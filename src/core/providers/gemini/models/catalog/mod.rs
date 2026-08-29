@@ -3,6 +3,7 @@ mod gemini3;
 mod gemini31;
 mod gemini35;
 mod gemini36;
+mod gemini37;
 mod legacy;
 
 use super::GeminiModelRegistry;
@@ -30,6 +31,7 @@ pub(super) fn function_batch_capabilities() -> Vec<ProviderCapability> {
 }
 
 pub(super) fn register_all(registry: &mut GeminiModelRegistry) {
+    gemini37::register(registry);
     gemini36::register(registry);
     gemini35::register(registry);
     gemini31::register(registry);

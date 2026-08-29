@@ -447,9 +447,12 @@ fn build_provider_aliases(
                     "provider alias {alias:?} collides with a canonical provider"
                 )));
             }
-            if let Some(previous) = aliases.insert(alias.clone(), provider.clone())
-                && previous != *provider
-            {
+            if let Some(previous) = aliases.insert(alias.clone(), provider.clone()) {
+                if previous == *provider {
+                    return Err(invalid(format!(
+                        "duplicate provider alias {alias:?} for {provider:?}"
+                    )));
+                }
                 return Err(invalid(format!(
                     "provider alias {alias:?} belongs to {previous:?} and {provider:?}"
                 )));

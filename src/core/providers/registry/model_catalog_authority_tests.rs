@@ -442,6 +442,17 @@ fn strict_schema_and_exact_collisions_fail_closed() {
 }
 
 #[test]
+fn repeated_provider_aliases_fail_closed() {
+    let mut duplicate: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("test fixture must parse");
+    duplicate["provider_aliases"]["openai"] = serde_json::json!(["oa", "oa"]);
+
+    let error = CatalogAuthority::from_json(&with_valid_authority_digests(duplicate))
+        .expect_err("repeated provider aliases must fail");
+    assert!(error.to_string().contains("duplicate provider alias"));
+}
+
+#[test]
 fn callable_identities_cannot_upgrade_non_callable_exact_ledger_keys() {
     for target_decision in ["callable", "pricing_only", "unreviewed"] {
         for target_key in ["restricted", "BAAI/restricted-model"] {

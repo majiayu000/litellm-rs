@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 
 use super::audio::AudioContent;
 use super::tools::{FunctionCall, ToolCall};
+use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 
 /// Chat message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +27,51 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     /// Audio content
     pub audio: Option<AudioContent>,
+}
+
+/// Additive chat-message DTO with explicit provider continuation extensions.
+///
+/// The existing public [`ChatMessage`] remains unchanged for Rust source
+/// compatibility. HTTP paths that need lossless provider continuation state can
+/// opt into this wrapper without adding fields to the legacy struct.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessageWithExtensions {
+    #[serde(flatten)]
+    message: ChatMessage,
+    #[serde(default, skip_serializing_if = "ChatMessageExtensions::is_empty")]
+    extensions: ChatMessageExtensions,
+}
+
+impl ChatMessageWithExtensions {
+    /// Wrap a legacy-compatible chat message with no extensions.
+    pub fn new(message: ChatMessage) -> Self {
+        Self {
+            message,
+            extensions: ChatMessageExtensions::new(),
+        }
+    }
+
+    /// Attach validated provider continuation extensions.
+    pub fn with_extensions(mut self, extensions: ChatMessageExtensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
+    /// Return the unchanged legacy-compatible message.
+    pub fn message(&self) -> &ChatMessage {
+        &self.message
+    }
+
+    /// Return the provider continuation extensions.
+    pub fn extensions(&self) -> &ChatMessageExtensions {
+        &self.extensions
+    }
+
+    /// Consume the wrapper into its legacy message and extensions.
+    pub fn into_parts(self) -> (ChatMessage, ChatMessageExtensions) {
+        (self.message, self.extensions)
+    }
 }
 
 /// Message role

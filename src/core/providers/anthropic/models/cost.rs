@@ -35,8 +35,8 @@ impl CostCalculator {
         cache_write_tokens: Option<u32>,
         is_batch: bool,
     ) -> Option<f64> {
-        let registry = get_anthropic_registry();
-        let pricing = registry.get_core_model_pricing(model_id)?;
+        let pricing =
+            crate::core::cost::calculator::get_model_pricing(model_id, "anthropic").ok()?;
 
         let batch_multiplier = if is_batch {
             pricing.batch_discount.unwrap_or(1.0)
@@ -85,5 +85,25 @@ impl CostCalculator {
     pub fn estimate_tokens(text: &str) -> u32 {
         // Anthropic uses approximately 4 characters = 1 token ratio (English)
         (text.len() as f32 / 4.0).ceil() as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CostCalculator;
+
+    #[test]
+    fn extended_cost_uses_shared_claude_5_cache_pricing() {
+        let cost = CostCalculator::calculate_extended_cost(
+            "claude-fable-5",
+            1_000,
+            100,
+            Some(200),
+            Some(300),
+            false,
+        )
+        .expect("Claude 5 pricing should resolve from the shared authority");
+
+        assert!((cost - 0.01395).abs() < 1e-12, "unexpected cost: {cost}");
     }
 }

@@ -161,4 +161,29 @@ mod pricing_tests {
             Err(ProviderError::ModelNotFound { .. })
         ));
     }
+
+    #[test]
+    fn time_bounded_gemini_pricing_is_not_owned_by_the_static_registry() {
+        let spec = get_gemini_registry()
+            .get_model_spec("gemini-3.6-flash")
+            .expect("gemini-3.6-flash should remain callable");
+
+        assert_eq!(spec.model_info.input_cost_per_1k_tokens, None);
+        assert_eq!(spec.model_info.output_cost_per_1k_tokens, None);
+        assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.0);
+        assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.0);
+        assert_eq!(spec.pricing.cache_read_input_token_cost, None);
+
+        let cost = models::CostCalculator::calculate_multimodal_cost(
+            "gemini-3.6-flash",
+            1_000,
+            500,
+            Some(200),
+            None,
+            None,
+            None,
+        )
+        .expect("shared catalog pricing should remain available");
+        assert!((cost - 0.00249).abs() < 1e-12, "unexpected cost: {cost}");
+    }
 }
