@@ -3,16 +3,19 @@ use super::*;
 #[tokio::test]
 async fn image_edit_records_flat_output_image_spend_after_success() {
     let mock = MockImageServer::start().await;
-    let state = build_route_policy_test_state(vec![image_provider(
-        "openai-primary",
-        "openai",
-        &mock.base_url,
-        vec!["flat-image-model".to_string()],
-    )])
+    let state = build_route_policy_test_state_with_pricing(
+        vec![openai_image_provider_with_mapping(
+            "openai-primary",
+            &mock.base_url,
+            "flat-image-model",
+            "flat-image-model",
+        )],
+        Some(HashMap::from([(
+            "flat-image-model".to_string(),
+            flat_image_model_info(0.06),
+        )])),
+    )
     .await;
-    state
-        .pricing
-        .add_custom_model("flat-image-model".to_string(), flat_image_model_info(0.06));
     state.budget_limits.providers.set_provider_limit(
         "openai-primary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -43,8 +46,18 @@ async fn image_edit_records_flat_output_image_spend_after_success() {
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    let status = resp.status();
+    let response_body = test::read_body(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected gateway response: {}",
+        String::from_utf8_lossy(&response_body)
+    );
     assert_eq!(mock.paths(), vec!["/v1/images/edits".to_string()]);
+    let upstream_bodies = mock.bodies();
+    let upstream_body = String::from_utf8_lossy(&upstream_bodies[0]);
+    assert!(upstream_body.contains("name=\"model\"\r\n\r\nflat-image-model"));
     let spent = budget_limits
         .providers
         .get_provider_usage("openai-primary")
