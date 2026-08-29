@@ -63,11 +63,13 @@ impl PricingService {
     ) -> Option<(String, LiteLLMModelInfo)> {
         let data = self.pricing_data.load();
         let (resolved_model, model_info) = resolve_model_info_for_provider(&data, provider, model)?;
+        let catalog_owned = data.catalog_models.contains(&resolved_model);
         let effective = super::google::effective_model_info_at(
             provider,
             &resolved_model,
             &model_info,
             pricing_time,
+            catalog_owned,
         )
         .into_owned();
         Some((resolved_model, effective))
@@ -258,9 +260,41 @@ impl PricingService {
         input_tokens: u32,
         max_output_tokens: Option<u32>,
     ) -> Result<PricingCostEstimate> {
-        let (resolved_model, model_info) = self
-            .get_model_info_for_provider(provider, model)
-            .ok_or_else(|| model_not_found(provider, model))?;
+        self.estimate_loaded_completion_cost_for_provider_at(
+            provider,
+            model,
+            input_tokens,
+            max_output_tokens,
+            Utc::now(),
+        )
+    }
+
+    pub(crate) fn estimate_loaded_completion_cost_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        input_tokens: u32,
+        max_output_tokens: Option<u32>,
+        pricing_time: DateTime<Utc>,
+    ) -> Result<PricingCostEstimate> {
+        let data = self.pricing_data.load();
+        let (resolved_model, raw_model_info) =
+            resolve_model_info_for_provider(&data, provider, model)
+                .ok_or_else(|| model_not_found(provider, model))?;
+        let catalog_owned = data.catalog_models.contains(&resolved_model);
+        let effective = super::google::effective_model_info_at(
+            provider,
+            &resolved_model,
+            &raw_model_info,
+            pricing_time,
+            catalog_owned,
+        );
+        let model_info = super::google::maximum_scheduled_model_info(
+            provider,
+            &resolved_model,
+            effective.as_ref(),
+            catalog_owned,
+        );
         let estimated_output_tokens = max_output_tokens.unwrap_or(100);
         let input_only = PricingUsage::new(input_tokens, 0);
         let full_usage = PricingUsage::new(input_tokens, estimated_output_tokens);
@@ -269,13 +303,13 @@ impl PricingService {
         let input = super::usage_cost::calculate_usage_cost_with_maximum_rates(
             provider,
             &resolved_model,
-            &model_info,
+            model_info.as_ref(),
             &input_only,
         )?;
         let full = super::usage_cost::calculate_usage_cost_with_maximum_rates(
             provider,
             &resolved_model,
-            &model_info,
+            model_info.as_ref(),
             &full_usage,
         )?;
 

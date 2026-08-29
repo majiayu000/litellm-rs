@@ -486,11 +486,18 @@ impl ModelUtils {
         let model_for_match = model_lower
             .strip_prefix(&provider_prefix)
             .unwrap_or(&model_lower);
+        let model_for_exact_match = model.split_once('/').map_or(model, |(prefix, local)| {
+            if prefix.eq_ignore_ascii_case(provider) {
+                local
+            } else {
+                model
+            }
+        });
 
         let model_matches = compatible_models.iter().any(|compatible_model| {
             let compatible_model = compatible_model.to_lowercase();
             if compatible_model == "gemini-3.7-flash" {
-                model_for_match == compatible_model
+                model_for_exact_match == compatible_model
             } else {
                 model_for_match.starts_with(&compatible_model)
             }

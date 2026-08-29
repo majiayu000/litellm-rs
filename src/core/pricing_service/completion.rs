@@ -48,15 +48,8 @@ impl PricingService {
         }
 
         let model_info = self
-            .get_raw_model_info(model)
+            .get_model_info_at(model, pricing_time)
             .ok_or_else(|| GatewayError::not_found(format!("Model not found: {model}")))?;
-        let model_info = super::google::effective_model_info_at(
-            &model_info.litellm_provider,
-            model,
-            &model_info,
-            pricing_time,
-        )
-        .into_owned();
 
         if model_info.cost_per_second.is_some() {
             let total_time_seconds = require_total_time_seconds(model, total_time_seconds)?;

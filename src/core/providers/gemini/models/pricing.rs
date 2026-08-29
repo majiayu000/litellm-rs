@@ -37,9 +37,13 @@ fn pricing_time_for_tier(tier: FlashPricingTier) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(timestamp, 0)
 }
 
-fn central_flash_pricing_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing> {
+fn central_model_pricing_at(
+    provider: &str,
+    model: &str,
+    now: DateTime<Utc>,
+) -> Option<ModelPricing> {
     let service = PricingService::shared_embedded_default().ok()?;
-    let (_, pricing) = service.get_model_info_for_provider_at("gemini", model, now)?;
+    let (_, pricing) = service.get_model_info_for_provider_at(provider, model, now)?;
     Some(ModelPricing {
         model: model.to_string(),
         input_cost_per_1k_tokens: per_token_to_per_thousand(pricing.input_cost_per_token?),
@@ -53,6 +57,10 @@ fn central_flash_pricing_at(model: &str, now: DateTime<Utc>) -> Option<ModelPric
         updated_at: now,
         ..ModelPricing::default()
     })
+}
+
+fn central_flash_pricing_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing> {
+    central_model_pricing_at("gemini", model, now)
 }
 
 fn per_token_to_per_thousand(price: f64) -> f64 {
@@ -140,18 +148,26 @@ fn model_infos_for_tier(
         .values()
         .filter(|spec| surface.includes(spec))
         .map(|spec| {
-            let mut pricing = spec.pricing.clone();
-            if matches!(
+            let pricing_time = pricing_time_for_tier(tier);
+            let pricing = if !matches!(surface, GoogleGeminiApiSurface::DeveloperApi) {
+                pricing_time.and_then(|pricing_time| {
+                    central_model_pricing_at(
+                        surface.provider_name(),
+                        &spec.model_info.id,
+                        pricing_time,
+                    )
+                })
+            } else if matches!(
                 spec.family,
                 GeminiModelFamily::Gemini37Flash | GeminiModelFamily::Gemini36Flash
             ) {
-                pricing = pricing_time_for_tier(tier)
-                    .and_then(|pricing_time| {
-                        central_flash_pricing_at(&spec.model_info.id, pricing_time)
-                    })
-                    .unwrap_or_default();
-            }
-            surface.overlay_model_info(spec, &pricing)
+                pricing_time.and_then(|pricing_time| {
+                    central_flash_pricing_at(&spec.model_info.id, pricing_time)
+                })
+            } else {
+                Some(spec.pricing.clone())
+            };
+            surface.overlay_model_info(spec, pricing.as_ref())
         })
         .collect::<Vec<_>>();
     models.sort_by(|left, right| left.id.cmp(&right.id));
@@ -165,7 +181,7 @@ impl GeminiModelRegistry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct GeminiModelListings {
     promotional: Vec<ModelInfo>,
     standard: Vec<ModelInfo>,

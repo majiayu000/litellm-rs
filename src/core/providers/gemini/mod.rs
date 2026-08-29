@@ -146,8 +146,14 @@ mod pricing_tests {
             get_model_pricing("gemini-2.5-flash").expect("catalogued model should be priced");
         assert!((input - 0.30).abs() < 1e-12);
         assert!((output - 2.50).abs() < 1e-12);
-        assert_eq!(get_model_pricing("gemini-3.6-flash").unwrap(), (0.75, 3.75));
-        assert_eq!(get_model_pricing("gemini-3.7-flash").unwrap(), (0.75, 3.75));
+        let promotional_time = chrono::DateTime::from_timestamp(1_798_761_599, 0).unwrap();
+        for model in ["gemini-3.6-flash", "gemini-3.7-flash"] {
+            let pricing = get_gemini_registry()
+                .get_core_model_pricing_at(model, promotional_time)
+                .expect("promotional pricing should be available");
+            assert_eq!(pricing.input_cost_per_1k_tokens, 0.00075);
+            assert_eq!(pricing.output_cost_per_1k_tokens, 0.00375);
+        }
         assert_eq!(
             get_model_pricing("gemini-3.5-flash-lite").unwrap(),
             (0.3, 2.5)

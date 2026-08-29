@@ -623,3 +623,23 @@ fn test_get_azure_pricing() {
     let pricing = pricing.unwrap();
     assert_eq!(pricing.input_cost_per_1k_tokens, 0.0025);
 }
+
+#[test]
+fn gemini_flash_explicit_time_lookup_honors_the_utc_cutoff() {
+    use chrono::{TimeZone, Utc};
+
+    let before = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let at = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+    let after = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
+
+    let promotional = get_model_pricing_at("gemini-3.7-flash", "gemini", before).unwrap();
+    let standard_at = get_model_pricing_at("gemini-3.7-flash", "gemini", at).unwrap();
+    let standard_after = get_model_pricing_at("gemini-3.7-flash", "gemini", after).unwrap();
+
+    assert_eq!(promotional.input_cost_per_1k_tokens, 0.00075);
+    assert_eq!(promotional.output_cost_per_1k_tokens, 0.00375);
+    assert_eq!(standard_at.input_cost_per_1k_tokens, 0.0015);
+    assert_eq!(standard_at.output_cost_per_1k_tokens, 0.0075);
+    assert_eq!(standard_after.input_cost_per_1k_tokens, 0.0015);
+    assert_eq!(standard_after.output_cost_per_1k_tokens, 0.0075);
+}

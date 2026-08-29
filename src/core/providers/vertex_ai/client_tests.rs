@@ -474,6 +474,111 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
 }
 
 #[tokio::test]
+async fn vertex_model_metadata_tracks_utc_pricing_boundary_without_restart() {
+    use chrono::{TimeZone, Utc};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    };
+
+    let before = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let at = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+    let after = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
+    let timestamp = Arc::new(AtomicI64::new(before.timestamp()));
+    let clock_timestamp = Arc::clone(&timestamp);
+    let clock = crate::core::providers::gemini::models::GeminiUtcClock::new(move || {
+        chrono::DateTime::from_timestamp(clock_timestamp.load(Ordering::SeqCst), 0)
+            .expect("test clock timestamp")
+    });
+    let provider = VertexAIProvider::new_with_clock(test_vertex_provider_config(), clock)
+        .await
+        .unwrap();
+    let prices = || {
+        let model = provider
+            .models()
+            .iter()
+            .find(|model| model.id == "gemini-3.7-flash")
+            .expect("Vertex Gemini 3.7 listing");
+        (
+            model.input_cost_per_1k_tokens,
+            model.output_cost_per_1k_tokens,
+        )
+    };
+
+    assert_eq!(prices(), (Some(0.00075), Some(0.00375)));
+    timestamp.store(at.timestamp(), Ordering::SeqCst);
+    assert_eq!(prices(), (Some(0.0015), Some(0.0075)));
+    timestamp.store(after.timestamp(), Ordering::SeqCst);
+    assert_eq!(prices(), (Some(0.0015), Some(0.0075)));
+}
+
+#[tokio::test]
+async fn vertex_gemini_37_uses_gemini_response_and_fixed_sampling_contract() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    let params = provider.get_supported_openai_params("gemini-3.7-flash");
+    assert!(!params.contains(&"temperature"));
+    assert!(!params.contains(&"top_p"));
+    assert!(!params.contains(&"top_k"));
+
+    let request = ChatRequest {
+        model: "gemini-3.7-flash".to_string(),
+        messages: vec![crate::core::types::chat::ChatMessage {
+            role: crate::core::types::message::MessageRole::User,
+            content: Some(crate::core::types::message::MessageContent::Text(
+                "hello".to_string(),
+            )),
+            ..Default::default()
+        }],
+        temperature: Some(0.7),
+        top_p: Some(0.8),
+        ..Default::default()
+    };
+    let transformed = provider
+        .transform_request(request, RequestContext::default())
+        .await
+        .unwrap();
+    assert!(transformed["generationConfig"].get("temperature").is_none());
+    assert!(transformed["generationConfig"].get("top_p").is_none());
+
+    let response = serde_json::json!({
+        "candidates": [{
+            "index": 0,
+            "content": {"parts": [{"text": "ok"}]},
+            "finishReason": "STOP"
+        }]
+    });
+    let parsed = provider
+        .transform_response(
+            serde_json::to_vec(&response).unwrap().as_slice(),
+            "gemini-3.7-flash",
+            "request-id",
+        )
+        .await
+        .expect("3.7 must use the Gemini response transformer");
+    assert_eq!(parsed.choices.len(), 1);
+
+    let assistant_prefill = ChatRequest {
+        model: "gemini-3.7-flash".to_string(),
+        messages: vec![crate::core::types::chat::ChatMessage {
+            role: crate::core::types::message::MessageRole::Assistant,
+            content: Some(crate::core::types::message::MessageContent::Text(
+                "prefill".to_string(),
+            )),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(
+        provider
+            .transform_request(assistant_prefill, RequestContext::default())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn test_vertex_shared_catalog_new_model_request_contract() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await

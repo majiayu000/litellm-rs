@@ -485,6 +485,8 @@ fn test_validate_model_with_provider_invalid() {
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "anthropic").is_err());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "openai").is_err());
     for near_match in [
+        "GEMINI-3.7-FLASH",
+        "google/GEMINI-3.7-FLASH",
         "gemini-3.7-flash-preview",
         "gemini-3.7-flash-20260813",
         "gemini-3.7-flash-suffix",

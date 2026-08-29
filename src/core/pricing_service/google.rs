@@ -10,6 +10,9 @@ const GEMINI_FLASH_STANDARD_PRICING_START_UTC: i64 = 1_798_761_600;
 const GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN: f64 = 1.5e-6;
 const GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN: f64 = 7.5e-6;
 const GEMINI_FLASH_STANDARD_CACHE_READ_COST_PER_TOKEN: f64 = 1.5e-7;
+const GEMINI_FLASH_PROMOTIONAL_INPUT_COST_PER_TOKEN: f64 = 7.5e-7;
+const GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN: f64 = 3.75e-6;
+const GEMINI_FLASH_PROMOTIONAL_CACHE_READ_COST_PER_TOKEN: f64 = 7.5e-8;
 
 pub(super) const VERTEX_PROVIDER_ALIASES: &[&str] = &[
     "vertex_ai",
@@ -45,6 +48,7 @@ pub(super) fn effective_model_info_at<'a>(
     resolved_model: &str,
     model_info: &'a LiteLLMModelInfo,
     pricing_time: DateTime<Utc>,
+    catalog_owned: bool,
 ) -> Cow<'a, LiteLLMModelInfo> {
     if pricing_time.timestamp() < GEMINI_FLASH_STANDARD_PRICING_START_UTC {
         return Cow::Borrowed(model_info);
@@ -62,6 +66,9 @@ pub(super) fn effective_model_info_at<'a>(
     if !matches!(local_model, "gemini-3.6-flash" | "gemini-3.7-flash") {
         return Cow::Borrowed(model_info);
     }
+    if !is_promotional_catalog_row(model_info, catalog_owned) {
+        return Cow::Borrowed(model_info);
+    }
 
     let mut effective = model_info.clone();
     effective.input_cost_per_token = Some(GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN);
@@ -75,6 +82,39 @@ pub(super) fn effective_model_info_at<'a>(
         serde_json::json!(GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN),
     );
     Cow::Owned(effective)
+}
+
+fn is_promotional_catalog_row(model_info: &LiteLLMModelInfo, catalog_owned: bool) -> bool {
+    catalog_owned
+        && model_info.input_cost_per_token == Some(GEMINI_FLASH_PROMOTIONAL_INPUT_COST_PER_TOKEN)
+        && model_info.output_cost_per_token == Some(GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN)
+        && model_info
+            .extra
+            .get("cache_read_input_token_cost")
+            .and_then(serde_json::Value::as_f64)
+            == Some(GEMINI_FLASH_PROMOTIONAL_CACHE_READ_COST_PER_TOKEN)
+        && model_info
+            .extra
+            .get("output_cost_per_reasoning_token")
+            .and_then(serde_json::Value::as_f64)
+            .is_none_or(|price| price == GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN)
+}
+
+pub(super) fn maximum_scheduled_model_info<'a>(
+    requested_provider: &str,
+    resolved_model: &str,
+    model_info: &'a LiteLLMModelInfo,
+    catalog_owned: bool,
+) -> Cow<'a, LiteLLMModelInfo> {
+    let standard_start = DateTime::from_timestamp(GEMINI_FLASH_STANDARD_PRICING_START_UTC, 0)
+        .expect("Gemini pricing schedule timestamp is valid");
+    effective_model_info_at(
+        requested_provider,
+        resolved_model,
+        model_info,
+        standard_start,
+        catalog_owned,
+    )
 }
 
 pub(super) fn explicit_pricing_alias(provider: &str, model: &str) -> Option<&'static str> {

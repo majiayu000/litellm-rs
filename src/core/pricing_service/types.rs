@@ -2,7 +2,7 @@
 
 pub use crate::core::pricing::LiteLLMModelInfo;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 /// Consolidated pricing data - single lock for all pricing state
@@ -11,6 +11,10 @@ pub(super) struct PricingData {
     /// Model pricing data (model_name -> LiteLLMModelInfo)
     pub models: HashMap<String, LiteLLMModelInfo>,
     pub exact_by_provider: HashMap<String, HashMap<String, Vec<String>>>,
+    /// Keys loaded from the configured catalog source. Runtime custom inserts
+    /// are intentionally excluded so time-based catalog schedules cannot
+    /// overwrite operator-provided pricing.
+    pub catalog_models: HashSet<String>,
     /// Last update time
     pub last_updated: SystemTime,
 }
@@ -20,6 +24,7 @@ impl Default for PricingData {
         Self {
             models: HashMap::new(),
             exact_by_provider: HashMap::new(),
+            catalog_models: HashSet::new(),
             last_updated: SystemTime::UNIX_EPOCH,
         }
     }
@@ -465,6 +470,7 @@ mod tests {
         let data = PricingData {
             models,
             exact_by_provider: HashMap::new(),
+            catalog_models: HashSet::new(),
             last_updated: SystemTime::now(),
         };
 

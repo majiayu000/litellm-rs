@@ -22,6 +22,9 @@ use super::{
     common_utils::{GenerationConfig, Part, convert_role},
     models::VertexAIModel,
 };
+use crate::core::providers::gemini::models::{
+    has_trailing_assistant_prefill, uses_fixed_sampling_contract,
+};
 
 /// Transformer for Gemini models
 #[derive(Debug, Clone, Default)]
@@ -38,6 +41,15 @@ impl GeminiTransformer {
         request: &ChatRequest,
         _model: &VertexAIModel,
     ) -> Result<Value, ProviderError> {
+        if uses_fixed_sampling_contract(&request.model) && has_trailing_assistant_prefill(request) {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                format!(
+                    "Model {} does not accept a trailing non-empty assistant message",
+                    request.model
+                ),
+            ));
+        }
         let mut contents = Vec::new();
         let mut system_instruction = None;
         let mut tool_planner = GoogleToolPlanner::new("vertex_ai");
@@ -67,9 +79,10 @@ impl GeminiTransformer {
         }
 
         // Build generation config
+        let fixed_sampling = uses_fixed_sampling_contract(&request.model);
         let mut generation_config = GenerationConfig {
-            temperature: request.temperature,
-            top_p: request.top_p,
+            temperature: (!fixed_sampling).then_some(request.temperature).flatten(),
+            top_p: (!fixed_sampling).then_some(request.top_p).flatten(),
             top_k: None,
             max_output_tokens: request.max_tokens.map(|v| v as i32),
             stop_sequences: request.stop.clone(),

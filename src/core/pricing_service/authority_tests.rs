@@ -539,3 +539,88 @@ fn gemini_flash_runtime_pricing_switches_at_the_exact_utc_boundary() {
         assert!((standard.total_cost - 0.007_65).abs() < 1e-12);
     }
 }
+
+#[test]
+fn gemini_flash_schedule_does_not_override_explicit_custom_pricing() {
+    use chrono::TimeZone;
+
+    let service = PricingService::new(None);
+    let mut custom = test_model_info("gemini");
+    custom.input_cost_per_token = Some(0.123);
+    custom.output_cost_per_token = Some(0.456);
+    custom.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::json!(0.078),
+    );
+    service.add_custom_model("gemini-3.7-flash".to_string(), custom);
+
+    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
+    let (_, pricing) = service
+        .get_model_info_for_provider_at("gemini", "gemini-3.7-flash", after_cutoff)
+        .expect("explicit custom Gemini pricing should resolve");
+
+    assert_eq!(pricing.input_cost_per_token, Some(0.123));
+    assert_eq!(pricing.output_cost_per_token, Some(0.456));
+    assert_eq!(
+        pricing.extra["cache_read_input_token_cost"],
+        serde_json::json!(0.078)
+    );
+}
+
+#[test]
+fn gemini_flash_schedule_does_not_override_corrected_catalog_pricing() {
+    use chrono::TimeZone;
+
+    let service = PricingService::new(None);
+    let mut corrected = test_model_info("gemini");
+    corrected.input_cost_per_token = Some(0.123);
+    corrected.output_cost_per_token = Some(0.456);
+    corrected.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::json!(0.078),
+    );
+    service.pricing_data.store(std::sync::Arc::new(
+        super::super::service::build_pricing_data(
+            std::collections::HashMap::from([("gemini-3.7-flash".to_string(), corrected)]),
+            std::time::SystemTime::now(),
+        ),
+    ));
+
+    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
+    let (_, pricing) = service
+        .get_model_info_for_provider_at("gemini", "gemini-3.7-flash", after_cutoff)
+        .expect("corrected catalog Gemini pricing should resolve");
+
+    assert_eq!(pricing.input_cost_per_token, Some(0.123));
+    assert_eq!(pricing.output_cost_per_token, Some(0.456));
+    assert_eq!(
+        pricing.extra["cache_read_input_token_cost"],
+        serde_json::json!(0.078)
+    );
+}
+
+#[test]
+fn gemini_flash_reservation_uses_the_maximum_known_schedule_rate() {
+    use chrono::TimeZone;
+
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    for pricing_time in [
+        Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap(),
+        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
+        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap(),
+    ] {
+        let estimate = service
+            .estimate_loaded_completion_cost_for_provider_at(
+                "gemini",
+                "gemini-3.7-flash",
+                1_000,
+                Some(1_000),
+                pricing_time,
+            )
+            .unwrap_or_else(|error| panic!("scheduled reservation should resolve: {error}"));
+        assert!((estimate.input_cost - 0.0015).abs() < 1e-12);
+        assert!((estimate.estimated_output_cost - 0.0075).abs() < 1e-12);
+        assert!((estimate.max_cost - 0.009).abs() < 1e-12);
+    }
+}

@@ -211,8 +211,9 @@ fn flash_static_pricing_switches_at_the_documented_2027_boundary() {
         .get_core_model_pricing_at("gemini-3.7-flash", standard_date)
         .unwrap();
     let promotional_info =
-        GoogleGeminiApiSurface::DeveloperApi.overlay_model_info(spec, &promotional);
-    let standard_info = GoogleGeminiApiSurface::DeveloperApi.overlay_model_info(spec, &standard);
+        GoogleGeminiApiSurface::DeveloperApi.overlay_model_info(spec, Some(&promotional));
+    let standard_info =
+        GoogleGeminiApiSurface::DeveloperApi.overlay_model_info(spec, Some(&standard));
     assert_eq!(promotional_info.input_cost_per_1k_tokens, Some(0.00075));
     assert_eq!(promotional_info.output_cost_per_1k_tokens, Some(0.00375));
     assert_eq!(standard_info.input_cost_per_1k_tokens, Some(0.0015));
