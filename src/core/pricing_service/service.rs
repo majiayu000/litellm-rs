@@ -238,10 +238,11 @@ impl PricingService {
         let timestamp = SystemTime::now();
         {
             let _write_guard = self.pricing_write_lock.lock();
-            let mut models = self.pricing_data.load().models.clone();
+            let current = self.pricing_data.load_full();
+            let mut models = current.models.clone();
             models.insert(model.clone(), model_info.clone());
             self.pricing_data
-                .store(Arc::new(build_pricing_data(models, timestamp)));
+                .store(Arc::new(build_pricing_data(models, current.last_updated)));
         }
 
         // Send update event
@@ -409,6 +410,37 @@ mod tests {
         let data = service.pricing_data.load();
         assert!(data.models.is_empty());
         assert_eq!(data.last_updated, SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn add_custom_model_preserves_catalog_refresh_age() {
+        let service = PricingService::new(None);
+        let catalog_timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+        service.pricing_data.store(Arc::new(build_pricing_data(
+            HashMap::from([(
+                "catalog-model".to_string(),
+                create_test_model_info("catalog-provider"),
+            )]),
+            catalog_timestamp,
+        )));
+        assert!(service.needs_refresh());
+        let mut updates = service.subscribe_to_updates();
+
+        service.add_custom_model(
+            "custom-model".to_string(),
+            create_test_model_info("custom-provider"),
+        );
+
+        assert_eq!(service.pricing_data.load().last_updated, catalog_timestamp);
+        assert!(
+            service.needs_refresh(),
+            "custom insertion must not postpone a due catalog refresh"
+        );
+        let event = updates
+            .try_recv()
+            .expect("custom insertion should still publish an update event");
+        assert!(event.timestamp > catalog_timestamp);
+        assert_eq!(event.model, "custom-model");
     }
 
     // ==================== Model Info Tests ====================
