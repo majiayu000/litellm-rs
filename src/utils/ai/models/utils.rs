@@ -487,9 +487,14 @@ impl ModelUtils {
             .strip_prefix(&provider_prefix)
             .unwrap_or(&model_lower);
 
-        let model_matches = compatible_models
-            .iter()
-            .any(|compatible_model| model_for_match.starts_with(&compatible_model.to_lowercase()));
+        let model_matches = compatible_models.iter().any(|compatible_model| {
+            let compatible_model = compatible_model.to_lowercase();
+            if compatible_model == "gemini-3.7-flash" {
+                model_for_match == compatible_model
+            } else {
+                model_for_match.starts_with(&compatible_model)
+            }
+        });
 
         if !model_matches {
             return Err(ProviderError::ModelNotFound {

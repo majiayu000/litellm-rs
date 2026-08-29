@@ -8,8 +8,9 @@ use chrono::{DateTime, Utc};
 
 use super::{
     GeminiModelFamily, GeminiModelRegistry, GoogleGeminiApiSurface, ModelInfo, ModelPricing,
-    ModelSpec, pricing_per_million,
+    ModelSpec,
 };
+use crate::core::pricing_service::PricingService;
 
 // 2027-01-01T00:00:00Z, the first instant after Google's promotional period.
 const STANDARD_PRICING_START_UTC_UNIX_SECONDS: i64 = 1_798_761_600;
@@ -20,31 +21,42 @@ enum FlashPricingTier {
     Standard,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct Gemini37PriceSchedule;
-
-impl Gemini37PriceSchedule {
-    fn tier_at(self, now: DateTime<Utc>) -> FlashPricingTier {
-        if now.timestamp() < STANDARD_PRICING_START_UTC_UNIX_SECONDS {
-            FlashPricingTier::Promotional
-        } else {
-            FlashPricingTier::Standard
-        }
+fn flash_pricing_tier_at(now: DateTime<Utc>) -> FlashPricingTier {
+    if now.timestamp() < STANDARD_PRICING_START_UTC_UNIX_SECONDS {
+        FlashPricingTier::Promotional
+    } else {
+        FlashPricingTier::Standard
     }
+}
 
-    fn pricing_at(self, now: DateTime<Utc>) -> ModelPricing {
-        self.pricing_for_tier(self.tier_at(now))
-    }
+fn pricing_time_for_tier(tier: FlashPricingTier) -> Option<DateTime<Utc>> {
+    let timestamp = match tier {
+        FlashPricingTier::Promotional => STANDARD_PRICING_START_UTC_UNIX_SECONDS - 1,
+        FlashPricingTier::Standard => STANDARD_PRICING_START_UTC_UNIX_SECONDS,
+    };
+    DateTime::from_timestamp(timestamp, 0)
+}
 
-    fn pricing_for_tier(self, tier: FlashPricingTier) -> ModelPricing {
-        let (input, output, cache) = match tier {
-            FlashPricingTier::Promotional => (0.75, 3.75, 0.075),
-            FlashPricingTier::Standard => (1.5, 7.5, 0.15),
-        };
-        let mut pricing = pricing_per_million(input, output, Some(cache), None, None, None);
-        pricing.batch_discount = Some(0.5);
-        pricing
-    }
+fn central_flash_pricing_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing> {
+    let service = PricingService::shared_embedded_default().ok()?;
+    let (_, pricing) = service.get_model_info_for_provider_at("gemini", model, now)?;
+    Some(ModelPricing {
+        model: model.to_string(),
+        input_cost_per_1k_tokens: per_token_to_per_thousand(pricing.input_cost_per_token?),
+        output_cost_per_1k_tokens: per_token_to_per_thousand(pricing.output_cost_per_token?),
+        cache_read_input_token_cost: pricing
+            .extra
+            .get("cache_read_input_token_cost")
+            .and_then(serde_json::Value::as_f64)
+            .map(per_token_to_per_thousand),
+        currency: "USD".to_string(),
+        updated_at: now,
+        ..ModelPricing::default()
+    })
+}
+
+fn per_token_to_per_thousand(price: f64) -> f64 {
+    ((price * 1_000.0) * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
 
 #[derive(Clone)]
@@ -72,17 +84,13 @@ impl fmt::Debug for GeminiUtcClock {
     }
 }
 
-pub(super) fn current_flash_pricing() -> ModelPricing {
-    Gemini37PriceSchedule.pricing_at(Utc::now())
-}
-
 fn flash_pricing_table(tier: FlashPricingTier) -> HashMap<&'static str, ModelPricing> {
     ["gemini-3.7-flash", "gemini-3.6-flash"]
         .into_iter()
-        .map(|model| {
-            let mut pricing = Gemini37PriceSchedule.pricing_for_tier(tier);
-            pricing.model = model.to_string();
-            (model, pricing)
+        .filter_map(|model| {
+            pricing_time_for_tier(tier)
+                .and_then(|pricing_time| central_flash_pricing_at(model, pricing_time))
+                .map(|pricing| (model, pricing))
         })
         .collect()
 }
@@ -95,7 +103,7 @@ pub(super) fn current_pricing_for_spec(spec: &ModelSpec) -> Option<&ModelPricing
         spec.family,
         GeminiModelFamily::Gemini37Flash | GeminiModelFamily::Gemini36Flash
     ) {
-        let table = match Gemini37PriceSchedule.tier_at(Utc::now()) {
+        let table = match flash_pricing_tier_at(Utc::now()) {
             FlashPricingTier::Promotional => {
                 PROMOTIONAL.get_or_init(|| flash_pricing_table(FlashPricingTier::Promotional))
             }
@@ -109,17 +117,17 @@ pub(super) fn current_pricing_for_spec(spec: &ModelSpec) -> Option<&ModelPricing
     }
 }
 
-pub(super) fn pricing_for_spec_at(spec: &ModelSpec, now: DateTime<Utc>) -> ModelPricing {
+pub(super) fn pricing_for_spec_at(spec: &ModelSpec, now: DateTime<Utc>) -> Option<ModelPricing> {
     let mut pricing = if matches!(
         spec.family,
         GeminiModelFamily::Gemini37Flash | GeminiModelFamily::Gemini36Flash
     ) {
-        Gemini37PriceSchedule.pricing_at(now)
+        central_flash_pricing_at(&spec.model_info.id, now)?
     } else {
         spec.pricing.clone()
     };
     pricing.model.clone_from(&spec.model_info.id);
-    pricing
+    Some(pricing)
 }
 
 fn model_infos_for_tier(
@@ -137,7 +145,11 @@ fn model_infos_for_tier(
                 spec.family,
                 GeminiModelFamily::Gemini37Flash | GeminiModelFamily::Gemini36Flash
             ) {
-                pricing = Gemini37PriceSchedule.pricing_for_tier(tier);
+                pricing = pricing_time_for_tier(tier)
+                    .and_then(|pricing_time| {
+                        central_flash_pricing_at(&spec.model_info.id, pricing_time)
+                    })
+                    .unwrap_or_default();
             }
             surface.overlay_model_info(spec, &pricing)
         })
@@ -149,7 +161,7 @@ fn model_infos_for_tier(
 impl GeminiModelRegistry {
     /// List model metadata for a concrete Google API surface using the current UTC price tier.
     pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
-        model_infos_for_tier(self, surface, Gemini37PriceSchedule.tier_at(Utc::now()))
+        model_infos_for_tier(self, surface, flash_pricing_tier_at(Utc::now()))
     }
 }
 
@@ -168,7 +180,7 @@ impl GeminiModelListings {
     }
 
     pub(crate) fn at(&self, now: DateTime<Utc>) -> &[ModelInfo] {
-        match Gemini37PriceSchedule.tier_at(now) {
+        match flash_pricing_tier_at(now) {
             FlashPricingTier::Promotional => &self.promotional,
             FlashPricingTier::Standard => &self.standard,
         }

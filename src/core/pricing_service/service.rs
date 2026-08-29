@@ -7,6 +7,7 @@ use super::types::{
 use crate::core::http::outbound::default_outbound_client;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use arc_swap::ArcSwap;
+use chrono::Utc;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -99,8 +100,21 @@ impl PricingService {
             && self.pricing_data.load().models.is_empty()
     }
 
-    /// Get model information
+    /// Get model information with current time-dependent pricing applied.
     pub fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
+        let model_info = self.get_raw_model_info(model)?;
+        Some(
+            super::google::effective_model_info_at(
+                &model_info.litellm_provider,
+                model,
+                &model_info,
+                Utc::now(),
+            )
+            .into_owned(),
+        )
+    }
+
+    pub(super) fn get_raw_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
         let data = self.pricing_data.load();
         data.models.get(model).cloned()
     }

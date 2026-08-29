@@ -81,10 +81,12 @@ fn gemini_37_flash_matches_official_capabilities_and_promotional_pricing() {
         assert_eq!(spec.model_info.metadata[key], serde_json::json!(false));
     }
 
-    assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.00075);
-    assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.00375);
-    assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
-    assert_eq!(spec.pricing.batch_discount, Some(0.5));
+    assert_eq!(spec.model_info.input_cost_per_1k_tokens, None);
+    assert_eq!(spec.model_info.output_cost_per_1k_tokens, None);
+    assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.0);
+    assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.0);
+    assert_eq!(spec.pricing.cache_read_input_token_cost, None);
+    assert_eq!(spec.pricing.batch_discount, None);
     assert_eq!(
         spec.model_info.metadata["google_promotional_pricing_through"],
         serde_json::json!("2026-12-31")
@@ -133,15 +135,17 @@ fn gemini_37_shared_context_window_is_exact_only() {
 }
 
 #[test]
-fn gemini_36_static_fallback_uses_current_promotional_price() {
+fn gemini_36_static_catalog_defers_pricing_to_the_central_authority() {
     let spec = get_gemini_registry()
         .get_model_spec("gemini-3.6-flash")
         .expect("Gemini 3.6 Flash should remain in the static catalog");
 
-    assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.00075);
-    assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.00375);
-    assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
-    assert_eq!(spec.pricing.batch_discount, Some(0.5));
+    assert_eq!(spec.model_info.input_cost_per_1k_tokens, None);
+    assert_eq!(spec.model_info.output_cost_per_1k_tokens, None);
+    assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.0);
+    assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.0);
+    assert_eq!(spec.pricing.cache_read_input_token_cost, None);
+    assert_eq!(spec.pricing.batch_discount, None);
 }
 
 #[test]
@@ -161,7 +165,7 @@ fn flash_static_pricing_switches_at_the_documented_2027_boundary() {
         assert_eq!(promotional.input_cost_per_1k_tokens, 0.00075);
         assert_eq!(promotional.output_cost_per_1k_tokens, 0.00375);
         assert_eq!(promotional.cache_read_input_token_cost, Some(0.000075));
-        assert_eq!(promotional.batch_discount, Some(0.5));
+        assert_eq!(promotional.batch_discount, None);
 
         let standard = registry
             .get_core_model_pricing_at(model, standard_date)
@@ -169,7 +173,7 @@ fn flash_static_pricing_switches_at_the_documented_2027_boundary() {
         assert_eq!(standard.input_cost_per_1k_tokens, 0.0015);
         assert_eq!(standard.output_cost_per_1k_tokens, 0.0075);
         assert_eq!(standard.cache_read_input_token_cost, Some(0.00015));
-        assert_eq!(standard.batch_discount, Some(0.5));
+        assert_eq!(standard.batch_discount, None);
     }
 
     let promotional_cost = CostCalculator::calculate_multimodal_cost_at(

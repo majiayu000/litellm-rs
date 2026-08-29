@@ -207,7 +207,7 @@ impl GeminiModelRegistry {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .map(|spec| pricing::pricing_for_spec_at(spec, now))
+            .and_then(|spec| pricing::pricing_for_spec_at(spec, now))
     }
 
     /// Model

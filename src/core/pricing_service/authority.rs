@@ -51,8 +51,26 @@ impl PricingService {
         provider: &str,
         model: &str,
     ) -> Option<(String, LiteLLMModelInfo)> {
+        self.get_model_info_for_provider_at(provider, model, Utc::now())
+    }
+
+    /// Resolve provider-scoped pricing at an explicit UTC instant.
+    pub fn get_model_info_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        pricing_time: DateTime<Utc>,
+    ) -> Option<(String, LiteLLMModelInfo)> {
         let data = self.pricing_data.load();
-        resolve_model_info_for_provider(&data, provider, model)
+        let (resolved_model, model_info) = resolve_model_info_for_provider(&data, provider, model)?;
+        let effective = super::google::effective_model_info_at(
+            provider,
+            &resolved_model,
+            &model_info,
+            pricing_time,
+        )
+        .into_owned();
+        Some((resolved_model, effective))
     }
 
     /// Calculate a completion cost from already-loaded pricing data.
@@ -97,7 +115,7 @@ impl PricingService {
         pricing_time: DateTime<Utc>,
     ) -> Result<CostResult> {
         let (resolved_model, model_info) = self
-            .get_model_info_for_provider(provider, model)
+            .get_model_info_for_provider_at(provider, model, pricing_time)
             .ok_or_else(|| model_not_found(provider, model))?;
 
         if model_info.cost_per_second.is_some() {
@@ -165,7 +183,7 @@ impl PricingService {
         pricing_time: DateTime<Utc>,
     ) -> Result<PricingCostBreakdown> {
         let (resolved_model, model_info) = self
-            .get_model_info_for_provider(provider, model)
+            .get_model_info_for_provider_at(provider, model, pricing_time)
             .ok_or_else(|| model_not_found(provider, model))?;
 
         super::usage_cost::calculate_usage_cost_with_pricing_at(

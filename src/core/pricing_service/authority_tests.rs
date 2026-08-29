@@ -499,3 +499,43 @@ fn provider_scoped_exact_rows_precede_old_fuzzy_aliases() {
         "amazon.nova-2-lite-v1:0"
     );
 }
+
+#[test]
+fn gemini_flash_runtime_pricing_switches_at_the_exact_utc_boundary() {
+    use chrono::TimeZone;
+
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    let promotional_time = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let standard_time = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+    let usage = PricingUsage {
+        prompt_tokens: 1_000,
+        completion_tokens: 1_000,
+        total_tokens: 2_000,
+        cached_tokens: Some(1_000),
+        ..PricingUsage::default()
+    };
+
+    for (provider, model) in [
+        ("gemini", "gemini-3.6-flash"),
+        ("gemini", "gemini/gemini-3.6-flash"),
+        ("gemini", "gemini-3.7-flash"),
+        ("gemini", "gemini/gemini-3.7-flash"),
+        ("vertex_ai", "gemini-3.7-flash"),
+        ("vertex_ai", "vertex_ai/gemini-3.7-flash"),
+    ] {
+        let promotional = service
+            .calculate_loaded_usage_cost_for_provider_at(provider, model, &usage, promotional_time)
+            .unwrap_or_else(|error| panic!("promotional {model} pricing: {error}"));
+        let standard = service
+            .calculate_loaded_usage_cost_for_provider_at(provider, model, &usage, standard_time)
+            .unwrap_or_else(|error| panic!("standard {model} pricing: {error}"));
+
+        assert!((promotional.cache_cost - 0.000_075).abs() < 1e-12);
+        assert!((promotional.output_cost - 0.003_75).abs() < 1e-12);
+        assert!((promotional.total_cost - 0.003_825).abs() < 1e-12);
+        assert!((standard.cache_cost - 0.000_15).abs() < 1e-12);
+        assert!((standard.output_cost - 0.007_5).abs() < 1e-12);
+        assert!((standard.total_cost - 0.007_65).abs() < 1e-12);
+    }
+}

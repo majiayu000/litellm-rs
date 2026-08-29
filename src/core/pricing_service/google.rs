@@ -1,5 +1,16 @@
 //! Exact catalog resolution rules for Google pricing surfaces.
 
+use std::borrow::Cow;
+
+use chrono::{DateTime, Utc};
+
+use super::types::LiteLLMModelInfo;
+
+const GEMINI_FLASH_STANDARD_PRICING_START_UTC: i64 = 1_798_761_600;
+const GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN: f64 = 1.5e-6;
+const GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN: f64 = 7.5e-6;
+const GEMINI_FLASH_STANDARD_CACHE_READ_COST_PER_TOKEN: f64 = 1.5e-7;
+
 pub(super) const VERTEX_PROVIDER_ALIASES: &[&str] = &[
     "vertex_ai",
     "google",
@@ -27,6 +38,43 @@ pub(super) fn uses_google_completion_calculator(
     matches!(requested_provider, "gemini" | "vertex_ai")
         || catalog_provider == "vertex_ai"
         || catalog_provider.starts_with("vertex_ai_")
+}
+
+pub(super) fn effective_model_info_at<'a>(
+    requested_provider: &str,
+    resolved_model: &str,
+    model_info: &'a LiteLLMModelInfo,
+    pricing_time: DateTime<Utc>,
+) -> Cow<'a, LiteLLMModelInfo> {
+    if pricing_time.timestamp() < GEMINI_FLASH_STANDARD_PRICING_START_UTC {
+        return Cow::Borrowed(model_info);
+    }
+
+    let requested_provider = crate::core::pricing::normalize_pricing_provider(requested_provider);
+    let catalog_provider =
+        crate::core::pricing::normalize_pricing_provider(&model_info.litellm_provider);
+    if !uses_google_completion_calculator(&requested_provider, &catalog_provider) {
+        return Cow::Borrowed(model_info);
+    }
+
+    let parsed = crate::core::types::model_id::ModelIdRef::parse(resolved_model);
+    let local_model = parsed.model();
+    if !matches!(local_model, "gemini-3.6-flash" | "gemini-3.7-flash") {
+        return Cow::Borrowed(model_info);
+    }
+
+    let mut effective = model_info.clone();
+    effective.input_cost_per_token = Some(GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN);
+    effective.output_cost_per_token = Some(GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN);
+    effective.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::json!(GEMINI_FLASH_STANDARD_CACHE_READ_COST_PER_TOKEN),
+    );
+    effective.extra.insert(
+        "output_cost_per_reasoning_token".to_string(),
+        serde_json::json!(GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN),
+    );
+    Cow::Owned(effective)
 }
 
 pub(super) fn explicit_pricing_alias(provider: &str, model: &str) -> Option<&'static str> {

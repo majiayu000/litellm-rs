@@ -477,12 +477,23 @@ fn test_validate_model_with_provider_valid() {
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "anthropic").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.1-pro-preview", "google").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.7-flash", "google").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("google/gemini-3.7-flash", "google").is_ok());
 }
 
 #[test]
 fn test_validate_model_with_provider_invalid() {
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "anthropic").is_err());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "openai").is_err());
+    for near_match in [
+        "gemini-3.7-flash-preview",
+        "gemini-3.7-flash-20260813",
+        "gemini-3.7-flash-suffix",
+    ] {
+        assert!(
+            ModelUtils::validate_model_with_provider(near_match, "google").is_err(),
+            "stable Gemini 3.7 validation must reject {near_match}"
+        );
+    }
 }
 
 #[test]
