@@ -590,10 +590,7 @@ impl AnthropicClient {
     }
 
     pub(crate) fn is_claude_5_protocol_model(model: &str) -> bool {
-        matches!(
-            model,
-            "claude-fable-5" | "claude-opus-5" | "claude-sonnet-5"
-        )
+        matches!(model, "claude-opus-5" | "claude-sonnet-5")
     }
 
     pub(super) fn validate_claude_5_legacy_functions(
