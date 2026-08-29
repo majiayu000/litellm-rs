@@ -28,6 +28,7 @@ pub(super) const REMOTE_LITELLM_PRICING_SOURCE: &str =
 
 // Re-export public types
 pub use service::PricingService;
+pub(crate) use types::PricingSnapshot;
 pub use types::{
     CostRange, CostResult, CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingCostEstimate,
     PricingEventType, PricingStatistics, PricingUpdateEvent, PricingUsage,

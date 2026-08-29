@@ -3,6 +3,7 @@
 pub use crate::core::pricing::LiteLLMModelInfo;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Consolidated pricing data - single lock for all pricing state
@@ -23,6 +24,15 @@ impl Default for PricingData {
             last_updated: SystemTime::UNIX_EPOCH,
         }
     }
+}
+
+/// Clone-cheap immutable view of one atomically published pricing generation.
+///
+/// A request keeps this value for its whole attempt so refreshes cannot change
+/// the rates between reservation and settlement.
+#[derive(Debug, Clone)]
+pub(crate) struct PricingSnapshot {
+    pub(super) data: Arc<PricingData>,
 }
 
 /// Pricing update event

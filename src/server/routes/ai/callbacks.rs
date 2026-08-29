@@ -5,11 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::core::integrations::callback_runtime::CallbackMetricsPermit;
 use crate::core::integrations::{CallbackDispatcher, CallbackTerminalPermit};
-use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::pricing_service::PricingService;
+use crate::core::pricing_service::PricingUsage;
 use crate::core::traits::integration::{
     EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, LlmEndEvent, LlmErrorEvent,
     LlmStartEvent,
@@ -23,6 +24,7 @@ pub(super) struct CallbackLifecycle {
 
 struct CallbackLifecycleInner {
     dispatcher: CallbackDispatcher,
+    #[cfg(test)]
     pricing: Arc<PricingService>,
     request_id: String,
     user_id: Option<String>,
@@ -46,8 +48,7 @@ enum CallbackKind {
 struct CallbackTarget {
     provider: String,
     model: String,
-    pricing_provider: String,
-    pricing_model: String,
+    pricing: super::spend::RequestPricing,
 }
 
 impl CallbackLifecycle {
@@ -89,10 +90,13 @@ impl CallbackLifecycle {
         context: &RequestContext,
         kind: CallbackKind,
     ) -> Self {
+        #[cfg(not(test))]
+        drop(pricing);
         let requested_model = requested_model.into();
         Self {
             inner: Arc::new(CallbackLifecycleInner {
                 dispatcher: dispatcher.clone(),
+                #[cfg(test)]
                 pricing,
                 request_id: context.request_id.clone(),
                 user_id: context.user_id.clone(),
@@ -108,6 +112,7 @@ impl CallbackLifecycle {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn begin_provider_execution(
         &self,
         provider: impl Into<String>,
@@ -115,11 +120,24 @@ impl CallbackLifecycle {
         pricing_provider: impl Into<String>,
         pricing_model: impl Into<String>,
     ) {
+        let pricing = super::spend::RequestPricing::from_exact(
+            self.inner.pricing.as_ref(),
+            pricing_provider,
+            pricing_model,
+        );
+        self.begin_provider_execution_with_pricing(provider, model, pricing);
+    }
+
+    pub(super) fn begin_provider_execution_with_pricing(
+        &self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        pricing: super::spend::RequestPricing,
+    ) {
         let target = CallbackTarget {
             provider: provider.into(),
             model: model.into(),
-            pricing_provider: pricing_provider.into(),
-            pricing_model: pricing_model.into(),
+            pricing,
         };
         {
             let mut current_target = self.inner.target.lock();
@@ -264,42 +282,30 @@ impl CallbackLifecycle {
         if !self.has_started() {
             return;
         }
+        let target = self.inner.target.lock().clone();
+        let cost = match (target.as_ref(), pricing_usage) {
+            (Some(target), Some(usage)) if target.pricing.priced_parts().is_some() => {
+                match target.pricing.calculate_settlement(usage) {
+                    Ok(cost) => Some(cost.total_cost),
+                    Err(cost_error) => {
+                        self.fail(cost_error.to_string(), "pricing_error");
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
         if !self.claim_terminal() {
             return;
         }
         let terminal_permit = self.inner.terminal_permit.lock().take();
         let metrics_permit = self.inner.metrics_permit.lock().take();
 
-        let target = self.inner.target.lock().clone();
         let model = target
             .as_ref()
             .map(|target| target.model.as_str())
             .unwrap_or(&self.inner.requested_model);
         let provider = target.as_ref().map(|target| target.provider.clone());
-        let cost = target.as_ref().and_then(|target| {
-            pricing_usage.and_then(|usage| {
-                match self
-                    .inner
-                    .pricing
-                    .calculate_loaded_settlement_cost_for_provider(
-                        &target.pricing_provider,
-                        &target.pricing_model,
-                        usage,
-                    ) {
-                    Ok(cost) => Some(cost.total_cost),
-                    Err(cost_error) => {
-                        warn!(
-                            request_id = %self.inner.request_id,
-                            provider = %target.pricing_provider,
-                            model = %target.pricing_model,
-                            "Callback cost is unavailable: {}",
-                            cost_error
-                        );
-                        None
-                    }
-                }
-            })
-        });
 
         match self.inner.kind {
             CallbackKind::Llm => {
@@ -368,6 +374,7 @@ fn safe_callback_error_message(error_type: &str) -> &'static str {
         "timeout" => "provider request timed out",
         "client_disconnect" => "client disconnected",
         "cache_error" => "response cache operation failed",
+        "pricing_error" => "request pricing calculation failed",
         "serialization_error" => "response serialization failed",
         "conversion_error" => "provider response conversion failed",
         _ => "provider request failed",
@@ -495,6 +502,72 @@ mod tests {
         ));
         assert!(!rendered.contains("litellm_requests_total{model=\"first-model\""));
         assert!(rendered.contains("litellm_active_requests 0"));
+    }
+
+    #[tokio::test]
+    async fn priced_callback_failure_emits_error_instead_of_success_without_cost() {
+        let start_count = Arc::new(AtomicUsize::new(0));
+        let end_count = Arc::new(AtomicUsize::new(0));
+        let error_count = Arc::new(AtomicUsize::new(0));
+        let errors = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = Arc::new(IntegrationManager::new(
+            IntegrationManagerConfig::default().parallel(false),
+        ));
+        manager
+            .register(Arc::new(TerminalCounter {
+                start_count: Arc::clone(&start_count),
+                end_count: Arc::clone(&end_count),
+                error_count: Arc::clone(&error_count),
+                embedding_error_count: Arc::new(AtomicUsize::new(0)),
+                errors,
+            }))
+            .await;
+        let runtime = CallbackRuntime::new(manager, 4)
+            .expect("callback runtime should start for pricing failure test");
+        let pricing = Arc::new(PricingService::new(None));
+        pricing.add_custom_model(
+            "invalid-priced-model".to_string(),
+            crate::core::pricing_service::LiteLLMModelInfo {
+                max_tokens: Some(4096),
+                max_input_tokens: Some(4096),
+                max_output_tokens: Some(1024),
+                input_cost_per_token: None,
+                output_cost_per_token: None,
+                input_cost_per_character: None,
+                output_cost_per_character: None,
+                cost_per_second: None,
+                litellm_provider: "review-provider".to_string(),
+                mode: "chat".to_string(),
+                supports_function_calling: None,
+                supports_vision: None,
+                supports_streaming: None,
+                supports_parallel_function_calling: None,
+                supports_system_message: None,
+                extra: std::collections::HashMap::new(),
+            },
+        );
+        let lifecycle = CallbackLifecycle::new(
+            &runtime.dispatcher(),
+            pricing,
+            "wire-model",
+            &RequestContext::default(),
+        );
+        lifecycle.begin_provider_execution(
+            "review-provider",
+            "wire-model",
+            "review-provider",
+            "invalid-priced-model",
+        );
+
+        lifecycle.complete_usage(
+            Some(&crate::core::types::responses::Usage::new(1, 1)),
+            "success",
+        );
+        assert!(runtime.shutdown().await.is_ok());
+
+        assert_eq!(start_count.load(Ordering::SeqCst), 1);
+        assert_eq!(end_count.load(Ordering::SeqCst), 0);
+        assert_eq!(error_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]

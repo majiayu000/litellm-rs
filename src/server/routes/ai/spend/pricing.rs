@@ -3,16 +3,274 @@ use uuid::Uuid;
 use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation};
 use crate::core::keys::KeyManager;
-use crate::core::pricing_service::{PricingService, PricingUsage};
+use crate::core::pricing_service::{
+    CostResult, CostType, PricingCostBreakdown, PricingCostEstimate, PricingService,
+    PricingSnapshot, PricingUsage,
+};
 use crate::core::providers::Provider;
+use crate::core::providers::model_identity::DeploymentPricingIdentity;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::embedding::EmbeddingInput;
 use crate::core::types::model::ProviderCapability;
 use crate::utils::ai::counter::token_counter::TokenCounter;
+use std::sync::Arc;
+
+#[derive(Clone, Debug)]
+pub(in crate::server::routes::ai) enum PricingIdentity {
+    Priced { provider: String, model: String },
+    Unpriced { provider: String },
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::server::routes::ai) struct RequestPricing {
+    snapshot: PricingSnapshot,
+    identity: PricingIdentity,
+}
+
+impl RequestPricing {
+    #[cfg(test)]
+    pub(in crate::server::routes::ai) fn from_exact(
+        pricing: &PricingService,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        let snapshot = pricing.snapshot();
+        let identity = snapshot
+            .get_model_info_for_provider(&provider, &model)
+            .map_or_else(
+                || PricingIdentity::Unpriced {
+                    provider: provider.clone(),
+                },
+                |(resolved, _)| PricingIdentity::Priced {
+                    provider: provider.clone(),
+                    model: resolved,
+                },
+            );
+        Self { snapshot, identity }
+    }
+
+    pub(in crate::server::routes::ai) fn priced_parts(&self) -> Option<(&str, &str)> {
+        match &self.identity {
+            PricingIdentity::Priced { provider, model } => Some((provider, model)),
+            PricingIdentity::Unpriced { .. } => None,
+        }
+    }
+
+    pub(in crate::server::routes::ai) fn estimation_model<'a>(
+        &'a self,
+        fallback: &'a str,
+    ) -> &'a str {
+        self.priced_parts().map_or(fallback, |(_, model)| model)
+    }
+
+    pub(in crate::server::routes::ai) fn with_exact_priced_model(
+        &self,
+        model: &str,
+    ) -> Option<Self> {
+        let (provider, _) = self.priced_parts()?;
+        let (resolved, _) = self.snapshot.get_model_info_for_provider(provider, model)?;
+        (resolved == model).then(|| Self {
+            snapshot: self.snapshot.clone(),
+            identity: PricingIdentity::Priced {
+                provider: provider.to_string(),
+                model: resolved,
+            },
+        })
+    }
+
+    pub(in crate::server::routes::ai) fn model_info(
+        &self,
+    ) -> Option<crate::core::pricing_service::LiteLLMModelInfo> {
+        let (provider, model) = self.priced_parts()?;
+        self.snapshot
+            .get_model_info_for_provider(provider, model)
+            .map(|(_, info)| info)
+    }
+
+    fn pricing_error(&self) -> crate::utils::error::gateway_error::GatewayError {
+        let provider = match &self.identity {
+            PricingIdentity::Priced { provider, .. } | PricingIdentity::Unpriced { provider } => {
+                provider
+            }
+        };
+        crate::utils::error::gateway_error::GatewayError::Config(format!(
+            "request pricing is explicitly unavailable for provider '{provider}'"
+        ))
+    }
+
+    pub(in crate::server::routes::ai) fn estimate_completion(
+        &self,
+        input_tokens: u32,
+        max_output_tokens: Option<u32>,
+    ) -> crate::utils::error::gateway_error::Result<PricingCostEstimate> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        self.snapshot.estimate_loaded_completion_cost_for_provider(
+            provider,
+            model,
+            input_tokens,
+            max_output_tokens,
+        )
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_usage(
+        &self,
+        usage: &PricingUsage,
+    ) -> crate::utils::error::gateway_error::Result<PricingCostBreakdown> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        self.snapshot
+            .calculate_loaded_usage_cost_for_provider(provider, model, usage)
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_settlement(
+        &self,
+        usage: &PricingUsage,
+    ) -> crate::utils::error::gateway_error::Result<PricingCostBreakdown> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        self.snapshot
+            .calculate_loaded_settlement_cost_for_provider(provider, model, usage)
+    }
+
+    pub(in crate::server::routes::ai) fn has_time_pricing(&self) -> bool {
+        self.priced_parts()
+            .and_then(|(provider, model)| {
+                self.snapshot.get_model_info_for_provider(provider, model)
+            })
+            .is_some_and(|(_, info)| info.cost_per_second.is_some())
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_time(
+        &self,
+        total_time_seconds: f64,
+    ) -> crate::utils::error::gateway_error::Result<CostResult> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        let (resolved, info) = self
+            .snapshot
+            .get_model_info_for_provider(provider, model)
+            .ok_or_else(|| self.pricing_error())?;
+        let rate = info.cost_per_second.ok_or_else(|| {
+            crate::utils::error::gateway_error::GatewayError::Config(format!(
+                "time pricing is unavailable for '{provider}/{resolved}'"
+            ))
+        })?;
+        let total_cost = total_time_seconds * rate;
+        Ok(CostResult {
+            input_cost: 0.0,
+            output_cost: 0.0,
+            total_cost,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: resolved,
+            provider: info.litellm_provider,
+            cost_type: CostType::TimeBased,
+        })
+    }
+}
+
+pub(in crate::server::routes::ai) fn request_pricing_for_provider(
+    pricing_service: &Arc<PricingService>,
+    provider: &Provider,
+    model: &str,
+    surface: ProviderCapability,
+) -> Result<RequestPricing, ProviderError> {
+    request_pricing_for_provider_with_snapshot_hook(
+        pricing_service,
+        provider,
+        model,
+        surface,
+        || {},
+    )
+}
+
+fn request_pricing_for_provider_with_snapshot_hook(
+    pricing_service: &Arc<PricingService>,
+    provider: &Provider,
+    model: &str,
+    surface: ProviderCapability,
+    after_snapshot: impl FnOnce(),
+) -> Result<RequestPricing, ProviderError> {
+    let snapshot = pricing_service.snapshot();
+    after_snapshot();
+    if matches!(
+        provider.provider_type(),
+        ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
+    ) {
+        let bound_pricing = provider.runtime_pricing().ok_or_else(|| {
+            ProviderError::configuration(
+                "model_identity",
+                format!(
+                    "deployment '{model}' has no validated runtime model identity; configure settings.model_identity_mappings"
+                ),
+            )
+        })?;
+        if !Arc::ptr_eq(pricing_service, &bound_pricing) {
+            return Err(ProviderError::configuration(
+                "model_identity",
+                "selected deployment is bound to a different runtime pricing authority",
+            ));
+        }
+        let identity = provider.deployment_model_identity().ok_or_else(|| {
+            ProviderError::configuration(
+                "model_identity",
+                format!("deployment '{model}' lost its validated model identity"),
+            )
+        })?;
+        let identity = match identity.pricing_identity_for_surface(&surface) {
+            DeploymentPricingIdentity::Priced { provider, model } => PricingIdentity::Priced {
+                provider: provider.to_string(),
+                model: model.to_string(),
+            },
+            DeploymentPricingIdentity::Unpriced => PricingIdentity::Unpriced {
+                provider: provider.name().to_string(),
+            },
+            DeploymentPricingIdentity::NotApplicable => {
+                let (pricing_provider, pricing_model) =
+                    pricing_identity_for_provider(&snapshot, provider, model, surface);
+                let identity = snapshot
+                    .get_model_info_for_provider(&pricing_provider, &pricing_model)
+                    .map_or_else(
+                        || PricingIdentity::Unpriced {
+                            provider: pricing_provider.clone(),
+                        },
+                        |(resolved, _)| PricingIdentity::Priced {
+                            provider: pricing_provider.clone(),
+                            model: resolved,
+                        },
+                    );
+                return Ok(RequestPricing { snapshot, identity });
+            }
+        };
+        return Ok(RequestPricing { snapshot, identity });
+    }
+
+    let (pricing_provider, pricing_model) =
+        pricing_identity_for_provider(&snapshot, provider, model, surface);
+    let identity = snapshot
+        .get_model_info_for_provider(&pricing_provider, &pricing_model)
+        .map_or_else(
+            || PricingIdentity::Unpriced {
+                provider: pricing_provider.clone(),
+            },
+            |(resolved, _)| PricingIdentity::Priced {
+                provider: pricing_provider.clone(),
+                model: resolved,
+            },
+        );
+    Ok(RequestPricing { snapshot, identity })
+}
 
 pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
-    pricing_service: &PricingService,
+    pricing_snapshot: &PricingSnapshot,
     provider: &Provider,
     model: &str,
     surface: ProviderCapability,
@@ -61,7 +319,7 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     for pricing_provider in &provider_candidates {
         for pricing_model in &model_candidates {
             if let Some((resolved_model, _)) =
-                pricing_service.get_model_info_for_provider(pricing_provider, pricing_model)
+                pricing_snapshot.get_model_info_for_provider(pricing_provider, pricing_model)
             {
                 return (pricing_provider.clone(), resolved_model);
             }
@@ -92,52 +350,38 @@ fn unpriced_openai_mapping_identity(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_policy(
-    pricing_service: &PricingService,
+pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_request_pricing(
+    request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
     input: &EmbeddingInput,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
-    let prompt_tokens = estimate_embedding_input_tokens(pricing_model, input);
-    reserve_completion_budget_with_split_pricing(
-        pricing_service,
+    let prompt_tokens =
+        estimate_embedding_input_tokens(request_pricing.estimation_model(budget_model), input);
+    reserve_completion_budget_with_request_pricing(
+        request_pricing,
         pricing_config,
         budget_limits,
         budget_provider,
         budget_model,
-        pricing_provider,
-        pricing_model,
         prompt_tokens,
         Some(0),
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_policy(
-    pricing_service: &PricingService,
+pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_request_pricing(
+    request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
     usage: &PricingUsage,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
-    let cost = match pricing_service.calculate_loaded_usage_cost_for_provider(
-        pricing_provider,
-        pricing_model,
-        usage,
-    ) {
+    let cost = match request_pricing.calculate_usage(usage) {
         Ok(breakdown) => breakdown.total_cost,
         Err(error) => {
-            tracing::error!(
-                "cost estimation failed for pricing provider '{pricing_provider}' budget provider \
-                 '{budget_provider}' model '{budget_model}': {error}; applying unpriced model policy"
-            );
             return super::unpriced::reserve_unpriced_usage_budget(
                 pricing_config,
                 budget_limits,
@@ -148,12 +392,10 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_policy(
             );
         }
     };
-
     if cost <= 0.0 {
         super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
         return Ok(None);
     }
-
     budget_limits
         .reserve_spend(budget_provider, budget_model, cost)
         .map(Some)
@@ -163,32 +405,21 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_policy(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reservation_with_policy(
-    pricing_service: &PricingService,
+pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_request_pricing(
+    request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     key_manager: &KeyManager,
     api_key_id: Option<Uuid>,
     budget_provider: &str,
     budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
     usage: &PricingUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
-    let cost = match pricing_service.calculate_loaded_settlement_cost_for_provider(
-        pricing_provider,
-        pricing_model,
-        usage,
-    ) {
+    let cost = match request_pricing.calculate_settlement(usage) {
         Ok(breakdown) => breakdown.total_cost,
-        Err(error) => {
-            tracing::error!(
-                "cost calculation failed for pricing provider '{pricing_provider}' budget provider \
-                 '{budget_provider}' model '{budget_model}': {error}; settling through unpriced \
-                 model policy"
-            );
+        Err(_) => {
             super::unpriced::settle_unpriced_usage(
                 pricing_config,
                 budget_limits,
@@ -199,19 +430,15 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
                 usage,
                 budget_reservation,
                 key_budget_reservation,
-                "usage spend pricing unavailable",
+                "request pricing unavailable",
             )
             .await;
             return;
         }
     };
-
     if let Some(reservation) = budget_reservation {
         if let Err(error) = reservation.settle(cost) {
-            tracing::error!(
-                "failed to settle reserved budget for '{budget_provider}'/'{budget_model}': \
-                 {error:?}; spend not recorded because reservation settlement failed"
-            );
+            tracing::error!("failed to settle reserved budget: {error:?}");
         }
     } else {
         budget_limits.record_spend(budget_provider, budget_model, cost);
@@ -221,7 +448,6 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
         cost,
         &format!("{budget_provider}/{budget_model}"),
     );
-
     if let Some(key_id) = api_key_id {
         let total_tokens = super::unpriced::usage_units(usage);
         if let Err(error) = key_manager
@@ -233,47 +459,34 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reser
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn reserve_completion_budget_with_split_pricing(
-    pricing_service: &PricingService,
+fn reserve_completion_budget_with_request_pricing(
+    request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
     estimated_prompt_tokens: u32,
     max_output_tokens: Option<u32>,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
-    let estimate = match pricing_service.estimate_loaded_completion_cost_for_provider(
-        pricing_provider,
-        pricing_model,
-        estimated_prompt_tokens,
-        max_output_tokens,
-    ) {
-        Ok(estimate) => estimate,
-        Err(error) => {
-            tracing::error!(
-                "cost estimation failed for pricing provider '{pricing_provider}' budget provider \
-                 '{budget_provider}' model '{budget_model}': {error}; applying unpriced model policy"
-            );
-            return super::unpriced::reserve_unpriced_completion_budget(
-                pricing_config,
-                budget_limits,
-                budget_provider,
-                budget_model,
-                estimated_prompt_tokens,
-                max_output_tokens,
-                error,
-            );
-        }
-    };
-
+    let estimate =
+        match request_pricing.estimate_completion(estimated_prompt_tokens, max_output_tokens) {
+            Ok(estimate) => estimate,
+            Err(error) => {
+                return super::unpriced::reserve_unpriced_completion_budget(
+                    pricing_config,
+                    budget_limits,
+                    budget_provider,
+                    budget_model,
+                    estimated_prompt_tokens,
+                    max_output_tokens,
+                    error,
+                );
+            }
+        };
     if estimate.max_cost <= 0.0 {
         super::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
         return Ok(None);
     }
-
     budget_limits
         .reserve_spend(budget_provider, budget_model, estimate.max_cost)
         .map(Some)
@@ -302,26 +515,130 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
 #[cfg(test)]
 mod mapped_identity_tests {
     use super::*;
-    use crate::core::types::model::ProviderCapability;
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::pricing_service::LiteLLMModelInfo;
+    use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
+    use crate::core::router::unified::Router;
+    use std::collections::HashMap;
 
-    fn priced_model_info() -> crate::core::pricing_service::LiteLLMModelInfo {
-        crate::core::pricing_service::LiteLLMModelInfo {
-            max_tokens: Some(4096),
-            max_input_tokens: Some(4096),
-            max_output_tokens: Some(4096),
-            input_cost_per_token: Some(0.001),
-            output_cost_per_token: Some(0.002),
+    fn pricing_info(provider: &str, input: f64, output: f64) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
+            max_tokens: Some(4_096),
+            max_input_tokens: Some(4_096),
+            max_output_tokens: Some(1_024),
+            input_cost_per_token: Some(input),
+            output_cost_per_token: Some(output),
             input_cost_per_character: None,
             output_cost_per_character: None,
             cost_per_second: None,
-            litellm_provider: "openai".to_string(),
+            litellm_provider: provider.to_string(),
             mode: "chat".to_string(),
-            supports_function_calling: Some(true),
-            supports_vision: Some(false),
+            supports_function_calling: None,
+            supports_vision: None,
             supports_streaming: Some(true),
-            supports_parallel_function_calling: Some(true),
-            supports_system_message: Some(true),
-            extra: std::collections::HashMap::new(),
+            supports_parallel_function_calling: None,
+            supports_system_message: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_pricing_keeps_the_snapshot_pinned_across_a_refresh() {
+        let pricing = Arc::new(PricingService::new(None));
+        pricing.add_custom_model(
+            "race-model".to_string(),
+            pricing_info("race-provider", 0.01, 0.02),
+        );
+        let provider = Provider::OpenAILike(
+            OpenAILikeProvider::new_openai_compatible(
+                OpenAILikeConfig::new("https://example.com")
+                    .with_skip_api_key(true)
+                    .with_provider_name("race-provider"),
+            )
+            .await
+            .expect("test provider should build"),
+        );
+
+        let pinned = request_pricing_for_provider_with_snapshot_hook(
+            &pricing,
+            &provider,
+            "race-model",
+            ProviderCapability::ChatCompletion,
+            || {
+                pricing
+                    .add_custom_model("race-model".to_string(), pricing_info("openai", 1.0, 2.0));
+            },
+        )
+        .expect("the attempt should retain its original pricing generation");
+
+        assert_eq!(pinned.priced_parts(), Some(("race-provider", "race-model")));
+        let cost = pinned
+            .calculate_usage(&PricingUsage::new(10, 5))
+            .expect("the pinned generation should remain priceable");
+        assert!((cost.total_cost - 0.2).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn gateway_bound_legacy_mapping_only_changes_chat_pricing_identity() {
+        let pricing = Arc::new(PricingService::new(None));
+        pricing.add_custom_model(
+            "review-wire-alias".to_string(),
+            pricing_info("openai", 0.01, 0.02),
+        );
+        pricing.add_custom_model("gpt-4".to_string(), pricing_info("openai", 1.0, 2.0));
+        let mut config = ProviderConfig {
+            name: "review-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["review-wire-alias".to_string()],
+            ..Default::default()
+        };
+        config.settings.insert(
+            "model_mappings".to_string(),
+            serde_json::json!({"review-wire-alias": "gpt-4"}),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
+            .await
+            .expect("legacy chat mapping should bind through the production gateway");
+        let deployment = router
+            .get_deployment("review-openai-review-wire-alias")
+            .expect("configured deployment should be published");
+
+        for surface in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+        ] {
+            let request_pricing = request_pricing_for_provider(
+                &pricing,
+                &deployment.provider,
+                &deployment.model,
+                surface,
+            )
+            .expect("chat pricing should resolve");
+            assert_eq!(request_pricing.priced_parts(), Some(("openai", "gpt-4")));
+        }
+
+        for surface in [
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::ImageEdit,
+            ProviderCapability::ImageVariation,
+            ProviderCapability::Embeddings,
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::AudioTranslation,
+            ProviderCapability::TextToSpeech,
+        ] {
+            let request_pricing = request_pricing_for_provider(
+                &pricing,
+                &deployment.provider,
+                &deployment.model,
+                surface.clone(),
+            )
+            .expect("non-chat raw pricing should resolve");
+            assert_eq!(
+                request_pricing.priced_parts(),
+                Some(("openai", "review-wire-alias")),
+                "legacy chat mapping changed {surface:?} pricing"
+            );
         }
     }
 
@@ -355,6 +672,52 @@ mod mapped_identity_tests {
             None
         );
     }
+}
+
+#[cfg(test)]
+mod pricing_identity_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::core::pricing_service::LiteLLMModelInfo;
+
+    fn priced_model_info(provider: &str) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
+            max_tokens: Some(4096),
+            max_input_tokens: Some(4096),
+            max_output_tokens: Some(4096),
+            input_cost_per_token: Some(0.001),
+            output_cost_per_token: Some(0.002),
+            input_cost_per_character: None,
+            output_cost_per_character: None,
+            cost_per_second: None,
+            litellm_provider: provider.to_string(),
+            mode: "chat".to_string(),
+            supports_function_calling: Some(true),
+            supports_vision: Some(false),
+            supports_streaming: Some(true),
+            supports_parallel_function_calling: Some(true),
+            supports_system_message: Some(true),
+            extra: HashMap::new(),
+        }
+    }
+
+    async fn legacy_mapped_provider(provider_name: &str) -> Provider {
+        let mut config = crate::core::providers::openai::OpenAIConfig {
+            provider_name: provider_name.to_string(),
+            ..Default::default()
+        };
+        config.base.api_key = Some("sk-test".to_string());
+        config.model_mappings.insert(
+            "review-public-alias".to_string(),
+            "review-canonical-unpriced".to_string(),
+        );
+        Provider::OpenAI(
+            crate::core::providers::openai::OpenAIProvider::new(config)
+                .await
+                .expect("test provider should build"),
+        )
+    }
 
     #[test]
     fn retained_mapping_identity_does_not_price_non_image_requests() {
@@ -366,7 +729,6 @@ mod mapped_identity_tests {
             "canonical-model",
         )
         .expect("real mapping should retain canonical identity");
-
         let error = pricing
             .calculate_loaded_usage_cost_for_provider(&provider, &model, &PricingUsage::new(10, 5))
             .expect_err("identity retention must not invent a non-image price");
@@ -374,102 +736,52 @@ mod mapped_identity_tests {
     }
 
     #[tokio::test]
-    async fn production_resolver_preserves_explicit_unpriced_mapping_over_priced_raw_alias() {
+    async fn legacy_mapping_preserves_explicit_unpriced_target_and_provider() {
         let pricing = PricingService::new(None);
-        pricing.add_custom_model("review-public-alias".to_string(), priced_model_info());
-        let mut config = crate::core::providers::openai::OpenAIConfig::default();
-        config.base.api_key = Some("sk-test".to_string());
-        config.model_mappings.insert(
+        pricing.add_custom_model(
             "review-public-alias".to_string(),
-            "review-canonical-unpriced".to_string(),
+            priced_model_info("openai"),
         );
-        let provider = Provider::OpenAI(
-            crate::core::providers::openai::OpenAIProvider::new(config)
-                .await
-                .expect("test provider should build"),
-        );
-
-        let identity = pricing_identity_for_provider(
-            &pricing,
-            &provider,
-            "review-public-alias",
-            ProviderCapability::ChatCompletion,
-        );
-
-        assert_eq!(
-            identity,
-            (
-                "openai".to_string(),
-                "review-canonical-unpriced".to_string()
-            )
-        );
-    }
-
-    #[tokio::test]
-    async fn chat_mapping_preserves_configured_provider_when_target_is_unpriced() {
-        let pricing = PricingService::new(None);
-        let mut config = crate::core::providers::openai::OpenAIConfig {
-            provider_name: "review-custom-openai".to_string(),
-            ..Default::default()
-        };
-        config.base.api_key = Some("sk-test".to_string());
-        config.model_mappings.insert(
-            "review-public-alias".to_string(),
-            "review-canonical-unpriced".to_string(),
-        );
-        let provider = Provider::OpenAI(
-            crate::core::providers::openai::OpenAIProvider::new(config)
-                .await
-                .expect("test provider should build"),
-        );
-
-        let identity = pricing_identity_for_provider(
-            &pricing,
-            &provider,
-            "review-public-alias",
-            ProviderCapability::ChatCompletion,
-        );
-
-        assert_eq!(
-            identity,
-            (
-                "review-custom-openai".to_string(),
-                "review-canonical-unpriced".to_string()
-            )
-        );
+        for provider_name in ["openai", "review-custom-openai"] {
+            let provider = legacy_mapped_provider(provider_name).await;
+            assert_eq!(
+                pricing_identity_for_provider(
+                    &pricing.snapshot(),
+                    &provider,
+                    "review-public-alias",
+                    ProviderCapability::ChatCompletion,
+                ),
+                (
+                    provider_name.to_string(),
+                    "review-canonical-unpriced".to_string(),
+                )
+            );
+        }
     }
 
     #[tokio::test]
     async fn chat_only_mapping_does_not_change_non_chat_pricing_identity() {
         let pricing = PricingService::new(None);
-        let mut raw_info = priced_model_info();
-        raw_info.litellm_provider = "review-custom-openai".to_string();
-        pricing.add_custom_model("review-public-alias".to_string(), raw_info);
-        let mut config = crate::core::providers::openai::OpenAIConfig {
-            provider_name: "review-custom-openai".to_string(),
-            ..Default::default()
-        };
-        config.base.api_key = Some("sk-test".to_string());
-        config.model_mappings.insert(
+        pricing.add_custom_model(
             "review-public-alias".to_string(),
-            "review-canonical-unpriced".to_string(),
+            priced_model_info("review-custom-openai"),
         );
-        let provider = Provider::OpenAI(
-            crate::core::providers::openai::OpenAIProvider::new(config)
-                .await
-                .expect("test provider should build"),
-        );
-
+        let provider = legacy_mapped_provider("review-custom-openai").await;
         for surface in [
             ProviderCapability::Embeddings,
             ProviderCapability::ImageGeneration,
             ProviderCapability::AudioTranscription,
         ] {
             assert_eq!(
-                pricing_identity_for_provider(&pricing, &provider, "review-public-alias", surface,),
+                pricing_identity_for_provider(
+                    &pricing.snapshot(),
+                    &provider,
+                    "review-public-alias",
+                    surface,
+                ),
                 (
                     "review-custom-openai".to_string(),
-                    "review-public-alias".to_string()
+                    "review-public-alias".to_string(),
                 )
             );
         }

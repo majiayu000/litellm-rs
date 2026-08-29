@@ -4,13 +4,10 @@ use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
 use crate::core::pricing_service::PricingUsage;
-use crate::core::providers::{Provider, ProviderError};
-use crate::core::router::execution::router_error_to_provider_error;
+use crate::core::providers::ProviderError;
 use crate::core::types::context::RequestContext;
-use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
-use std::collections::HashSet;
 use tracing::warn;
 
 const BYPASS_CHAT_RESPONSE_CACHE_KEY: &str = "bypass_chat_response_cache";
@@ -130,11 +127,12 @@ pub(super) async fn store_embedding(
         .await
 }
 
-pub(super) fn ensure_chat_cache_pricing_gate(
-    state: &AppState,
+pub(super) fn ensure_chat_cache_pricing_for_attempt(
+    request_pricing: &super::spend::RequestPricing,
     request: &ChatCompletionRequest,
-) -> Result<(), GatewayError> {
-    let pricing = state.budgeted.pricing();
+    provider: &str,
+    model: &str,
+) -> Result<(), ProviderError> {
     let prompt_tokens = super::spend::estimate_chat_prompt_tokens(
         &request.model,
         &request.messages,
@@ -147,109 +145,77 @@ pub(super) fn ensure_chat_cache_pricing_gate(
         .max_completion_tokens
         .or(request.max_tokens)
         .or(Some(1));
-    ensure_cache_pricing_gate(
-        state,
-        &request.model,
-        ProviderCapability::ChatCompletion,
-        |provider, selected_model| {
-            let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                pricing.as_ref(),
-                provider,
-                selected_model,
-                ProviderCapability::ChatCompletion,
-            );
-            pricing
-                .estimate_loaded_completion_cost_for_provider(
-                    &pricing_provider,
-                    &pricing_model,
-                    prompt_tokens,
-                    output_tokens,
-                )
-                .map(|_| ())
-                .map_err(|error| {
-                    super::spend::model_not_priced_error(provider.name(), selected_model, error)
-                })
-        },
-    )
+    request_pricing
+        .estimate_completion(prompt_tokens, output_tokens)
+        .map(|_| ())
+        .map_err(|error| super::spend::model_not_priced_error(provider, model, error))
 }
 
-pub(super) fn ensure_embedding_cache_pricing_gate(
-    state: &AppState,
-    request: &EmbeddingRequest,
-) -> Result<(), GatewayError> {
-    let pricing = state.budgeted.pricing();
+pub(super) fn ensure_embedding_cache_pricing_for_attempt(
+    request_pricing: &super::spend::RequestPricing,
+    provider: &str,
+    model: &str,
+) -> Result<(), ProviderError> {
     let usage = PricingUsage::new(1, 0);
-    ensure_cache_pricing_gate(
-        state,
-        &request.model,
-        ProviderCapability::Embeddings,
-        |provider, selected_model| {
-            let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                pricing.as_ref(),
-                provider,
-                selected_model,
-                ProviderCapability::Embeddings,
-            );
-            pricing
-                .calculate_loaded_usage_cost_for_provider(&pricing_provider, &pricing_model, &usage)
-                .map(|_| ())
-                .map_err(|error| {
-                    super::spend::model_not_priced_error(provider.name(), selected_model, error)
-                })
-        },
-    )
-}
-
-fn ensure_cache_pricing_gate<F>(
-    state: &AppState,
-    requested_model: &str,
-    capability: ProviderCapability,
-    mut check: F,
-) -> Result<(), GatewayError>
-where
-    F: FnMut(&Provider, &str) -> Result<(), ProviderError>,
-{
-    let mut excluded_deployments = HashSet::new();
-    let mut last_error = None;
-
-    loop {
-        let lease = match state
-            .unified_router
-            .select_deployment_lease_for_capability_matching(
-                requested_model,
-                &capability,
-                |deployment| !excluded_deployments.contains(deployment.id.as_str()),
-            ) {
-            Ok(lease) => lease,
-            Err(router_error) => {
-                if let Some(error) = last_error {
-                    return Err(GatewayError::Provider(error));
-                }
-                return Err(GatewayError::Provider(router_error_to_provider_error(
-                    router_error,
-                )));
-            }
-        };
-
-        let deployment = lease.deployment();
-        match check(&deployment.provider, &deployment.model) {
-            Ok(()) => return Ok(()),
-            Err(error) if super::spend::is_model_not_priced_error(&error) => {
-                super::execution::observability::record_candidate_exclusion(
-                    deployment, &error, false,
-                );
-                excluded_deployments.insert(lease.clone_deployment_id());
-                last_error = Some(error);
-            }
-            Err(error) => return Err(GatewayError::Provider(error)),
-        }
-    }
+    request_pricing
+        .calculate_usage(&usage)
+        .map(|_| ())
+        .map_err(|error| super::spend::model_not_priced_error(provider, model, error))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::pricing_service::{LiteLLMModelInfo, PricingService};
+    use crate::server::routes::ai::spend::RequestPricing;
+    use std::collections::HashMap;
     use uuid::Uuid;
+
+    fn priced_model(provider: &str) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
+            max_tokens: Some(4096),
+            max_input_tokens: Some(4096),
+            max_output_tokens: Some(1024),
+            input_cost_per_token: Some(0.01),
+            output_cost_per_token: Some(0.02),
+            input_cost_per_character: None,
+            output_cost_per_character: None,
+            cost_per_second: None,
+            litellm_provider: provider.to_string(),
+            mode: "chat".to_string(),
+            supports_function_calling: None,
+            supports_vision: None,
+            supports_streaming: None,
+            supports_parallel_function_calling: None,
+            supports_system_message: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn cache_gate_cannot_substitute_a_priced_sibling_for_the_selected_attempt() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model(
+            "priced-sibling".to_string(),
+            priced_model("review-provider"),
+        );
+        let selected =
+            RequestPricing::from_exact(&pricing, "review-provider", "selected-explicitly-unpriced");
+        let request = ChatCompletionRequest {
+            model: "public-route".to_string(),
+            ..Default::default()
+        };
+
+        let error = ensure_chat_cache_pricing_for_attempt(
+            &selected,
+            &request,
+            "selected-provider",
+            "selected-wire-model",
+        )
+        .expect_err("the selected attempt must not borrow a priced sibling identity");
+
+        assert!(super::super::spend::is_model_not_priced_error(&error));
+    }
 
     #[test]
     fn chat_cache_identity_includes_api_key_token_cap() {

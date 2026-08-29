@@ -1,7 +1,4 @@
-//! Gateway configuration integration
-//!
-//! This module contains the from_gateway_config method for creating
-//! a Router from gateway configuration.
+//! Gateway configuration integration.
 
 #[cfg(test)]
 #[path = "gateway_config_tests.rs"]
@@ -18,6 +15,7 @@ use super::deployment::{
 };
 use super::error::RouterError;
 use super::gateway_aliases::normalize_model_aliases;
+use super::gateway_identity::{GatewayIdentityAuthority, default_models, take_identity_mappings};
 use super::unified::Router;
 use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
@@ -153,7 +151,6 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
     }
 }
 
-/// Build runtime router config from gateway YAML router config.
 pub fn runtime_router_config_from_gateway(
     config: &GatewayRouterConfig,
 ) -> Result<RouterConfig, String> {
@@ -171,10 +168,7 @@ pub fn runtime_router_config_from_gateway(
 }
 
 impl Router {
-    /// Create a Router from gateway configuration
-    ///
-    /// This method initializes a Router with deployments created from provider configurations.
-    /// Each provider in the config becomes a deployment in the router.
+    /// Create a router from gateway configuration.
     pub async fn from_gateway_config(
         providers: &[ProviderConfig],
         router_config: Option<RouterConfig>,
@@ -183,11 +177,20 @@ impl Router {
         Self::from_gateway_config_with_aliases(providers, router_config, &model_aliases).await
     }
 
-    /// Create a Router from gateway configuration with validated public aliases.
+    /// Create a router with validated public aliases.
     pub async fn from_gateway_config_with_aliases(
         providers: &[ProviderConfig],
         router_config: Option<RouterConfig>,
         model_aliases: &HashMap<String, String>,
+    ) -> Result<Self, RouterError> {
+        Self::from_gateway_config_with_identity(providers, router_config, model_aliases, None).await
+    }
+
+    pub(super) async fn from_gateway_config_with_identity(
+        providers: &[ProviderConfig],
+        router_config: Option<RouterConfig>,
+        model_aliases: &HashMap<String, String>,
+        identity_authority: Option<&GatewayIdentityAuthority>,
     ) -> Result<Self, RouterError> {
         GatewayConfig::validate_model_alias_map(model_aliases)
             .map_err(RouterError::InvalidConfiguration)?;
@@ -213,12 +216,13 @@ impl Router {
             }
 
             let construction = normalize_provider_construction(provider_config);
-            let normalized_config = construction.config;
+            let mut normalized_config = construction.config;
+            let identity_mappings =
+                take_identity_mappings(&mut normalized_config, identity_authority)?;
             let provider_name = normalized_config.name.clone();
             let configured_models = normalized_config.models.clone();
             let tags = normalized_config.tags.clone();
             let deployment_config = deployment_config_from_provider(&normalized_config)?;
-            // Create provider instance via the single canonical factory.
             let provider = create_provider(normalized_config).await.map_err(|e| {
                 RouterError::DeploymentNotFound(format!(
                     "Failed to create provider {}: {}",
@@ -228,16 +232,11 @@ impl Router {
             let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
 
-            // Determine which models this deployment serves.
             let uses_configured_models = !configured_models.is_empty();
             let mut models: Vec<String> = if uses_configured_models {
                 configured_models
             } else {
-                provider
-                    .list_models()
-                    .iter()
-                    .map(|m| m.id.clone())
-                    .collect()
+                default_models(&provider, identity_authority)
             };
             catalog_policy::canonicalize_models(provider.name(), &mut models);
 
@@ -275,10 +274,19 @@ impl Router {
                     )));
                 }
                 canonical_models.insert(model.clone());
+                let mut deployment_provider = provider.clone();
+                if let Some(authority) = identity_authority {
+                    authority.bind(
+                        &provider_name,
+                        &mut deployment_provider,
+                        &model,
+                        identity_mappings.get(&model),
+                    )?;
+                }
                 staged.push((
                     create_deployment_from_config(
                         &deployment_id,
-                        provider.clone(),
+                        deployment_provider,
                         &model,
                         deployment_config.clone(),
                         tags.clone(),
@@ -332,7 +340,6 @@ impl Router {
     }
 }
 
-/// Helper function to create deployment from provider config
 fn create_deployment_from_config(
     deployment_id: &str,
     provider: Provider,

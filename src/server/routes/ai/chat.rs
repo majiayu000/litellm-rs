@@ -7,7 +7,9 @@ use crate::core::models::openai::{
     ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentLogprob,
     ContentPart, Logprobs, MessageContent, MessageRole, Tool, ToolChoice, TopLogprob, Usage,
 };
-use crate::core::providers::{ChatContinuationRequest, ChatMessageContinuation, ProviderError};
+use crate::core::providers::{
+    ChatContinuationRequest, ChatContinuationResponse, ChatMessageContinuation, ProviderError,
+};
 use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
 };
@@ -37,6 +39,11 @@ use chat_sse::format_sse_error;
 pub(super) use chat_sse::sse_error_classification;
 #[path = "chat_streaming.rs"]
 mod chat_streaming;
+
+enum ChatAttemptResponse {
+    Cached(ChatCompletionResponse),
+    Provider(ChatContinuationResponse),
+}
 
 /// Chat completions endpoint
 ///
@@ -189,16 +196,11 @@ async fn handle_chat_completion_internal(
         build_core_chat_request(request.as_ref(), requested_model, false)?,
         extensions,
     )?;
-    if !opt_in
-        && let Some(cached) =
-            super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
-    {
-        super::response_cache::ensure_chat_cache_pricing_gate(state, request.as_ref())?;
-        crate::server::guardrails::check_chat_output(state, &cached).await?;
-        let extensions = vec![ChatMessageContinuation::new(); cached.choices.len()];
-        return ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
-            .map_err(GatewayError::internal);
-    }
+    let cached_response = if opt_in {
+        None
+    } else {
+        super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
+    };
     let requested_model = core_request.request().model.clone();
     let callback = CallbackLifecycle::new(
         &state.callbacks,
@@ -209,8 +211,6 @@ async fn handle_chat_completion_internal(
     let context_for_execution = Arc::clone(&context);
     let request_for_execution = Arc::clone(&request);
 
-    // Owned handles captured into the (retryable) execution closure so that the
-    // successful attempt records budget spend and per-key usage.
     let pricing_service = state.budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
     let key_manager = state.budgeted.key_manager();
@@ -235,8 +235,24 @@ async fn handle_chat_completion_internal(
             let budget_limits = budget_limits.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
+            let cached_response = cached_response.clone();
             async move {
                 let provider_name = provider.name().to_string();
+                let request_pricing = super::spend::request_pricing_for_provider(
+                    &pricing_service,
+                    &provider,
+                    &selected_model,
+                    ProviderCapability::ChatCompletion,
+                )?;
+                if let Some(cached) = cached_response {
+                    super::response_cache::ensure_chat_cache_pricing_for_attempt(
+                        &request_pricing,
+                        original_request.as_ref(),
+                        &provider_name,
+                        &selected_model,
+                    )?;
+                    return Ok((ChatAttemptResponse::Cached(cached), 0));
+                }
                 if has_continuation
                     && continuation_budget_enabled(
                         budget_limits.as_ref(),
@@ -250,12 +266,6 @@ async fn handle_chat_completion_internal(
                         "Anthropic continuation cannot be metered safely while an API-key, provider, or model budget is enabled",
                     ));
                 }
-                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                    pricing_service.as_ref(),
-                    &provider,
-                    &selected_model,
-                    ProviderCapability::ChatCompletion,
-                );
                 let (legacy_request, extensions) = core_request.into_parts();
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
@@ -272,19 +282,15 @@ async fn handle_chat_completion_internal(
                             request_for_provider.request().max_completion_tokens,
                         );
                 let provider_context = context.as_ref().clone();
-                let reserve_pricing_service = pricing_service.clone();
                 let settle_pricing_service = pricing_service.clone();
                 let reserve_pricing_config = pricing_config.clone();
                 let settle_pricing_config = pricing_config;
-                let reserve_pricing_provider = pricing_provider.clone();
-                let reserve_pricing_model = pricing_model.clone();
-                let settle_pricing_provider = pricing_provider;
-                let settle_pricing_model = pricing_model;
+                let reserve_request_pricing = request_pricing.clone();
+                let settle_request_pricing = request_pricing.clone();
                 let settle_key_manager = key_manager.clone();
                 let callback_provider = provider_name.clone();
                 let callback_model = selected_model.clone();
-                let callback_pricing_provider = reserve_pricing_provider.clone();
-                let callback_pricing_model = reserve_pricing_model.clone();
+                let callback_request_pricing = request_pricing;
                 budgeted
                     .for_selected_with_api_key_budget(
                         provider_name.clone(),
@@ -294,23 +300,20 @@ async fn handle_chat_completion_internal(
                     )
                     .reserve_call_settle(
                         |budget| {
-                            super::spend::reserve_chat_completion_budget_with_split_pricing(
-                                reserve_pricing_service.as_ref(),
+                            super::spend::reserve_chat_completion_budget_with_request_pricing(
+                                &reserve_request_pricing,
                                 &reserve_pricing_config,
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                &reserve_pricing_provider,
-                                &reserve_pricing_model,
                                 request_for_budget,
                             )
                         },
                         || {
-                            callback.begin_provider_execution(
+                            callback.begin_provider_execution_with_pricing(
                                 callback_provider,
                                 callback_model,
-                                callback_pricing_provider,
-                                callback_pricing_model,
+                                callback_request_pricing,
                             );
                             provider.chat_completion_with_continuation(
                                 request_for_provider,
@@ -331,14 +334,14 @@ async fn handle_chat_completion_internal(
                                 super::spend::record_completion_spend_with_reservation_with_policy(
                                     settle_pricing_service.as_ref(),
                                     &settle_pricing_config,
-                                    super::spend::usage_spend_settlement_with_pricing(
+                                    super::spend::usage_spend_settlement_with_request_pricing(
                                         (budget.budget_limits(), &settle_key_manager, api_key_id),
                                         (
                                             budget.provider(),
                                             budget.model(),
                                             response.response().usage.as_ref(),
                                         ),
-                                        (&settle_pricing_provider, &settle_pricing_model),
+                                        settle_request_pricing,
                                         budget_reservation,
                                         key_budget_reservation,
                                     ),
@@ -349,6 +352,7 @@ async fn handle_chat_completion_internal(
                         },
                     )
                     .await
+                    .map(|(response, tokens)| (ChatAttemptResponse::Provider(response), tokens))
             }
         },
     )
@@ -361,6 +365,15 @@ async fn handle_chat_completion_internal(
         }
     };
 
+    let core_response = match core_response {
+        ChatAttemptResponse::Cached(cached) => {
+            crate::server::guardrails::check_chat_output(state, &cached).await?;
+            let extensions = vec![ChatMessageContinuation::new(); cached.choices.len()];
+            return ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
+                .map_err(GatewayError::internal);
+        }
+        ChatAttemptResponse::Provider(response) => response,
+    };
     let (core_response, choice_extensions) = core_response.into_parts();
     let response = convert_core_chat_response(core_response);
     let guardrail_response =
