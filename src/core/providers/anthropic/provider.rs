@@ -1,7 +1,3 @@
-//! Anthropic Provider Implementation
-//!
-//! Implementation
-
 use futures::Stream;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -28,7 +24,6 @@ use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
 const COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 
-/// Anthropic Provider - unified implementation
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
     client: Box<AnthropicClient>,
@@ -36,7 +31,6 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    /// Create
     pub fn new(config: AnthropicConfig) -> Result<Self, ProviderError> {
         let client = AnthropicClient::new(config.clone())?;
         let supported_models = if config.uses_compatible_model_allow_list() {
@@ -169,14 +163,12 @@ impl AnthropicProvider {
             return Ok(());
         };
 
-        // Common validation: empty messages + max_tokens
         crate::core::providers::base::validate_chat_request_common(
             "anthropic",
             request,
             model_spec.limits.max_output_tokens,
         )?;
 
-        // Check multimodal content
         let has_multimodal_content = AnthropicClient::has_multimodal_content(request);
 
         if has_multimodal_content
@@ -193,7 +185,6 @@ impl AnthropicProvider {
             ));
         }
 
-        // Check tool calling support
         if request
             .tools
             .as_ref()
@@ -240,7 +231,18 @@ impl LLMProvider for AnthropicProvider {
             || self.client.allows_unknown_model(model)
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        if AnthropicClient::is_claude_5_protocol_model(model) {
+            return &[
+                "max_tokens",
+                "tools",
+                "tool_choice",
+                "stream",
+                "stop",
+                "reasoning_effort",
+                "response_format",
+            ];
+        }
         &[
             "temperature",
             "max_tokens",
@@ -258,7 +260,6 @@ impl LLMProvider for AnthropicProvider {
         mut params: HashMap<String, Value>,
         _model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        // Anthropic uses max_tokens instead of max_tokens_to_sample
         if let Some(max_tokens) = params.remove("max_tokens") {
             params.insert("max_tokens".to_string(), max_tokens);
         }
@@ -273,13 +274,11 @@ impl LLMProvider for AnthropicProvider {
     ) -> Result<Value, ProviderError> {
         self.validate_request(&request)?;
 
-        // Request
         let mut anthropic_request = serde_json::json!({
             "model": request.model,
             "messages": request.messages,
         });
 
-        // Add optional parameters
         if let Some(max_tokens) = request.max_tokens {
             anthropic_request["max_tokens"] = Value::Number(max_tokens.into());
         }
@@ -331,7 +330,6 @@ impl LLMProvider for AnthropicProvider {
         let response_text = String::from_utf8_lossy(raw_response);
         let anthropic_response: Value = serde_json::from_str(&response_text)?;
 
-        // Response
         let response = serde_json::from_value(anthropic_response)?;
         Ok(response)
     }

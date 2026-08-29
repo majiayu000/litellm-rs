@@ -10,8 +10,9 @@ use crate::core::providers::{
     ChatMessageContinuation,
 };
 use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
-use crate::core::types::chat::ChatRequest;
-use crate::core::types::message::MessageRole;
+use crate::core::types::chat::{ChatMessage, ChatRequest};
+use crate::core::types::content::ContentPart;
+use crate::core::types::message::{MessageContent, MessageRole};
 use crate::core::types::thinking::ThinkingEffort;
 
 use super::AnthropicClient;
@@ -23,6 +24,13 @@ pub(super) enum AnthropicEffort {
     High,
     XHigh,
     Max,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Claude5Model {
+    Fable,
+    Opus,
+    Sonnet,
 }
 
 impl AnthropicEffort {
@@ -81,8 +89,7 @@ impl AnthropicClient {
             registry.get_model_spec(&request.model)
         };
         let claude_5 = !self.config.uses_compatible_model_allow_list()
-            && model_spec.is_some()
-            && Self::is_claude_5_protocol_model(&request.model);
+            && Self::claude_5_model(&request.model).is_some();
         if model_spec.is_none() && !claude_5 && !self.config.allows_unknown_model(&request.model) {
             return Err(anthropic_api_error(
                 400,
@@ -91,6 +98,7 @@ impl AnthropicClient {
         }
         if claude_5 {
             Self::validate_claude_5_legacy_functions(request)?;
+            Self::validate_claude_5_request_shape(request)?;
         } else if request.reasoning_effort.is_some() {
             return Err(ProviderError::not_supported(
                 "anthropic",
@@ -142,9 +150,6 @@ impl AnthropicClient {
             ));
         }
 
-        // The Messages API only returns a single candidate; any n other than 1
-        // (including 0) cannot be honored, so reject it instead of silently
-        // returning the wrong number of choices.
         if let Some(n) = request.n
             && n != 1
         {
@@ -154,7 +159,6 @@ impl AnthropicClient {
             ));
         }
 
-        // Warn once about OpenAI-style parameters Anthropic has no equivalent for.
         let mut ignored_params = Vec::new();
         if request.frequency_penalty.is_some() {
             ignored_params.push("frequency_penalty");
@@ -191,7 +195,6 @@ impl AnthropicClient {
             anthropic_request["system"] = json!(system);
         }
 
-        // Add optional parameters
         if let Some(temperature) = request.temperature {
             anthropic_request["temperature"] = json!(temperature);
         }
@@ -215,7 +218,6 @@ impl AnthropicClient {
             anthropic_request["stop_sequences"] = json!(stop);
         }
 
-        // Add tool support
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {
@@ -249,7 +251,7 @@ impl AnthropicClient {
             if let Some((thinking, effort)) = Self::claude_5_thinking_config(request)? {
                 anthropic_request["thinking"] = thinking;
                 if let Some(effort) = effort {
-                    anthropic_request["output_config"] = json!({"effort": effort.as_str()});
+                    anthropic_request["output_config"]["effort"] = json!(effort.as_str());
                 }
             }
         } else if let Some(thinking) = &request.thinking
@@ -283,19 +285,19 @@ impl AnthropicClient {
             });
         }
 
-        // Structured outputs: pass json_schema response_format to Anthropic.
         if let Some(rf) = &request.response_format
             && rf.format_type == "json_schema"
             && let Some(schema) = &rf.json_schema
         {
-            anthropic_request["response_format"] = json!({
-                "type": "json_schema",
-                "json_schema": schema
-            });
+            if claude_5 {
+                anthropic_request["output_config"]["format"] =
+                    json!({"type": "json_schema", "schema": schema});
+            } else {
+                anthropic_request["response_format"] =
+                    json!({"type": "json_schema", "json_schema": schema});
+            }
         }
 
-        // Anthropic built-in (server-side) tools passed via extra_params.
-        // These are appended after any user-defined function tools.
         if let Some(arr) = request
             .extra_params
             .get("anthropic_tools")
@@ -381,6 +383,20 @@ impl AnthropicClient {
                 );
             }
             *wire_content = Value::Array(content);
+        }
+        if !self.config.uses_compatible_model_allow_list()
+            && Self::is_claude_5_protocol_model(&request.model)
+            && messages.last().is_some_and(|message| {
+                message["role"] == "assistant"
+                    && message["content"]
+                        .as_array()
+                        .is_some_and(|blocks| !blocks.is_empty())
+            })
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support assistant prefill", request.model),
+            ));
         }
         Ok(transformed)
     }
@@ -590,7 +606,78 @@ impl AnthropicClient {
     }
 
     pub(crate) fn is_claude_5_protocol_model(model: &str) -> bool {
-        matches!(model, "claude-opus-5" | "claude-sonnet-5")
+        Self::claude_5_model(model).is_some()
+    }
+
+    fn claude_5_model(model: &str) -> Option<Claude5Model> {
+        match model {
+            "claude-fable-5" => Some(Claude5Model::Fable),
+            "claude-opus-5" => Some(Claude5Model::Opus),
+            "claude-sonnet-5" => Some(Claude5Model::Sonnet),
+            _ => None,
+        }
+    }
+
+    fn validate_claude_5_request_shape(request: &ChatRequest) -> Result<(), ProviderError> {
+        let unsupported = if request.temperature.is_some_and(|value| value != 1.0) {
+            Some("temperature")
+        } else if request
+            .top_p
+            .is_some_and(|value| !value.is_finite() || !(0.99..=1.0).contains(&value))
+        {
+            Some("top_p")
+        } else if request.extra_params.contains_key("top_k") {
+            Some("top_k")
+        } else {
+            None
+        };
+        if let Some(parameter) = unsupported {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} does not support non-default {parameter}",
+                    request.model
+                ),
+            ));
+        }
+        if Self::has_trailing_assistant_prefill(request) {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support assistant prefill", request.model),
+            ));
+        }
+        Ok(())
+    }
+
+    fn has_trailing_assistant_prefill(request: &ChatRequest) -> bool {
+        request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                !matches!(message.role, MessageRole::System | MessageRole::Developer)
+                    && Self::message_has_payload(message)
+            })
+            .is_some_and(|message| message.role == MessageRole::Assistant)
+    }
+
+    fn message_has_payload(message: &ChatMessage) -> bool {
+        let content = match message.content.as_ref() {
+            Some(MessageContent::Text(text)) => !text.trim().is_empty(),
+            Some(MessageContent::Parts(parts)) => parts.iter().any(|part| match part {
+                ContentPart::Text { text } => !text.trim().is_empty(),
+                _ => true,
+            }),
+            None => false,
+        };
+        content
+            || message.audio.is_some()
+            || message.thinking.is_some()
+            || message.function_call.is_some()
+            || message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty())
     }
 
     pub(super) fn validate_claude_5_legacy_functions(
@@ -620,29 +707,26 @@ impl AnthropicClient {
     pub(super) fn claude_5_thinking_config(
         request: &ChatRequest,
     ) -> Result<Option<(Value, Option<AnthropicEffort>)>, ProviderError> {
+        let model = Self::claude_5_model(&request.model).ok_or_else(|| {
+            ProviderError::not_supported(
+                "anthropic",
+                format!("Model {} is not an exact Claude 5 model", request.model),
+            )
+        })?;
         let requested_effort = request
             .reasoning_effort
             .as_deref()
             .map(Self::parse_reasoning_effort)
             .transpose()?;
         let Some(thinking) = request.thinking.as_ref() else {
-            return Ok(requested_effort.map(|effort| {
-                (
+            return Ok(Some(match requested_effort {
+                Some(effort) => (
                     json!({"type": "adaptive", "display": "summarized"}),
                     Some(effort),
-                )
+                ),
+                None => (json!({"type": "adaptive"}), None),
             }));
         };
-
-        if !thinking.enabled {
-            if requested_effort.is_some() {
-                return Err(ProviderError::invalid_request(
-                    "anthropic",
-                    "reasoning_effort conflicts with thinking.enabled=false",
-                ));
-            }
-            return Ok(Some((json!({"type": "disabled"}), None)));
-        }
         if thinking.budget_tokens.is_some() {
             return Err(ProviderError::invalid_request(
                 "anthropic",
@@ -663,6 +747,23 @@ impl AnthropicClient {
             ));
         }
         let effort = typed_effort.or(requested_effort);
+        if !thinking.enabled {
+            if model == Claude5Model::Fable {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "claude-fable-5 cannot disable thinking",
+                ));
+            }
+            if model == Claude5Model::Opus
+                && matches!(effort, Some(AnthropicEffort::XHigh | AnthropicEffort::Max))
+            {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "claude-opus-5 cannot disable thinking at xhigh or max effort",
+                ));
+            }
+            return Ok(Some((json!({"type": "disabled"}), effort)));
+        }
         Ok(Some((
             json!({
                 "type": "adaptive",

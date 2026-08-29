@@ -2,10 +2,11 @@ use serde_json::json;
 
 use super::*;
 use crate::core::net::ProviderEndpointAccess;
-use crate::core::providers::anthropic::config::AnthropicConfig;
+use crate::core::providers::anthropic::{AnthropicConfig, AnthropicProvider};
 use crate::core::providers::{
     AnthropicContentBlockOrder, ChatContinuationRequest, ChatMessageContinuation,
 };
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::anthropic_continuation::{
     AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
 };
@@ -16,7 +17,8 @@ use crate::core::types::content::{
 use crate::core::types::message::{MessageContent, MessageRole};
 use crate::core::types::thinking::{ThinkingConfig, ThinkingEffort};
 use crate::core::types::tools::{
-    FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
+    FunctionCall, FunctionChoice, FunctionDefinition, ResponseFormat, Tool, ToolCall, ToolChoice,
+    ToolType,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -184,42 +186,121 @@ async fn continuation_send_path_adds_interleaved_beta_once() {
 }
 
 #[test]
-fn reasoning_effort_maps_once_to_adaptive_output_config() {
-    let mut request = ChatRequest::new("claude-opus-5").add_user_message("solve");
-    request.reasoning_effort = Some("high".to_string());
-
-    let (thinking, effort) = AnthropicClient::claude_5_thinking_config(&request)
-        .expect("exact Claude 5 reasoning must be valid")
-        .expect("reasoning enables thinking");
-
-    assert_eq!(thinking["type"], "adaptive");
-    assert_eq!(effort.expect("effort").as_str(), "high");
-}
-
-#[test]
-fn claude5_extended_reasoning_efforts_map_without_downshifting() {
-    for model in ["claude-opus-5", "claude-sonnet-5"] {
-        for effort in ["xhigh", "max"] {
-            let mut request = ChatRequest::new(model).add_user_message("solve");
-            request.reasoning_effort = Some(effort.to_string());
-
-            let (thinking, output_effort) = AnthropicClient::claude_5_thinking_config(&request)
-                .expect("official Claude 5 effort must be accepted")
-                .expect("reasoning effort enables adaptive thinking");
-
-            assert_eq!(thinking["type"], "adaptive");
-            assert_eq!(output_effort.expect("effort").as_str(), effort);
-        }
-    }
-}
-
-#[test]
-fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
+fn claude5_policy_is_exact_defaults_adaptive_and_reports_supported_params() {
     let client = anthropic_client();
+    let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key")).unwrap();
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let wire = client
+            .transform_chat_request(&ChatRequest::new(model).add_user_message("solve"))
+            .expect("exact Claude 5 IDs use protocol policy before catalog registration");
+        assert_eq!(wire["thinking"], json!({"type": "adaptive"}));
+        let params = provider.get_supported_openai_params(model);
+        assert!(params.contains(&"reasoning_effort"));
+        assert!(params.contains(&"response_format"));
+        assert!(
+            !params
+                .iter()
+                .any(|p| matches!(*p, "temperature" | "top_p" | "top_k"))
+        );
+        let mut formatted = ChatRequest::new(model).add_user_message("solve");
+        formatted.reasoning_effort = Some("high".to_string());
+        formatted.response_format = Some(ResponseFormat {
+            format_type: "json_schema".to_string(),
+            json_schema: Some(json!({"type": "object"})),
+            response_type: None,
+        });
+        let formatted = client.transform_chat_request(&formatted).unwrap();
+        assert_eq!(formatted["output_config"]["effort"], "high");
+        assert_eq!(formatted["output_config"]["format"]["type"], "json_schema");
+        assert!(formatted.get("response_format").is_none());
+    }
+    for model in [
+        "Claude-Fable-5",
+        "claude-fable-5-latest",
+        "claude-opus-5-20260801",
+    ] {
+        assert!(
+            client
+                .transform_chat_request(&ChatRequest::new(model).add_user_message("solve"))
+                .is_err()
+        );
+    }
+    assert!(
+        !provider
+            .get_supported_openai_params("Claude-Fable-5")
+            .contains(&"reasoning_effort")
+    );
+}
 
+#[test]
+fn claude5_disabled_thinking_obeys_model_effort_policy() {
+    let client = anthropic_client();
+    for effort in [None, Some("low"), Some("high")] {
+        let mut opus = ChatRequest::new("claude-opus-5").add_user_message("solve");
+        opus.thinking = Some(ThinkingConfig::new());
+        opus.reasoning_effort = effort.map(str::to_string);
+        let wire = client
+            .transform_chat_request(&opus)
+            .expect("Opus allows disabled at high or below");
+        assert_eq!(wire["thinking"], json!({"type": "disabled"}));
+    }
+    for effort in ["xhigh", "max"] {
+        let mut opus = ChatRequest::new("claude-opus-5").add_user_message("solve");
+        opus.thinking = Some(ThinkingConfig::new());
+        opus.reasoning_effort = Some(effort.to_string());
+        assert!(client.transform_chat_request(&opus).is_err());
+    }
+    let mut sonnet = ChatRequest::new("claude-sonnet-5").add_user_message("solve");
+    sonnet.thinking = Some(ThinkingConfig::new());
+    sonnet.reasoning_effort = Some("max".to_string());
+    assert_eq!(
+        client.transform_chat_request(&sonnet).unwrap()["thinking"]["type"],
+        "disabled"
+    );
+
+    let mut fable = ChatRequest::new("claude-fable-5").add_user_message("solve");
+    fable.thinking = Some(ThinkingConfig::new());
+    assert!(client.transform_chat_request(&fable).is_err());
+}
+
+#[test]
+fn claude5_rejects_manual_thinking_non_default_sampling_and_prefill() {
+    let client = anthropic_client();
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let mut compatible = ChatRequest::new(model).add_user_message("solve");
+        compatible.temperature = Some(1.0);
+        compatible.top_p = Some(0.99);
+        assert!(client.transform_chat_request(&compatible).is_ok());
+
+        for (field, value) in [
+            ("temperature", json!(0.5)),
+            ("top_p", json!(0.5)),
+            ("top_k", json!(5)),
+        ] {
+            let mut invalid = ChatRequest::new(model).add_user_message("solve");
+            match field {
+                "temperature" => invalid.temperature = value.as_f64().map(|v| v as f32),
+                "top_p" => invalid.top_p = value.as_f64().map(|v| v as f32),
+                _ => {
+                    invalid.extra_params.insert(field.to_string(), value);
+                }
+            }
+            assert!(
+                client.transform_chat_request(&invalid).is_err(),
+                "{model} accepted {field}"
+            );
+        }
+        let mut manual = ChatRequest::new(model).add_user_message("solve");
+        manual.thinking = Some(ThinkingConfig::new().enabled().with_budget(1024));
+        assert!(client.transform_chat_request(&manual).is_err());
+        let prefill = ChatRequest::new(model)
+            .add_user_message("solve")
+            .add_assistant_message("answer");
+        assert!(client.transform_chat_request(&prefill).is_err());
+    }
     let mut invalid = ChatRequest::new("claude-opus-5").add_user_message("solve");
     invalid.reasoning_effort = Some("maximum".to_string());
-    assert!(AnthropicClient::claude_5_thinking_config(&invalid).is_err());
+    assert!(client.transform_chat_request(&invalid).is_err());
 
     let mut conflict = ChatRequest::new("claude-opus-5").add_user_message("solve");
     conflict.reasoning_effort = Some("high".to_string());
@@ -228,16 +309,32 @@ fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
             .enabled()
             .with_effort(ThinkingEffort::Low),
     );
-    assert!(AnthropicClient::claude_5_thinking_config(&conflict).is_err());
-
-    let mut manual = ChatRequest::new("claude-opus-5").add_user_message("solve");
-    manual.reasoning_effort = Some("medium".to_string());
-    manual.thinking = Some(ThinkingConfig::new().enabled().with_budget(1024));
-    assert!(AnthropicClient::claude_5_thinking_config(&manual).is_err());
+    assert!(client.transform_chat_request(&conflict).is_err());
 
     let mut old_model = ChatRequest::new("claude-3-opus-20240229").add_user_message("solve");
     old_model.reasoning_effort = Some("high".to_string());
     assert!(client.transform_chat_request(&old_model).is_err());
+}
+
+#[test]
+fn claude5_rejects_extension_only_terminal_assistant_prefill() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        let mut request = ChatRequest::new(model).add_user_message("solve");
+        request.messages.push(ChatMessage {
+            role: MessageRole::Assistant,
+            ..Default::default()
+        });
+        let error = anthropic_client()
+            .transform_chat_request_with_extensions(
+                &request,
+                &[
+                    ChatMessageContinuation::new(),
+                    signed_continuation_extension(),
+                ],
+            )
+            .expect_err("sidecar-only terminal assistant payload is still a prefill");
+        assert!(error.to_string().contains("assistant prefill"));
+    }
 }
 
 #[test]
