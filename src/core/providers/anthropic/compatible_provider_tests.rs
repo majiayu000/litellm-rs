@@ -21,9 +21,30 @@ fn only_priced_standalone_claude_5_is_published_as_supported() {
     let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
         .unwrap_or_else(|err| panic!("provider should build: {err}"));
 
+    let published = provider.models();
+    let fable = published
+        .iter()
+        .find(|model| model.id == "claude-fable-5")
+        .expect("the exact priced standalone Fable ID must be listed for gateway construction");
+    assert_eq!(fable.provider, "anthropic");
+    assert_eq!(fable.max_context_length, 1_000_000);
+    assert_eq!(fable.max_output_length, Some(128_000));
+    assert!(fable.supports_streaming);
+    assert!(fable.supports_tools);
+    assert!(fable.supports_multimodal);
+    assert_eq!(fable.input_cost_per_1k_tokens, None);
+    assert_eq!(fable.output_cost_per_1k_tokens, None);
+
     assert!(provider.supports_model("claude-fable-5"));
-    assert!(!provider.supports_model("claude-opus-5"));
-    assert!(!provider.supports_model("claude-sonnet-5"));
+    for unsupported in [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "Claude-fable-5",
+        "claude-fable-5-latest",
+    ] {
+        assert!(!provider.supports_model(unsupported));
+        assert!(published.iter().all(|model| model.id != unsupported));
+    }
 }
 
 #[tokio::test]

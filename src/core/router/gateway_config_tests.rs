@@ -309,3 +309,39 @@ fn unambiguously_chat_only_provider_can_opt_into_native_probe() {
 
     assert!(provider.validate_health_check_runtime().is_ok());
 }
+
+#[tokio::test]
+async fn default_anthropic_gateway_routes_only_exact_standalone_fable() {
+    use super::*;
+
+    let provider = ProviderConfig {
+        name: "anthropic-primary".to_string(),
+        provider_type: "anthropic".to_string(),
+        api_key: "sk-ant-test-key-long-enough-for-validation".to_string(),
+        models: Vec::new(),
+        ..ProviderConfig::default()
+    };
+    let router = Router::from_gateway_config(&[provider], None)
+        .await
+        .expect("default Anthropic provider should build");
+
+    let deployments = router.get_deployments_for_model("claude-fable-5");
+    assert_eq!(
+        deployments,
+        vec!["anthropic-primary-claude-fable-5".to_string()]
+    );
+    let selected = router
+        .select_deployment_lease("claude-fable-5")
+        .expect("exact Fable must be selectable from the default provider model list");
+    assert_eq!(selected.deployment_id(), deployments[0]);
+
+    for unsupported in [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "Claude-fable-5",
+        "claude-fable-5-latest",
+    ] {
+        assert!(router.get_deployments_for_model(unsupported).is_empty());
+        assert!(router.select_deployment_lease(unsupported).is_err());
+    }
+}

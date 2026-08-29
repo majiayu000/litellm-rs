@@ -11,7 +11,36 @@ mod cost;
 
 pub use cost::CostCalculator;
 
-use crate::core::types::model::ModelInfo;
+use crate::core::types::model::{ModelInfo, ProviderCapability};
+
+/// Provider-routing metadata for the exact standalone Fable exception.
+///
+/// Pricing intentionally remains absent here: spend uses the runtime pricing
+/// authority, which already has this exact ID. Once the native registry gains
+/// Fable, its catalog entry wins and this fallback is not inserted.
+pub(super) fn standalone_fable_model_info() -> ModelInfo {
+    ModelInfo {
+        id: "claude-fable-5".to_string(),
+        name: "Claude Fable 5".to_string(),
+        provider: "anthropic".to_string(),
+        max_context_length: 1_000_000,
+        max_output_length: Some(128_000),
+        supports_streaming: true,
+        supports_tools: true,
+        supports_multimodal: true,
+        input_cost_per_1k_tokens: None,
+        output_cost_per_1k_tokens: None,
+        currency: "USD".to_string(),
+        capabilities: vec![
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::ToolCalling,
+        ],
+        created_at: None,
+        updated_at: None,
+        metadata: HashMap::new(),
+    }
+}
 
 /// Model
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

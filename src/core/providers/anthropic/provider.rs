@@ -19,7 +19,7 @@ use std::pin::Pin;
 
 use super::client::AnthropicClient;
 use super::config::AnthropicConfig;
-use super::models::{ModelFeature, get_anthropic_registry};
+use super::models::{ModelFeature, get_anthropic_registry, standalone_fable_model_info};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 const COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 
@@ -58,11 +58,15 @@ impl AnthropicProvider {
                 .collect()
         } else {
             let registry = get_anthropic_registry();
-            registry
+            let mut models = registry
                 .list_models()
                 .into_iter()
                 .map(|spec| spec.model_info.clone())
-                .collect()
+                .collect::<Vec<_>>();
+            if !models.iter().any(|model| model.id == "claude-fable-5") {
+                models.push(standalone_fable_model_info());
+            }
+            models
         };
 
         Ok(Self {
