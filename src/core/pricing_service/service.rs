@@ -6,7 +6,8 @@ use super::types::{
 };
 use crate::core::http::outbound::default_outbound_client;
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use parking_lot::RwLock;
+use arc_swap::ArcSwap;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -56,8 +57,10 @@ pub(super) fn require_total_time_seconds(
 /// Pricing service using LiteLLM data format
 #[derive(Debug, Clone)]
 pub struct PricingService {
-    /// Consolidated pricing data - single lock for model data and timestamp
-    pub(super) pricing_data: Arc<RwLock<PricingData>>,
+    /// Immutable model/index/timestamp snapshot published atomically.
+    pub(super) pricing_data: Arc<ArcSwap<PricingData>>,
+    /// Serializes writers so insert and refresh cannot lose each other's update.
+    pub(super) pricing_write_lock: Arc<Mutex<()>>,
     /// HTTP client for fetching updates
     pub(super) http_client: reqwest::Client,
     /// Pricing data source URL
@@ -77,10 +80,8 @@ impl PricingService {
         let use_embedded_fallback_on_remote_error = false;
 
         let service = Self {
-            pricing_data: Arc::new(RwLock::new(PricingData {
-                models: HashMap::new(),
-                last_updated: SystemTime::UNIX_EPOCH,
-            })),
+            pricing_data: Arc::new(ArcSwap::from_pointee(PricingData::default())),
+            pricing_write_lock: Arc::new(Mutex::new(())),
             http_client: default_outbound_client().clone(),
             pricing_url: pricing_url.unwrap_or_default(),
             use_embedded_fallback_on_remote_error,
@@ -95,12 +96,12 @@ impl PricingService {
     pub(super) fn should_fallback_to_embedded_on_remote_error(&self) -> bool {
         self.use_embedded_fallback_on_remote_error
             && self.pricing_url == super::REMOTE_LITELLM_PRICING_SOURCE
-            && self.pricing_data.read().models.is_empty()
+            && self.pricing_data.load().models.is_empty()
     }
 
     /// Get model information
     pub fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
-        let data = self.pricing_data.read();
+        let data = self.pricing_data.load();
         data.models.get(model).cloned()
     }
 
@@ -210,7 +211,7 @@ impl PricingService {
 
     /// Get all available models for a provider
     pub fn get_models_by_provider(&self, provider: &str) -> Vec<String> {
-        let data = self.pricing_data.read();
+        let data = self.pricing_data.load();
         data.models
             .iter()
             .filter(|(_, info)| info.litellm_provider == provider)
@@ -220,7 +221,7 @@ impl PricingService {
 
     /// Get all available providers
     pub fn get_providers(&self) -> Vec<String> {
-        let data = self.pricing_data.read();
+        let data = self.pricing_data.load();
         let mut providers: Vec<String> = data
             .models
             .values()
@@ -234,9 +235,14 @@ impl PricingService {
 
     /// Add custom model pricing
     pub fn add_custom_model(&self, model: String, model_info: LiteLLMModelInfo) {
+        let timestamp = SystemTime::now();
         {
-            let mut data = self.pricing_data.write();
-            data.models.insert(model.clone(), model_info.clone());
+            let _write_guard = self.pricing_write_lock.lock();
+            let current = self.pricing_data.load_full();
+            let mut models = current.models.clone();
+            models.insert(model.clone(), model_info.clone());
+            self.pricing_data
+                .store(Arc::new(build_pricing_data(models, current.last_updated)));
         }
 
         // Send update event
@@ -244,13 +250,13 @@ impl PricingService {
             event_type: PricingEventType::ModelAdded,
             model,
             provider: model_info.litellm_provider,
-            timestamp: SystemTime::now(),
+            timestamp,
         });
     }
 
     /// Get pricing statistics
     pub fn get_statistics(&self) -> PricingStatistics {
-        let data = self.pricing_data.read();
+        let data = self.pricing_data.load();
         let total_models = data.models.len();
 
         let mut provider_stats = HashMap::new();
@@ -285,6 +291,31 @@ impl PricingService {
             cost_ranges,
             last_updated: data.last_updated,
         }
+    }
+}
+
+pub(super) fn build_pricing_data(
+    models: HashMap<String, LiteLLMModelInfo>,
+    last_updated: SystemTime,
+) -> PricingData {
+    let mut exact_by_provider: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+    for (canonical, info) in &models {
+        let provider = crate::core::pricing::normalize_pricing_provider(&info.litellm_provider);
+        exact_by_provider
+            .entry(provider)
+            .or_default()
+            .entry(canonical.to_ascii_lowercase())
+            .or_default()
+            .push(canonical.clone());
+    }
+    for candidates in exact_by_provider.values_mut().flat_map(HashMap::values_mut) {
+        candidates.sort();
+        candidates.dedup();
+    }
+    PricingData {
+        models,
+        exact_by_provider,
+        last_updated,
     }
 }
 
@@ -376,9 +407,40 @@ mod tests {
     #[test]
     fn test_pricing_service_initial_state() {
         let service = PricingService::new(None);
-        let data = service.pricing_data.read();
+        let data = service.pricing_data.load();
         assert!(data.models.is_empty());
         assert_eq!(data.last_updated, SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn add_custom_model_preserves_catalog_refresh_age() {
+        let service = PricingService::new(None);
+        let catalog_timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+        service.pricing_data.store(Arc::new(build_pricing_data(
+            HashMap::from([(
+                "catalog-model".to_string(),
+                create_test_model_info("catalog-provider"),
+            )]),
+            catalog_timestamp,
+        )));
+        assert!(service.needs_refresh());
+        let mut updates = service.subscribe_to_updates();
+
+        service.add_custom_model(
+            "custom-model".to_string(),
+            create_test_model_info("custom-provider"),
+        );
+
+        assert_eq!(service.pricing_data.load().last_updated, catalog_timestamp);
+        assert!(
+            service.needs_refresh(),
+            "custom insertion must not postpone a due catalog refresh"
+        );
+        let event = updates
+            .try_recv()
+            .expect("custom insertion should still publish an update event");
+        assert!(event.timestamp > catalog_timestamp);
+        assert_eq!(event.model, "custom-model");
     }
 
     // ==================== Model Info Tests ====================

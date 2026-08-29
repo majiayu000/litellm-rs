@@ -515,7 +515,11 @@ fn provider_pricing_fails_closed_for_mismatched_flat_image_variant() {
         .push("1024-x-1024/flat-variant-model".to_string());
 
     let error = service
-        .calculate_loaded_usage_cost_for_provider("bedrock", "flat-variant-model", &usage)
+        .calculate_loaded_usage_cost_for_provider(
+            "bedrock",
+            "1024-x-1024/50-steps/flat-variant-model",
+            &usage,
+        )
         .unwrap_err();
 
     assert!(error.to_string().contains("output_image_pricing_keys"));

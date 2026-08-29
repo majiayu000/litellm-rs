@@ -89,6 +89,7 @@ pub(super) async fn handle_streaming_chat_completion(
                     pricing_service.as_ref(),
                     &provider,
                     &selected_model,
+                    ProviderCapability::ChatCompletionStream,
                 );
                 let request_for_provider = token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
