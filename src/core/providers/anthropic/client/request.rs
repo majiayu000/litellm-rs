@@ -429,7 +429,12 @@ impl AnthropicClient {
         let budget = 10_000_u32;
         let current_max = request.max_tokens.unwrap_or(4096);
         if current_max <= budget {
-            transformed["max_tokens"] = json!(budget + 1);
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic signed continuation requires max_tokens greater than the {budget}-token thinking budget"
+                ),
+            ));
         }
         transformed["thinking"] = json!({
             "type": "enabled",

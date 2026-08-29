@@ -4,8 +4,8 @@ use crate::core::models::openai::continuation::{
     ChatCompletionRequestWithExtensions, ChatCompletionResponseWithExtensions,
 };
 use crate::core::models::openai::{
-    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, Logprobs, Tool,
-    ToolChoice, TopLogprob, Usage,
+    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, ContentPart,
+    Logprobs, MessageContent, Tool, ToolChoice, TopLogprob, Usage,
 };
 use crate::core::providers::{ChatContinuationRequest, ChatMessageContinuation, ProviderError};
 use crate::core::streaming::types::{
@@ -362,7 +362,17 @@ async fn handle_chat_completion_internal(
 
     let (core_response, choice_extensions) = core_response.into_parts();
     let response = convert_core_chat_response(core_response);
-    if let Err(error) = crate::server::guardrails::check_chat_output(state, &response).await {
+    let guardrail_response =
+        match guardrail_response_with_continuation(&response, &choice_extensions) {
+            Ok(projected) => projected,
+            Err(error) => {
+                callback.fail(error.to_string(), "guardrail_output_projection");
+                return Err(error);
+            }
+        };
+    if let Err(error) =
+        crate::server::guardrails::check_chat_output(state, &guardrail_response).await
+    {
         callback.fail(error.to_string(), "guardrail_output");
         return Err(error);
     }
@@ -377,6 +387,44 @@ async fn handle_chat_completion_internal(
     callback.complete_usage(response.usage.as_ref(), "success");
     ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
         .map_err(GatewayError::internal)
+}
+
+fn guardrail_response_with_continuation(
+    response: &ChatCompletionResponse,
+    choice_extensions: &[ChatMessageContinuation],
+) -> Result<ChatCompletionResponse, GatewayError> {
+    if response.choices.len() != choice_extensions.len() {
+        return Err(GatewayError::internal(format!(
+            "chat choice extensions length mismatch: expected {}, got {}",
+            response.choices.len(),
+            choice_extensions.len()
+        )));
+    }
+
+    let mut projected = response.clone();
+    for (choice, extension) in projected.choices.iter_mut().zip(choice_extensions) {
+        let Some(visible_thinking) = extension
+            .anthropic_thinking()
+            .and_then(|thinking| thinking.as_text())
+        else {
+            continue;
+        };
+        match &mut choice.message.content {
+            Some(MessageContent::Text(content)) => {
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(&visible_thinking);
+            }
+            Some(MessageContent::Parts(parts)) => parts.push(ContentPart::Text {
+                text: visible_thinking.into_owned(),
+            }),
+            None => {
+                choice.message.content = Some(MessageContent::Text(visible_thinking.into_owned()));
+            }
+        }
+    }
+    Ok(projected)
 }
 
 pub(crate) fn build_core_chat_request(

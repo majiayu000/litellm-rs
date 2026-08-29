@@ -94,6 +94,7 @@ fn signed_continuation_extension() -> ChatMessageContinuation {
 #[test]
 fn signed_legacy_continuation_enables_thinking_when_http_request_omits_it() {
     let mut request = ChatRequest::new("claude-opus-4-8");
+    request.max_tokens = Some(10_001);
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("visible".to_string())),
@@ -120,6 +121,24 @@ fn signed_legacy_continuation_enables_thinking_when_http_request_omits_it() {
         json!({"type": "enabled", "budget_tokens": 10_000})
     );
     assert_eq!(transformed["max_tokens"], 10_001);
+}
+
+#[test]
+fn signed_legacy_continuation_does_not_raise_the_validated_output_limit() {
+    let mut request = ChatRequest::new("claude-opus-4-8");
+    request.max_tokens = Some(10_000);
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("visible".to_string())),
+        ..Default::default()
+    });
+
+    let error = anthropic_client()
+        .transform_chat_request_with_extensions(&request, &[signed_continuation_extension()])
+        .expect_err("thinking replay must not raise a validated max_tokens limit");
+
+    assert!(error.to_string().contains("max_tokens"));
+    assert_eq!(request.max_tokens, Some(10_000));
 }
 
 #[tokio::test]

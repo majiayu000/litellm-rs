@@ -9,6 +9,63 @@ use crate::core::types::responses::{
 use crate::core::types::thinking::{ThinkingDelta, ThinkingUsage};
 
 #[test]
+fn guardrail_projection_includes_visible_thinking_without_opaque_continuation_data() {
+    use crate::core::providers::ChatMessageContinuation;
+    use crate::core::types::anthropic_continuation::{
+        AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    };
+
+    let response = ChatCompletionResponse {
+        id: "chatcmpl-test".to_string(),
+        object: "chat.completion".to_string(),
+        created: 0,
+        model: "claude-opus-4-8".to_string(),
+        system_fingerprint: None,
+        choices: vec![ChatChoice {
+            index: 0,
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Text("answer".to_string())),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            },
+            logprobs: None,
+            finish_reason: Some("stop".to_string()),
+        }],
+        usage: None,
+    };
+    let continuation = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "visible guardrail phrase".to_string(),
+                signature: AnthropicSignature::try_from("opaque signature").unwrap(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: AnthropicRedactedData::try_from("opaque redacted payload").unwrap(),
+            },
+        ]),
+    );
+
+    let projected = guardrail_response_with_continuation(&response, &[continuation])
+        .expect("matching response continuation must project");
+    let MessageContent::Text(content) = projected.choices[0]
+        .message
+        .content
+        .as_ref()
+        .expect("projected content")
+    else {
+        panic!("projection should remain text");
+    };
+    assert!(content.contains("answer"));
+    assert!(content.contains("visible guardrail phrase"));
+    assert!(!content.contains("opaque signature"));
+    assert!(!content.contains("opaque redacted payload"));
+}
+
+#[test]
 fn typed_continuation_fails_closed_only_for_enabled_budget_scopes() {
     use crate::core::budget::{
         ModelLimitConfig, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits,
