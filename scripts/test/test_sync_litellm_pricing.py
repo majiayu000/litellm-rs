@@ -10,6 +10,8 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -42,6 +44,62 @@ class SyncPricingTests(unittest.TestCase):
                 + "/model_prices_and_context_window.json",
                 "a" * 40,
             )
+
+    def test_catalog_source_identity_comes_from_committed_metadata(self) -> None:
+        refreshed_commit = "b" * 40
+        refreshed_url = (
+            "https://raw.githubusercontent.com/BerriAI/litellm/"
+            f"{refreshed_commit}/model_prices_and_context_window.json"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            catalog_path = pathlib.Path(temp_dir) / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "_metadata": {
+                            "source_commit": refreshed_commit,
+                            "source_url": refreshed_url,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                sync.load_catalog_source_identity(catalog_path),
+                (refreshed_url, refreshed_commit),
+            )
+
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "_metadata": {
+                            "source_commit": "a" * 40,
+                            "source_url": refreshed_url,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SystemExit, "does not match"):
+                sync.load_catalog_source_identity(catalog_path)
+
+    def test_check_mode_cannot_silently_use_the_default_source_pin(self) -> None:
+        arguments = SimpleNamespace(
+            source_catalog=None,
+            source_url=None,
+            source_commit=None,
+            check=True,
+        )
+        with (
+            mock.patch.object(sync, "parse_args", return_value=arguments),
+            mock.patch.object(
+                sync,
+                "load_url",
+                side_effect=AssertionError("check attempted a default network source"),
+            ),
+            self.assertRaisesRegex(SystemExit, "check.*source-catalog"),
+        ):
+            sync.main()
 
     def test_load_json_rejects_duplicate_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -578,7 +636,12 @@ class CatalogAuthorityTests(unittest.TestCase):
             "python3 -m unittest discover -s scripts/test -p 'test_sync_litellm_pricing.py'",
             workflow,
         )
-        self.assertIn("python3 scripts/sync_litellm_pricing.py --check", workflow)
+        self.assertIn(
+            "python3 scripts/sync_litellm_pricing.py \\\n"
+            "            --source-catalog config/model_prices_extended.json \\\n"
+            "            --check",
+            workflow,
+        )
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
         self.assertIn(
             'test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD}"', workflow
