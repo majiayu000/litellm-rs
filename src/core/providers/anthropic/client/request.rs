@@ -332,6 +332,9 @@ impl AnthropicClient {
         })?;
         let mut wire_index = 0;
         for (message, extension) in request.messages.iter().zip(extensions) {
+            extension
+                .validate()
+                .map_err(|message| ProviderError::invalid_request("anthropic", message))?;
             if matches!(message.role, MessageRole::System | MessageRole::Developer) {
                 if !extension.is_empty() {
                     return Err(ProviderError::invalid_request(
@@ -549,12 +552,15 @@ impl AnthropicClient {
             return Ok(());
         }
 
-        let mut unsupported = Vec::with_capacity(2);
+        let mut unsupported = Vec::with_capacity(3);
         if request.temperature.is_some() {
             unsupported.push("temperature");
         }
         if request.top_p.is_some() {
             unsupported.push("top_p");
+        }
+        if request.extra_params.contains_key("top_k") {
+            unsupported.push("top_k");
         }
         if unsupported.is_empty() {
             return Ok(());

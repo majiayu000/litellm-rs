@@ -261,6 +261,25 @@ mod tests {
             }));
         assert!(unknown_provider_extension.is_err());
 
+        for thinking in [None, Some(serde_json::json!([]))] {
+            let mut extensions = serde_json::json!({
+                "anthropic_block_order": [{"type":"text", "start":0, "end":7}]
+            });
+            if let Some(thinking) = thinking {
+                extensions["anthropic_thinking"] = thinking;
+            }
+            let malformed_order =
+                serde_json::from_value::<ChatMessageWithExtensions>(serde_json::json!({
+                    "role": "assistant",
+                    "content": "visible",
+                    "extensions": extensions
+                }));
+            assert!(
+                malformed_order.is_err(),
+                "private order metadata must not survive without non-empty thinking"
+            );
+        }
+
         let legacy_with_unknown_top_level =
             serde_json::from_value::<OpenAiChatMessage>(serde_json::json!({
                 "role": "assistant",

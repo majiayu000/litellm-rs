@@ -15,14 +15,7 @@ use crate::core::types::model::{ModelInfo, ProviderCapability};
 
 pub(super) fn supported_openai_params(model: &str) -> &'static [&'static str] {
     if model == "claude-fable-5" {
-        &[
-            "max_tokens",
-            "top_k",
-            "tools",
-            "tool_choice",
-            "stream",
-            "stop",
-        ]
+        &["max_tokens", "tools", "tool_choice", "stream", "stop"]
     } else {
         &[
             "temperature",

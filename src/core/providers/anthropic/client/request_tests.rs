@@ -5,7 +5,8 @@ use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ChatContinuationRequest;
 use crate::core::providers::anthropic::config::AnthropicConfig;
 use crate::core::types::anthropic_continuation::{
-    AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent, ChatMessageExtensions,
+    AnthropicContentBlockOrder, AnthropicSignature, AnthropicThinkingBlock,
+    AnthropicThinkingContent, ChatMessageExtensions,
 };
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::content::{
@@ -695,6 +696,39 @@ fn issue_802_rejects_cache_control_on_models_without_cache_support() {
 
     assert!(message.contains("claude-2.1"));
     assert!(message.contains("cache control"));
+}
+
+#[test]
+fn fable_rejects_top_k_while_existing_models_keep_their_contract() {
+    let mut fable = ChatRequest::new("claude-fable-5").add_user_message("hello");
+    fable.extra_params.insert("top_k".to_string(), json!(40));
+    let error = anthropic_client()
+        .transform_chat_request(&fable)
+        .expect_err("Fable must reject every explicit top_k value");
+    assert!(error.to_string().contains("top_k"));
+
+    let mut existing = ChatRequest::new("claude-3-opus-20240229").add_user_message("hello");
+    existing.extra_params.insert("top_k".to_string(), json!(40));
+    anthropic_client()
+        .transform_chat_request(&existing)
+        .expect("this focused Fable policy must not change existing Anthropic models");
+}
+
+#[test]
+fn provider_rejects_internal_order_without_thinking_payload() {
+    let mut request = ChatRequest::new("claude-fable-5");
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("visible".to_string())),
+        ..Default::default()
+    });
+    let malformed = ChatMessageExtensions::new()
+        .with_anthropic_block_order(vec![AnthropicContentBlockOrder::Text { start: 0, end: 7 }]);
+
+    let error = anthropic_client()
+        .transform_chat_request_with_extensions(&request, &[malformed])
+        .expect_err("provider boundary must reject internally malformed order metadata");
+    assert!(error.to_string().contains("non-empty Anthropic thinking"));
 }
 
 #[test]

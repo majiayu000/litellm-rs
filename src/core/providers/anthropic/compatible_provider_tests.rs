@@ -55,6 +55,7 @@ fn fable_supported_params_match_sampling_validation_exactly() {
     let fable = provider.get_supported_openai_params("claude-fable-5");
     assert!(!fable.contains(&"temperature"));
     assert!(!fable.contains(&"top_p"));
+    assert!(!fable.contains(&"top_k"));
     assert!(fable.contains(&"max_tokens"));
     assert!(fable.contains(&"tools"));
 
@@ -62,6 +63,7 @@ fn fable_supported_params_match_sampling_validation_exactly() {
         let params = provider.get_supported_openai_params(model);
         assert!(params.contains(&"temperature"));
         assert!(params.contains(&"top_p"));
+        assert!(params.contains(&"top_k"));
     }
 }
 

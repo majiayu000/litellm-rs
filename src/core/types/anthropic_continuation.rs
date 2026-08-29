@@ -260,13 +260,37 @@ pub(crate) enum AnthropicContentBlockOrder {
 /// Fields are private so this carrier can grow without breaking external struct
 /// literals. Callers opt in through constructors and accessors.
 #[non_exhaustive]
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ChatMessageExtensions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_thinking: Option<AnthropicThinkingContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_block_order: Option<Vec<AnthropicContentBlockOrder>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatMessageExtensionsWire {
+    #[serde(default)]
+    anthropic_thinking: Option<AnthropicThinkingContent>,
+    #[serde(default)]
+    anthropic_block_order: Option<Vec<AnthropicContentBlockOrder>>,
+}
+
+impl<'de> Deserialize<'de> for ChatMessageExtensions {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ChatMessageExtensionsWire::deserialize(deserializer)?;
+        let extensions = Self {
+            anthropic_thinking: wire.anthropic_thinking,
+            anthropic_block_order: wire.anthropic_block_order,
+        };
+        extensions.validate().map_err(D::Error::custom)?;
+        Ok(extensions)
+    }
 }
 
 impl ChatMessageExtensions {
@@ -298,10 +322,26 @@ impl ChatMessageExtensions {
         self.anthropic_block_order.as_deref()
     }
 
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.anthropic_block_order.is_some()
+            && self
+                .anthropic_thinking
+                .as_ref()
+                .is_none_or(|thinking| thinking.blocks().is_empty())
+        {
+            return Err(
+                "Anthropic block order requires a non-empty Anthropic thinking continuation",
+            );
+        }
+        Ok(())
+    }
+
     /// Whether this carrier has no provider extensions.
     pub fn is_empty(&self) -> bool {
-        self.anthropic_thinking
-            .as_ref()
-            .is_none_or(|thinking| thinking.blocks().is_empty())
+        self.anthropic_block_order.is_none()
+            && self
+                .anthropic_thinking
+                .as_ref()
+                .is_none_or(|thinking| thinking.blocks().is_empty())
     }
 }

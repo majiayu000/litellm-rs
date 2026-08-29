@@ -755,4 +755,43 @@ mod tests {
 
         let _ = extension();
     }
+
+    #[test]
+    fn typed_http_boundaries_reject_order_without_nonempty_thinking() {
+        for order in [json!([]), json!([{"type":"text", "start":0, "end":7}])] {
+            for thinking in [None, Some(json!([]))] {
+                let mut extensions = json!({"anthropic_block_order": order.clone()});
+                if let Some(thinking) = thinking {
+                    extensions["anthropic_thinking"] = thinking;
+                }
+
+                let chat = json!({
+                    "model": "claude-fable-5",
+                    "messages": [{
+                        "role": "assistant",
+                        "content": "visible",
+                        "extensions": extensions.clone()
+                    }]
+                });
+                assert!(
+                    serde_json::from_value::<ChatCompletionRequestWithExtensions>(chat).is_err(),
+                    "order metadata without thinking payload must fail Chat deserialization"
+                );
+
+                let responses = json!({
+                    "model": "claude-fable-5",
+                    "input": [{
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type":"input_text", "text":"visible"}],
+                        "extensions": extensions
+                    }]
+                });
+                assert!(
+                    serde_json::from_value::<ResponsesApiRequestWithExtensions>(responses).is_err(),
+                    "order metadata without thinking payload must fail Responses deserialization"
+                );
+            }
+        }
+    }
 }
