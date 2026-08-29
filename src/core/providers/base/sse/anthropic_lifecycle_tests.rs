@@ -1006,6 +1006,67 @@ fn every_content_block_start_requires_an_exact_u32_index() {
 }
 
 #[test]
+fn every_content_block_delta_requires_an_exact_u32_index() {
+    for index in [
+        None,
+        Some(serde_json::json!(-1)),
+        Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        Some(serde_json::json!("0")),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":0,
+                "content_block":{"type":"text", "text":""}
+            }),
+        )
+        .unwrap();
+
+        let mut event = serde_json::json!({
+            "type":"content_block_delta",
+            "delta":{"type":"text_delta", "text":"must not alias index zero"}
+        });
+        if let Some(index) = index {
+            event["index"] = index;
+        }
+        assert!(matches!(
+            transform(&transformer, event),
+            Err(ProviderError::ResponseParsing { .. })
+        ));
+    }
+}
+
+#[test]
+fn every_content_block_stop_requires_an_exact_u32_index() {
+    for index in [
+        None,
+        Some(serde_json::json!(-1)),
+        Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        Some(serde_json::json!("0")),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":0,
+                "content_block":{"type":"text", "text":""}
+            }),
+        )
+        .unwrap();
+
+        let mut event = serde_json::json!({"type":"content_block_stop"});
+        if let Some(index) = index {
+            event["index"] = index;
+        }
+        assert!(matches!(
+            transform(&transformer, event),
+            Err(ProviderError::ResponseParsing { .. })
+        ));
+    }
+}
+
+#[test]
 fn message_stop_closes_content_lifecycle_until_new_message_start() {
     let transformer = AnthropicTransformer::new("claude-test");
     transform(
@@ -1044,6 +1105,45 @@ fn message_stop_closes_content_lifecycle_until_new_message_start() {
         }),
     )
     .expect("new message_start reopens the lifecycle");
+}
+
+#[test]
+fn message_delta_after_message_stop_requires_a_new_message_start() {
+    for event in [
+        serde_json::json!({
+            "type":"message_delta", "delta":{"stop_reason":"end_turn"},
+            "usage":{"input_tokens":1,"output_tokens":2}
+        }),
+        serde_json::json!({
+            "type":"message_delta", "delta":{},
+            "usage":{"input_tokens":1,"output_tokens":2}
+        }),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({"type":"message_start", "message":{"id":"first"}}),
+        )
+        .unwrap();
+        transform(&transformer, serde_json::json!({"type":"message_stop"})).unwrap();
+
+        let error = transform(&transformer, event)
+            .expect_err("message_delta after message_stop requires a new message_start");
+        assert_lifecycle_error_contexts(error, 0, &["message_delta", "message_start"]);
+
+        transform(
+            &transformer,
+            serde_json::json!({"type":"message_start", "message":{"id":"second"}}),
+        )
+        .unwrap();
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"}
+            }),
+        )
+        .expect("a new message_start reopens message_delta processing");
+    }
 }
 
 #[test]

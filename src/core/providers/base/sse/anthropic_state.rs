@@ -327,7 +327,7 @@ impl AnthropicThinkingStreamState {
         ))
     }
 
-    fn ensure_message_open(&self, index: u32, event: &str) -> Result<(), ProviderError> {
+    pub(super) fn ensure_message_open(&self, index: u32, event: &str) -> Result<(), ProviderError> {
         if self.message_open {
             return Ok(());
         }

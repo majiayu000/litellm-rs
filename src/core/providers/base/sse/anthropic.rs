@@ -320,7 +320,7 @@ impl SSETransformer for AnthropicTransformer {
                 }
             }
             "content_block_delta" => {
-                let index = json.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let index = Self::required_index(&json, "content block delta")?;
                 let delta_json = json.get("delta").ok_or_else(|| {
                     ProviderError::response_parsing(
                         "anthropic",
@@ -383,7 +383,6 @@ impl SSETransformer for AnthropicTransformer {
                         )))
                     }
                     "thinking_delta" => {
-                        let index = Self::required_index(&json, "thinking delta")?;
                         let thinking = delta_json
                             .get("thinking")
                             .and_then(|value| value.as_str())
@@ -394,7 +393,6 @@ impl SSETransformer for AnthropicTransformer {
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
                     "signature_delta" => {
-                        let index = Self::required_index(&json, "signature delta")?;
                         let signature = delta_json
                             .get("signature")
                             .and_then(|value| value.as_str())
@@ -417,6 +415,7 @@ impl SSETransformer for AnthropicTransformer {
                 }
             }
             "message_delta" => {
+                self.with_thinking_state(|state| state.ensure_message_open(0, "message_delta"))?;
                 let finish_reason = json
                     .get("delta")
                     .and_then(|d| d.get("stop_reason"))
@@ -497,13 +496,7 @@ impl SSETransformer for AnthropicTransformer {
                 ))
             }
             "content_block_stop" => {
-                let Some(index) = json
-                    .get("index")
-                    .and_then(Value::as_u64)
-                    .and_then(|index| u32::try_from(index).ok())
-                else {
-                    return Ok(None);
-                };
+                let index = Self::required_index(&json, "content block stop")?;
                 if self.with_thinking_state(|state| state.complete(index))? {
                     let mut delta = Self::empty_delta();
                     delta.thinking = Some(ThinkingDelta::complete());
