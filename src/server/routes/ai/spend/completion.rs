@@ -559,6 +559,7 @@ fn fallback_message_tokens(messages: &[ChatMessage]) -> u32 {
 #[cfg(test)]
 mod budget_request_tests {
     use super::*;
+    use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use crate::core::types::anthropic_continuation::{
         AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock,
         AnthropicThinkingContent, ChatMessageExtensions,
@@ -606,7 +607,7 @@ mod budget_request_tests {
     #[test]
     fn continuation_budget_counts_the_provider_bound_anthropic_blocks() {
         let request = ChatCompletionRequest {
-            model: "claude-opus-5".to_string(),
+            model: "claude-fable-5".to_string(),
             messages: vec![ChatMessage {
                 role: crate::core::models::openai::MessageRole::Assistant,
                 content: Some(MessageContent::Text("visible answer".to_string())),
@@ -616,6 +617,7 @@ mod budget_request_tests {
                 tool_call_id: None,
                 audio: None,
             }],
+            max_tokens: Some(1),
             ..Default::default()
         };
         let extension = ChatMessageExtensions::new().with_anthropic_thinking(
@@ -647,5 +649,50 @@ mod budget_request_tests {
 
         assert!(extra_tokens > 0);
         assert!(continuation_tokens > legacy_tokens);
+
+        let budget = |provider: &str, model: &str| {
+            let limits = UnifiedBudgetLimits::new();
+            limits.providers.set_provider_limit(
+                provider,
+                ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
+            );
+            limits
+                .models
+                .set_model_limit(model, ModelLimitConfig::new(1000.0, ResetPeriod::Monthly));
+            limits
+        };
+        let baseline_budget = budget("anthropic", &request.model);
+        let continuation_budget = budget("anthropic", &request.model);
+        let pricing = super::super::default_spend_pricing_service();
+        let baseline_reservation = reserve_chat_completion_budget_with_split_pricing(
+            pricing,
+            &GatewayPricingConfig::default(),
+            &baseline_budget,
+            "anthropic",
+            &request.model,
+            "anthropic",
+            &request.model,
+            ChatCompletionBudgetRequest::from(&request),
+        )
+        .unwrap()
+        .unwrap();
+        let continuation_reservation = reserve_chat_completion_budget_with_split_pricing(
+            pricing,
+            &GatewayPricingConfig::default(),
+            &continuation_budget,
+            "anthropic",
+            &request.model,
+            "anthropic",
+            &request.model,
+            ChatCompletionBudgetRequest::from(&request).with_additional_prompt_tokens(extra_tokens),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(
+            continuation_reservation.reserved_amount() > baseline_reservation.reserved_amount()
+        );
+        baseline_reservation.cancel();
+        continuation_reservation.cancel();
     }
 }
