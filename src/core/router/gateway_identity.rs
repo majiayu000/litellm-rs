@@ -11,7 +11,9 @@ use crate::core::providers::model_identity::{
     validate_deployment_identity,
 };
 use crate::core::providers::provider_type::ProviderType;
-use crate::core::providers::registry::model_catalog_authority::CatalogAuthority;
+use crate::core::providers::registry::model_catalog_authority::{
+    CatalogAuthority, CatalogResolution,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -41,13 +43,8 @@ impl GatewayIdentityAuthority {
         wire_model: &str,
         mapping: Option<&ModelIdentityMapping>,
     ) -> Result<(), RouterError> {
-        let identity_provider = match provider.provider_type() {
-            ProviderType::OpenAI => "openai",
-            #[cfg(feature = "providers-extra")]
-            ProviderType::Azure => "azure",
-            #[cfg(feature = "providers-extra")]
-            ProviderType::AzureAI => "azure_ai",
-            _ => return Ok(()),
+        let Some(identity_provider) = identity_provider(provider) else {
+            return Ok(());
         };
         debug_assert!(canonical_identity_provider(identity_provider).is_some());
         let legacy_target = provider
@@ -66,6 +63,38 @@ impl GatewayIdentityAuthority {
         provider
             .bind_deployment_model_identity(identity, Arc::clone(&self.pricing))
             .map_err(RouterError::InvalidConfiguration)
+    }
+}
+
+pub(super) fn default_models(
+    provider: &Provider,
+    authority: Option<&GatewayIdentityAuthority>,
+) -> Vec<String> {
+    let identity_provider = identity_provider(provider);
+    provider
+        .list_models()
+        .iter()
+        .filter(|model| match (authority, identity_provider) {
+            (Some(authority), Some(identity_provider)) => matches!(
+                authority
+                    .catalog
+                    .resolve_model(identity_provider, &model.id),
+                CatalogResolution::Callable(_)
+            ),
+            _ => true,
+        })
+        .map(|model| model.id.clone())
+        .collect()
+}
+
+fn identity_provider(provider: &Provider) -> Option<&'static str> {
+    match provider.provider_type() {
+        ProviderType::OpenAI => Some("openai"),
+        #[cfg(feature = "providers-extra")]
+        ProviderType::Azure => Some("azure"),
+        #[cfg(feature = "providers-extra")]
+        ProviderType::AzureAI => Some("azure_ai"),
+        _ => None,
     }
 }
 

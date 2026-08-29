@@ -377,6 +377,39 @@ fn runtime_price(provider: &str) -> crate::core::pricing_service::LiteLLMModelIn
 }
 
 #[tokio::test]
+async fn pricing_aware_default_openai_publishes_only_callable_catalog_models() {
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default()
+            .expect("embedded pricing should load"),
+    );
+    let provider = crate::config::models::provider::ProviderConfig {
+        name: "default-openai".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        models: Vec::new(),
+        ..Default::default()
+    };
+
+    let router = Router::from_gateway_config_with_pricing(&[provider], None, pricing)
+        .await
+        .expect("default OpenAI catalog should publish only callable deployments");
+
+    assert!(!router.get_deployments_for_model("gpt-4").is_empty());
+    for non_callable in [
+        "high/1536-x-1024/gpt-image-1",
+        "openai/container",
+        "daybreak-blue-latest",
+        "openai/sora-2",
+        "GPT-4",
+    ] {
+        assert!(
+            router.get_deployments_for_model(non_callable).is_empty(),
+            "non-callable or non-exact catalog identity {non_callable:?} became routable"
+        );
+    }
+}
+
+#[tokio::test]
 async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_service() {
     let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
     pricing.add_custom_model("runtime-only-price".to_string(), runtime_price("openai"));

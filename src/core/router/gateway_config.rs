@@ -15,7 +15,7 @@ use super::deployment::{
 };
 use super::error::RouterError;
 use super::gateway_aliases::normalize_model_aliases;
-use super::gateway_identity::{GatewayIdentityAuthority, take_identity_mappings};
+use super::gateway_identity::{GatewayIdentityAuthority, default_models, take_identity_mappings};
 use super::unified::Router;
 use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
@@ -236,11 +236,7 @@ impl Router {
             let mut models: Vec<String> = if uses_configured_models {
                 configured_models
             } else {
-                provider
-                    .list_models()
-                    .iter()
-                    .map(|m| m.id.clone())
-                    .collect()
+                default_models(&provider, identity_authority)
             };
             catalog_policy::canonicalize_models(provider.name(), &mut models);
 
