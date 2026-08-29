@@ -3,6 +3,7 @@ use crate::core::models::openai::{
     ChatMessage, Function, FunctionCall, MessageContent, MessageRole, ToolChoiceFunction,
     ToolChoiceFunctionSpec,
 };
+use crate::core::providers::base::sse::{AnthropicTransformer, SSETransformer};
 use crate::core::types::responses::{
     ChatChunk, ChatDelta, ChatStreamChoice, LogProbs, TokenLogProb,
 };
@@ -125,7 +126,6 @@ fn test_convert_core_chunk_preserves_thinking_and_function_call() {
                     arguments: Some("{}".to_string()),
                 }),
                 audio: None,
-                annotations: None,
             },
             finish_reason: None,
             logprobs: None,
@@ -169,7 +169,6 @@ fn test_convert_core_chunk_preserves_audio_delta() {
                     transcript: Some("hello from audio".to_string()),
                     format: Some("wav".to_string()),
                 }),
-                annotations: None,
             },
             finish_reason: None,
             logprobs: None,
@@ -205,7 +204,6 @@ fn test_convert_core_chunk_preserves_stream_logprobs() {
                 tool_calls: None,
                 function_call: None,
                 audio: None,
-                annotations: None,
             },
             finish_reason: None,
             logprobs: Some(LogProbs {
@@ -226,6 +224,42 @@ fn test_convert_core_chunk_preserves_stream_logprobs() {
     let logprobs = converted.choices[0].logprobs.as_ref().unwrap();
     assert_eq!(logprobs["content"][0]["token"], "hello");
     assert_eq!(logprobs["content"][0]["logprob"], -0.25);
+}
+
+#[test]
+fn test_anthropic_citation_reaches_http_stream_annotations_losslessly() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transformer
+        .transform_chunk(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        )
+        .unwrap();
+    let citation = serde_json::json!({
+        "type":"page_location",
+        "cited_text":"source",
+        "document_index":0,
+        "document_title":"Reference",
+        "start_page_number":1,
+        "end_page_number":2
+    });
+    let chunk = transformer
+        .transform_chunk(
+            &serde_json::json!({
+                "type":"content_block_delta", "index":0,
+                "delta":{"type":"citations_delta", "citation":citation}
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .expect("citation delta should produce an internal stream event");
+
+    let converted = convert_core_chunk_to_streaming(chunk).unwrap();
+    let serialized = serde_json::to_value(converted).unwrap();
+    assert_eq!(
+        serialized["choices"][0]["delta"]["annotations"][0],
+        citation
+    );
+    assert!(serialized["choices"][0]["delta"].get("content").is_none());
 }
 
 #[test]

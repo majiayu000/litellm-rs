@@ -1,11 +1,14 @@
 //! Chat response types
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::super::{chat::ChatMessage, message::MessageContent, tools::ToolCall};
 use super::delta::ChatDelta;
 use super::logprobs::{FinishReason, LogProbs};
 use super::usage::Usage;
+
+pub(crate) const PROVIDER_ANNOTATION_CHUNK_OBJECT: &str = "litellm.provider.annotation.chunk";
 
 /// Chat completion response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +98,41 @@ pub struct ChatStreamChoice {
     /// Log probabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<LogProbs>,
+}
+
+impl ChatChunk {
+    pub(crate) fn is_provider_annotation(&self) -> bool {
+        self.object == PROVIDER_ANNOTATION_CHUNK_OBJECT
+    }
+
+    /// Build a crate-internal provider annotation event without widening the
+    /// stable public response structs. The HTTP boundary recognizes the exact
+    /// object discriminator and projects the payload into `delta.annotations`.
+    pub(crate) fn provider_annotation(
+        id: String,
+        created: i64,
+        model: String,
+        choice_index: u32,
+        annotation: Value,
+    ) -> Self {
+        Self {
+            id,
+            object: PROVIDER_ANNOTATION_CHUNK_OBJECT.to_string(),
+            created,
+            model,
+            choices: vec![ChatStreamChoice {
+                index: choice_index,
+                delta: ChatDelta {
+                    content: Some(annotation.to_string()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: None,
+        }
+    }
 }
 
 impl ChatResponse {
@@ -402,7 +440,6 @@ mod tests {
                     tool_calls: None,
                     function_call: None,
                     audio: None,
-                    annotations: None,
                 },
                 finish_reason: None,
                 logprobs: None,
@@ -427,7 +464,6 @@ mod tests {
                 tool_calls: None,
                 function_call: None,
                 audio: None,
-                annotations: None,
             },
             finish_reason: Some(FinishReason::Stop),
             logprobs: None,

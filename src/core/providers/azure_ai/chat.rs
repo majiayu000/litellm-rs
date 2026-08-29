@@ -512,7 +512,6 @@ impl AzureAIChatUtils {
                             function_call: None,
                             tool_calls: None,
                             audio: None,
-                            annotations: None,
                         },
                         finish_reason: match choice["finish_reason"].as_str() {
                             Some("stop") => Some(FinishReason::Stop),

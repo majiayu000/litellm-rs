@@ -18,6 +18,12 @@ pub(super) enum ActiveContentBlock {
     Ignored,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DeltaDisposition {
+    Emit,
+    Ignore,
+}
+
 impl ActiveContentBlock {
     fn kind(self) -> &'static str {
         match self {
@@ -249,12 +255,12 @@ impl AnthropicThinkingStreamState {
         &self,
         index: u32,
         delta_type: &str,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<DeltaDisposition, ProviderError> {
         if let Some(block) = self.active.get(&index) {
             if matches!(block, ActiveThinkingBlock::Thinking { .. })
                 && matches!(delta_type, "thinking_delta" | "signature_delta")
             {
-                return Ok(());
+                return Ok(DeltaDisposition::Emit);
             }
             return Err(lifecycle_error(
                 index,
@@ -266,7 +272,11 @@ impl AnthropicThinkingStreamState {
         }
         if let Some(block) = self.active_content.get(&index) {
             if block.accepts(delta_type) {
-                return Ok(());
+                return Ok(if matches!(block, ActiveContentBlock::Ignored) {
+                    DeltaDisposition::Ignore
+                } else {
+                    DeltaDisposition::Emit
+                });
             }
             return Err(lifecycle_error(
                 index,
@@ -284,7 +294,7 @@ impl AnthropicThinkingStreamState {
                 ),
             ));
         }
-        Ok(())
+        Ok(DeltaDisposition::Emit)
     }
 
     pub(super) fn ensure_complete(&self, boundary: &str) -> Result<(), ProviderError> {

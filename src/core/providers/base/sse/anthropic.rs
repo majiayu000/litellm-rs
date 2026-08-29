@@ -16,7 +16,7 @@ use crate::core::types::thinking::ThinkingDelta;
 #[path = "anthropic_state.rs"]
 mod state;
 
-use state::{ActiveContentBlock, AnthropicThinkingStreamState};
+use state::{ActiveContentBlock, AnthropicThinkingStreamState, DeltaDisposition};
 
 /// Anthropic SSE Transformer
 ///
@@ -136,7 +136,6 @@ impl AnthropicTransformer {
             tool_calls: None,
             function_call: None,
             audio: None,
-            annotations: None,
         }
     }
 
@@ -206,7 +205,6 @@ impl SSETransformer for AnthropicTransformer {
                             tool_calls: None,
                             function_call: None,
                             audio: None,
-                            annotations: None,
                         },
                         finish_reason: None,
                         logprobs: None,
@@ -321,7 +319,11 @@ impl SSETransformer for AnthropicTransformer {
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                self.with_thinking_state(|state| state.validate_delta_kind(index, delta_type))?;
+                let disposition =
+                    self.with_thinking_state(|state| state.validate_delta_kind(index, delta_type))?;
+                if disposition == DeltaDisposition::Ignore {
+                    return Ok(None);
+                }
 
                 match delta_type {
                     "text_delta" => {
@@ -357,9 +359,13 @@ impl SSETransformer for AnthropicTransformer {
                                 "No citation in Anthropic citations_delta",
                             )
                         })?;
-                        let mut delta = Self::empty_delta();
-                        delta.annotations = Some(vec![citation]);
-                        Ok(Some(self.chunk_with_choice(created, delta, None, None)))
+                        Ok(Some(ChatChunk::provider_annotation(
+                            self.current_message_id(),
+                            created,
+                            self.model.clone(),
+                            0,
+                            citation,
+                        )))
                     }
                     "thinking_delta" => {
                         let index = Self::required_index(&json, "thinking delta")?;

@@ -18,8 +18,13 @@ use crate::server::state::AppState;
 use crate::utils::data::validation::RequestValidator;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
-use serde_json::json;
-use std::sync::Arc;
+use serde::{Serialize, Serializer, ser::Error as _};
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 use tracing::{error, info, warn};
 
 use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
@@ -533,13 +538,97 @@ fn convert_usage(usage: types::responses::Usage) -> Usage {
     }
 }
 
+#[derive(Debug)]
+struct HttpStreamingChunk {
+    inner: ChatCompletionChunk,
+    annotations: BTreeMap<u32, Vec<Value>>,
+}
+
+impl Deref for HttpStreamingChunk {
+    type Target = ChatCompletionChunk;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for HttpStreamingChunk {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Serialize for HttpStreamingChunk {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut value = serde_json::to_value(&self.inner).map_err(S::Error::custom)?;
+        let choices = value
+            .get_mut("choices")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| {
+                S::Error::custom("streaming chunk choices did not serialize as an array")
+            })?;
+
+        for choice in choices {
+            let index = choice
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|index| u32::try_from(index).ok())
+                .ok_or_else(|| {
+                    S::Error::custom("streaming choice index did not serialize as u32")
+                })?;
+            let Some(annotations) = self.annotations.get(&index) else {
+                continue;
+            };
+            let delta = choice
+                .get_mut("delta")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| {
+                    S::Error::custom("streaming choice delta did not serialize as an object")
+                })?;
+            delta.insert("annotations".to_string(), Value::Array(annotations.clone()));
+        }
+
+        value.serialize(serializer)
+    }
+}
+
 fn convert_core_chunk_to_streaming(
     chunk: types::responses::ChatChunk,
-) -> Result<ChatCompletionChunk, ProviderError> {
+) -> Result<HttpStreamingChunk, ProviderError> {
+    let is_annotation_chunk = chunk.is_provider_annotation();
+    let mut annotations = BTreeMap::<u32, Vec<Value>>::new();
     let choices = chunk
         .choices
         .into_iter()
         .map(|choice| {
+            if is_annotation_chunk {
+                let annotation = choice.delta.content.as_deref().ok_or_else(|| {
+                    ProviderError::response_parsing(
+                        "router",
+                        "Provider annotation stream event has no payload",
+                    )
+                })?;
+                let annotation = serde_json::from_str(annotation).map_err(|error| {
+                    ProviderError::response_parsing(
+                        "router",
+                        format!("Invalid provider annotation stream payload: {error}"),
+                    )
+                })?;
+                annotations
+                    .entry(choice.index)
+                    .or_default()
+                    .push(annotation);
+                return Ok(ChatCompletionChunkChoice {
+                    index: choice.index,
+                    delta: ChatCompletionDelta::default(),
+                    finish_reason: None,
+                    logprobs: None,
+                });
+            }
+
             let logprobs = choice
                 .logprobs
                 .map(|lp| {
@@ -580,14 +669,21 @@ fn convert_core_chunk_to_streaming(
         })
         .collect::<Result<Vec<_>, ProviderError>>()?;
 
-    Ok(ChatCompletionChunk {
-        id: chunk.id,
-        object: chunk.object,
-        created: chunk.created as u64,
-        model: chunk.model,
-        system_fingerprint: chunk.system_fingerprint,
-        choices,
-        usage: chunk.usage.map(convert_usage),
+    Ok(HttpStreamingChunk {
+        inner: ChatCompletionChunk {
+            id: chunk.id,
+            object: if is_annotation_chunk {
+                "chat.completion.chunk".to_string()
+            } else {
+                chunk.object
+            },
+            created: chunk.created as u64,
+            model: chunk.model,
+            system_fingerprint: chunk.system_fingerprint,
+            choices,
+            usage: chunk.usage.map(convert_usage),
+        },
+        annotations,
     })
 }
 

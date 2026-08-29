@@ -778,6 +778,41 @@ fn future_content_starts_reserve_their_indexes_until_stop() {
 }
 
 #[test]
+fn future_content_payload_is_consumed_without_known_delta_output() {
+    for delta in [
+        serde_json::json!({"type":"text_delta", "text":"must-not-leak"}),
+        serde_json::json!({"type":"input_json_delta", "partial_json":"{}"}),
+        serde_json::json!({"type":"thinking_delta", "thinking":"must-not-leak"}),
+        serde_json::json!({
+            "type":"citations_delta",
+            "citation":{"type":"page_location", "cited_text":"must-not-leak"}
+        }),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":4,
+                "content_block":{"type":"future_block", "opaque":"value"}
+            }),
+        )
+        .unwrap();
+
+        assert!(
+            transform(
+                &transformer,
+                serde_json::json!({
+                    "type":"content_block_delta", "index":4, "delta":delta
+                }),
+            )
+            .expect("future payload should be consumed safely")
+            .is_none(),
+            "future payload must not be projected as a known delta"
+        );
+    }
+}
+
+#[test]
 fn content_stops_require_a_matching_active_index() {
     let transformer = AnthropicTransformer::new("claude-test");
     transform(
@@ -810,7 +845,7 @@ fn content_stops_require_a_matching_active_index() {
 }
 
 #[test]
-fn citation_deltas_on_text_blocks_are_preserved_as_annotations() {
+fn citation_deltas_on_text_blocks_are_preserved_for_http_projection() {
     let transformer = AnthropicTransformer::new("claude-test");
     transform(
         &transformer,
@@ -837,9 +872,14 @@ fn citation_deltas_on_text_blocks_are_preserved_as_annotations() {
     )
     .expect("citation deltas are valid for text blocks")
     .expect("a preserved citation produces a chunk");
-    let serialized = serde_json::to_value(chunk).unwrap();
+    assert!(chunk.is_provider_annotation());
+    let payload = chunk.choices[0]
+        .delta
+        .content
+        .as_deref()
+        .expect("internal annotation event carries a typed JSON payload");
     assert_eq!(
-        serialized["choices"][0]["delta"]["annotations"][0],
+        serde_json::from_str::<serde_json::Value>(payload).unwrap(),
         citation
     );
 }
