@@ -405,6 +405,30 @@ fn provider_scoped_authority_resolves_vertex_publishers_but_not_unknown_suffixes
         "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas"
     );
     assert_eq!(info.litellm_provider, "vertex_ai-llama_models");
+    for (wire_model, expected_pricing_model, expected_provider) in [
+        (
+            "ai21/jamba-1.5-large",
+            "vertex_ai/jamba-1.5-large",
+            "vertex_ai-ai21_models",
+        ),
+        (
+            "mistral/mistral-large-2411",
+            "vertex_ai/mistral-large-2411",
+            "vertex_ai-mistral_models",
+        ),
+    ] {
+        let (resolved, info) = service
+            .get_model_info_for_provider("vertex_ai", wire_model)
+            .unwrap_or_else(|| panic!("{wire_model} should use an exact Vertex pricing alias"));
+        assert_eq!(resolved, expected_pricing_model);
+        assert_eq!(info.litellm_provider, expected_provider);
+        assert!(
+            service
+                .get_model_info_for_provider("vertex_ai", &format!("{wire_model}-unknown"))
+                .is_none(),
+            "{wire_model} lookalike must fail closed"
+        );
+    }
     assert!(
         service
             .get_model_info_for_provider("vertex_ai", "gemini-1.5-pro-9999")
