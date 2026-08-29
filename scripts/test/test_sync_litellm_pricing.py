@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from datetime import date
+from unittest import mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -70,6 +71,37 @@ class SyncPricingTests(unittest.TestCase):
             missing = pathlib.Path(temp_dir) / "missing-overlay.json"
             with self.assertRaisesRegex(SystemExit, "does not exist"):
                 sync.load_overlay_entries([missing])
+
+    def test_new_output_path_is_not_an_implicit_declared_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = pathlib.Path(temp_dir) / "new-catalog.json"
+            args = mock.Mock(
+                source_url="https://example.invalid/catalog.json",
+                source_commit="a" * 40,
+                output=output,
+                overlay_file=[],
+                min_models=1,
+                check=False,
+            )
+            source = {
+                "model": {
+                    "litellm_provider": "test",
+                    "input_cost_per_token": 1.0,
+                    "output_cost_per_token": 2.0,
+                }
+            }
+            with (
+                mock.patch.object(sync, "parse_args", return_value=args),
+                mock.patch.object(sync, "validate_source_identity"),
+                mock.patch.object(sync, "load_url", return_value=(source, "d" * 64)),
+                mock.patch.object(sync, "load_overlay_entries", return_value={}) as load_overlay,
+                mock.patch.object(sync, "apply_official_overrides", return_value={}),
+                mock.patch.object(sync, "validate_official_contracts"),
+                mock.patch.object(sync, "write_catalog"),
+            ):
+                self.assertEqual(sync.main(), 0)
+
+            load_overlay.assert_called_once_with([])
 
     def test_only_exact_control_blocks_are_filtered(self) -> None:
         source = {
@@ -211,6 +243,26 @@ class PricingSchemaValidationTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(SystemExit, "peak_rates.*output_cost_per_token"):
             sync.validate_entries({"deepseek-v4-flash": row}, min_models=1)
+
+    def test_peak_rates_require_runtime_cache_rate_even_without_base_cache_rate(self) -> None:
+        row = {
+            "litellm_provider": "future-provider",
+            "input_cost_per_token": 0.00000022,
+            "output_cost_per_token": 0.00000066,
+            "time_of_use_pricing": {
+                "timezone": "UTC",
+                "peak_windows": [
+                    {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4}
+                ],
+                "peak_rates": {
+                    "input_cost_per_token": 0.00000044,
+                    "output_cost_per_token": 0.00000132,
+                },
+            },
+        }
+
+        with self.assertRaisesRegex(SystemExit, "peak_rates.*cache_read_input_token_cost"):
+            sync.validate_entries({"future-model": row}, min_models=1)
 
     def test_rejects_time_of_use_timezone_unsupported_by_runtime(self) -> None:
         row = {

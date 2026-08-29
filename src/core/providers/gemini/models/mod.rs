@@ -48,6 +48,7 @@ pub enum ModelFeature {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeminiModelFamily {
+    Gemini37Flash,
     Gemini36Flash,
     /// Gemini 3.5 series (2026 - Latest)
     Gemini35Flash,
@@ -146,7 +147,7 @@ pub struct GeminiModelRegistry {
 
 impl GeminiModelRegistry {
     /// Expected number of Gemini models for capacity hint
-    const EXPECTED_MODEL_COUNT: usize = 19;
+    const EXPECTED_MODEL_COUNT: usize = 20;
 
     pub fn new() -> Self {
         let mut registry = Self {
@@ -217,7 +218,9 @@ impl GeminiModelRegistry {
     pub fn from_model_name(model_name: &str) -> Option<GeminiModelFamily> {
         let model_lower = model_name.to_lowercase();
 
-        if model_lower.contains("gemini-3.6-flash") {
+        if model_lower.contains("gemini-3.7-flash") {
+            Some(GeminiModelFamily::Gemini37Flash)
+        } else if model_lower.contains("gemini-3.6-flash") {
             Some(GeminiModelFamily::Gemini36Flash)
         } else if model_lower.contains("gemini-3.5-flash-lite") {
             Some(GeminiModelFamily::Gemini35FlashLite)
@@ -320,27 +323,26 @@ impl CostCalculator {
     ) -> Option<f64> {
         let registry = get_gemini_registry();
         let pricing = registry.get_core_model_pricing(model_id)?;
-
-        let mut total_cost = 0.0;
-        let mut remaining_prompt_tokens = prompt_tokens;
-
-        // Handle
-        if let (Some(cached), Some(cached_price)) =
-            (cached_tokens, pricing.cache_read_input_token_cost)
-        {
-            let cached_cost = (cached as f64 / 1000.0) * cached_price;
-            total_cost += cached_cost;
-            remaining_prompt_tokens = remaining_prompt_tokens.saturating_sub(cached);
-        }
-
-        // Regular input tokens
-        let input_cost =
-            (remaining_prompt_tokens as f64 / 1000.0) * pricing.input_cost_per_1k_tokens;
-        total_cost += input_cost;
-
-        // Output tokens
-        let output_cost = (completion_tokens as f64 / 1000.0) * pricing.output_cost_per_1k_tokens;
-        total_cost += output_cost;
+        let mut usage =
+            crate::core::cost::types::UsageTokens::new(prompt_tokens, completion_tokens);
+        usage.cached_tokens = cached_tokens;
+        let mut total_cost =
+            match crate::core::cost::calculator::generic_cost_per_token(model_id, &usage, "gemini")
+            {
+                Ok(cost) => cost.total_cost,
+                Err(crate::core::cost::types::CostError::ModelNotSupported { .. }) => {
+                    let cached_tokens = cached_tokens.unwrap_or(0);
+                    let remaining_prompt_tokens = prompt_tokens.saturating_sub(cached_tokens);
+                    let cache_cost = pricing
+                        .cache_read_input_token_cost
+                        .map(|price| cached_tokens as f64 / 1000.0 * price)
+                        .unwrap_or(0.0);
+                    cache_cost
+                        + remaining_prompt_tokens as f64 / 1000.0 * pricing.input_cost_per_1k_tokens
+                        + completion_tokens as f64 / 1000.0 * pricing.output_cost_per_1k_tokens
+                }
+                Err(_) => return None,
+            };
 
         // Image cost
         let image_price = pricing

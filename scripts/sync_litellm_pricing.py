@@ -427,9 +427,11 @@ def validate_time_of_use_pricing(
     peak_rates = time_of_use.get("peak_rates")
     if not isinstance(peak_rates, dict):
         raise SystemExit(f"{model!r}.time_of_use_pricing.peak_rates must be an object")
-    required_rates = ["input_cost_per_token", "output_cost_per_token"]
-    if "cache_read_input_token_cost" in entry:
-        required_rates.append("cache_read_input_token_cost")
+    required_rates = [
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+    ]
     for field in required_rates:
         value = peak_rates.get(field)
         if (
@@ -645,7 +647,7 @@ def main() -> int:
     source_data, source_sha256 = load_url(args.source_url)
     source_entries = model_entries(source_data)
     validate_entries(source_entries, args.min_models)
-    overlay_paths = args.overlay_file or [args.output]
+    overlay_paths = args.overlay_file or ([args.output] if args.output.exists() else [])
     overlay_entries = apply_official_overrides(
         source_entries, load_overlay_entries(overlay_paths), as_of_date
     )

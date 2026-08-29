@@ -148,14 +148,6 @@ mod pricing_tests {
         assert!((output - 2.50).abs() < 1e-12);
         // The compatibility overlay keeps the promotional rate through 2026-12-31.
         assert_eq!(get_model_pricing("gemini-3.6-flash").unwrap(), (0.75, 3.75));
-        let spec = get_gemini_registry()
-            .get_model_spec("gemini-3.6-flash")
-            .expect("gemini-3.6-flash should be registered");
-        assert_eq!(spec.model_info.input_cost_per_1k_tokens, Some(0.00075));
-        assert_eq!(spec.model_info.output_cost_per_1k_tokens, Some(0.00375));
-        assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.00075);
-        assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.00375);
-        assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
         assert_eq!(
             get_model_pricing("gemini-3.5-flash-lite").unwrap(),
             (0.3, 2.5)
@@ -168,5 +160,30 @@ mod pricing_tests {
             get_model_pricing("unknown-google-model"),
             Err(ProviderError::ModelNotFound { .. })
         ));
+    }
+
+    #[test]
+    fn time_bounded_gemini_pricing_is_not_owned_by_the_static_registry() {
+        let spec = get_gemini_registry()
+            .get_model_spec("gemini-3.6-flash")
+            .expect("gemini-3.6-flash should remain callable");
+
+        assert_eq!(spec.model_info.input_cost_per_1k_tokens, None);
+        assert_eq!(spec.model_info.output_cost_per_1k_tokens, None);
+        assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.0);
+        assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.0);
+        assert_eq!(spec.pricing.cache_read_input_token_cost, None);
+
+        let cost = models::CostCalculator::calculate_multimodal_cost(
+            "gemini-3.6-flash",
+            1_000,
+            500,
+            Some(200),
+            None,
+            None,
+            None,
+        )
+        .expect("shared catalog pricing should remain available");
+        assert!((cost - 0.00249).abs() < 1e-12, "unexpected cost: {cost}");
     }
 }
