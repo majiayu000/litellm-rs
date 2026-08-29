@@ -8,12 +8,12 @@ use crate::core::pricing_service::{
     PricingSnapshot, PricingUsage,
 };
 use crate::core::providers::Provider;
-use crate::core::providers::model_identity::DeploymentPricingIdentity;
+use crate::core::providers::model_identity::{DeploymentModelIdentity, DeploymentPricingIdentity};
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::embedding::EmbeddingInput;
 use crate::core::types::model::ProviderCapability;
-use crate::utils::ai::counter::token_counter::TokenCounter;
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -26,6 +26,7 @@ pub(in crate::server::routes::ai) enum PricingIdentity {
 pub(in crate::server::routes::ai) struct RequestPricing {
     snapshot: PricingSnapshot,
     identity: PricingIdentity,
+    token_identity: TokenizerIdentity,
 }
 
 impl RequestPricing {
@@ -49,7 +50,16 @@ impl RequestPricing {
                     model: resolved,
                 },
             );
-        Self { snapshot, identity }
+        let token_identity = if provider == "openai" {
+            TokenizerIdentity::exact_openai(model)
+        } else {
+            TokenizerIdentity::approximate(provider, model)
+        };
+        Self {
+            snapshot,
+            identity,
+            token_identity,
+        }
     }
 
     pub(in crate::server::routes::ai) fn priced_parts(&self) -> Option<(&str, &str)> {
@@ -59,11 +69,8 @@ impl RequestPricing {
         }
     }
 
-    pub(in crate::server::routes::ai) fn estimation_model<'a>(
-        &'a self,
-        fallback: &'a str,
-    ) -> &'a str {
-        self.priced_parts().map_or(fallback, |(_, model)| model)
+    pub(in crate::server::routes::ai) fn token_identity(&self) -> &TokenizerIdentity {
+        &self.token_identity
     }
 
     pub(in crate::server::routes::ai) fn with_exact_priced_model(
@@ -78,6 +85,7 @@ impl RequestPricing {
                 provider: provider.to_string(),
                 model: resolved,
             },
+            token_identity: self.token_identity.clone(),
         })
     }
 
@@ -225,6 +233,7 @@ fn request_pricing_for_provider_with_snapshot_hook(
                 format!("deployment '{model}' lost its validated model identity"),
             )
         })?;
+        let token_identity = token_identity_for_binding(identity, provider.name(), model)?;
         let identity = match identity.pricing_identity_for_surface(&surface) {
             DeploymentPricingIdentity::Priced { provider, model } => PricingIdentity::Priced {
                 provider: provider.to_string(),
@@ -247,10 +256,18 @@ fn request_pricing_for_provider_with_snapshot_hook(
                             model: resolved,
                         },
                     );
-                return Ok(RequestPricing { snapshot, identity });
+                return Ok(RequestPricing {
+                    snapshot,
+                    identity,
+                    token_identity,
+                });
             }
         };
-        return Ok(RequestPricing { snapshot, identity });
+        return Ok(RequestPricing {
+            snapshot,
+            identity,
+            token_identity,
+        });
     }
 
     let (pricing_provider, pricing_model) =
@@ -266,7 +283,31 @@ fn request_pricing_for_provider_with_snapshot_hook(
                 model: resolved,
             },
         );
-    Ok(RequestPricing { snapshot, identity })
+    Ok(RequestPricing {
+        snapshot,
+        identity,
+        token_identity: TokenizerIdentity::approximate(provider.name(), model),
+    })
+}
+
+fn token_identity_for_binding(
+    identity: &DeploymentModelIdentity,
+    provider: &str,
+    model: &str,
+) -> Result<TokenizerIdentity, ProviderError> {
+    match (
+        identity.capability_catalog_provider(),
+        identity.capability_catalog_model(),
+    ) {
+        (Some("openai"), Some(model)) => Ok(TokenizerIdentity::exact_openai(model)),
+        (Some(provider), Some(model)) => Ok(TokenizerIdentity::approximate(provider, model)),
+        _ => Err(ProviderError::configuration(
+            "token_count",
+            format!(
+                "selected deployment '{provider}/{model}' has no validated capability token identity"
+            ),
+        )),
+    }
 }
 
 pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
@@ -358,8 +399,15 @@ pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_request_prici
     budget_model: &str,
     input: &EmbeddingInput,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
-    let prompt_tokens =
-        estimate_embedding_input_tokens(request_pricing.estimation_model(budget_model), input);
+    let prompt_tokens = estimate_embedding_input_tokens(request_pricing.token_identity(), input)
+        .map_err(|error| {
+            super::token_count_error(
+                budget_provider,
+                budget_model,
+                request_pricing.token_identity(),
+                error,
+            )
+        })?;
     reserve_completion_budget_with_request_pricing(
         request_pricing,
         pricing_config,
@@ -495,295 +543,27 @@ fn reserve_completion_budget_with_request_pricing(
         })
 }
 
-fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
+pub(in crate::server::routes::ai) fn estimate_embedding_input_tokens(
+    identity: &TokenizerIdentity,
+    input: &EmbeddingInput,
+) -> crate::utils::error::gateway_error::Result<u32> {
     let counter = TokenCounter::new();
-    input.iter().fold(0u32, |total, text| {
-        let tokens = counter
-            .count_completion_tokens(model, text)
-            .map(|estimate| estimate.input_tokens)
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    "embedding token estimation failed for model '{model}': {error}; \
-                     using fallback estimate"
-                );
-                u32::try_from(text.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
-            });
-        total.saturating_add(tokens)
+    input.iter().try_fold(0u32, |total, text| {
+        let estimate = counter.count_completion_tokens_for_identity(identity, text)?;
+        if estimate.is_approximate {
+            tracing::warn!(
+                token_provider = identity.provider(),
+                token_model = identity.model(),
+                input = "embedding",
+                is_approximate = true,
+                confidence = estimate.confidence,
+                "explicit approximate token count used"
+            );
+        }
+        Ok(total.saturating_add(estimate.input_tokens))
     })
 }
 
 #[cfg(test)]
-mod mapped_identity_tests {
-    use super::*;
-    use crate::config::models::provider::ProviderConfig;
-    use crate::core::pricing_service::LiteLLMModelInfo;
-    use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
-    use crate::core::router::unified::Router;
-    use std::collections::HashMap;
-
-    fn pricing_info(provider: &str, input: f64, output: f64) -> LiteLLMModelInfo {
-        LiteLLMModelInfo {
-            max_tokens: Some(4_096),
-            max_input_tokens: Some(4_096),
-            max_output_tokens: Some(1_024),
-            input_cost_per_token: Some(input),
-            output_cost_per_token: Some(output),
-            input_cost_per_character: None,
-            output_cost_per_character: None,
-            cost_per_second: None,
-            litellm_provider: provider.to_string(),
-            mode: "chat".to_string(),
-            supports_function_calling: None,
-            supports_vision: None,
-            supports_streaming: Some(true),
-            supports_parallel_function_calling: None,
-            supports_system_message: None,
-            extra: HashMap::new(),
-        }
-    }
-
-    #[tokio::test]
-    async fn request_pricing_keeps_the_snapshot_pinned_across_a_refresh() {
-        let pricing = Arc::new(PricingService::new(None));
-        pricing.add_custom_model(
-            "race-model".to_string(),
-            pricing_info("race-provider", 0.01, 0.02),
-        );
-        let provider = Provider::OpenAILike(
-            OpenAILikeProvider::new_openai_compatible(
-                OpenAILikeConfig::new("https://example.com")
-                    .with_skip_api_key(true)
-                    .with_provider_name("race-provider"),
-            )
-            .await
-            .expect("test provider should build"),
-        );
-
-        let pinned = request_pricing_for_provider_with_snapshot_hook(
-            &pricing,
-            &provider,
-            "race-model",
-            ProviderCapability::ChatCompletion,
-            || {
-                pricing
-                    .add_custom_model("race-model".to_string(), pricing_info("openai", 1.0, 2.0));
-            },
-        )
-        .expect("the attempt should retain its original pricing generation");
-
-        assert_eq!(pinned.priced_parts(), Some(("race-provider", "race-model")));
-        let cost = pinned
-            .calculate_usage(&PricingUsage::new(10, 5))
-            .expect("the pinned generation should remain priceable");
-        assert!((cost.total_cost - 0.2).abs() < f64::EPSILON);
-    }
-
-    #[tokio::test]
-    async fn gateway_bound_legacy_mapping_only_changes_chat_pricing_identity() {
-        let pricing = Arc::new(PricingService::new(None));
-        pricing.add_custom_model(
-            "review-wire-alias".to_string(),
-            pricing_info("openai", 0.01, 0.02),
-        );
-        pricing.add_custom_model("gpt-4".to_string(), pricing_info("openai", 1.0, 2.0));
-        let mut config = ProviderConfig {
-            name: "review-openai".to_string(),
-            provider_type: "openai".to_string(),
-            api_key: "sk-test".to_string(),
-            models: vec!["review-wire-alias".to_string()],
-            ..Default::default()
-        };
-        config.settings.insert(
-            "model_mappings".to_string(),
-            serde_json::json!({"review-wire-alias": "gpt-4"}),
-        );
-        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
-            .await
-            .expect("legacy chat mapping should bind through the production gateway");
-        let deployment = router
-            .get_deployment("review-openai-review-wire-alias")
-            .expect("configured deployment should be published");
-
-        for surface in [
-            ProviderCapability::ChatCompletion,
-            ProviderCapability::ChatCompletionStream,
-        ] {
-            let request_pricing = request_pricing_for_provider(
-                &pricing,
-                &deployment.provider,
-                &deployment.model,
-                surface,
-            )
-            .expect("chat pricing should resolve");
-            assert_eq!(request_pricing.priced_parts(), Some(("openai", "gpt-4")));
-        }
-
-        for surface in [
-            ProviderCapability::ImageGeneration,
-            ProviderCapability::ImageEdit,
-            ProviderCapability::ImageVariation,
-            ProviderCapability::Embeddings,
-            ProviderCapability::AudioTranscription,
-            ProviderCapability::AudioTranslation,
-            ProviderCapability::TextToSpeech,
-        ] {
-            let request_pricing = request_pricing_for_provider(
-                &pricing,
-                &deployment.provider,
-                &deployment.model,
-                surface.clone(),
-            )
-            .expect("non-chat raw pricing should resolve");
-            assert_eq!(
-                request_pricing.priced_parts(),
-                Some(("openai", "review-wire-alias")),
-                "legacy chat mapping changed {surface:?} pricing"
-            );
-        }
-    }
-
-    #[test]
-    fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
-        assert_eq!(
-            unpriced_openai_mapping_identity(
-                &ProviderType::OpenAICompatible,
-                "openai",
-                "public-alias",
-                "canonical-model",
-            ),
-            Some(("openai".to_string(), "canonical-model".to_string()))
-        );
-        assert_eq!(
-            unpriced_openai_mapping_identity(
-                &ProviderType::OpenAICompatible,
-                "openai",
-                "same-model",
-                "same-model",
-            ),
-            None
-        );
-        assert_eq!(
-            unpriced_openai_mapping_identity(
-                &ProviderType::Anthropic,
-                "anthropic",
-                "public-alias",
-                "canonical-model",
-            ),
-            None
-        );
-    }
-}
-
-#[cfg(test)]
-mod pricing_identity_tests {
-    use std::collections::HashMap;
-
-    use super::*;
-    use crate::core::pricing_service::LiteLLMModelInfo;
-
-    fn priced_model_info(provider: &str) -> LiteLLMModelInfo {
-        LiteLLMModelInfo {
-            max_tokens: Some(4096),
-            max_input_tokens: Some(4096),
-            max_output_tokens: Some(4096),
-            input_cost_per_token: Some(0.001),
-            output_cost_per_token: Some(0.002),
-            input_cost_per_character: None,
-            output_cost_per_character: None,
-            cost_per_second: None,
-            litellm_provider: provider.to_string(),
-            mode: "chat".to_string(),
-            supports_function_calling: Some(true),
-            supports_vision: Some(false),
-            supports_streaming: Some(true),
-            supports_parallel_function_calling: Some(true),
-            supports_system_message: Some(true),
-            extra: HashMap::new(),
-        }
-    }
-
-    async fn legacy_mapped_provider(provider_name: &str) -> Provider {
-        let mut config = crate::core::providers::openai::OpenAIConfig {
-            provider_name: provider_name.to_string(),
-            ..Default::default()
-        };
-        config.base.api_key = Some("sk-test".to_string());
-        config.model_mappings.insert(
-            "review-public-alias".to_string(),
-            "review-canonical-unpriced".to_string(),
-        );
-        Provider::OpenAI(
-            crate::core::providers::openai::OpenAIProvider::new(config)
-                .await
-                .expect("test provider should build"),
-        )
-    }
-
-    #[test]
-    fn retained_mapping_identity_does_not_price_non_image_requests() {
-        let pricing = PricingService::new(None);
-        let (provider, model) = unpriced_openai_mapping_identity(
-            &ProviderType::OpenAICompatible,
-            "openai",
-            "public-alias",
-            "canonical-model",
-        )
-        .expect("real mapping should retain canonical identity");
-        let error = pricing
-            .calculate_loaded_usage_cost_for_provider(&provider, &model, &PricingUsage::new(10, 5))
-            .expect_err("identity retention must not invent a non-image price");
-        assert!(error.to_string().contains("Model not found"));
-    }
-
-    #[tokio::test]
-    async fn legacy_mapping_preserves_explicit_unpriced_target_and_provider() {
-        let pricing = PricingService::new(None);
-        pricing.add_custom_model(
-            "review-public-alias".to_string(),
-            priced_model_info("openai"),
-        );
-        for provider_name in ["openai", "review-custom-openai"] {
-            let provider = legacy_mapped_provider(provider_name).await;
-            assert_eq!(
-                pricing_identity_for_provider(
-                    &pricing.snapshot(),
-                    &provider,
-                    "review-public-alias",
-                    ProviderCapability::ChatCompletion,
-                ),
-                (
-                    provider_name.to_string(),
-                    "review-canonical-unpriced".to_string(),
-                )
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn chat_only_mapping_does_not_change_non_chat_pricing_identity() {
-        let pricing = PricingService::new(None);
-        pricing.add_custom_model(
-            "review-public-alias".to_string(),
-            priced_model_info("review-custom-openai"),
-        );
-        let provider = legacy_mapped_provider("review-custom-openai").await;
-        for surface in [
-            ProviderCapability::Embeddings,
-            ProviderCapability::ImageGeneration,
-            ProviderCapability::AudioTranscription,
-        ] {
-            assert_eq!(
-                pricing_identity_for_provider(
-                    &pricing.snapshot(),
-                    &provider,
-                    "review-public-alias",
-                    surface,
-                ),
-                (
-                    "review-custom-openai".to_string(),
-                    "review-public-alias".to_string(),
-                )
-            );
-        }
-    }
-}
+#[path = "pricing_tests.rs"]
+mod tests;

@@ -3,9 +3,9 @@
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
-use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::ProviderError;
 use crate::core::types::context::RequestContext;
+use crate::core::types::embedding::EmbeddingInput;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use tracing::warn;
@@ -133,14 +133,17 @@ pub(super) fn ensure_chat_cache_pricing_for_attempt(
     provider: &str,
     model: &str,
 ) -> Result<(), ProviderError> {
-    let prompt_tokens = super::spend::estimate_chat_prompt_tokens(
-        &request.model,
+    let prompt_tokens = super::spend::try_estimate_chat_prompt_tokens(
+        request_pricing.token_identity(),
         &request.messages,
         request.tools.as_deref(),
         request.functions.as_deref(),
         request.function_call.as_ref(),
         request.response_format.as_ref(),
-    );
+    )
+    .map_err(|error| {
+        super::spend::token_count_error(provider, model, request_pricing.token_identity(), error)
+    })?;
     let output_tokens = request
         .max_completion_tokens
         .or(request.max_tokens)
@@ -153,12 +156,22 @@ pub(super) fn ensure_chat_cache_pricing_for_attempt(
 
 pub(super) fn ensure_embedding_cache_pricing_for_attempt(
     request_pricing: &super::spend::RequestPricing,
+    input: &EmbeddingInput,
     provider: &str,
     model: &str,
 ) -> Result<(), ProviderError> {
-    let usage = PricingUsage::new(1, 0);
+    let prompt_tokens =
+        super::spend::estimate_embedding_input_tokens(request_pricing.token_identity(), input)
+            .map_err(|error| {
+                super::spend::token_count_error(
+                    provider,
+                    model,
+                    request_pricing.token_identity(),
+                    error,
+                )
+            })?;
     request_pricing
-        .calculate_usage(&usage)
+        .estimate_completion(prompt_tokens, Some(0))
         .map(|_| ())
         .map_err(|error| super::spend::model_not_priced_error(provider, model, error))
 }
@@ -215,6 +228,67 @@ mod tests {
         .expect_err("the selected attempt must not borrow a priced sibling identity");
 
         assert!(super::super::spend::is_model_not_priced_error(&error));
+    }
+
+    #[test]
+    fn embedding_cache_gate_fails_for_selected_exact_identity_without_tokenizer() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model("gpt-audio-1.5".to_string(), priced_model("openai"));
+        let selected = RequestPricing::from_exact(&pricing, "openai", "gpt-audio-1.5");
+
+        let error = ensure_embedding_cache_pricing_for_attempt(
+            &selected,
+            &EmbeddingInput::Text("hello".to_string()),
+            "selected-openai",
+            "wire-audio-deployment",
+        )
+        .expect_err("cache hits must enforce the selected attempt's token identity");
+
+        assert!(matches!(
+            error,
+            ProviderError::InvalidRequest {
+                provider: "token_count",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn chat_cache_gate_fails_for_selected_exact_identity_without_tokenizer() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model("gpt-audio-1.5".to_string(), priced_model("openai"));
+        let selected = RequestPricing::from_exact(&pricing, "openai", "gpt-audio-1.5");
+        let request = ChatCompletionRequest {
+            model: "public-alias".to_string(),
+            messages: vec![crate::core::models::openai::ChatMessage {
+                role: crate::core::models::openai::MessageRole::User,
+                content: Some(crate::core::models::openai::MessageContent::Text(
+                    "hello".to_string(),
+                )),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            }],
+            ..Default::default()
+        };
+
+        let error = ensure_chat_cache_pricing_for_attempt(
+            &selected,
+            &request,
+            "selected-openai",
+            "wire-audio-deployment",
+        )
+        .expect_err("cache hit must use the selected attempt's exact token identity");
+
+        assert!(matches!(
+            error,
+            ProviderError::InvalidRequest {
+                provider: "token_count",
+                ..
+            }
+        ));
     }
 
     #[test]

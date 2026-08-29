@@ -23,12 +23,12 @@ use crate::core::types::responses::{ChatChunk, Usage};
 use std::sync::LazyLock;
 
 pub(super) use completion::{
-    ChatCompletionBudgetRequest, estimate_chat_prompt_tokens,
-    reserve_chat_completion_budget_with_request_pricing,
+    ChatCompletionBudgetRequest, reserve_chat_completion_budget_with_request_pricing,
+    try_estimate_chat_prompt_tokens,
 };
 #[cfg(test)]
 pub(super) use completion::{
-    IMAGE_HIGH_DETAIL_PROMPT_TOKENS, catalog_max_output_tokens,
+    IMAGE_HIGH_DETAIL_PROMPT_TOKENS, catalog_max_output_tokens, estimate_chat_prompt_tokens,
     provider_effective_max_output_tokens, reserve_chat_completion_budget,
     reserve_completion_budget, reserve_completion_budget_with_policy,
     reserve_completion_budget_with_pricing,
@@ -38,7 +38,8 @@ pub(in crate::server::routes::ai) use key_budget::{
     settle_api_key_budget_reservation,
 };
 pub(super) use pricing::{
-    RequestPricing, record_pricing_usage_spend_with_request_pricing, request_pricing_for_provider,
+    RequestPricing, estimate_embedding_input_tokens,
+    record_pricing_usage_spend_with_request_pricing, request_pricing_for_provider,
     reserve_embedding_budget_with_request_pricing,
     reserve_pricing_usage_budget_with_request_pricing,
 };
@@ -49,6 +50,22 @@ pub(super) use unpriced::{
 
 pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
     !chunk.choices.is_empty()
+}
+
+pub(super) fn token_count_error(
+    provider: &str,
+    model: &str,
+    identity: &crate::utils::ai::counter::token_counter::TokenizerIdentity,
+    error: impl std::fmt::Display,
+) -> ProviderError {
+    ProviderError::invalid_request(
+        "token_count",
+        format!(
+            "token counting failed for selected deployment '{provider}/{model}' using token identity '{}/{}': {error}",
+            identity.provider(),
+            identity.model()
+        ),
+    )
 }
 
 /// Reject a request before it reaches the upstream provider when the served
