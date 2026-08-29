@@ -495,7 +495,7 @@ async fn test_calculate_cost_current_small_model() {
     let cost = provider
         .calculate_cost("mistral-small-latest", 1000, 500)
         .await;
-    assert!(matches!(cost, Ok(v) if (v - 0.00025).abs() < f64::EPSILON));
+    assert!(matches!(cost, Ok(v) if (v - 0.00045).abs() < f64::EPSILON));
 }
 
 #[tokio::test]
@@ -521,7 +521,7 @@ async fn test_calculate_cost_current_alias_prices_are_deterministic() {
     let small = provider.calculate_cost("mistral-small", 1000, 500).await;
 
     assert!(matches!(large, Ok(v) if (v - 0.00125).abs() < f64::EPSILON));
-    assert!(matches!(small, Ok(v) if (v - 0.00025).abs() < f64::EPSILON));
+    assert!(matches!(small, Ok(v) if (v - 0.00045).abs() < f64::EPSILON));
 }
 
 #[tokio::test]

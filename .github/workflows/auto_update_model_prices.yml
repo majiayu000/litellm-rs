@@ -2,10 +2,8 @@ name: Auto Update Model Prices
 
 on:
   schedule:
-    # 每周日 UTC 00:00 运行
     - cron: "0 0 * * 0"
   workflow_dispatch:
-    # 允许手动触发
 
 jobs:
   update-prices:
@@ -13,108 +11,79 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      UPSTREAM_REPO: BerriAI/litellm
+      UPSTREAM_REF: litellm_internal_staging
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install aiohttp
-
-      - name: Update model prices
-        run: python scripts/sync_models.py --output json > /tmp/openrouter_models.json
-
-      - name: Merge with existing data
+      - name: Resolve immutable LiteLLM source
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 << 'EOF'
-          import json
-          from datetime import datetime
+          set -euo pipefail
+          source_commit="$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_REF}" --jq .sha)"
+          if [[ ! "${source_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid upstream commit: ${source_commit}" >&2
+            exit 1
+          fi
+          source_url="https://raw.githubusercontent.com/${UPSTREAM_REPO}/${source_commit}/model_prices_and_context_window.json"
+          echo "source_commit=${source_commit}" >> "${GITHUB_OUTPUT}"
+          echo "source_url=${source_url}" >> "${GITHUB_OUTPUT}"
 
-          # Load existing data
-          try:
-              with open("data/model_prices.json") as f:
-                  existing = json.load(f)
-          except FileNotFoundError:
-              existing = {"_metadata": {}}
+      - name: Test pricing sync contract
+        run: python3 -m unittest discover -s scripts/test -p 'test_sync_litellm_pricing.py'
 
-          # Load new data from OpenRouter
-          with open("/tmp/openrouter_models.json") as f:
-              new_models = json.load(f)
+      - name: Refresh runtime pricing catalog
+        run: |
+          python3 scripts/sync_litellm_pricing.py \
+            --source-commit "${{ steps.upstream.outputs.source_commit }}" \
+            --source-url "${{ steps.upstream.outputs.source_url }}"
 
-          # Update metadata
-          existing["_metadata"] = {
-              "version": "1.0.0",
-              "updated_at": datetime.utcnow().isoformat() + "Z",
-              "source": "https://openrouter.ai/api/v1/models"
-          }
-
-          # Merge models (update existing, add new)
-          for model in new_models:
-              provider = model.get("provider", "unknown")
-              name = model.get("name", "")
-              key = f"{provider}/{name}"
-
-              existing[key] = {
-                  "input_cost_per_token": model.get("input_cost_per_million", 0) / 1_000_000,
-                  "output_cost_per_token": model.get("output_cost_per_million", 0) / 1_000_000,
-                  "max_input_tokens": model.get("context_length", 0),
-                  "max_output_tokens": 16384,  # Default, OpenRouter doesn't always provide this
-                  "litellm_provider": provider,
-                  "mode": "chat",
-                  "supports_function_calling": model.get("supports_tools", False),
-                  "supports_vision": model.get("supports_vision", False)
-              }
-
-          # Write back
-          with open("data/model_prices.json", "w") as f:
-              json.dump(existing, f, indent=2, sort_keys=True)
-
-          print(f"Updated {len(new_models)} models")
-          EOF
+      - name: Validate generated catalog
+        run: |
+          python3 scripts/sync_litellm_pricing.py \
+            --source-commit "${{ steps.upstream.outputs.source_commit }}" \
+            --source-url "${{ steps.upstream.outputs.source_url }}" \
+            --check
+          python3 -m unittest discover -s scripts/test -p 'test_sync_litellm_pricing.py'
 
       - name: Check for changes
         id: check_changes
         run: |
-          if git diff --quiet data/model_prices.json; then
-            echo "changed=false" >> $GITHUB_OUTPUT
+          if git diff --quiet -- config/model_prices_extended.json; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
           else
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
           fi
 
       - name: Create Pull Request
         if: steps.check_changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore(models): auto-update model prices from OpenRouter"
-          title: "[Auto] Update model prices - ${{ github.run_id }}"
+          add-paths: config/model_prices_extended.json
+          commit-message: "chore(pricing): refresh runtime catalog from LiteLLM"
+          title: "chore(pricing): refresh runtime catalog from LiteLLM"
           body: |
-            ## Automated Model Price Update
+            ## Automated runtime pricing refresh
 
-            This PR was automatically generated by the model price sync workflow.
+            This PR updates the catalog embedded by `src/core/pricing.rs`.
 
-            **Source:** OpenRouter API
-            **Date:** ${{ github.event.repository.updated_at }}
+            - Upstream: `BerriAI/litellm`
+            - Immutable source commit: `${{ steps.upstream.outputs.source_commit }}`
+            - Runtime catalog: `config/model_prices_extended.json`
+            - Official and compatibility overrides: validated and applied after upstream rows
 
-            ### Changes
-            - Updated model pricing information
-            - Added any new models from OpenRouter
-
-            ### Review Checklist
-            - [ ] Verify pricing changes are reasonable
-            - [ ] Check for any removed models
-            - [ ] Ensure no breaking changes
-
-            ---
-            *This PR was created automatically by GitHub Actions*
-          branch: auto-update-model-prices
+            Review the catalog diff before merging. First-party overrides are retained
+            when LiteLLM differs from provider documentation.
+          branch: auto-update-runtime-model-prices
           delete-branch: true
-          labels: |
-            automated
-            models
-            pricing
