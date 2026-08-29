@@ -91,11 +91,23 @@ fn test_model_support() {
     let provider = GeminiProvider::new(config).unwrap();
 
     assert!(provider.supports_model("gemini-3.6-flash"));
+    assert!(provider.supports_model("gemini-3.7-flash"));
     assert!(provider.supports_model("gemini-3.5-flash-lite"));
     assert!(provider.supports_model("gemini-2.5-flash"));
     assert!(!provider.supports_model("gemini-1.0-pro"));
     assert!(!provider.supports_model("gemini-3.1-flash"));
     assert!(!provider.supports_model("gpt-4"));
+}
+
+#[test]
+fn priced_gemini_3_7_flash_is_callable_on_the_developer_api() {
+    let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
+        "test-api-key-12345678901234567890",
+    ))
+    .unwrap();
+
+    let request = create_valid_request("gemini-3.7-flash");
+    assert!(provider.validate_request(&request).is_ok());
 }
 
 #[test]

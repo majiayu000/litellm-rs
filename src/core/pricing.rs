@@ -788,7 +788,10 @@ pub(crate) fn embedded_default_pricing_models() -> serde_json::Result<PricingMod
 }
 
 pub fn is_litellm_pricing_metadata_key(key: &str) -> bool {
-    key == "sample_spec" || key.starts_with('_') || key.contains("example")
+    matches!(
+        key,
+        "_metadata" | "fallback_generalizations" | "sample_spec"
+    )
 }
 
 #[cfg(test)]
