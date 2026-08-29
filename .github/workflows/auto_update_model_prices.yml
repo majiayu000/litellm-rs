@@ -59,7 +59,9 @@ jobs:
       - name: Check for changes
         id: check_changes
         run: |
-          if git diff --quiet -- config/model_prices_extended.json; then
+          if git diff --quiet -- \
+            config/model_prices_extended.json \
+            config/model_catalog_authority.json; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
           else
             echo "changed=true" >> "${GITHUB_OUTPUT}"
@@ -70,7 +72,9 @@ jobs:
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          add-paths: config/model_prices_extended.json
+          add-paths: |
+            config/model_prices_extended.json
+            config/model_catalog_authority.json
           commit-message: "chore(pricing): refresh runtime catalog from LiteLLM"
           title: "chore(pricing): refresh runtime catalog from LiteLLM"
           body: |
@@ -81,9 +85,12 @@ jobs:
             - Upstream: `BerriAI/litellm`
             - Immutable source commit: `${{ steps.upstream.outputs.source_commit }}`
             - Runtime catalog: `config/model_prices_extended.json`
+            - Generated exact classification authority: `config/model_catalog_authority.json`
+            - Reviewed decisions: `config/model_catalog_decisions.json` (not changed automatically)
             - Official and compatibility overrides: validated and applied after upstream rows
 
             Review the catalog diff before merging. First-party overrides are retained
-            when LiteLLM differs from provider documentation.
+            when LiteLLM differs from provider documentation. Classification is exact,
+            provider-scoped, and fails if a pricing row lacks an explicit decision.
           branch: auto-update-runtime-model-prices
           delete-branch: true

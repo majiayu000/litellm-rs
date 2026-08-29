@@ -11,9 +11,12 @@ pub(crate) mod catalog_policy;
 pub mod definition;
 pub(crate) mod github_policy;
 pub mod lifecycle;
+pub mod model_catalog_authority;
 pub mod support_matrix;
 pub mod types;
 
+#[cfg(test)]
+mod model_catalog_authority_tests;
 #[cfg(test)]
 mod readme_tests;
 #[cfg(test)]
