@@ -325,27 +325,8 @@ impl AnthropicClient {
                 "message extension length mismatch",
             ));
         }
-        let replays_thinking = extensions.iter().any(|extension| {
-            extension
-                .anthropic_thinking()
-                .is_some_and(|thinking| !thinking.blocks().is_empty())
-        });
-        if replays_thinking
-            && !Self::is_claude_5_protocol_model(&request.model)
-            && !request
-                .thinking
-                .as_ref()
-                .is_some_and(|thinking| thinking.enabled)
-        {
-            return Err(ProviderError::invalid_request(
-                "anthropic",
-                format!(
-                    "Anthropic continuation replay for model {} requires an explicit thinking configuration",
-                    request.model
-                ),
-            ));
-        }
         let mut transformed = self.transform_chat_request(request)?;
+        Self::enable_legacy_continuation_thinking(request, extensions, &mut transformed)?;
         let messages = transformed["messages"].as_array_mut().ok_or_else(|| {
             anthropic_api_error(500, "Anthropic request messages must be an array")
         })?;
@@ -402,6 +383,59 @@ impl AnthropicClient {
             *wire_content = Value::Array(content);
         }
         Ok(transformed)
+    }
+
+    fn enable_legacy_continuation_thinking(
+        request: &ChatRequest,
+        extensions: &[ChatMessageContinuation],
+        transformed: &mut Value,
+    ) -> Result<(), ProviderError> {
+        let has_signed_continuation = extensions.iter().any(|extension| {
+            extension
+                .anthropic_thinking()
+                .is_some_and(|thinking| !thinking.blocks().is_empty())
+        });
+        if !has_signed_continuation || transformed.get("thinking").is_some() {
+            return Ok(());
+        }
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| !thinking.enabled)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Anthropic signed continuation requires thinking to be enabled",
+            ));
+        }
+
+        let registry = get_anthropic_registry();
+        let Some(model_spec) = registry.get_model_spec(&request.model) else {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} cannot replay Anthropic thinking continuation",
+                    request.model
+                ),
+            ));
+        };
+        if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!("Model {} does not support thinking", request.model),
+            ));
+        }
+
+        let budget = 10_000_u32;
+        let current_max = request.max_tokens.unwrap_or(4096);
+        if current_max <= budget {
+            transformed["max_tokens"] = json!(budget + 1);
+        }
+        transformed["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": budget
+        });
+        Ok(())
     }
 
     fn thinking_block_to_value(block: &AnthropicThinkingBlock) -> Value {

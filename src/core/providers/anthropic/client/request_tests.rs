@@ -92,23 +92,34 @@ fn signed_continuation_extension() -> ChatMessageContinuation {
 }
 
 #[test]
-fn legacy_thinking_replay_requires_an_explicit_thinking_configuration() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+fn signed_legacy_continuation_enables_thinking_when_http_request_omits_it() {
+    let mut request = ChatRequest::new("claude-opus-4-8");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("visible".to_string())),
         ..Default::default()
     });
+    request.messages.push(ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("continue".to_string())),
+        ..Default::default()
+    });
 
-    let error = anthropic_client()
-        .transform_chat_request_with_extensions(&request, &[signed_continuation_extension()])
-        .expect_err("legacy thinking replay must fail before transport without thinking config");
+    let transformed = anthropic_client()
+        .transform_chat_request_with_extensions(
+            &request,
+            &[
+                signed_continuation_extension(),
+                ChatMessageContinuation::new(),
+            ],
+        )
+        .expect("signed continuation should enable legacy thinking");
 
-    assert!(
-        error
-            .to_string()
-            .contains("requires an explicit thinking configuration")
+    assert_eq!(
+        transformed["thinking"],
+        json!({"type": "enabled", "budget_tokens": 10_000})
     );
+    assert_eq!(transformed["max_tokens"], 10_001);
 }
 
 #[tokio::test]
