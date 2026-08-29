@@ -330,6 +330,28 @@ class CatalogAuthorityTests(unittest.TestCase):
             {"callable": 0, "pricing_only": 0, "unreviewed": 1},
         )
 
+    def test_provider_aliases_cannot_shadow_entry_providers(self) -> None:
+        prices = {
+            "gpt-test": {"litellm_provider": "openai"},
+            "bedrock-model": {"litellm_provider": "bedrock"},
+        }
+        entries = [
+            self.decision("openai", "gpt-test", "unreviewed"),
+            self.decision("bedrock", "bedrock-model", "unreviewed"),
+        ]
+        collision = self.document(entries)
+        collision["provider_aliases"]["openai"] = ["bedrock"]
+
+        with self.assertRaisesRegex(
+            SystemExit, "provider alias collision.*bedrock.*canonical provider"
+        ):
+            sync.build_catalog_authority(prices, collision)
+
+        valid = self.document(entries)
+        valid["provider_aliases"]["openai"] = ["openai-compatible"]
+        authority = sync.build_catalog_authority(prices, valid)
+        self.assertEqual(authority["provider_aliases"]["openai"], ["openai-compatible"])
+
     def test_callable_and_pricing_only_contracts_are_strict(self) -> None:
         prices = {
             "gpt-test": {"litellm_provider": "openai"},

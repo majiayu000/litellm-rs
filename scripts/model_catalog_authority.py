@@ -126,12 +126,15 @@ def _validate_sources(value: Any) -> dict[str, dict[str, str]]:
     return sources
 
 
-def _validate_provider_aliases(value: Any) -> dict[str, list[str]]:
+def _validate_provider_aliases(
+    value: Any,
+    entry_providers: set[str],
+) -> dict[str, list[str]]:
     if not isinstance(value, dict):
         raise SystemExit("provider_aliases must be an object")
     result: dict[str, list[str]] = {}
     owner: dict[str, str] = {}
-    canonical = set(value)
+    canonical = set(value) | entry_providers
     for provider, aliases in value.items():
         provider = _non_empty_string(provider, "canonical provider")
         aliases = _string_list(aliases, f"provider_aliases.{provider}")
@@ -259,9 +262,6 @@ def build_catalog_authority(
             "enforced_providers must be exactly: "
             + ", ".join(sorted(ENFORCED_CATALOG_PROVIDERS))
         )
-    provider_aliases = _validate_provider_aliases(
-        decision_document.get("provider_aliases", {})
-    )
     raw_entries = decision_document.get("entries")
     if not isinstance(raw_entries, list):
         raise SystemExit("catalog decisions entries must be a list")
@@ -277,6 +277,11 @@ def build_catalog_authority(
             )
         by_tuple[identity] = entry
         entries.append(entry)
+
+    provider_aliases = _validate_provider_aliases(
+        decision_document.get("provider_aliases", {}),
+        {entry["provider"] for entry in entries},
+    )
 
     price_tuples = {
         (entry.get("litellm_provider"), key)
