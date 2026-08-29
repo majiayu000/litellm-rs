@@ -112,6 +112,81 @@ fn test_multimodal_message() {
 }
 
 #[test]
+fn developer_multimodal_parts_encode_audio_and_pdf_as_inline_data() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    let message = ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Parts(vec![
+            ContentPart::Audio {
+                audio: crate::core::types::content::AudioData {
+                    data: "YXVkaW8=".to_string(),
+                    format: Some("mp3".to_string()),
+                },
+            },
+            ContentPart::Document {
+                source: crate::core::types::content::DocumentSource {
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBERi0xLjQK".to_string(),
+                },
+                cache_control: None,
+            },
+        ])),
+        ..Default::default()
+    };
+
+    let parts = transform_parts(&client, &message);
+    assert_eq!(parts[0]["inlineData"]["mimeType"], "audio/mp3");
+    assert_eq!(parts[0]["inlineData"]["data"], "YXVkaW8=");
+    assert_eq!(parts[1]["inlineData"]["mimeType"], "application/pdf");
+    assert_eq!(parts[1]["inlineData"]["data"], "JVBERi0xLjQK");
+}
+
+#[test]
+fn developer_multimodal_parts_reject_unsupported_or_empty_media() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    for part in [
+        ContentPart::Audio {
+            audio: crate::core::types::content::AudioData {
+                data: "YXVkaW8=".to_string(),
+                format: Some("zip".to_string()),
+            },
+        },
+        ContentPart::Audio {
+            audio: crate::core::types::content::AudioData {
+                data: String::new(),
+                format: Some("mp3".to_string()),
+            },
+        },
+        ContentPart::Document {
+            source: crate::core::types::content::DocumentSource {
+                media_type: "text/plain".to_string(),
+                data: "dGV4dA==".to_string(),
+            },
+            cache_control: None,
+        },
+        ContentPart::Document {
+            source: crate::core::types::content::DocumentSource {
+                media_type: "application/pdf".to_string(),
+                data: String::new(),
+            },
+            cache_control: None,
+        },
+    ] {
+        let message = ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(vec![part])),
+            ..Default::default()
+        };
+        let mut planner = GoogleToolPlanner::new("gemini");
+        assert!(
+            client
+                .transform_message_content(0, &message, &mut planner)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn test_gemini_request_maps_tool_call_and_result_round_trip() {
     let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
     let request = ChatRequest {

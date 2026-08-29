@@ -116,6 +116,26 @@ fn is_catalog_row_at_rate(
             .get("output_cost_per_reasoning_token")
             .and_then(serde_json::Value::as_f64)
             .is_none_or(|price| price == output_cost)
+        && optional_extra_rate_matches(model_info, "input_cost_per_token_batches", input_cost / 2.0)
+        && optional_extra_rate_matches(model_info, "input_cost_per_token_flex", input_cost / 2.0)
+        && optional_extra_rate_matches(
+            model_info,
+            "output_cost_per_token_batches",
+            output_cost / 2.0,
+        )
+        && optional_extra_rate_matches(model_info, "output_cost_per_token_flex", output_cost / 2.0)
+        && optional_extra_rate_matches(
+            model_info,
+            "cache_read_input_token_cost_flex",
+            cache_read_cost / 2.0,
+        )
+}
+
+fn optional_extra_rate_matches(model_info: &LiteLLMModelInfo, key: &str, expected: f64) -> bool {
+    model_info
+        .extra
+        .get(key)
+        .is_none_or(|value| value.as_f64() == Some(expected))
 }
 
 fn model_info_with_rate<'a>(
