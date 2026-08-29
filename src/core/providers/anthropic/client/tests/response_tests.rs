@@ -167,7 +167,7 @@ fn test_anthropic_client_preserves_thinking_blocks() {
         result.choices.first().unwrap().message.thinking.as_ref(),
         Some(&ThinkingContent::Text {
             text: "First thought. Second thought.".to_string(),
-            signature: None,
+            signature: Some("sig_456".to_string()),
         })
     );
 }

@@ -6,6 +6,7 @@ use crate::core::models::openai::{
 };
 use crate::core::pricing_service::PricingService;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::utils::ai::counter::token_counter::TokenCounter;
 
 const IMAGE_PROMPT_BASE_TOKENS: u32 = 85;
@@ -25,6 +26,7 @@ pub(in crate::server::routes::ai) struct ChatCompletionBudgetRequest<'a> {
     max_tokens: Option<u32>,
     max_completion_tokens: Option<u32>,
     n: Option<u32>,
+    additional_prompt_tokens: u32,
 }
 
 impl<'a> ChatCompletionBudgetRequest<'a> {
@@ -35,6 +37,14 @@ impl<'a> ChatCompletionBudgetRequest<'a> {
     ) -> Self {
         self.max_tokens = max_tokens;
         self.max_completion_tokens = max_completion_tokens;
+        self
+    }
+
+    pub(in crate::server::routes::ai) fn with_additional_prompt_tokens(
+        mut self,
+        additional_prompt_tokens: u32,
+    ) -> Self {
+        self.additional_prompt_tokens = additional_prompt_tokens;
         self
     }
 }
@@ -50,6 +60,7 @@ impl<'a> From<&'a ChatCompletionRequest> for ChatCompletionBudgetRequest<'a> {
             max_tokens: request.max_tokens,
             max_completion_tokens: request.max_completion_tokens,
             n: request.n,
+            additional_prompt_tokens: 0,
         }
     }
 }
@@ -232,14 +243,7 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_p
     request: impl Into<ChatCompletionBudgetRequest<'a>>,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     let request = request.into();
-    let prompt_tokens = estimate_chat_prompt_tokens(
-        pricing_model,
-        request.messages,
-        request.tools,
-        request.functions,
-        request.function_call,
-        request.response_format,
-    );
+    let prompt_tokens = estimate_budget_request_prompt_tokens(pricing_model, request);
     reserve_completion_budget_with_split_pricing(
         pricing_service,
         pricing_config,
@@ -258,6 +262,40 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_p
             request.n.unwrap_or(1),
         ),
     )
+}
+
+fn estimate_budget_request_prompt_tokens(
+    model: &str,
+    request: ChatCompletionBudgetRequest<'_>,
+) -> u32 {
+    estimate_chat_prompt_tokens(
+        model,
+        request.messages,
+        request.tools,
+        request.functions,
+        request.function_call,
+        request.response_format,
+    )
+    .saturating_add(request.additional_prompt_tokens)
+}
+
+pub(in crate::server::routes::ai) fn estimate_chat_continuation_prompt_tokens(
+    model: &str,
+    extensions: &[ChatMessageExtensions],
+) -> u32 {
+    let counter = TokenCounter::new();
+    extensions
+        .iter()
+        .filter_map(ChatMessageExtensions::anthropic_thinking)
+        .fold(0u32, |total, thinking| {
+            total.saturating_add(serialized_prompt_tokens(
+                &counter,
+                model,
+                Some(thinking.blocks()),
+                "Anthropic continuation token estimation failed",
+                |blocks| blocks.len().saturating_mul(256),
+            ))
+        })
 }
 
 pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
@@ -521,6 +559,10 @@ fn fallback_message_tokens(messages: &[ChatMessage]) -> u32 {
 #[cfg(test)]
 mod budget_request_tests {
     use super::*;
+    use crate::core::types::anthropic_continuation::{
+        AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock,
+        AnthropicThinkingContent, ChatMessageExtensions,
+    };
 
     #[test]
     fn budget_request_view_borrows_large_request_parts() {
@@ -559,5 +601,51 @@ mod budget_request_tests {
         ));
         assert_eq!(view.max_tokens, Some(128));
         assert_eq!(view.max_completion_tokens, Some(64));
+    }
+
+    #[test]
+    fn continuation_budget_counts_the_provider_bound_anthropic_blocks() {
+        let request = ChatCompletionRequest {
+            model: "claude-opus-5".to_string(),
+            messages: vec![ChatMessage {
+                role: crate::core::models::openai::MessageRole::Assistant,
+                content: Some(MessageContent::Text("visible answer".to_string())),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            }],
+            ..Default::default()
+        };
+        let extension = ChatMessageExtensions::new().with_anthropic_thinking(
+            AnthropicThinkingContent::new(vec![
+                AnthropicThinkingBlock::Thinking {
+                    thinking: "private reasoning ".repeat(256),
+                    signature: AnthropicSignature::try_from("opaque-signature")
+                        .expect("fixture signature is non-empty"),
+                },
+                AnthropicThinkingBlock::RedactedThinking {
+                    data: AnthropicRedactedData::try_from("opaque-redacted")
+                        .expect("fixture redacted data is non-empty"),
+                },
+            ]),
+        );
+        let extra_tokens = estimate_chat_continuation_prompt_tokens(
+            &request.model,
+            std::slice::from_ref(&extension),
+        );
+
+        let legacy_tokens = estimate_budget_request_prompt_tokens(
+            &request.model,
+            ChatCompletionBudgetRequest::from(&request),
+        );
+        let continuation_tokens = estimate_budget_request_prompt_tokens(
+            &request.model,
+            ChatCompletionBudgetRequest::from(&request).with_additional_prompt_tokens(extra_tokens),
+        );
+
+        assert!(extra_tokens > 0);
+        assert!(continuation_tokens > legacy_tokens);
     }
 }

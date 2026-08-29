@@ -23,8 +23,8 @@ use crate::core::types::responses::{ChatChunk, Usage};
 use std::sync::LazyLock;
 
 pub(super) use completion::{
-    ChatCompletionBudgetRequest, estimate_chat_prompt_tokens,
-    reserve_chat_completion_budget_with_split_pricing,
+    ChatCompletionBudgetRequest, estimate_chat_continuation_prompt_tokens,
+    estimate_chat_prompt_tokens, reserve_chat_completion_budget_with_split_pricing,
 };
 #[cfg(test)]
 pub(super) use completion::{

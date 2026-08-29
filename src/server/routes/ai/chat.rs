@@ -225,6 +225,11 @@ async fn handle_chat_completion_internal(
                     &selected_model,
                     legacy_request,
                 )?;
+                let continuation_prompt_tokens =
+                    super::spend::estimate_chat_continuation_prompt_tokens(
+                        &pricing_model,
+                        &extensions,
+                    );
                 let request_for_provider =
                     ChatContinuationRequest::new(request_for_provider, extensions)?;
                 let request_for_budget =
@@ -232,7 +237,8 @@ async fn handle_chat_completion_internal(
                         .with_output_limits(
                             request_for_provider.request().max_tokens,
                             request_for_provider.request().max_completion_tokens,
-                        );
+                        )
+                        .with_additional_prompt_tokens(continuation_prompt_tokens);
                 let provider_context = context.as_ref().clone();
                 let reserve_pricing_service = pricing_service.clone();
                 let settle_pricing_service = pricing_service.clone();

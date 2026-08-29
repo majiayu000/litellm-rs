@@ -112,14 +112,18 @@ async fn first_turn_opt_in_rejects_unsupported_responses_modes_before_dispatch()
     let server = crate::server::HttpServer::new(&config).await.unwrap();
     let state = web::Data::new(server.state().clone());
 
-    for mode in [
-        json!({"stream":true}),
-        json!({"background":true}),
-        json!({"store":true}),
-        json!({"previous_response_id":"resp_previous"}),
+    for (mode, explicit_store_false) in [
+        (json!({}), false),
+        (json!({"stream":true}), true),
+        (json!({"background":true}), true),
+        (json!({"store":true}), false),
+        (json!({"previous_response_id":"resp_previous"}), true),
     ] {
         super::PROVIDER_DISPATCH_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
         let mut value = json!({"model":"m","input":"run"});
+        if explicit_store_false {
+            value["store"] = json!(false);
+        }
         value
             .as_object_mut()
             .unwrap()

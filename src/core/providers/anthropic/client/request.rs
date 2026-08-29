@@ -13,6 +13,37 @@ use crate::core::types::thinking::ThinkingEffort;
 
 use super::AnthropicClient;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnthropicEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl AnthropicEffort {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl From<ThinkingEffort> for AnthropicEffort {
+    fn from(value: ThinkingEffort) -> Self {
+        match value {
+            ThinkingEffort::Low => Self::Low,
+            ThinkingEffort::Medium => Self::Medium,
+            ThinkingEffort::High => Self::High,
+        }
+    }
+}
+
 impl AnthropicClient {
     pub(crate) async fn chat_with_continuation(
         &self,
@@ -385,7 +416,7 @@ impl AnthropicClient {
 
     fn claude_5_thinking_config(
         request: &ChatRequest,
-    ) -> Result<Option<(Value, Option<ThinkingEffort>)>, ProviderError> {
+    ) -> Result<Option<(Value, Option<AnthropicEffort>)>, ProviderError> {
         let requested_effort = request
             .reasoning_effort
             .as_deref()
@@ -425,7 +456,8 @@ impl AnthropicClient {
                 "Claude 5 adaptive thinking does not support budget_tokens",
             ));
         }
-        if let (Some(typed), Some(requested)) = (thinking.effort, requested_effort)
+        let typed_effort = thinking.effort.map(AnthropicEffort::from);
+        if let (Some(typed), Some(requested)) = (typed_effort, requested_effort)
             && typed != requested
         {
             return Err(ProviderError::invalid_request(
@@ -437,7 +469,7 @@ impl AnthropicClient {
                 ),
             ));
         }
-        let effort = thinking.effort.or(requested_effort);
+        let effort = typed_effort.or(requested_effort);
         Ok(Some((
             json!({
                 "type": "adaptive",
@@ -447,14 +479,18 @@ impl AnthropicClient {
         )))
     }
 
-    fn parse_reasoning_effort(value: &str) -> Result<ThinkingEffort, ProviderError> {
+    fn parse_reasoning_effort(value: &str) -> Result<AnthropicEffort, ProviderError> {
         match value {
-            "low" => Ok(ThinkingEffort::Low),
-            "medium" => Ok(ThinkingEffort::Medium),
-            "high" => Ok(ThinkingEffort::High),
+            "low" => Ok(AnthropicEffort::Low),
+            "medium" => Ok(AnthropicEffort::Medium),
+            "high" => Ok(AnthropicEffort::High),
+            "xhigh" => Ok(AnthropicEffort::XHigh),
+            "max" => Ok(AnthropicEffort::Max),
             other => Err(ProviderError::invalid_request(
                 "anthropic",
-                format!("Unsupported reasoning_effort '{other}'; expected low, medium, or high"),
+                format!(
+                    "Unsupported reasoning_effort '{other}'; expected low, medium, high, xhigh, or max"
+                ),
             )),
         }
     }

@@ -45,10 +45,31 @@ impl AnthropicClient {
         response: Value,
         tool_name_map: &HashMap<String, String>,
     ) -> Result<ChatResponse, ProviderError> {
-        Ok(self
+        let continuation = self
             .transform_chat_response_with_continuation(response, tool_name_map)?
-            .into_parts()
-            .0)
+            .into_parts();
+        let (mut response, extensions) = continuation;
+        // Preserve the historical single-signature field only for callers of
+        // the legacy response path. The typed continuation wrapper keeps the
+        // opaque signature solely in its secret-safe sidecar.
+        for (choice, extension) in response.choices.iter_mut().zip(&extensions) {
+            let Some(ThinkingContent::Text { signature, .. }) = &mut choice.message.thinking else {
+                continue;
+            };
+            *signature = extension.anthropic_thinking().and_then(|thinking| {
+                thinking
+                    .blocks()
+                    .iter()
+                    .rev()
+                    .find_map(|block| match block {
+                        AnthropicThinkingBlock::Thinking { signature, .. } => {
+                            Some(signature.expose().to_string())
+                        }
+                        AnthropicThinkingBlock::RedactedThinking { .. } => None,
+                    })
+            });
+        }
+        Ok(response)
     }
 
     pub(crate) fn transform_chat_response_with_continuation(

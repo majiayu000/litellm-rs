@@ -65,7 +65,7 @@ pub async fn create_response(
     if continuation_requested
         && (request.stream.unwrap_or(false)
             || request.background.unwrap_or(false)
-            || request.store == Some(true)
+            || request.store.unwrap_or(true)
             || request.previous_response_id.is_some())
     {
         return Ok(openai_errors::validation_error(
@@ -102,10 +102,15 @@ pub async fn create_response(
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    let request = match lifecycle::resolve_previous_response_context(request, &owner) {
-        Ok(request) => request,
-        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
-    };
+    let (request, input_extensions) =
+        match lifecycle::resolve_previous_response_context_with_extensions(
+            request,
+            input_extensions,
+            &owner,
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        };
 
     let turn = match build_responses_continuation_turn(&request, &input_extensions) {
         Ok(turn) => turn,
@@ -414,7 +419,6 @@ fn push_tool_call(messages: &mut Vec<ChatMessage>, call_id: &str, name: &str, ar
     };
     if let Some(message) = messages.last_mut()
         && message.role == MessageRole::Assistant
-        && message.content.is_none()
     {
         message.tool_calls.get_or_insert_default().push(tool_call);
         return;
@@ -719,9 +723,11 @@ mod tests {
     fn continuation_message_stays_attached_to_following_tool_call_and_result() {
         let request: ResponsesApiRequest = serde_json::from_value(serde_json::json!({
             "model":"claude-opus-5", "input":[
-                {"type":"message","role":"assistant","content":[]},
+                {"type":"message","role":"assistant","content":[{"type":"input_text","text":"visible answer"}]},
                 {"type":"function_call","id":"fc_1","call_id":"toolu_1","name":"lookup","arguments":"{}"},
-                {"type":"function_call_output","call_id":"toolu_1","output":"result"}]
+                {"type":"custom_tool_call","id":"ct_1","call_id":"toolu_2","name":"shell","input":"pwd"},
+                {"type":"function_call_output","call_id":"toolu_1","output":"result"},
+                {"type":"custom_tool_call_output","call_id":"toolu_2","name":"shell","output":"/tmp"}]
         })).unwrap();
         let extension = ChatMessageExtensions::new().with_anthropic_thinking(
             AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
@@ -729,21 +735,35 @@ mod tests {
                 signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
             }]),
         );
-        let input = vec![Some(extension), None, None];
+        let input = vec![Some(extension), None, None, None, None];
         let turn = build_responses_continuation_turn(&request, &input).unwrap();
         let chat = build_chat_request_from_turn(&request, &turn).unwrap();
         let mapped = map_responses_input_extensions(&request, &chat, input).unwrap();
-        assert_eq!((chat.messages.len(), mapped.len()), (2, 2));
+        assert_eq!((chat.messages.len(), mapped.len()), (3, 3));
         assert!(!mapped[0].is_empty());
         assert!(mapped[1].is_empty());
+        assert!(mapped[2].is_empty());
         assert_eq!(
             chat.messages[0].tool_calls.as_ref().unwrap()[0].id,
             "toolu_1"
         );
+        assert_eq!(
+            chat.messages[0].tool_calls.as_ref().unwrap()[1].id,
+            "toolu_2"
+        );
+        assert!(matches!(
+            chat.messages[0].content.as_ref(),
+            Some(MessageContent::Text(text)) if text == "visible answer"
+        ));
         assert_eq!(chat.messages[1].tool_call_id.as_deref(), Some("toolu_1"));
         assert!(matches!(
             chat.messages[1].content.as_ref(),
             Some(MessageContent::Text(text)) if text == "result"
+        ));
+        assert_eq!(chat.messages[2].tool_call_id.as_deref(), Some("toolu_2"));
+        assert!(matches!(
+            chat.messages[2].content.as_ref(),
+            Some(MessageContent::Text(text)) if text == "/tmp"
         ));
     }
 

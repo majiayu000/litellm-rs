@@ -50,6 +50,23 @@ fn reasoning_effort_maps_once_to_adaptive_output_config() {
 }
 
 #[test]
+fn claude5_extended_reasoning_efforts_map_without_downshifting() {
+    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+        for effort in ["xhigh", "max"] {
+            let mut request = ChatRequest::new(model).add_user_message("solve");
+            request.reasoning_effort = Some(effort.to_string());
+
+            let transformed = anthropic_client()
+                .transform_chat_request(&request)
+                .expect("official Claude 5 effort must be accepted");
+
+            assert_eq!(transformed["thinking"]["type"], "adaptive");
+            assert_eq!(transformed["output_config"]["effort"], effort);
+        }
+    }
+}
+
+#[test]
 fn fable_defaults_to_always_on_adaptive_while_opus_and_sonnet_remain_optional() {
     let client = anthropic_client();
 
@@ -288,6 +305,48 @@ fn issue_764_maps_user_and_top_level_cache_control()
     assert_eq!(transformed["metadata"]["user_id"], "user-123");
     assert_eq!(transformed["cache_control"], json!({"type": "ephemeral"}));
     Ok(())
+}
+
+#[test]
+fn claude_fable_5_accepts_official_prompt_cache_control_but_lookalikes_fail() {
+    let mut request = ChatRequest::new("claude-fable-5").add_user_message("hello");
+    request
+        .extra_params
+        .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+
+    let transformed = anthropic_client()
+        .transform_chat_request(&request)
+        .expect("Fable 5 prompt caching is supported");
+    assert_eq!(transformed["cache_control"], json!({"type": "ephemeral"}));
+
+    request.model = "claude-fable-5-preview".to_string();
+    assert!(anthropic_client().transform_chat_request(&request).is_err());
+}
+
+#[test]
+fn claude_fable_5_preserves_document_cache_control() {
+    let mut request = ChatRequest::new("claude-fable-5");
+    request.messages.push(ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Parts(vec![ContentPart::Document {
+            source: DocumentSource {
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0=".to_string(),
+            },
+            cache_control: Some(CacheControl {
+                cache_type: "ephemeral".to_string(),
+            }),
+        }])),
+        ..Default::default()
+    });
+
+    let transformed = anthropic_client()
+        .transform_chat_request(&request)
+        .expect("Fable 5 document caching is supported");
+    assert_eq!(
+        transformed["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
 }
 
 #[test]
