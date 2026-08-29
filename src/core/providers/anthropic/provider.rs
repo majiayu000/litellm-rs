@@ -19,7 +19,9 @@ use std::pin::Pin;
 
 use super::client::AnthropicClient;
 use super::config::AnthropicConfig;
-use super::models::{ModelFeature, get_anthropic_registry, standalone_fable_model_info};
+use super::models::{
+    ModelFeature, get_anthropic_registry, standalone_fable_model_info, supported_openai_params,
+};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 const COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 
@@ -244,17 +246,8 @@ impl LLMProvider for AnthropicProvider {
             || self.client.allows_unknown_model(model)
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        &[
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "top_k",
-            "tools",
-            "tool_choice",
-            "stream",
-            "stop",
-        ]
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        supported_openai_params(model)
     }
 
     async fn map_openai_params(

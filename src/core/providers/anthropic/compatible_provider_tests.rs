@@ -47,6 +47,24 @@ fn only_priced_standalone_claude_5_is_published_as_supported() {
     }
 }
 
+#[test]
+fn fable_supported_params_match_sampling_validation_exactly() {
+    let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
+        .unwrap_or_else(|err| panic!("provider should build: {err}"));
+
+    let fable = provider.get_supported_openai_params("claude-fable-5");
+    assert!(!fable.contains(&"temperature"));
+    assert!(!fable.contains(&"top_p"));
+    assert!(fable.contains(&"max_tokens"));
+    assert!(fable.contains(&"tools"));
+
+    for model in ["claude-3-opus-20240229", "Claude-fable-5"] {
+        let params = provider.get_supported_openai_params(model);
+        assert!(params.contains(&"temperature"));
+        assert!(params.contains(&"top_p"));
+    }
+}
+
 #[tokio::test]
 async fn unregistered_claude_5_models_fail_before_unpriced_budget_reservation() {
     let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))

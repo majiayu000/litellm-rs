@@ -244,6 +244,15 @@ impl AnthropicThinkingContent {
     }
 }
 
+/// Private ordering metadata used to replay thinking and tool-use blocks in
+/// the same relative order returned by Anthropic.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum AnthropicContentBlockOrder {
+    Thinking { index: usize },
+    ToolUse { index: usize },
+}
+
 /// Additive, provider-explicit continuation extensions for a chat message.
 ///
 /// Fields are private so this carrier can grow without breaking external struct
@@ -254,6 +263,8 @@ impl AnthropicThinkingContent {
 pub struct ChatMessageExtensions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_thinking: Option<AnthropicThinkingContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    anthropic_block_order: Option<Vec<AnthropicContentBlockOrder>>,
 }
 
 impl ChatMessageExtensions {
@@ -271,6 +282,18 @@ impl ChatMessageExtensions {
     /// Return the Anthropic thinking continuation, if present.
     pub fn anthropic_thinking(&self) -> Option<&AnthropicThinkingContent> {
         self.anthropic_thinking.as_ref()
+    }
+
+    pub(crate) fn with_anthropic_block_order(
+        mut self,
+        order: Vec<AnthropicContentBlockOrder>,
+    ) -> Self {
+        self.anthropic_block_order = Some(order);
+        self
+    }
+
+    pub(crate) fn anthropic_block_order(&self) -> Option<&[AnthropicContentBlockOrder]> {
+        self.anthropic_block_order.as_deref()
     }
 
     /// Whether this carrier has no provider extensions.

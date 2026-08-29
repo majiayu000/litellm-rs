@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::core::providers::ChatContinuationResponse;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::anthropic_continuation::{
-    AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
-    ChatMessageExtensions,
+    AnthropicContentBlockOrder, AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock,
+    AnthropicThinkingContent, ChatMessageExtensions,
 };
 use crate::core::types::{
     chat::ChatMessage,
@@ -104,6 +104,7 @@ impl AnthropicClient {
         let mut message_content = String::new();
         let mut continuation_blocks = Vec::new();
         let mut tool_calls = Vec::new();
+        let mut block_order = Vec::new();
 
         for (block_index, item) in content.iter().enumerate() {
             match item.get("type").and_then(|t| t.as_str()) {
@@ -118,6 +119,7 @@ impl AnthropicClient {
                         item.get("name").and_then(|v| v.as_str()),
                         item.get("input"),
                     ) {
+                        let index = tool_calls.len();
                         tool_calls.push(ToolCall {
                             id: id.to_string(),
                             tool_type: "function".to_string(),
@@ -126,6 +128,7 @@ impl AnthropicClient {
                                 arguments: input.to_string(),
                             },
                         });
+                        block_order.push(AnthropicContentBlockOrder::ToolUse { index });
                     }
                 }
                 Some("thinking") => {
@@ -145,6 +148,7 @@ impl AnthropicClient {
                                 "choice 0 block {block_index} thinking signature is missing"
                             ))
                         })?;
+                    let index = continuation_blocks.len();
                     continuation_blocks.push(AnthropicThinkingBlock::Thinking {
                         thinking: thinking.to_string(),
                         signature: AnthropicSignature::try_from(signature).map_err(|_| {
@@ -153,6 +157,7 @@ impl AnthropicClient {
                             ))
                         })?,
                     });
+                    block_order.push(AnthropicContentBlockOrder::Thinking { index });
                 }
                 Some("redacted_thinking") => {
                     let data = item
@@ -163,6 +168,7 @@ impl AnthropicClient {
                                 "choice 0 block {block_index} redacted thinking data is missing"
                             ))
                         })?;
+                    let index = continuation_blocks.len();
                     continuation_blocks.push(AnthropicThinkingBlock::RedactedThinking {
                         data: AnthropicRedactedData::try_from(data).map_err(|_| {
                             anthropic_parse_error(format!(
@@ -170,6 +176,7 @@ impl AnthropicClient {
                             ))
                         })?,
                     });
+                    block_order.push(AnthropicContentBlockOrder::Thinking { index });
                 }
                 Some("refusal") => {
                     if let Some(refusal) = item.get("refusal").and_then(|r| r.as_str()) {
@@ -237,7 +244,9 @@ impl AnthropicClient {
         let extension = if continuation.blocks().is_empty() {
             ChatMessageExtensions::new()
         } else {
-            ChatMessageExtensions::new().with_anthropic_thinking(continuation)
+            ChatMessageExtensions::new()
+                .with_anthropic_thinking(continuation)
+                .with_anthropic_block_order(block_order)
         };
         ChatContinuationResponse::new(response, vec![extension])
     }

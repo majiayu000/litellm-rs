@@ -65,15 +65,20 @@ impl RequestValidator {
 
         // Validate max_tokens
         if let Some(max_tokens) = max_tokens {
+            let max_output_tokens = if model == "claude-fable-5" {
+                128_000
+            } else {
+                100_000
+            };
             if max_tokens == 0 {
                 return Err(GatewayError::Validation(
                     "max_tokens must be greater than 0".to_string(),
                 ));
             }
-            if max_tokens > 100000 {
-                return Err(GatewayError::Validation(
-                    "max_tokens cannot exceed 100000".to_string(),
-                ));
+            if max_tokens > max_output_tokens {
+                return Err(GatewayError::Validation(format!(
+                    "max_tokens cannot exceed {max_output_tokens}"
+                )));
             }
         }
 

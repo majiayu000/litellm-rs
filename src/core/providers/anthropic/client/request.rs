@@ -6,7 +6,9 @@ use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::providers::{ChatContinuationRequest, ChatContinuationResponse};
-use crate::core::types::anthropic_continuation::{AnthropicThinkingBlock, ChatMessageExtensions};
+use crate::core::types::anthropic_continuation::{
+    AnthropicContentBlockOrder, AnthropicThinkingBlock, ChatMessageExtensions,
+};
 use crate::core::types::chat::ChatRequest;
 use crate::core::types::message::MessageRole;
 use crate::core::types::thinking::ThinkingEffort;
@@ -367,24 +369,94 @@ impl AnthropicClient {
                     ));
                 }
             };
-            let blocks = thinking.blocks().iter().map(|block| match block {
-                AnthropicThinkingBlock::Thinking {
-                    thinking,
-                    signature,
-                } => json!({
-                    "type": "thinking",
-                    "thinking": thinking,
-                    "signature": signature.expose(),
-                }),
-                AnthropicThinkingBlock::RedactedThinking { data } => json!({
-                    "type": "redacted_thinking",
-                    "data": data.expose(),
-                }),
-            });
-            content.splice(0..0, blocks);
+            if let Some(order) = extension.anthropic_block_order() {
+                content = Self::replay_ordered_continuation(content, thinking.blocks(), order)?;
+            } else {
+                content.splice(
+                    0..0,
+                    thinking.blocks().iter().map(Self::thinking_block_to_value),
+                );
+            }
             *wire_content = Value::Array(content);
         }
         Ok(transformed)
+    }
+
+    fn thinking_block_to_value(block: &AnthropicThinkingBlock) -> Value {
+        match block {
+            AnthropicThinkingBlock::Thinking {
+                thinking,
+                signature,
+            } => json!({
+                "type": "thinking",
+                "thinking": thinking,
+                "signature": signature.expose(),
+            }),
+            AnthropicThinkingBlock::RedactedThinking { data } => json!({
+                "type": "redacted_thinking",
+                "data": data.expose(),
+            }),
+        }
+    }
+
+    fn replay_ordered_continuation(
+        content: Vec<Value>,
+        thinking: &[AnthropicThinkingBlock],
+        order: &[AnthropicContentBlockOrder],
+    ) -> Result<Vec<Value>, ProviderError> {
+        let (tool_blocks, remaining): (Vec<_>, Vec<_>) = content
+            .into_iter()
+            .partition(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"));
+        let mut seen_thinking = vec![false; thinking.len()];
+        let mut seen_tools = vec![false; tool_blocks.len()];
+        let mut replay = Vec::with_capacity(order.len() + remaining.len());
+
+        for marker in order {
+            match *marker {
+                AnthropicContentBlockOrder::Thinking { index } => {
+                    let Some(block) = thinking.get(index) else {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!(
+                                "Anthropic continuation references missing thinking block {index}"
+                            ),
+                        ));
+                    };
+                    if std::mem::replace(&mut seen_thinking[index], true) {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!("Anthropic continuation repeats thinking block {index}"),
+                        ));
+                    }
+                    replay.push(Self::thinking_block_to_value(block));
+                }
+                AnthropicContentBlockOrder::ToolUse { index } => {
+                    let Some(block) = tool_blocks.get(index) else {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!(
+                                "Anthropic continuation references missing tool-use block {index}"
+                            ),
+                        ));
+                    };
+                    if std::mem::replace(&mut seen_tools[index], true) {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!("Anthropic continuation repeats tool-use block {index}"),
+                        ));
+                    }
+                    replay.push(block.clone());
+                }
+            }
+        }
+        if seen_thinking.iter().any(|seen| !seen) || seen_tools.iter().any(|seen| !seen) {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Anthropic continuation block order does not cover every thinking and tool-use block",
+            ));
+        }
+        replay.extend(remaining);
+        Ok(replay)
     }
 
     pub(crate) fn is_claude_5_protocol_model(model: &str) -> bool {

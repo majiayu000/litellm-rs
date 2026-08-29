@@ -219,6 +219,41 @@ fn test_validate_max_tokens_valid_boundary() {
 }
 
 #[test]
+fn exact_fable_uses_its_advertised_output_limit() {
+    let messages = vec![create_user_message("Hello")];
+
+    for max_tokens in [100_001, 128_000] {
+        let result = RequestValidator::validate_chat_completion_request(
+            "claude-fable-5",
+            &messages,
+            Some(max_tokens),
+            None,
+        );
+        assert!(result.is_ok(), "exact Fable should accept {max_tokens}");
+    }
+
+    let too_large = RequestValidator::validate_chat_completion_request(
+        "claude-fable-5",
+        &messages,
+        Some(128_001),
+        None,
+    )
+    .expect_err("Fable must reject output above 128k");
+    assert!(too_large.to_string().contains("128000"));
+
+    for model in ["gpt-4", "Claude-fable-5", "claude-fable-5-latest"] {
+        let error = RequestValidator::validate_chat_completion_request(
+            model,
+            &messages,
+            Some(100_001),
+            None,
+        )
+        .expect_err("the Fable exception must be exact and case-sensitive");
+        assert!(error.to_string().contains("100000"));
+    }
+}
+
+#[test]
 fn test_validate_max_tokens_none() {
     let messages = vec![create_user_message("Hello")];
     let result = RequestValidator::validate_chat_completion_request("gpt-4", &messages, None, None);

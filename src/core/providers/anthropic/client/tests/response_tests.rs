@@ -77,6 +77,46 @@ fn response_parser_returns_validated_secret_safe_sidecar() {
 }
 
 #[test]
+fn response_replay_preserves_multiple_thinking_tool_interleavings() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let cases = [
+        vec![
+            json!({"type": "thinking", "thinking": "plan-a", "signature": "sig-a"}),
+            json!({"type": "tool_use", "id": "tool-a", "name": "lookup_a", "input": {"a": 1}}),
+            json!({"type": "redacted_thinking", "data": "redacted-b"}),
+            json!({"type": "tool_use", "id": "tool-b", "name": "lookup_b", "input": {"b": 2}}),
+            json!({"type": "thinking", "thinking": "plan-c", "signature": "sig-c"}),
+        ],
+        vec![
+            json!({"type": "thinking", "thinking": "first", "signature": "sig-first"}),
+            json!({"type": "tool_use", "id": "tool-first", "name": "lookup_first", "input": {}}),
+            json!({"type": "thinking", "thinking": "second", "signature": "sig-second"}),
+            json!({"type": "tool_use", "id": "tool-second", "name": "lookup_second", "input": {}}),
+        ],
+    ];
+
+    for original_content in cases {
+        let response = json!({
+            "id": "msg_interleaved",
+            "model": "claude-fable-5",
+            "content": original_content,
+            "stop_reason": "tool_use"
+        });
+        let parsed = client
+            .transform_chat_response_with_continuation(response, &std::collections::HashMap::new())
+            .expect("interleaved response should parse");
+        let (response, extensions) = parsed.into_parts();
+        let mut request = ChatRequest::new("claude-fable-5");
+        request.messages.push(response.choices[0].message.clone());
+
+        let replay = client
+            .transform_chat_request_with_extensions(&request, &extensions)
+            .expect("typed continuation should replay");
+        assert_eq!(replay["messages"][0]["content"], json!(original_content));
+    }
+}
+
+#[test]
 fn test_transform_chat_response_usage() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
