@@ -110,7 +110,12 @@ impl AnthropicClient {
             match item.get("type").and_then(|t| t.as_str()) {
                 Some("text") => {
                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                        let start = message_content.len();
                         message_content.push_str(text);
+                        block_order.push(AnthropicContentBlockOrder::Text {
+                            start,
+                            end: message_content.len(),
+                        });
                     }
                 }
                 Some("tool_use") => {
@@ -180,7 +185,12 @@ impl AnthropicClient {
                 }
                 Some("refusal") => {
                     if let Some(refusal) = item.get("refusal").and_then(|r| r.as_str()) {
+                        let start = message_content.len();
                         message_content.push_str(refusal);
+                        block_order.push(AnthropicContentBlockOrder::Refusal {
+                            start,
+                            end: message_content.len(),
+                        });
                     }
                 }
                 _ => {}

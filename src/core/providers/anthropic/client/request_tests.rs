@@ -1,7 +1,12 @@
 use serde_json::json;
 
 use super::*;
+use crate::core::net::ProviderEndpointAccess;
+use crate::core::providers::ChatContinuationRequest;
 use crate::core::providers::anthropic::config::AnthropicConfig;
+use crate::core::types::anthropic_continuation::{
+    AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent, ChatMessageExtensions,
+};
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::content::{
     AudioData, CacheControl, ContentPart, DocumentSource, ImageSource,
@@ -11,6 +16,9 @@ use crate::core::types::thinking::{ThinkingConfig, ThinkingEffort};
 use crate::core::types::tools::{
     FunctionCall, FunctionChoice, FunctionDefinition, Tool, ToolCall, ToolChoice, ToolType,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
 fn anthropic_client() -> AnthropicClient {
     AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap()
@@ -24,6 +32,106 @@ fn tool(name: &str) -> Tool {
             description: Some("lookup".to_string()),
             parameters: Some(json!({"type": "object"})),
         },
+    }
+}
+
+async fn continuation_capture_server() -> (String, oneshot::Receiver<String>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_sender, request_receiver) = oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request_bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert_ne!(read, 0, "client closed before sending a complete request");
+            request_bytes.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request_bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request_bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request_bytes.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        request_sender
+            .send(String::from_utf8(request_bytes).unwrap())
+            .unwrap();
+        let body = r#"{"id":"msg-response","model":"claude-fable-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+    (format!("http://{address}"), request_receiver)
+}
+
+fn signed_continuation_extension() -> ChatMessageExtensions {
+    ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+        AnthropicThinkingBlock::Thinking {
+            thinking: "plan".to_string(),
+            signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
+        },
+    ]))
+}
+
+#[tokio::test]
+async fn continuation_send_path_adds_interleaved_beta_once() {
+    for legacy_thinking in [false, true] {
+        let (base_url, captured) = continuation_capture_server().await;
+        let client = AnthropicClient::new(
+            AnthropicConfig::new_test("test-key")
+                .with_base_url(base_url)
+                .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork),
+        )
+        .unwrap();
+        let mut request = ChatRequest::new("claude-fable-5");
+        request.messages.push(ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Text("visible".to_string())),
+            ..Default::default()
+        });
+        if legacy_thinking {
+            request.thinking = Some(ThinkingConfig::new().enabled());
+            request.extra_params.insert(
+                "anthropic_beta".to_string(),
+                json!(["interleaved-thinking-2025-05-14"]),
+            );
+        }
+        let envelope =
+            ChatContinuationRequest::new(request, vec![signed_continuation_extension()]).unwrap();
+
+        client
+            .chat_with_continuation(envelope)
+            .await
+            .expect("mock Anthropic request should succeed");
+        let request = captured.await.unwrap();
+        let beta_lines = request
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("anthropic-beta:"))
+            .collect::<Vec<_>>();
+        assert_eq!(beta_lines.len(), 1, "request: {request}");
+        assert_eq!(
+            beta_lines[0]
+                .matches("interleaved-thinking-2025-05-14")
+                .count(),
+            1,
+            "request: {request}"
+        );
     }
 }
 

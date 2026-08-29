@@ -244,12 +244,14 @@ impl AnthropicThinkingContent {
     }
 }
 
-/// Private ordering metadata used to replay thinking and tool-use blocks in
-/// the same relative order returned by Anthropic.
+/// Private, payload-free ordering metadata used to replay every supported
+/// response block in the exact order returned by Anthropic.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum AnthropicContentBlockOrder {
     Thinking { index: usize },
+    Text { start: usize, end: usize },
+    Refusal { start: usize, end: usize },
     ToolUse { index: usize },
 }
 

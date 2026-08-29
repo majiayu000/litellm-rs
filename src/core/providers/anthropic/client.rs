@@ -178,10 +178,24 @@ impl AnthropicClient {
     ///
     /// Returns an empty Vec when no beta features are needed.
     fn compute_beta_headers(&self, request: &ChatRequest) -> Vec<HeaderPair> {
+        self.compute_beta_headers_with_extensions(request, &[])
+    }
+
+    fn compute_beta_headers_with_extensions(
+        &self,
+        request: &ChatRequest,
+        extensions: &[crate::core::types::anthropic_continuation::ChatMessageExtensions],
+    ) -> Vec<HeaderPair> {
         let mut features: Vec<String> = Vec::new();
 
         // Extended / interleaved thinking requires the beta header.
-        if request.thinking.as_ref().is_some_and(|t| t.enabled) {
+        if request.thinking.as_ref().is_some_and(|t| t.enabled)
+            || extensions.iter().any(|extension| {
+                extension
+                    .anthropic_thinking()
+                    .is_some_and(|thinking| !thinking.blocks().is_empty())
+            })
+        {
             Self::push_beta_feature(&mut features, "interleaved-thinking-2025-05-14");
         }
 

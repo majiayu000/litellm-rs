@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
+use crate::core::types::anthropic_continuation::{AnthropicThinkingBlock, ChatMessageExtensions};
 
 // ==================== Chat Response Transformation Tests ====================
 
@@ -93,6 +93,14 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
             json!({"type": "thinking", "thinking": "second", "signature": "sig-second"}),
             json!({"type": "tool_use", "id": "tool-second", "name": "lookup_second", "input": {}}),
         ],
+        vec![
+            json!({"type": "thinking", "thinking": "before", "signature": "sig-before"}),
+            json!({"type": "text", "text": "visible 世界"}),
+            json!({"type": "tool_use", "id": "tool-middle", "name": "lookup_middle", "input": {}}),
+            json!({"type": "refusal", "refusal": "refused"}),
+            json!({"type": "redacted_thinking", "data": "redacted-after"}),
+            json!({"type": "text", "text": "tail"}),
+        ],
     ];
 
     for original_content in cases {
@@ -106,6 +114,16 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
             .transform_chat_response_with_continuation(response, &std::collections::HashMap::new())
             .expect("interleaved response should parse");
         let (response, extensions) = parsed.into_parts();
+        let serialized_extensions = serde_json::to_value(&extensions).unwrap();
+        let serialized_text = serialized_extensions.to_string();
+        for payload in ["visible 世界", "refused", "tool-middle", "tail"] {
+            assert!(
+                !serialized_text.contains(payload),
+                "ordering metadata must remain index/span-only: {serialized_text}"
+            );
+        }
+        let extensions: Vec<ChatMessageExtensions> =
+            serde_json::from_value(serialized_extensions).unwrap();
         let mut request = ChatRequest::new("claude-fable-5");
         request.messages.push(response.choices[0].message.clone());
 
@@ -114,6 +132,91 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
             .expect("typed continuation should replay");
         assert_eq!(replay["messages"][0]["content"], json!(original_content));
     }
+}
+
+#[test]
+fn ordered_continuation_sidecars_are_isolated_per_message() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let originals = [
+        vec![
+            json!({"type": "thinking", "thinking": "a", "signature": "sig-a"}),
+            json!({"type": "text", "text": "first"}),
+            json!({"type": "tool_use", "id": "tool-a", "name": "lookup_a", "input": {}}),
+        ],
+        vec![
+            json!({"type": "tool_use", "id": "tool-b", "name": "lookup_b", "input": {}}),
+            json!({"type": "text", "text": "second"}),
+            json!({"type": "thinking", "thinking": "b", "signature": "sig-b"}),
+        ],
+    ];
+    let mut request = ChatRequest::new("claude-fable-5");
+    let mut extensions = Vec::new();
+
+    for (index, original) in originals.iter().enumerate() {
+        let parsed = client
+            .transform_chat_response_with_continuation(
+                json!({
+                    "id": format!("msg-{index}"),
+                    "model": "claude-fable-5",
+                    "content": original,
+                    "stop_reason": "tool_use"
+                }),
+                &std::collections::HashMap::new(),
+            )
+            .expect("isolated continuation response should parse");
+        let (response, choice_extensions) = parsed.into_parts();
+        let mut choice_extensions: Vec<ChatMessageExtensions> =
+            serde_json::from_value(serde_json::to_value(choice_extensions).unwrap()).unwrap();
+        request.messages.push(response.choices[0].message.clone());
+        extensions.push(choice_extensions.remove(0));
+    }
+
+    let replay = client
+        .transform_chat_request_with_extensions(&request, &extensions)
+        .expect("each message must use only its own ordering sidecar");
+    assert_eq!(replay["messages"][0]["content"], json!(originals[0]));
+    assert_eq!(replay["messages"][1]["content"], json!(originals[1]));
+}
+
+#[test]
+fn ordered_continuation_metadata_fails_closed_on_span_drift() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let parsed = client
+        .transform_chat_response_with_continuation(
+            json!({
+                "id": "msg-span",
+                "model": "claude-fable-5",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": "世界"}
+                ]
+            }),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+    let (response, extensions) = parsed.into_parts();
+    let mut request = ChatRequest::new("claude-fable-5");
+    request.messages.push(response.choices[0].message.clone());
+    let serialized = serde_json::to_value(extensions).unwrap();
+
+    let mut invalid_utf8 = serialized.clone();
+    invalid_utf8[0]["anthropic_block_order"][1]["end"] = json!(1);
+    let extensions: Vec<ChatMessageExtensions> = serde_json::from_value(invalid_utf8).unwrap();
+    let error = client
+        .transform_chat_request_with_extensions(&request, &extensions)
+        .expect_err("a visible span cannot split a UTF-8 code point");
+    assert!(error.to_string().contains("valid UTF-8 range"));
+
+    let mut missing_visible = serialized;
+    missing_visible[0]["anthropic_block_order"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let extensions: Vec<ChatMessageExtensions> = serde_json::from_value(missing_visible).unwrap();
+    let error = client
+        .transform_chat_request_with_extensions(&request, &extensions)
+        .expect_err("the order must cover the complete canonical visible payload");
+    assert!(error.to_string().contains("does not cover every supported"));
 }
 
 #[test]

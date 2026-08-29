@@ -55,7 +55,7 @@ impl AnthropicClient {
         let tool_name_map = self.anthropic_tool_name_map_for_request(&request)?;
         let body = self.transform_chat_request_with_extensions(&request, &extensions)?;
         let mut headers = self.get_request_headers();
-        headers.extend(self.compute_beta_headers(&request));
+        headers.extend(self.compute_beta_headers_with_extensions(&request, &extensions));
         let response = self.send_request("/v1/messages", body, headers).await?;
         self.transform_chat_response_with_continuation(response, &tool_name_map)
     }
@@ -404,12 +404,33 @@ impl AnthropicClient {
         thinking: &[AnthropicThinkingBlock],
         order: &[AnthropicContentBlockOrder],
     ) -> Result<Vec<Value>, ProviderError> {
-        let (tool_blocks, remaining): (Vec<_>, Vec<_>) = content
-            .into_iter()
-            .partition(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"));
+        let mut visible_text = String::new();
+        let mut tool_blocks = Vec::new();
+        for block in content {
+            match block.get("type").and_then(Value::as_str) {
+                Some("tool_use") => tool_blocks.push(Some(block)),
+                Some("text") => {
+                    let text = block.get("text").and_then(Value::as_str).ok_or_else(|| {
+                        ProviderError::invalid_request(
+                            "anthropic",
+                            "Anthropic continuation text block has no text",
+                        )
+                    })?;
+                    visible_text.push_str(text);
+                }
+                other => {
+                    return Err(ProviderError::invalid_request(
+                        "anthropic",
+                        format!(
+                            "Anthropic ordered continuation cannot replay content block {other:?}"
+                        ),
+                    ));
+                }
+            }
+        }
         let mut seen_thinking = vec![false; thinking.len()];
-        let mut seen_tools = vec![false; tool_blocks.len()];
-        let mut replay = Vec::with_capacity(order.len() + remaining.len());
+        let mut visible_cursor = 0;
+        let mut replay = Vec::with_capacity(order.len());
 
         for marker in order {
             match *marker {
@@ -430,33 +451,81 @@ impl AnthropicClient {
                     }
                     replay.push(Self::thinking_block_to_value(block));
                 }
+                AnthropicContentBlockOrder::Text { start, end } => {
+                    replay.push(Self::ordered_visible_block(
+                        "text",
+                        "text",
+                        &visible_text,
+                        &mut visible_cursor,
+                        start,
+                        end,
+                    )?);
+                }
+                AnthropicContentBlockOrder::Refusal { start, end } => {
+                    replay.push(Self::ordered_visible_block(
+                        "refusal",
+                        "refusal",
+                        &visible_text,
+                        &mut visible_cursor,
+                        start,
+                        end,
+                    )?);
+                }
                 AnthropicContentBlockOrder::ToolUse { index } => {
-                    let Some(block) = tool_blocks.get(index) else {
+                    let Some(block) = tool_blocks.get_mut(index).and_then(Option::take) else {
                         return Err(ProviderError::invalid_request(
                             "anthropic",
                             format!(
-                                "Anthropic continuation references missing tool-use block {index}"
+                                "Anthropic continuation references missing or repeated tool-use block {index}"
                             ),
                         ));
                     };
-                    if std::mem::replace(&mut seen_tools[index], true) {
-                        return Err(ProviderError::invalid_request(
-                            "anthropic",
-                            format!("Anthropic continuation repeats tool-use block {index}"),
-                        ));
-                    }
-                    replay.push(block.clone());
+                    replay.push(block);
                 }
             }
         }
-        if seen_thinking.iter().any(|seen| !seen) || seen_tools.iter().any(|seen| !seen) {
+        if seen_thinking.iter().any(|seen| !seen)
+            || tool_blocks.iter().any(Option::is_some)
+            || visible_cursor != visible_text.len()
+        {
             return Err(ProviderError::invalid_request(
                 "anthropic",
-                "Anthropic continuation block order does not cover every thinking and tool-use block",
+                "Anthropic continuation block order does not cover every supported content block",
             ));
         }
-        replay.extend(remaining);
         Ok(replay)
+    }
+
+    fn ordered_visible_block(
+        block_type: &str,
+        value_key: &str,
+        visible_text: &str,
+        cursor: &mut usize,
+        start: usize,
+        end: usize,
+    ) -> Result<Value, ProviderError> {
+        if start != *cursor || end < start {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic continuation {block_type} span {start}..{end} does not follow visible offset {}",
+                    *cursor
+                ),
+            ));
+        }
+        let text = visible_text.get(start..end).ok_or_else(|| {
+            ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic continuation {block_type} span {start}..{end} is not a valid UTF-8 range"
+                ),
+            )
+        })?;
+        *cursor = end;
+        let mut block = serde_json::Map::with_capacity(2);
+        block.insert("type".to_string(), Value::String(block_type.to_string()));
+        block.insert(value_key.to_string(), Value::String(text.to_string()));
+        Ok(Value::Object(block))
     }
 
     pub(crate) fn is_claude_5_protocol_model(model: &str) -> bool {
