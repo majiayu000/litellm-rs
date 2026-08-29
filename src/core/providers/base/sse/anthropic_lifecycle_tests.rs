@@ -669,6 +669,68 @@ fn completed_index_reopens_only_after_message_or_transformer_reset() {
 }
 
 #[test]
+fn text_and_tool_starts_reserve_their_content_indexes() {
+    for content_block in [
+        serde_json::json!({"type":"text", "text":"visible"}),
+        serde_json::json!({
+            "type":"tool_use", "id":"tool-2", "name":"lookup", "input":{}
+        }),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":2, "content_block":content_block
+            }),
+        )
+        .unwrap();
+
+        let error = transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":2,
+                "content_block":{"type":"thinking", "thinking":"", "signature":"sig"}
+            }),
+        )
+        .expect_err("an occupied text/tool index cannot be reused by thinking");
+        assert_lifecycle_error_contexts(error, 2, &["active", "index"]);
+    }
+}
+
+#[test]
+fn completed_thinking_index_rejects_every_later_delta_kind() {
+    for delta in [
+        serde_json::json!({"type":"text_delta", "text":"late"}),
+        serde_json::json!({"type":"input_json_delta", "partial_json":"{}"}),
+        serde_json::json!({"type":"future_delta", "value":"late"}),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":3,
+                "content_block":{"type":"thinking", "thinking":"", "signature":"sig"}
+            }),
+        )
+        .unwrap();
+        transform(
+            &transformer,
+            serde_json::json!({"type":"content_block_stop", "index":3}),
+        )
+        .unwrap();
+
+        let error = transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_delta", "index":3, "delta":delta
+            }),
+        )
+        .expect_err("a completed thinking index cannot accept later deltas");
+        assert_lifecycle_error_contexts(error, 3, &["completed", "index"]);
+    }
+}
+
+#[test]
 fn terminal_message_delta_rejects_incomplete_thinking_before_finish_reason() {
     for content_block in [
         serde_json::json!({"type":"thinking", "thinking":"", "signature":"sig"}),

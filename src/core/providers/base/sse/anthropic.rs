@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Mutex;
 
@@ -22,6 +22,28 @@ enum ActiveThinkingBlock {
     Redacted { data: AnthropicRedactedData },
 }
 
+#[derive(Clone, Copy)]
+enum ActiveContentBlock {
+    Text,
+    ToolUse,
+}
+
+impl ActiveContentBlock {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::ToolUse => "tool_use",
+        }
+    }
+
+    fn accepts(self, delta_type: &str) -> bool {
+        matches!(
+            (self, delta_type),
+            (Self::Text, "text_delta") | (Self::ToolUse, "input_json_delta")
+        )
+    }
+}
+
 impl ActiveThinkingBlock {
     fn kind(&self) -> &'static str {
         match self {
@@ -34,14 +56,23 @@ impl ActiveThinkingBlock {
 #[derive(Default)]
 struct AnthropicThinkingStreamState {
     active: BTreeMap<u32, ActiveThinkingBlock>,
+    active_content: BTreeMap<u32, ActiveContentBlock>,
     completed: Vec<(u32, AnthropicThinkingBlock)>,
+    completed_indexes: BTreeSet<u32>,
 }
 
 impl fmt::Debug for AnthropicThinkingStreamState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AnthropicThinkingStreamState")
-            .field("active_indexes", &self.active.keys().collect::<Vec<_>>())
+            .field(
+                "active_thinking_indexes",
+                &self.active.keys().collect::<Vec<_>>(),
+            )
+            .field(
+                "active_content_indexes",
+                &self.active_content.keys().collect::<Vec<_>>(),
+            )
             .field("completed_count", &self.completed.len())
             .finish()
     }
@@ -50,7 +81,19 @@ impl fmt::Debug for AnthropicThinkingStreamState {
 impl AnthropicThinkingStreamState {
     fn begin_message(&mut self) -> Result<(), ProviderError> {
         self.ensure_complete("message_start")?;
+        self.active_content.clear();
         self.completed.clear();
+        self.completed_indexes.clear();
+        Ok(())
+    }
+
+    fn begin_content(
+        &mut self,
+        index: u32,
+        block: ActiveContentBlock,
+    ) -> Result<(), ProviderError> {
+        self.ensure_index_available(index)?;
+        self.active_content.insert(index, block);
         Ok(())
     }
 
@@ -131,6 +174,9 @@ impl AnthropicThinkingStreamState {
 
     fn complete(&mut self, index: u32) -> Result<bool, ProviderError> {
         let Some(active) = self.active.get(&index) else {
+            if self.active_content.remove(&index).is_some() {
+                self.completed_indexes.insert(index);
+            }
             return Ok(false);
         };
         let completed = match active {
@@ -152,6 +198,7 @@ impl AnthropicThinkingStreamState {
         };
         self.active.remove(&index);
         self.completed.push((index, completed));
+        self.completed_indexes.insert(index);
         Ok(true)
     }
 
@@ -171,11 +218,16 @@ impl AnthropicThinkingStreamState {
                 ),
             ));
         }
-        if self
-            .completed
-            .iter()
-            .any(|(completed_index, _)| *completed_index == index)
-        {
+        if let Some(existing) = self.active_content.get(&index) {
+            return Err(lifecycle_error(
+                index,
+                format!(
+                    "duplicate {} block at active index {index}",
+                    existing.kind()
+                ),
+            ));
+        }
+        if self.completed_indexes.contains(&index) {
             return Err(lifecycle_error(
                 index,
                 format!("content block index {index} was already completed in this message"),
@@ -185,21 +237,41 @@ impl AnthropicThinkingStreamState {
     }
 
     fn validate_delta_kind(&self, index: u32, delta_type: &str) -> Result<(), ProviderError> {
-        let Some(block) = self.active.get(&index) else {
-            return Ok(());
-        };
-        if matches!(block, ActiveThinkingBlock::Thinking { .. })
-            && matches!(delta_type, "thinking_delta" | "signature_delta")
-        {
-            return Ok(());
+        if let Some(block) = self.active.get(&index) {
+            if matches!(block, ActiveThinkingBlock::Thinking { .. })
+                && matches!(delta_type, "thinking_delta" | "signature_delta")
+            {
+                return Ok(());
+            }
+            return Err(lifecycle_error(
+                index,
+                format!(
+                    "{delta_type} delta is invalid for {} block at index {index}",
+                    block.kind()
+                ),
+            ));
         }
-        Err(lifecycle_error(
-            index,
-            format!(
-                "{delta_type} delta is invalid for {} block at index {index}",
-                block.kind()
-            ),
-        ))
+        if let Some(block) = self.active_content.get(&index) {
+            if block.accepts(delta_type) {
+                return Ok(());
+            }
+            return Err(lifecycle_error(
+                index,
+                format!(
+                    "{delta_type} delta is invalid for {} block at index {index}",
+                    block.kind()
+                ),
+            ));
+        }
+        if self.completed_indexes.contains(&index) {
+            return Err(lifecycle_error(
+                index,
+                format!(
+                    "{delta_type} delta for content block index {index} arrived after it completed"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn ensure_complete(&self, boundary: &str) -> Result<(), ProviderError> {
@@ -439,10 +511,11 @@ impl SSETransformer for AnthropicTransformer {
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                self.with_thinking_state(|state| state.ensure_index_available(index))?;
-
                 match block_type {
                     "tool_use" => {
+                        self.with_thinking_state(|state| {
+                            state.begin_content(index, ActiveContentBlock::ToolUse)
+                        })?;
                         let id = content_block
                             .get("id")
                             .and_then(|v| v.as_str())
@@ -502,8 +575,14 @@ impl SSETransformer for AnthropicTransformer {
                         delta.thinking = Some(ThinkingDelta::start());
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
-                    "text" => Ok(None),
+                    "text" => {
+                        self.with_thinking_state(|state| {
+                            state.begin_content(index, ActiveContentBlock::Text)
+                        })?;
+                        Ok(None)
+                    }
                     _ => {
+                        self.with_thinking_state(|state| state.ensure_index_available(index))?;
                         warn!(
                             provider = "anthropic",
                             block_type, "Ignoring unknown Anthropic content block start"
