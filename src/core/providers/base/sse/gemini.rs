@@ -309,6 +309,7 @@ impl SSETransformer for GeminiTransformer {
                     function_call: None,
                     tool_calls: tool_deltas,
                     audio: None,
+                    annotations: None,
                 },
                 finish_reason,
                 logprobs: None,

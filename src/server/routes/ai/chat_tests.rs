@@ -125,6 +125,7 @@ fn test_convert_core_chunk_preserves_thinking_and_function_call() {
                     arguments: Some("{}".to_string()),
                 }),
                 audio: None,
+                annotations: None,
             },
             finish_reason: None,
             logprobs: None,
@@ -168,6 +169,7 @@ fn test_convert_core_chunk_preserves_audio_delta() {
                     transcript: Some("hello from audio".to_string()),
                     format: Some("wav".to_string()),
                 }),
+                annotations: None,
             },
             finish_reason: None,
             logprobs: None,
@@ -203,6 +205,7 @@ fn test_convert_core_chunk_preserves_stream_logprobs() {
                 tool_calls: None,
                 function_call: None,
                 audio: None,
+                annotations: None,
             },
             finish_reason: None,
             logprobs: Some(LogProbs {

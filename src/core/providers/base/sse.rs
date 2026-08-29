@@ -11,6 +11,7 @@ mod cohere;
 mod databricks;
 mod gemini;
 mod openai;
+mod termination;
 
 pub use anthropic::AnthropicTransformer;
 pub use cohere::CohereTransformer;
@@ -20,6 +21,7 @@ pub use openai::OpenAICompatibleTransformer;
 
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::responses::{ChatChunk, FinishReason};
+use termination::{combine_stream_errors, finalize_transform_error};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SSEEventType {
@@ -278,36 +280,6 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
 
 const MAX_CHUNK_BUFFER_SIZE: usize = 10_000;
 
-fn combine_stream_errors(
-    provider: &'static str,
-    first: ProviderError,
-    finalization: ProviderError,
-) -> ProviderError {
-    let first = format!("{:?}", first.redacted());
-    match finalization.redacted() {
-        ProviderError::Streaming {
-            provider,
-            stream_type,
-            position,
-            message,
-            ..
-        } => ProviderError::Streaming {
-            provider,
-            stream_type,
-            position,
-            last_chunk: None,
-            message: format!("{message}; preceding stream error: {first}"),
-        },
-        finalization => ProviderError::streaming_error(
-            provider,
-            "sse.termination",
-            None,
-            None,
-            format!("multiple stream errors: {first}; finalization: {finalization:?}"),
-        ),
-    }
-}
-
 pub struct UnifiedSSEStream<S, T>
 where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin,
@@ -383,6 +355,7 @@ where
                     }
                 }
                 Err(error) => {
+                    let error = finalize_transform_error(&this.parser.transformer, error);
                     this.finished = true;
                     Poll::Ready(Some(Err(error)))
                 }

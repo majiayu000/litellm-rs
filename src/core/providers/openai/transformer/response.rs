@@ -120,6 +120,7 @@ impl OpenAIResponseTransformer {
             tool_calls,
             function_call,
             audio,
+            annotations: None,
         })
     }
 

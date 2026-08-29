@@ -1,6 +1,7 @@
 //! Streaming delta types
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::super::message::MessageRole;
 use super::super::thinking::ThinkingDelta;
@@ -59,6 +60,13 @@ pub struct ChatDelta {
     /// Audio output delta.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioDelta>,
+
+    /// Provider-supplied annotations attached to this streamed content delta.
+    ///
+    /// Values remain lossless so provider-specific citation schemas can be
+    /// forwarded without narrowing or silently discarding their fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Vec<Value>>,
 }
 
 impl ChatDelta {

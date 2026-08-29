@@ -79,6 +79,7 @@ impl SSETransformer for DatabricksTransformer {
                         tool_calls: None,
                         function_call: None,
                         audio: None,
+                        annotations: None,
                     }
                 } else {
                     ChatDelta {
@@ -88,6 +89,7 @@ impl SSETransformer for DatabricksTransformer {
                         tool_calls: None,
                         function_call: None,
                         audio: None,
+                        annotations: None,
                     }
                 };
 

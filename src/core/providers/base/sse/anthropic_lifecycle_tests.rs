@@ -71,6 +71,30 @@ async fn transform_error_is_terminal_and_later_events_cannot_repair_stream() {
 }
 
 #[tokio::test]
+async fn framed_transform_error_preserves_lifecycle_finalization_context() {
+    let events = [
+        Ok::<Bytes, reqwest::Error>(Bytes::from(sse_event(serde_json::json!({
+            "type":"content_block_start", "index":7,
+            "content_block":{"type":"thinking", "thinking":""}
+        })))),
+        Ok(Bytes::from("data: {\"type\":\"content_block_delta\"\n\n")),
+    ];
+    let mut output = UnifiedSSEStream::new(stream::iter(events), AnthropicTransformer::new("test"));
+
+    assert!(output.next().await.unwrap().is_ok());
+    assert_lifecycle_error_contexts(
+        output.next().await.unwrap().unwrap_err(),
+        7,
+        &[
+            "ResponseParsing",
+            "Failed to parse Anthropic SSE",
+            "missing its signature",
+        ],
+    );
+    assert!(output.next().await.is_none());
+}
+
+#[tokio::test]
 async fn pending_invalid_event_at_eof_preserves_parse_and_lifecycle_errors() {
     let body = format!(
         "{}data: {{",
@@ -728,6 +752,96 @@ fn completed_thinking_index_rejects_every_later_delta_kind() {
         .expect_err("a completed thinking index cannot accept later deltas");
         assert_lifecycle_error_contexts(error, 3, &["completed", "index"]);
     }
+}
+
+#[test]
+fn future_content_starts_reserve_their_indexes_until_stop() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":4,
+            "content_block":{"type":"future_block", "opaque":"value"}
+        }),
+    )
+    .unwrap();
+
+    let error = transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":4,
+            "content_block":{"type":"thinking", "thinking":"", "signature":"sig"}
+        }),
+    )
+    .expect_err("an ignored future block must still reserve its index");
+    assert_lifecycle_error_contexts(error, 4, &["active", "index"]);
+}
+
+#[test]
+fn content_stops_require_a_matching_active_index() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":5,
+            "content_block":{"type":"thinking", "thinking":"", "signature":"sig"}
+        }),
+    )
+    .unwrap();
+
+    let wrong = transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":6}),
+    )
+    .expect_err("a stop cannot target an inactive index");
+    assert_lifecycle_error_contexts(wrong, 6, &["inactive", "stop"]);
+
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":5}),
+    )
+    .unwrap();
+    let duplicate = transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":5}),
+    )
+    .expect_err("a completed index cannot be stopped twice");
+    assert_lifecycle_error_contexts(duplicate, 5, &["completed", "stop"]);
+}
+
+#[test]
+fn citation_deltas_on_text_blocks_are_preserved_as_annotations() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":""}
+        }),
+    )
+    .unwrap();
+    let citation = serde_json::json!({
+        "type":"page_location",
+        "cited_text":"source",
+        "document_index":0,
+        "document_title":"Reference",
+        "start_page_number":1,
+        "end_page_number":2
+    });
+    let chunk = transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_delta", "index":0,
+            "delta":{"type":"citations_delta", "citation":citation}
+        }),
+    )
+    .expect("citation deltas are valid for text blocks")
+    .expect("a preserved citation produces a chunk");
+    let serialized = serde_json::to_value(chunk).unwrap();
+    assert_eq!(
+        serialized["choices"][0]["delta"]["annotations"][0],
+        citation
+    );
 }
 
 #[test]

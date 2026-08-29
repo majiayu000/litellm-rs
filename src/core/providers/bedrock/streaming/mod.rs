@@ -256,6 +256,7 @@ impl BedrockStream {
                     tool_calls: Some(vec![tool_call]),
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 None,
             )));
@@ -270,6 +271,7 @@ impl BedrockStream {
                     tool_calls: Some(vec![tool_call]),
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 None,
             )));
@@ -289,6 +291,7 @@ impl BedrockStream {
                     tool_calls: None,
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 None,
             )));
@@ -309,6 +312,7 @@ impl BedrockStream {
                     tool_calls: None,
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 Some(finish_reason),
             )));
@@ -340,6 +344,7 @@ impl BedrockStream {
                         tool_calls: None,
                         function_call: None,
                         audio: None,
+                        annotations: None,
                     },
                     None,
                 )))
@@ -352,6 +357,7 @@ impl BedrockStream {
                     tool_calls: None,
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 Some(crate::core::types::responses::FinishReason::Stop),
             ))),
@@ -377,6 +383,7 @@ impl BedrockStream {
                     tool_calls: None,
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 None,
             )))
@@ -404,6 +411,7 @@ impl BedrockStream {
                     tool_calls: None,
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 finish_reason,
             )))
@@ -471,6 +479,7 @@ impl BedrockStream {
                     tool_calls: openai_tool_calls,
                     function_call: None,
                     audio: None,
+                    annotations: None,
                 },
                 openai_finish_reason,
             )))

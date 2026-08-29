@@ -437,6 +437,7 @@ impl AzureChatHandler {
                             serde_json::from_value(choice["delta"]["tool_calls"].clone()).ok()
                         }),
                         audio: None,
+                        annotations: None,
                     },
                     finish_reason: choice["finish_reason"].as_str().map(|reason| match reason {
                         "stop" => FinishReason::Stop,
