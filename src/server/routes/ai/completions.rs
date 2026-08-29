@@ -467,3 +467,21 @@ fn finish_reason_to_string(reason: types::responses::FinishReason) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::completion_chunk_from_core;
+
+    #[test]
+    fn anthropic_annotation_marker_is_not_legacy_completion_text() {
+        let chunk = crate::core::types::responses::ChatChunk::provider_annotation_marker(
+            "msg-1".to_string(),
+            1,
+            "claude-test".to_string(),
+            0,
+        );
+
+        let converted = completion_chunk_from_core(chunk, None, false);
+        assert!(converted.choices[0].text.is_empty());
+    }
+}

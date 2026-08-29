@@ -4,6 +4,9 @@ use bytes::Bytes;
 use futures::{StreamExt, stream};
 
 use super::{AnthropicTransformer, SSETransformer};
+use crate::core::providers::anthropic::http_annotations::{
+    http_annotation_sender, register_http_annotation_channel,
+};
 use crate::core::providers::base::sse::{OpenAICompatibleTransformer, UnifiedSSEStream};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
@@ -846,7 +849,10 @@ fn content_stops_require_a_matching_active_index() {
 
 #[test]
 fn citation_deltas_on_text_blocks_are_preserved_for_http_projection() {
-    let transformer = AnthropicTransformer::new("claude-test");
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let _annotation_receiver = register_http_annotation_channel(&request_id).unwrap();
+    let transformer = AnthropicTransformer::new("claude-test")
+        .with_http_annotation_sender(http_annotation_sender(&request_id));
     transform(
         &transformer,
         serde_json::json!({
@@ -873,15 +879,84 @@ fn citation_deltas_on_text_blocks_are_preserved_for_http_projection() {
     .expect("citation deltas are valid for text blocks")
     .expect("a preserved citation produces a chunk");
     assert!(chunk.is_provider_annotation());
-    let payload = chunk.choices[0]
-        .delta
-        .content
-        .as_deref()
-        .expect("internal annotation event carries a typed JSON payload");
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(payload).unwrap(),
-        citation
-    );
+    assert!(chunk.choices[0].delta.content.is_none());
+    assert_eq!(citation["cited_text"], "source");
+}
+
+#[test]
+fn citation_delta_without_http_side_channel_never_becomes_public_content() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":""}
+        }),
+    )
+    .unwrap();
+
+    let chunk = transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_delta", "index":0,
+            "delta":{
+                "type":"citations_delta",
+                "citation":{"type":"page_location", "cited_text":"never text"}
+            }
+        }),
+    )
+    .unwrap();
+    assert!(chunk.is_none());
+}
+
+#[test]
+fn every_active_content_kind_requires_an_exact_stop_at_terminal_boundaries() {
+    for content_block in [
+        serde_json::json!({"type":"text", "text":""}),
+        serde_json::json!({"type":"tool_use", "id":"tool-1", "name":"lookup", "input":{}}),
+        serde_json::json!({"type":"future_block", "opaque":{"kept":"provider-side"}}),
+    ] {
+        for terminal in [
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"}
+            }),
+            serde_json::json!({"type":"message_stop"}),
+            serde_json::json!({
+                "type":"message_start", "message":{"id":"next-message"}
+            }),
+        ] {
+            let transformer = AnthropicTransformer::new("claude-test");
+            transform(
+                &transformer,
+                serde_json::json!({
+                    "type":"content_block_start", "index":4,
+                    "content_block":content_block
+                }),
+            )
+            .unwrap();
+
+            let error = transform(&transformer, terminal.clone())
+                .expect_err("an active content block must be stopped before a terminal boundary");
+            assert_lifecycle_error_contexts(error, 4, &["content_block_stop"]);
+        }
+
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":4,
+                "content_block":content_block
+            }),
+        )
+        .unwrap();
+        assert_lifecycle_error_contexts(
+            transformer
+                .finish_stream()
+                .expect_err("raw EOF must reject an active content block"),
+            4,
+            &["content_block_stop"],
+        );
+    }
 }
 
 #[test]
@@ -1061,6 +1136,15 @@ fn normal_text_and_tool_stream_is_semantically_unchanged() {
         Some("{\"city\":\"Paris\"}")
     );
 
+    assert!(
+        transform(
+            &transformer,
+            serde_json::json!({"type":"content_block_stop", "index":4})
+        )
+        .unwrap()
+        .is_none()
+    );
+
     let stop = transform(
         &transformer,
         serde_json::json!({
@@ -1073,14 +1157,6 @@ fn normal_text_and_tool_stream_is_semantically_unchanged() {
     assert_eq!(
         stop.choices[0].finish_reason,
         Some(crate::core::types::responses::FinishReason::ToolCalls)
-    );
-    assert!(
-        transform(
-            &transformer,
-            serde_json::json!({"type":"content_block_stop"})
-        )
-        .unwrap()
-        .is_none()
     );
 }
 

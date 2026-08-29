@@ -133,3 +133,21 @@ fn convert_chat_chunk_to_completion_chunk(
             .collect(),
     }
 }
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::convert_chat_chunk_to_completion_chunk;
+
+    #[test]
+    fn anthropic_annotation_marker_is_not_default_router_text() {
+        let chunk = crate::core::types::responses::ChatChunk::provider_annotation_marker(
+            "msg-1".to_string(),
+            1,
+            "claude-test".to_string(),
+            0,
+        );
+
+        let converted = convert_chat_chunk_to_completion_chunk(chunk);
+        assert!(converted.choices[0].delta.content.is_none());
+    }
+}

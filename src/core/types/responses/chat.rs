@@ -1,7 +1,6 @@
 //! Chat response types
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::super::{chat::ChatMessage, message::MessageContent, tools::ToolCall};
 use super::delta::ChatDelta;
@@ -105,15 +104,14 @@ impl ChatChunk {
         self.object == PROVIDER_ANNOTATION_CHUNK_OBJECT
     }
 
-    /// Build a crate-internal provider annotation event without widening the
-    /// stable public response structs. The HTTP boundary recognizes the exact
-    /// object discriminator and projects the payload into `delta.annotations`.
-    pub(crate) fn provider_annotation(
+    /// Build a crate-internal provider annotation marker without widening the
+    /// stable public response structs. The HTTP boundary pairs this marker with
+    /// its private typed channel and projects the payload into annotations.
+    pub(crate) fn provider_annotation_marker(
         id: String,
         created: i64,
         model: String,
         choice_index: u32,
-        annotation: Value,
     ) -> Self {
         Self {
             id,
@@ -122,10 +120,7 @@ impl ChatChunk {
             model,
             choices: vec![ChatStreamChoice {
                 index: choice_index,
-                delta: ChatDelta {
-                    content: Some(annotation.to_string()),
-                    ..Default::default()
-                },
+                delta: ChatDelta::default(),
                 finish_reason: None,
                 logprobs: None,
             }],

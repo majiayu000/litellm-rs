@@ -5,6 +5,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::SSETransformer;
+use crate::core::providers::anthropic::http_annotations::HttpAnnotationSender;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
 use crate::core::types::responses::{
@@ -28,6 +29,7 @@ pub struct AnthropicTransformer {
     tool_name_map: HashMap<String, String>,
     message_id: Mutex<Option<String>>,
     thinking_state: Mutex<AnthropicThinkingStreamState>,
+    http_annotation_sender: Option<HttpAnnotationSender>,
 }
 
 impl Clone for AnthropicTransformer {
@@ -37,6 +39,7 @@ impl Clone for AnthropicTransformer {
             tool_name_map: self.tool_name_map.clone(),
             message_id: Mutex::new(None),
             thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
+            http_annotation_sender: self.http_annotation_sender.clone(),
         }
     }
 }
@@ -48,11 +51,20 @@ impl AnthropicTransformer {
             tool_name_map: HashMap::new(),
             message_id: Mutex::new(None),
             thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
+            http_annotation_sender: None,
         }
     }
 
     pub fn with_tool_name_map(mut self, tool_name_map: HashMap<String, String>) -> Self {
         self.tool_name_map = tool_name_map;
+        self
+    }
+
+    pub(crate) fn with_http_annotation_sender(
+        mut self,
+        sender: Option<HttpAnnotationSender>,
+    ) -> Self {
+        self.http_annotation_sender = sender;
         self
     }
 
@@ -359,12 +371,15 @@ impl SSETransformer for AnthropicTransformer {
                                 "No citation in Anthropic citations_delta",
                             )
                         })?;
-                        Ok(Some(ChatChunk::provider_annotation(
+                        let Some(sender) = &self.http_annotation_sender else {
+                            return Ok(None);
+                        };
+                        sender.send(0, citation)?;
+                        Ok(Some(ChatChunk::provider_annotation_marker(
                             self.current_message_id(),
                             created,
                             self.model.clone(),
                             0,
-                            citation,
                         )))
                     }
                     "thinking_delta" => {

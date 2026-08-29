@@ -46,6 +46,15 @@ use responses_stream_support::{
     flush_output_guardrail, in_progress_reasoning_item, make_shell, output_items_in_stream_order,
     response_usage_from_chat_usage, send_encoded, send_guardrail_error, sse_error,
 };
+
+fn visible_text_delta(choice: &crate::core::types::responses::ChatStreamChoice) -> Option<&str> {
+    choice
+        .delta
+        .content
+        .as_deref()
+        .filter(|text| !text.is_empty())
+}
+
 /// Streaming path for POST /v1/responses.
 pub(crate) async fn handle_streaming_response(
     state: &AppState,
@@ -436,8 +445,7 @@ pub(crate) async fn handle_streaming_response(
                                     }
                                 }
 
-                                let text = choice.delta.content.as_deref().unwrap_or("");
-                                if !text.is_empty() {
+                                if let Some(text) = visible_text_delta(choice) {
                                     saw_upstream_output = true;
                                     if !text_started {
                                         text_started = true;

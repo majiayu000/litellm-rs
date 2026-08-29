@@ -347,7 +347,7 @@ impl LLMProvider for AnthropicProvider {
     async fn chat_completion_stream(
         &self,
         request: ChatRequest,
-        _context: RequestContext,
+        context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
         self.validate_request(&request)?;
@@ -364,7 +364,12 @@ impl LLMProvider for AnthropicProvider {
             ));
         }
 
-        let stream = self.client.chat_stream_chunks(request).await?;
+        let annotation_sender =
+            super::http_annotations::http_annotation_sender(&context.request_id);
+        let stream = self
+            .client
+            .chat_stream_chunks(request, annotation_sender)
+            .await?;
 
         Ok(Box::pin(stream))
     }

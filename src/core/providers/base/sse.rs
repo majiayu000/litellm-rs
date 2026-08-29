@@ -563,6 +563,13 @@ mod tests {
             Some("{\"location\": \"San Fra")
         );
 
+        assert!(
+            transformer
+                .transform_chunk(r#"{"type":"content_block_stop","index":1}"#)
+                .unwrap()
+                .is_none()
+        );
+
         let stop = transformer
             .transform_chunk(
                 r#"{

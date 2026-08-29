@@ -10,9 +10,11 @@ use tracing::{error, info, warn};
 
 use crate::core::models::openai::ChatCompletionRequest;
 use crate::core::providers::ProviderError;
+use crate::core::providers::anthropic::http_annotations::register_http_annotation_channel;
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::state::AppState;
+use crate::utils::error::gateway_error::GatewayError;
 
 use super::super::budgeted::{ApiKeyBudgetPolicy, SettledStream, run_stream};
 use super::super::callbacks::CallbackLifecycle;
@@ -66,6 +68,13 @@ pub(super) async fn handle_streaming_chat_completion(
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let callback_for_execution = callback.clone();
+    let mut annotation_receiver = match register_http_annotation_channel(&context.request_id) {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            let error = GatewayError::from(error);
+            return Ok(openai_errors::gateway_error_response(&error));
+        }
+    };
     match run_stream(
         state.unified_router.clone(),
         &requested_model,
@@ -288,8 +297,10 @@ pub(super) async fn handle_streaming_chat_completion(
                                 continue;
                             }
                             saw_upstream_output |= has_candidate_output;
-                            let mut chat_chunk = match super::convert_core_chunk_to_streaming(chunk)
-                            {
+                            let mut chat_chunk = match super::convert_core_chunk_to_streaming(
+                                chunk,
+                                Some(&mut annotation_receiver),
+                            ) {
                                 Ok(chat_chunk) => chat_chunk,
                                 Err(e) => {
                                     flush_guardrail!();

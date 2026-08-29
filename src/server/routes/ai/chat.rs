@@ -5,6 +5,7 @@ use crate::core::models::openai::{
     ToolChoice, TopLogprob, Usage,
 };
 use crate::core::providers::ProviderError;
+use crate::core::providers::anthropic::http_annotations::HttpAnnotationReceiver;
 use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
 };
@@ -597,6 +598,7 @@ impl Serialize for HttpStreamingChunk {
 
 fn convert_core_chunk_to_streaming(
     chunk: types::responses::ChatChunk,
+    mut annotation_receiver: Option<&mut HttpAnnotationReceiver>,
 ) -> Result<HttpStreamingChunk, ProviderError> {
     let is_annotation_chunk = chunk.is_provider_annotation();
     let mut annotations = BTreeMap::<u32, Vec<Value>>::new();
@@ -605,18 +607,19 @@ fn convert_core_chunk_to_streaming(
         .into_iter()
         .map(|choice| {
             if is_annotation_chunk {
-                let annotation = choice.delta.content.as_deref().ok_or_else(|| {
+                if choice.delta.content.is_some() {
+                    return Err(ProviderError::response_parsing(
+                        "router",
+                        "Provider annotation marker unexpectedly contains public text",
+                    ));
+                }
+                let receiver = annotation_receiver.as_deref_mut().ok_or_else(|| {
                     ProviderError::response_parsing(
                         "router",
-                        "Provider annotation stream event has no payload",
+                        "Provider annotation marker has no private HTTP receiver",
                     )
                 })?;
-                let annotation = serde_json::from_str(annotation).map_err(|error| {
-                    ProviderError::response_parsing(
-                        "router",
-                        format!("Invalid provider annotation stream payload: {error}"),
-                    )
-                })?;
+                let annotation = receiver.take_for_choice(choice.index)?;
                 annotations
                     .entry(choice.index)
                     .or_default()

@@ -298,6 +298,15 @@ impl AnthropicThinkingStreamState {
     }
 
     pub(super) fn ensure_complete(&self, boundary: &str) -> Result<(), ProviderError> {
+        if let Some((index, block)) = self.active_content.first_key_value() {
+            return Err(lifecycle_error(
+                *index,
+                format!(
+                    "{} block at index {index} is incomplete at {boundary}: missing content_block_stop",
+                    block.kind()
+                ),
+            ));
+        }
         let Some((index, block)) = self.active.first_key_value() else {
             return Ok(());
         };
