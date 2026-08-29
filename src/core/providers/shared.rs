@@ -8,7 +8,6 @@ use crate::core::types::thinking::ThinkingUsage;
 use crate::core::types::{message::MessageContent, message::MessageRole};
 
 // Shared Model Limits
-
 pub const GEMINI_10_PRO_CONTEXT_WINDOW: u32 = 32_000;
 pub const GEMINI_15_FLASH_CONTEXT_WINDOW: u32 = 1_048_576;
 pub const GEMINI_15_PRO_CONTEXT_WINDOW: u32 = 2_097_152;
@@ -23,6 +22,9 @@ pub fn gemini_context_window(model_name: &str) -> Option<u32> {
     let model_lower = model_name.to_ascii_lowercase();
 
     if model_name == "gemini-3.7-flash"
+        || ["gemini/", "google/", "vertex_ai/"]
+            .iter()
+            .any(|prefix| model_name.strip_prefix(prefix) == Some("gemini-3.7-flash"))
         || model_lower.contains("gemini-3.6-flash")
         || model_lower.contains("gemini-3.5-flash-lite")
         || model_lower.contains("gemini-3.5-flash")

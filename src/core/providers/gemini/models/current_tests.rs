@@ -123,8 +123,21 @@ fn gemini_37_shared_context_window_is_exact_only() {
         gemini_context_window("gemini-3.7-flash"),
         Some(GEMINI_31_CONTEXT_WINDOW)
     );
+    for qualified in [
+        "gemini/gemini-3.7-flash",
+        "google/gemini-3.7-flash",
+        "vertex_ai/gemini-3.7-flash",
+    ] {
+        assert_eq!(
+            gemini_context_window(qualified),
+            Some(GEMINI_31_CONTEXT_WINDOW),
+            "{qualified}"
+        );
+    }
     for lookalike in [
         "GEMINI-3.7-FLASH",
+        "other/gemini-3.7-flash",
+        "gemini/gemini/gemini-3.7-flash",
         "gemini-3.7-flash-preview",
         "gemini-3.7-flash-20260813",
         "prefix-gemini-3.7-flash",

@@ -175,6 +175,37 @@ fn test_message_content_to_parts_multipart_text() {
     assert_eq!(parts.len(), 2);
 }
 
+#[test]
+fn vertex_multimodal_parts_encode_audio_and_pdf_as_inline_data() {
+    use crate::core::types::content::{AudioData, DocumentSource};
+
+    let transformer = GeminiTransformer::new();
+    let content = MessageContent::Parts(vec![
+        ContentPart::Audio {
+            audio: AudioData {
+                data: "audio-base64".to_string(),
+                format: Some("mp3".to_string()),
+            },
+        },
+        ContentPart::Document {
+            source: DocumentSource {
+                media_type: "application/pdf".to_string(),
+                data: "pdf-base64".to_string(),
+            },
+            cache_control: None,
+        },
+    ]);
+
+    let parts = transformer
+        .message_content_to_parts(&content)
+        .expect("official Vertex media modalities must transform");
+    let wire = serde_json::to_value(parts).expect("parts serialize");
+    assert_eq!(wire[0]["inlineData"]["mimeType"], "audio/mp3");
+    assert_eq!(wire[0]["inlineData"]["data"], "audio-base64");
+    assert_eq!(wire[1]["inlineData"]["mimeType"], "application/pdf");
+    assert_eq!(wire[1]["inlineData"]["data"], "pdf-base64");
+}
+
 fn weather_tool() -> Tool {
     Tool {
         tool_type: ToolType::Function,

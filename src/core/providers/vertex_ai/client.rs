@@ -278,9 +278,7 @@ impl VertexAIProvider {
         model: &str,
         messages: &[Value],
     ) -> Result<usize, VertexAIError> {
-        let model_obj = super::parse_vertex_model(model);
-        let endpoint = "countTokens";
-        let url = self.build_url(&model_obj, endpoint, false);
+        let url = self.count_tokens_url(model);
 
         let body = serde_json::json!({
             "contents": messages
@@ -296,6 +294,14 @@ impl VertexAIProvider {
             .as_u64()
             .map(|v| v as usize)
             .ok_or_else(|| ProviderError::response_parsing("vertex_ai", "Missing token count"))
+    }
+
+    pub(super) fn count_tokens_url(&self, model: &str) -> String {
+        if super::is_vertex_gemini_chat_model(model, self.config.enable_experimental) {
+            return self.build_google_catalog_model_url(model, "countTokens", false);
+        }
+        let model_obj = super::parse_vertex_model(model);
+        self.build_url(&model_obj, "countTokens", false)
     }
 }
 

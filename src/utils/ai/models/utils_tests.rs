@@ -2,7 +2,7 @@ use super::*;
 #[cfg(feature = "providers-extended")]
 use crate::core::providers::gemini::get_gemini_registry;
 use crate::core::providers::shared::{
-    GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW,
+    GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW, GEMINI_31_CONTEXT_WINDOW,
 };
 
 // ==================== get_model_capabilities Tests ====================
@@ -153,6 +153,15 @@ fn test_get_model_capabilities_gemini_20_flash() {
     assert_eq!(
         caps.context_window,
         Some(GEMINI_20_FLASH_CONTEXT_WINDOW as usize)
+    );
+}
+
+#[test]
+fn qualified_gemini_37_uses_the_registry_context_window() {
+    let capabilities = ModelUtils::get_model_capabilities("gemini/gemini-3.7-flash");
+    assert_eq!(
+        capabilities.context_window,
+        Some(GEMINI_31_CONTEXT_WINDOW as usize)
     );
 }
 

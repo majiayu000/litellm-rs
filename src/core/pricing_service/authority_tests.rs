@@ -652,6 +652,83 @@ fn gemini_flash_schedule_does_not_override_explicit_custom_pricing() {
 }
 
 #[test]
+fn gemini_flash_schedule_projects_flex_and_batch_rates_in_both_directions() {
+    use chrono::TimeZone;
+
+    let mut promotional_row = test_model_info("vertex_ai");
+    promotional_row.input_cost_per_token = Some(7.5e-7);
+    promotional_row.output_cost_per_token = Some(3.75e-6);
+    for (key, value) in [
+        ("cache_read_input_token_cost", 7.5e-8),
+        ("output_cost_per_reasoning_token", 3.75e-6),
+        ("input_cost_per_token_batches", 3.75e-7),
+        ("input_cost_per_token_flex", 3.75e-7),
+        ("output_cost_per_token_batches", 1.875e-6),
+        ("output_cost_per_token_flex", 1.875e-6),
+        ("cache_read_input_token_cost_flex", 3.75e-8),
+    ] {
+        promotional_row
+            .extra
+            .insert(key.to_string(), serde_json::json!(value));
+    }
+    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+    let standard = super::super::google::effective_model_info_at(
+        "vertex_ai",
+        "gemini-3.7-flash",
+        &promotional_row,
+        after_cutoff,
+        true,
+    );
+    for (key, expected) in [
+        ("input_cost_per_token_batches", 7.5e-7),
+        ("input_cost_per_token_flex", 7.5e-7),
+        ("output_cost_per_token_batches", 3.75e-6),
+        ("output_cost_per_token_flex", 3.75e-6),
+        ("cache_read_input_token_cost_flex", 7.5e-8),
+    ] {
+        assert_eq!(
+            standard.extra.get(key).and_then(serde_json::Value::as_f64),
+            Some(expected),
+            "{key}"
+        );
+    }
+
+    let mut standard_row = test_model_info("vertex_ai");
+    standard_row.input_cost_per_token = Some(1.5e-6);
+    standard_row.output_cost_per_token = Some(7.5e-6);
+    for (key, value) in [
+        ("cache_read_input_token_cost", 1.5e-7),
+        ("output_cost_per_reasoning_token", 7.5e-6),
+        ("input_cost_per_token_batches", 7.5e-7),
+        ("input_cost_per_token_flex", 7.5e-7),
+        ("output_cost_per_token_batches", 3.75e-6),
+        ("output_cost_per_token_flex", 3.75e-6),
+        ("cache_read_input_token_cost_flex", 7.5e-8),
+    ] {
+        standard_row
+            .extra
+            .insert(key.to_string(), serde_json::json!(value));
+    }
+    let before_cutoff = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let promotional = super::super::google::effective_model_info_at(
+        "vertex_ai",
+        "gemini-3.7-flash",
+        &standard_row,
+        before_cutoff,
+        true,
+    );
+    for (key, expected) in [
+        ("input_cost_per_token_batches", 3.75e-7),
+        ("input_cost_per_token_flex", 3.75e-7),
+        ("output_cost_per_token_batches", 1.875e-6),
+        ("output_cost_per_token_flex", 1.875e-6),
+        ("cache_read_input_token_cost_flex", 3.75e-8),
+    ] {
+        assert_eq!(promotional.extra[key].as_f64(), Some(expected), "{key}");
+    }
+}
+
+#[test]
 fn gemini_flash_schedule_does_not_override_corrected_catalog_pricing() {
     use chrono::TimeZone;
 

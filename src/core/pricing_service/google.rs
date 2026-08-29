@@ -135,6 +135,19 @@ fn model_info_with_rate<'a>(
         "output_cost_per_reasoning_token".to_string(),
         serde_json::json!(output_cost),
     );
+    for (key, rate) in [
+        ("input_cost_per_token_batches", input_cost / 2.0),
+        ("input_cost_per_token_flex", input_cost / 2.0),
+        ("output_cost_per_token_batches", output_cost / 2.0),
+        ("output_cost_per_token_flex", output_cost / 2.0),
+        ("cache_read_input_token_cost_flex", cache_read_cost / 2.0),
+    ] {
+        if effective.extra.contains_key(key) {
+            effective
+                .extra
+                .insert(key.to_string(), serde_json::json!(rate));
+        }
+    }
     Cow::Owned(effective)
 }
 

@@ -579,6 +579,29 @@ async fn vertex_gemini_37_uses_gemini_response_and_fixed_sampling_contract() {
 }
 
 #[tokio::test]
+async fn vertex_gemini_37_count_tokens_uses_the_google_publisher_endpoint() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+
+    let url = provider.count_tokens_url("gemini-3.7-flash");
+    assert!(
+        url.contains("/publishers/google/models/gemini-3.7-flash:countTokens"),
+        "unexpected countTokens URL: {url}"
+    );
+    assert!(!url.contains("/endpoints/"), "unexpected custom URL: {url}");
+
+    for lookalike in [
+        "gemini-3.7-flash-preview",
+        "gemini-3.7-flash-20260813",
+        "prefix-gemini-3.7-flash",
+    ] {
+        let url = provider.count_tokens_url(lookalike);
+        assert!(url.contains(&format!("/endpoints/{lookalike}:countTokens")));
+    }
+}
+
+#[tokio::test]
 async fn exact_legacy_vertex_gemini_ids_keep_the_gemini_transformer() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await
