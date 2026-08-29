@@ -516,6 +516,210 @@ fn block_indexes_and_kinds_must_match() {
 }
 
 #[test]
+fn non_thinking_deltas_cannot_cross_active_thinking_boundaries() {
+    for (block, delta, expected_kind) in [
+        (
+            serde_json::json!({"type":"thinking", "thinking":""}),
+            serde_json::json!({"type":"text_delta", "text":"wrong"}),
+            "thinking block",
+        ),
+        (
+            serde_json::json!({"type":"thinking", "thinking":""}),
+            serde_json::json!({"type":"input_json_delta", "partial_json":"{}"}),
+            "thinking block",
+        ),
+        (
+            serde_json::json!({"type":"thinking", "thinking":""}),
+            serde_json::json!({"type":"future_delta", "value":"wrong"}),
+            "thinking block",
+        ),
+        (
+            serde_json::json!({"type":"redacted_thinking", "data":"opaque"}),
+            serde_json::json!({"type":"text_delta", "text":"wrong"}),
+            "redacted_thinking block",
+        ),
+        (
+            serde_json::json!({"type":"redacted_thinking", "data":"opaque"}),
+            serde_json::json!({"type":"input_json_delta", "partial_json":"{}"}),
+            "redacted_thinking block",
+        ),
+        (
+            serde_json::json!({"type":"redacted_thinking", "data":"opaque"}),
+            serde_json::json!({"type":"future_delta", "value":"wrong"}),
+            "redacted_thinking block",
+        ),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":3, "content_block":block
+            }),
+        )
+        .unwrap();
+
+        let delta_type = delta["type"].as_str().unwrap();
+        let error = transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_delta", "index":3, "delta":delta
+            }),
+        )
+        .expect_err("delta kind must match the active content block");
+        assert_lifecycle_error_contexts(error, 3, &[expected_kind, delta_type]);
+    }
+}
+
+#[test]
+fn signature_phase_rejects_later_thinking_and_accepts_split_signatures() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":4,
+            "content_block":{"type":"thinking", "thinking":"first"}
+        }),
+    )
+    .unwrap();
+    for signature in ["opaque-", "signature"] {
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_delta", "index":4,
+                "delta":{"type":"signature_delta", "signature":signature}
+            }),
+        )
+        .unwrap();
+    }
+
+    let error = transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_delta", "index":4,
+            "delta":{"type":"thinking_delta", "thinking":"-mutated"}
+        }),
+    )
+    .expect_err("thinking cannot change after signature emission");
+    assert_lifecycle_error_contexts(error, 4, &["thinking delta", "signature"]);
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":4}),
+    )
+    .unwrap();
+
+    let start_signed = AnthropicTransformer::new("claude-test");
+    transform(
+        &start_signed,
+        serde_json::json!({
+            "type":"content_block_start", "index":5,
+            "content_block":{"type":"thinking", "thinking":"", "signature":"opaque"}
+        }),
+    )
+    .unwrap();
+    let error = transform(
+        &start_signed,
+        serde_json::json!({
+            "type":"content_block_delta", "index":5,
+            "delta":{"type":"thinking_delta", "thinking":"late"}
+        }),
+    )
+    .expect_err("a start-time signature also enters signature phase");
+    assert_lifecycle_error_contexts(error, 5, &["thinking delta", "signature"]);
+}
+
+#[test]
+fn completed_index_reopens_only_after_message_or_transformer_reset() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    let start = serde_json::json!({
+        "type":"content_block_start", "index":6,
+        "content_block":{"type":"thinking", "thinking":"first", "signature":"sig"}
+    });
+    transform(&transformer, start.clone()).unwrap();
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":6}),
+    )
+    .unwrap();
+
+    for reopened in [
+        start.clone(),
+        serde_json::json!({
+            "type":"content_block_start", "index":6,
+            "content_block":{"type":"text", "text":"wrong"}
+        }),
+        serde_json::json!({
+            "type":"content_block_start", "index":6,
+            "content_block":{"type":"tool_use", "id":"tool-6", "name":"lookup", "input":{}}
+        }),
+    ] {
+        let duplicate = transform(&transformer, reopened)
+            .expect_err("a completed content index cannot reopen in the same message");
+        assert_lifecycle_error_contexts(duplicate, 6, &["completed", "index"]);
+    }
+
+    transform(
+        &transformer,
+        serde_json::json!({"type":"message_start", "message":{"id":"next"}}),
+    )
+    .unwrap();
+    transform(&transformer, start.clone()).expect("a new message resets completed indexes");
+
+    let reconnected = transformer.clone();
+    transform(&reconnected, start).expect("a new transformer has independent lifecycle state");
+}
+
+#[test]
+fn terminal_message_delta_rejects_incomplete_thinking_before_finish_reason() {
+    for content_block in [
+        serde_json::json!({"type":"thinking", "thinking":"", "signature":"sig"}),
+        serde_json::json!({"type":"redacted_thinking", "data":"opaque"}),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_start", "index":7, "content_block":content_block
+            }),
+        )
+        .unwrap();
+        let error = transform(
+            &transformer,
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"},
+                "usage":{"input_tokens":1,"output_tokens":2}
+            }),
+        )
+        .expect_err("terminal success cannot precede lifecycle validation");
+        assert_lifecycle_error_contexts(error, 7, &["message_delta", "content_block_stop"]);
+    }
+
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":8,
+            "content_block":{"type":"thinking", "thinking":"", "signature":"sig"}
+        }),
+    )
+    .unwrap();
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":8}),
+    )
+    .unwrap();
+    let terminal = transform(
+        &transformer,
+        serde_json::json!({"type":"message_delta", "delta":{"stop_reason":"end_turn"}}),
+    )
+    .unwrap()
+    .expect("completed lifecycle may emit a finish reason");
+    assert_eq!(
+        terminal.choices[0].finish_reason,
+        Some(crate::core::types::responses::FinishReason::Stop)
+    );
+}
+
+#[test]
 fn duplicate_start_and_new_message_preserve_active_failure() {
     let transformer = AnthropicTransformer::new("claude-test");
     let start = serde_json::json!({

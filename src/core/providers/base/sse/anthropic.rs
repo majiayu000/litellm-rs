@@ -81,10 +81,17 @@ impl AnthropicThinkingStreamState {
 
     fn append_thinking(&mut self, index: u32, fragment: &str) -> Result<(), ProviderError> {
         match self.active.get_mut(&index) {
-            Some(ActiveThinkingBlock::Thinking { thinking, .. }) => {
+            Some(ActiveThinkingBlock::Thinking {
+                thinking,
+                signature,
+            }) if signature.is_empty() => {
                 thinking.push_str(fragment);
                 Ok(())
             }
+            Some(ActiveThinkingBlock::Thinking { .. }) => Err(lifecycle_error(
+                index,
+                format!("thinking delta for block at index {index} arrived after its signature"),
+            )),
             Some(block) => Err(lifecycle_error(
                 index,
                 format!("thinking delta for {} block at index {index}", block.kind()),
@@ -149,6 +156,12 @@ impl AnthropicThinkingStreamState {
     }
 
     fn insert(&mut self, index: u32, block: ActiveThinkingBlock) -> Result<(), ProviderError> {
+        self.ensure_index_available(index)?;
+        self.active.insert(index, block);
+        Ok(())
+    }
+
+    fn ensure_index_available(&self, index: u32) -> Result<(), ProviderError> {
         if let Some(existing) = self.active.get(&index) {
             return Err(lifecycle_error(
                 index,
@@ -158,8 +171,35 @@ impl AnthropicThinkingStreamState {
                 ),
             ));
         }
-        self.active.insert(index, block);
+        if self
+            .completed
+            .iter()
+            .any(|(completed_index, _)| *completed_index == index)
+        {
+            return Err(lifecycle_error(
+                index,
+                format!("content block index {index} was already completed in this message"),
+            ));
+        }
         Ok(())
+    }
+
+    fn validate_delta_kind(&self, index: u32, delta_type: &str) -> Result<(), ProviderError> {
+        let Some(block) = self.active.get(&index) else {
+            return Ok(());
+        };
+        if matches!(block, ActiveThinkingBlock::Thinking { .. })
+            && matches!(delta_type, "thinking_delta" | "signature_delta")
+        {
+            return Ok(());
+        }
+        Err(lifecycle_error(
+            index,
+            format!(
+                "{delta_type} delta is invalid for {} block at index {index}",
+                block.kind()
+            ),
+        ))
     }
 
     fn ensure_complete(&self, boundary: &str) -> Result<(), ProviderError> {
@@ -399,6 +439,7 @@ impl SSETransformer for AnthropicTransformer {
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                self.with_thinking_state(|state| state.ensure_index_available(index))?;
 
                 match block_type {
                     "tool_use" => {
@@ -483,6 +524,7 @@ impl SSETransformer for AnthropicTransformer {
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                self.with_thinking_state(|state| state.validate_delta_kind(index, delta_type))?;
 
                 match delta_type {
                     "text_delta" => {
@@ -551,6 +593,11 @@ impl SSETransformer for AnthropicTransformer {
                     .and_then(|d| d.get("stop_reason"))
                     .and_then(|r| r.as_str())
                     .map(Self::parse_anthropic_finish_reason);
+                if finish_reason.is_some() {
+                    self.with_thinking_state(|state| {
+                        state.ensure_complete("message_delta stop_reason")
+                    })?;
+                }
 
                 let usage = json.get("usage").map(|u| {
                     let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
