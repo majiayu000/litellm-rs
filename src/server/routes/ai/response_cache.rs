@@ -156,6 +156,7 @@ pub(super) fn ensure_chat_cache_pricing_gate(
                 pricing.as_ref(),
                 provider,
                 selected_model,
+                ProviderCapability::ChatCompletion,
             );
             pricing
                 .estimate_loaded_completion_cost_for_provider(
@@ -187,6 +188,7 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
                 pricing.as_ref(),
                 provider,
                 selected_model,
+                ProviderCapability::Embeddings,
             );
             pricing
                 .calculate_loaded_usage_cost_for_provider(&pricing_provider, &pricing_model, &usage)

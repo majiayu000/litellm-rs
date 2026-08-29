@@ -6,10 +6,11 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 /// Consolidated pricing data - single lock for all pricing state
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct PricingData {
     /// Model pricing data (model_name -> LiteLLMModelInfo)
     pub models: HashMap<String, LiteLLMModelInfo>,
+    pub exact_by_provider: HashMap<String, HashMap<String, Vec<String>>>,
     /// Last update time
     pub last_updated: SystemTime,
 }
@@ -18,6 +19,7 @@ impl Default for PricingData {
     fn default() -> Self {
         Self {
             models: HashMap::new(),
+            exact_by_provider: HashMap::new(),
             last_updated: SystemTime::UNIX_EPOCH,
         }
     }
@@ -462,6 +464,7 @@ mod tests {
 
         let data = PricingData {
             models,
+            exact_by_provider: HashMap::new(),
             last_updated: SystemTime::now(),
         };
 
