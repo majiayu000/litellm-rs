@@ -250,6 +250,28 @@ mod tests {
     }
 
     #[test]
+    fn unpriced_canonical_image_identity_does_not_fall_back_to_raw_alias_variant() {
+        let service = PricingService::new(None);
+        service.add_custom_model(
+            "hd/1024-x-1024/review-public-alias".to_string(),
+            model_info(HashMap::from([(
+                "output_cost_per_image".to_string(),
+                serde_json::Value::from(0.10),
+            )])),
+        );
+
+        let resolved = resolve_image_pricing_model(
+            &service,
+            "openai",
+            "review-canonical-unpriced",
+            Some("1024x1024"),
+            Some("hd"),
+        );
+
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
     fn image_pricing_keys_include_bedrock_hd_step_alias() {
         let keys = image_pricing_keys(
             "bedrock",

@@ -176,6 +176,7 @@ pub async fn audio_transcriptions(
                     &pricing_service,
                     &provider,
                     &selected_model,
+                    ProviderCapability::AudioTranscription,
                 )?;
                 request.model = selected_model.clone();
                 let reserve_pricing_config = pricing_config.clone();

@@ -341,21 +341,26 @@ fn resolve_model_info_for_provider(
     if normalized_provider == "amazon_nova" {
         return amazon_nova_pricing_model_info(model);
     }
+
+    let provider_aliases = pricing_provider_aliases(provider, model);
+    let candidates = exact_pricing_candidates(&normalized_provider, model, &provider_aliases);
+    if let Some(resolved) = exact_provider_model(data, &provider_aliases, &candidates) {
+        return Some(resolved);
+    }
     if normalized_provider == "openai_like" {
         let parsed = ModelIdRef::parse(model);
         if let Some(prefix) = parsed.provider()
             && crate::core::providers::registry::selector_has_matrix_entry(prefix)
         {
-            let prefixed_provider = crate::core::pricing::normalize_pricing_provider(prefix);
+            let prefixed_provider = canonical_pricing_selector(prefix);
             if prefixed_provider != "openai_like" {
                 return resolve_model_info_for_provider(data, &prefixed_provider, parsed.model());
             }
         }
     }
-
-    let provider_aliases = pricing_provider_aliases(provider, model);
-    let candidates = exact_pricing_candidates(&normalized_provider, model, &provider_aliases);
-    if let Some(resolved) = exact_provider_model(data, &provider_aliases, &candidates) {
+    if let Some(alias) = super::google::explicit_pricing_alias(&normalized_provider, model)
+        && let Some(resolved) = exact_provider_model(data, &provider_aliases, &[alias.to_string()])
+    {
         return Some(resolved);
     }
     if matches!(normalized_provider.as_str(), "gemini" | "vertex_ai") {
@@ -380,10 +385,16 @@ fn exact_pricing_candidates(
         push_unique(&mut candidates, parsed.model());
         push_unique(&mut candidates, &format!("{provider}/{}", parsed.model()));
     }
-    if let Some(alias) = super::google::explicit_pricing_alias(provider, model) {
-        push_unique(&mut candidates, alias);
-    }
     candidates
+}
+
+fn canonical_pricing_selector(selector: &str) -> String {
+    let canonical = crate::core::providers::registry::canonical_selector(selector);
+    if canonical == "openai_compatible" {
+        "openai_like".to_string()
+    } else {
+        crate::core::pricing::normalize_pricing_provider(&canonical)
+    }
 }
 
 fn push_unique(candidates: &mut Vec<String>, candidate: &str) {

@@ -58,6 +58,7 @@ pub async fn handle_image_generation_with_state(
                         &pricing_service,
                         &provider,
                         &selected_model,
+                        ProviderCapability::ImageGeneration,
                     )?;
                 if let Some(variant) = super::pricing_keys::resolve_image_request_pricing(
                     &request_pricing,
@@ -168,4 +169,84 @@ fn estimated_image_generation_usage(
         })
         .unwrap_or_default();
     usage
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::pricing_service::LiteLLMModelInfo;
+    use crate::server::routes::ai::spend::RequestPricing;
+    use std::collections::HashMap;
+
+    fn image_model_info(provider: &str, price: f64) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
+            max_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            input_cost_per_token: None,
+            output_cost_per_token: None,
+            input_cost_per_character: None,
+            output_cost_per_character: None,
+            cost_per_second: None,
+            litellm_provider: provider.to_string(),
+            mode: "image_generation".to_string(),
+            supports_function_calling: None,
+            supports_vision: None,
+            supports_streaming: None,
+            supports_parallel_function_calling: None,
+            supports_system_message: None,
+            extra: HashMap::from([(
+                "output_cost_per_image".to_string(),
+                serde_json::Value::from(price),
+            )]),
+        }
+    }
+
+    #[test]
+    fn authoritative_pricing_identity_beats_raw_alias_image_variant() {
+        let pricing = crate::core::pricing_service::PricingService::new(None);
+        pricing.add_custom_model(
+            "review-canonical".to_string(),
+            image_model_info("review-provider", 0.005),
+        );
+        pricing.add_custom_model(
+            "hd/1024-x-1024/review-public-alias".to_string(),
+            image_model_info("review-provider", 0.99),
+        );
+        pricing.add_custom_model(
+            "hd/1024-x-1024/review-canonical".to_string(),
+            image_model_info("review-provider", 0.01),
+        );
+
+        let request_pricing =
+            RequestPricing::from_exact(&pricing, "review-provider", "review-canonical");
+        let resolved = super::super::pricing_keys::resolve_image_request_pricing(
+            &request_pricing,
+            Some("1024x1024"),
+            Some("hd"),
+        );
+
+        assert_eq!(
+            resolved.as_ref().and_then(RequestPricing::priced_parts),
+            Some(("review-provider", "hd/1024-x-1024/review-canonical"))
+        );
+    }
+
+    #[test]
+    fn unpriced_authoritative_identity_never_falls_back_to_raw_alias_variant() {
+        let pricing = crate::core::pricing_service::PricingService::new(None);
+        pricing.add_custom_model(
+            "hd/1024-x-1024/review-public-alias".to_string(),
+            image_model_info("review-provider", 0.99),
+        );
+
+        let request_pricing =
+            RequestPricing::from_exact(&pricing, "review-provider", "review-canonical-unpriced");
+        let resolved = super::super::pricing_keys::resolve_image_request_pricing(
+            &request_pricing,
+            Some("1024x1024"),
+            Some("hd"),
+        );
+
+        assert!(resolved.is_none());
+    }
 }

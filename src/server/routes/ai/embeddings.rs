@@ -146,6 +146,7 @@ async fn handle_embedding_internal(
                     &pricing_service,
                     &provider,
                     &selected_model,
+                    ProviderCapability::Embeddings,
                 )?;
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();

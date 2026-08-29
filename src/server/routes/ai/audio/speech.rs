@@ -101,6 +101,7 @@ pub async fn audio_speech(
                     &pricing_service,
                     &provider,
                     &selected_model,
+                    ProviderCapability::TextToSpeech,
                 )?;
                 request.model = selected_model.clone();
                 let reserve_pricing_config = pricing_config.clone();

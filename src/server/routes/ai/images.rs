@@ -188,6 +188,7 @@ async fn proxy_image_multipart_endpoint(
                             &pricing_service,
                             &selected_provider,
                             requested_model,
+                            endpoint.capability(),
                         )?;
                         if let Some(variant) = pricing_keys::resolve_image_request_pricing(
                             &request_pricing,

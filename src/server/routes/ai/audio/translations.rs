@@ -164,6 +164,7 @@ pub async fn audio_translations(
                     &pricing_service,
                     &provider,
                     &selected_model,
+                    ProviderCapability::AudioTranslation,
                 )?;
                 request.model = selected_model.clone();
                 let reserve_pricing_config = pricing_config.clone();

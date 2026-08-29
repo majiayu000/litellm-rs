@@ -154,6 +154,7 @@ async fn handle_chat_completion_internal(
                     &pricing_service,
                     &provider,
                     &selected_model,
+                    ProviderCapability::ChatCompletion,
                 )?;
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),

@@ -313,6 +313,20 @@ def validate_source_identity(source_url: str, source_commit: str) -> None:
         raise SystemExit("source URL commit does not match --source-commit")
 
 
+def load_catalog_source_identity(path: Path) -> tuple[str, str]:
+    """Load and validate the immutable upstream identity recorded by a catalog."""
+    catalog = load_json(path)
+    metadata = catalog.get("_metadata")
+    if not isinstance(metadata, dict):
+        raise SystemExit(f"{path} is missing object _metadata")
+    source_url = metadata.get("source_url")
+    source_commit = metadata.get("source_commit")
+    if not isinstance(source_url, str) or not isinstance(source_commit, str):
+        raise SystemExit(f"{path} is missing string source_url/source_commit metadata")
+    validate_source_identity(source_url, source_commit)
+    return source_url, source_commit
+
+
 def load_url(url: str) -> tuple[dict[str, Any], str]:
     try:
         with urlopen(url, timeout=30) as response:
@@ -592,8 +606,13 @@ def write_catalog(path: Path, data: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-url", default=DEFAULT_SOURCE_URL)
-    parser.add_argument("--source-commit", default=DEFAULT_SOURCE_COMMIT)
+    parser.add_argument("--source-url")
+    parser.add_argument("--source-commit")
+    parser.add_argument(
+        "--source-catalog",
+        type=Path,
+        help="derive the immutable source identity from committed catalog metadata",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--catalog-decisions", type=Path, default=DEFAULT_CATALOG_DECISIONS
@@ -622,8 +641,27 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    validate_source_identity(args.source_url, args.source_commit)
-    source_data, source_sha256 = load_url(args.source_url)
+    if args.source_catalog is not None:
+        if not args.check:
+            raise SystemExit("--source-catalog requires --check")
+        if args.source_url is not None or args.source_commit is not None:
+            raise SystemExit(
+                "--source-catalog cannot be combined with --source-url/--source-commit"
+            )
+        source_url, source_commit = load_catalog_source_identity(args.source_catalog)
+    elif args.source_url is None and args.source_commit is None:
+        if args.check:
+            raise SystemExit(
+                "--check requires --source-catalog or an explicit source URL/commit"
+            )
+        source_url, source_commit = DEFAULT_SOURCE_URL, DEFAULT_SOURCE_COMMIT
+    elif args.source_url is None or args.source_commit is None:
+        raise SystemExit("--source-url and --source-commit must be provided together")
+    else:
+        source_url, source_commit = args.source_url, args.source_commit
+
+    validate_source_identity(source_url, source_commit)
+    source_data, source_sha256 = load_url(source_url)
     source_entries = model_entries(source_data)
     validate_entries(source_entries, args.min_models)
     overlay_paths = args.overlay_file or [args.output]
@@ -634,8 +672,8 @@ def main() -> int:
         source_data,
         source_entries,
         overlay_entries,
-        args.source_url,
-        args.source_commit,
+        source_url,
+        source_commit,
         source_sha256,
     )
     merged_entries = model_entries(data)
@@ -668,7 +706,7 @@ def main() -> int:
         current = load_json(args.output)
         if current != data:
             print(
-                f"{args.output} is out of sync with {args.source_url}",
+                f"{args.output} is out of sync with {source_url}",
                 file=sys.stderr,
             )
             return 1
@@ -689,7 +727,7 @@ def main() -> int:
     print(
         (
             f"validated {len(source_entries)} upstream LiteLLM pricing entries "
-            f"and {overlay_count} local compatibility entries from {args.source_url}"
+            f"and {overlay_count} local compatibility entries from {source_url}"
             f"; classified {authority_metadata['total_entry_count']} exact pricing rows"
         ),
         file=sys.stderr,

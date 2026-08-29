@@ -152,8 +152,12 @@ pub(super) fn ensure_chat_cache_pricing_gate(
         &request.model,
         ProviderCapability::ChatCompletion,
         |provider, selected_model| {
-            let request_pricing =
-                super::spend::request_pricing_for_provider(&pricing, provider, selected_model)?;
+            let request_pricing = super::spend::request_pricing_for_provider(
+                &pricing,
+                provider,
+                selected_model,
+                ProviderCapability::ChatCompletion,
+            )?;
             request_pricing
                 .estimate_completion(prompt_tokens, output_tokens)
                 .map(|_| ())
@@ -175,8 +179,12 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
         &request.model,
         ProviderCapability::Embeddings,
         |provider, selected_model| {
-            let request_pricing =
-                super::spend::request_pricing_for_provider(&pricing, provider, selected_model)?;
+            let request_pricing = super::spend::request_pricing_for_provider(
+                &pricing,
+                provider,
+                selected_model,
+                ProviderCapability::Embeddings,
+            )?;
             request_pricing
                 .calculate_usage(&usage)
                 .map(|_| ())

@@ -300,6 +300,13 @@ mod tests {
     }
 
     fn flat_image_model_info(output_cost_per_image: f64) -> LiteLLMModelInfo {
+        flat_image_model_info_for_provider("openai", output_cost_per_image)
+    }
+
+    fn flat_image_model_info_for_provider(
+        provider: &str,
+        output_cost_per_image: f64,
+    ) -> LiteLLMModelInfo {
         let mut extra = HashMap::new();
         extra.insert(
             "output_cost_per_image".to_string(),
@@ -314,7 +321,7 @@ mod tests {
             input_cost_per_character: None,
             output_cost_per_character: None,
             cost_per_second: None,
-            litellm_provider: "openai".to_string(),
+            litellm_provider: provider.to_string(),
             mode: "image_generation".to_string(),
             supports_function_calling: None,
             supports_vision: None,
@@ -323,6 +330,21 @@ mod tests {
             supports_system_message: None,
             extra,
         }
+    }
+
+    fn add_raw_image_alias_pricing(
+        state: &litellm_rs::server::state::AppState,
+        alias: &str,
+        catalog_model: &str,
+    ) {
+        let (_, info) = state
+            .pricing
+            .get_model_info_for_provider("openai", catalog_model)
+            .unwrap_or_else(|| panic!("catalog pricing should exist for {catalog_model}"));
+        // OpenAI model_mappings are chat-only. Image transport sends the selected alias,
+        // so the fixture must price that exact wire identity instead of borrowing the
+        // mapped chat target accidentally.
+        state.pricing.add_custom_model(alias.to_string(), info);
     }
 
     fn token_priced_image_model_info(input_cost_per_token: f64) -> LiteLLMModelInfo {
@@ -396,6 +418,7 @@ mod tests {
             "gpt-image-1-mini",
         )])
         .await;
+        add_raw_image_alias_pricing(&state, "image-alias", "gpt-image-1-mini");
         state
             .unified_router
             .add_model_alias("public-image", "image-alias")
@@ -440,6 +463,7 @@ mod tests {
             "gpt-image-1-mini",
         )])
         .await;
+        add_raw_image_alias_pricing(&state, "image-alias", "gpt-image-1-mini");
         let api_key = api_key_with_allowed_models(&["image-alias"]);
         let app = test::init_service(
             App::new()
@@ -565,6 +589,7 @@ mod tests {
             "gpt-image-1-mini",
         )])
         .await;
+        add_raw_image_alias_pricing(&state, "image-alias", "gpt-image-1-mini");
         state.budget_limits.providers.set_provider_limit(
             "openai-primary",
             ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
@@ -610,6 +635,7 @@ mod tests {
             "gpt-image-1-mini",
         )])
         .await;
+        add_raw_image_alias_pricing(&state, "image-alias", "gpt-image-1-mini");
         state.budget_limits.providers.set_provider_limit(
             "openai-primary",
             ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
@@ -619,7 +645,7 @@ mod tests {
         expected_usage.image_tokens = Some(1024);
         let expected_cost = state
             .pricing
-            .calculate_loaded_usage_cost_for_provider("openai", "gpt-image-1-mini", &expected_usage)
+            .calculate_loaded_usage_cost_for_provider("openai", "image-alias", &expected_usage)
             .expect("image generation pricing should be available")
             .total_cost;
         let app = test::init_service(
@@ -644,6 +670,12 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(mock.paths(), vec!["/v1/images/generations".to_string()]);
+        let upstream_body: Value = serde_json::from_slice(&mock.bodies()[0])
+            .expect("upstream image request should be valid JSON");
+        assert_eq!(
+            upstream_body["model"], "image-alias",
+            "chat-only model mapping must not change the image wire identity"
+        );
         let spent = budget_limits
             .providers
             .get_provider_usage("openai-primary")
