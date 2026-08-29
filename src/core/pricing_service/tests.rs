@@ -95,6 +95,31 @@ fn pricing_usage_treats_cached_tokens_as_read_fallback() {
 }
 
 #[test]
+fn provider_pricing_xai_long_context_is_inclusive_at_200k() {
+    let service = PricingService::with_embedded_default().unwrap();
+
+    for (prompt_tokens, expected_cost) in [
+        (199_999, 199_999.0 * 0.000002),
+        (200_000, 200_000.0 * 0.000004),
+        (200_001, 200_001.0 * 0.000004),
+    ] {
+        for model in ["grok-4.5", "grok-4.6"] {
+            let cost = service
+                .calculate_loaded_usage_cost_for_provider(
+                    "xai",
+                    model,
+                    &PricingUsage::new(prompt_tokens, 0),
+                )
+                .unwrap();
+            assert!(
+                (cost.total_cost - expected_cost).abs() < 1e-12,
+                "{model} at {prompt_tokens}"
+            );
+        }
+    }
+}
+
+#[test]
 fn provider_pricing_charges_cache_creation_and_read_separately() {
     let service = PricingService::new(None);
     let mut model_info = LiteLLMModelInfo {
@@ -515,7 +540,11 @@ fn provider_pricing_fails_closed_for_mismatched_flat_image_variant() {
         .push("1024-x-1024/flat-variant-model".to_string());
 
     let error = service
-        .calculate_loaded_usage_cost_for_provider("bedrock", "flat-variant-model", &usage)
+        .calculate_loaded_usage_cost_for_provider(
+            "bedrock",
+            "1024-x-1024/50-steps/flat-variant-model",
+            &usage,
+        )
         .unwrap_err();
 
     assert!(error.to_string().contains("output_image_pricing_keys"));

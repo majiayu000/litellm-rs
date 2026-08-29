@@ -243,7 +243,7 @@ fn extended_pricing_uses_exact_mistral_alias_rates() {
 
     assert!((large - 0.00125).abs() < 1e-12);
     assert!((small - 0.00025).abs() < 1e-12);
-    assert!((small_4 - 0.00025).abs() < 1e-12);
+    assert!((small_4 - 0.00045).abs() < 1e-12);
     assert!((small_2506 - 0.00025).abs() < 1e-12);
 }
 
@@ -692,6 +692,37 @@ fn gpt55_provider_prefixed_pro_pricing_uses_exact_model() {
             .abs()
             < 1e-12
     );
+
+    let long_usage = Usage::new(300_000, 1_000);
+    let expected_long_cost = 300_000.0 * 0.00003 + 1_000.0 * 0.00018;
+    assert!(
+        (shared_db.calculate_for_provider("openai", "gpt-5.5-pro", &long_usage)
+            - expected_long_cost)
+            .abs()
+            < 1e-12
+    );
+}
+
+#[test]
+fn xai_long_context_pricing_is_inclusive_at_200k() {
+    let Ok(db) = PricingDatabase::from_default_source() else {
+        panic!("shared pricing source should load");
+    };
+
+    for (prompt_tokens, expected_cost) in [
+        (199_999, 199_999.0 * 0.000002),
+        (200_000, 200_000.0 * 0.000004),
+        (200_001, 200_001.0 * 0.000004),
+    ] {
+        let usage = Usage::new(prompt_tokens, 0);
+        for model in ["grok-4.5", "grok-4.6"] {
+            let cost = db.calculate_for_provider("xai", model, &usage);
+            assert!(
+                (cost - expected_cost).abs() < 1e-12,
+                "{model} at {prompt_tokens}"
+            );
+        }
+    }
 }
 
 #[test]
