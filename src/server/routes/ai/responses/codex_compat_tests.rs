@@ -6,10 +6,9 @@ use crate::core::models::openai::{
     responses::{ChatChoice, ChatCompletionResponse},
     tools::{FunctionCall, ToolCall},
 };
-use crate::core::providers::anthropic::{AnthropicClient, AnthropicConfig};
+use crate::core::providers::ChatMessageContinuation;
 use crate::core::types::anthropic_continuation::{
     AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
-    ChatMessageExtensions,
 };
 use crate::core::types::codex::domain::{CodexCallKind, CodexTurn, CodexTurnError, CodexTurnItem};
 use crate::core::types::codex::wire::CODEX_PROTOCOL_BASELINE;
@@ -68,8 +67,8 @@ fn first_turn_response_preserves_signed_and_redacted_continuation() {
         }],
         usage: None,
     };
-    let extension =
-        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+    let extension = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![
             AnthropicThinkingBlock::Thinking {
                 thinking: "plan".into(),
                 signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
@@ -77,7 +76,8 @@ fn first_turn_response_preserves_signed_and_redacted_continuation() {
             AnthropicThinkingBlock::RedactedThinking {
                 data: AnthropicRedactedData::try_from("opaque-redacted").unwrap(),
             },
-        ]));
+        ]),
+    );
 
     let mut response = super::convert_to_responses_api(chat, &request);
     let extensions = crate::core::models::openai::continuation::attach_responses_choice_extensions(
@@ -509,25 +509,5 @@ fn codex_turn_rejects_invalid_tool_definitions() {
     for (request, expected) in requests.into_iter().zip(expected) {
         let request = codex_request(serde_json::from_str(request).unwrap());
         assert_eq!(CodexTurn::try_from(&request).unwrap_err(), expected);
-    }
-}
-
-#[test]
-fn responses_fable_rejects_unsupported_sampling_controls() {
-    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
-
-    for (field, value) in [("temperature", json!(0.2)), ("top_p", json!(0.8))] {
-        let request = codex_request(json!({
-            "model": "claude-fable-5",
-            "input": "hello",
-            (field): value
-        }));
-        let chat = super::build_chat_request(&request).unwrap();
-        let model = chat.model.clone();
-        let chat = super::super::chat::build_core_chat_request(&chat, model, false).unwrap();
-        let error = client
-            .transform_chat_request(&chat)
-            .expect_err("Responses sampling controls must share Anthropic validation");
-        assert!(error.to_string().contains(field));
     }
 }

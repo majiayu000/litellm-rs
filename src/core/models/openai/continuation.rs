@@ -12,7 +12,7 @@ use super::{
         ResponsesApiResponse,
     },
 };
-use crate::core::types::anthropic_continuation::ChatMessageExtensions;
+use crate::core::providers::ChatMessageContinuation;
 use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
 
 /// A Chat Completions request with one typed extension carrier per message.
@@ -23,13 +23,13 @@ use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem
 #[derive(Debug, Clone)]
 pub struct ChatCompletionRequestWithExtensions {
     request: ChatCompletionRequest,
-    message_extensions: Vec<ChatMessageExtensions>,
+    message_extensions: Vec<ChatMessageContinuation>,
 }
 
 impl ChatCompletionRequestWithExtensions {
     pub(crate) fn from_parts(
         request: ChatCompletionRequest,
-        message_extensions: Vec<ChatMessageExtensions>,
+        message_extensions: Vec<ChatMessageContinuation>,
     ) -> Result<Self, String> {
         ensure_len(
             "chat message extensions",
@@ -46,7 +46,7 @@ impl ChatCompletionRequestWithExtensions {
         &self.request
     }
 
-    pub(crate) fn message_extensions(&self) -> &[ChatMessageExtensions] {
+    pub(crate) fn message_extensions(&self) -> &[ChatMessageContinuation] {
         &self.message_extensions
     }
 
@@ -56,7 +56,7 @@ impl ChatCompletionRequestWithExtensions {
             .any(|extension| !extension.is_empty())
     }
 
-    pub(crate) fn into_parts(self) -> (ChatCompletionRequest, Vec<ChatMessageExtensions>) {
+    pub(crate) fn into_parts(self) -> (ChatCompletionRequest, Vec<ChatMessageContinuation>) {
         (self.request, self.message_extensions)
     }
 }
@@ -92,13 +92,13 @@ impl<'de> Deserialize<'de> for ChatCompletionRequestWithExtensions {
 #[derive(Debug, Clone)]
 pub struct ChatCompletionResponseWithExtensions {
     response: ChatCompletionResponse,
-    choice_extensions: Vec<ChatMessageExtensions>,
+    choice_extensions: Vec<ChatMessageContinuation>,
 }
 
 impl ChatCompletionResponseWithExtensions {
     pub(crate) fn from_parts(
         response: ChatCompletionResponse,
-        choice_extensions: Vec<ChatMessageExtensions>,
+        choice_extensions: Vec<ChatMessageContinuation>,
     ) -> Result<Self, String> {
         ensure_len(
             "chat choice extensions",
@@ -118,7 +118,7 @@ impl ChatCompletionResponseWithExtensions {
             .any(|extension| !extension.is_empty())
     }
 
-    pub(crate) fn into_parts(self) -> (ChatCompletionResponse, Vec<ChatMessageExtensions>) {
+    pub(crate) fn into_parts(self) -> (ChatCompletionResponse, Vec<ChatMessageContinuation>) {
         (self.response, self.choice_extensions)
     }
 }
@@ -159,13 +159,13 @@ impl<'de> Deserialize<'de> for ChatCompletionResponseWithExtensions {
 #[derive(Debug, Clone)]
 pub struct ResponsesApiRequestWithExtensions {
     request: ResponsesApiRequest,
-    input_extensions: Vec<Option<ChatMessageExtensions>>,
+    input_extensions: Vec<Option<ChatMessageContinuation>>,
 }
 
 impl ResponsesApiRequestWithExtensions {
     pub(crate) fn from_parts(
         request: ResponsesApiRequest,
-        input_extensions: Vec<Option<ChatMessageExtensions>>,
+        input_extensions: Vec<Option<ChatMessageContinuation>>,
     ) -> Result<Self, String> {
         let expected = response_input_len(&request);
         ensure_len(
@@ -190,7 +190,7 @@ impl ResponsesApiRequestWithExtensions {
             .any(|extension| !extension.is_empty())
     }
 
-    pub(crate) fn into_parts(self) -> (ResponsesApiRequest, Vec<Option<ChatMessageExtensions>>) {
+    pub(crate) fn into_parts(self) -> (ResponsesApiRequest, Vec<Option<ChatMessageContinuation>>) {
         (self.request, self.input_extensions)
     }
 }
@@ -226,13 +226,13 @@ impl<'de> Deserialize<'de> for ResponsesApiRequestWithExtensions {
 #[derive(Debug, Clone)]
 pub struct ResponsesApiResponseWithExtensions {
     response: ResponsesApiResponse,
-    output_extensions: Vec<Option<ChatMessageExtensions>>,
+    output_extensions: Vec<Option<ChatMessageContinuation>>,
 }
 
 impl ResponsesApiResponseWithExtensions {
     pub(crate) fn from_parts(
         response: ResponsesApiResponse,
-        output_extensions: Vec<Option<ChatMessageExtensions>>,
+        output_extensions: Vec<Option<ChatMessageContinuation>>,
     ) -> Result<Self, String> {
         ensure_len(
             "Responses output extensions",
@@ -282,9 +282,9 @@ impl<'de> Deserialize<'de> for ResponsesApiResponseWithExtensions {
 
 pub(crate) fn attach_responses_choice_extensions(
     response: &mut ResponsesApiResponse,
-    choice_extensions: Vec<ChatMessageExtensions>,
+    choice_extensions: Vec<ChatMessageContinuation>,
     empty_message: ResponseOutputItem,
-) -> Result<Vec<Option<ChatMessageExtensions>>, String> {
+) -> Result<Vec<Option<ChatMessageContinuation>>, String> {
     if choice_extensions.len() > 1 {
         return Err("Anthropic continuation requires exactly one response choice".to_string());
     }
@@ -309,17 +309,17 @@ pub(crate) fn attach_responses_choice_extensions(
 pub(crate) fn map_responses_input_extensions(
     request: &ResponsesApiRequest,
     chat: &ChatCompletionRequest,
-    input: Vec<Option<ChatMessageExtensions>>,
-) -> Result<Vec<ChatMessageExtensions>, String> {
+    input: Vec<Option<ChatMessageContinuation>>,
+) -> Result<Vec<ChatMessageContinuation>, String> {
     let mut mapped = Vec::with_capacity(chat.messages.len());
     let mut chat_index = 0;
     if request.instructions.is_some() {
-        mapped.push(ChatMessageExtensions::new());
+        mapped.push(ChatMessageContinuation::new());
         chat_index += 1;
     }
     match &request.input {
         ResponseInput::Text(_) => {
-            mapped.push(ChatMessageExtensions::new());
+            mapped.push(ChatMessageContinuation::new());
             chat_index += 1;
         }
         ResponseInput::Items(items) => {
@@ -369,7 +369,7 @@ pub(crate) fn map_responses_input_extensions(
 }
 
 fn map_tool_call(
-    mapped: &mut Vec<ChatMessageExtensions>,
+    mapped: &mut Vec<ChatMessageContinuation>,
     chat: &ChatCompletionRequest,
     chat_index: &mut usize,
     call_id: &str,
@@ -386,13 +386,13 @@ fn map_tool_call(
     if !contains_call(*chat_index) {
         return Err("Responses tool-call mapping drifted".to_string());
     }
-    mapped.push(ChatMessageExtensions::new());
+    mapped.push(ChatMessageContinuation::new());
     *chat_index += 1;
     Ok(())
 }
 
 fn map_tool_output(
-    mapped: &mut Vec<ChatMessageExtensions>,
+    mapped: &mut Vec<ChatMessageContinuation>,
     chat: &ChatCompletionRequest,
     chat_index: &mut usize,
     call_id: &str,
@@ -404,7 +404,7 @@ fn map_tool_output(
     if message.role != MessageRole::Tool || message.tool_call_id.as_deref() != Some(call_id) {
         return Err("Responses tool-output mapping drifted".to_string());
     }
-    mapped.push(ChatMessageExtensions::new());
+    mapped.push(ChatMessageContinuation::new());
     *chat_index += 1;
     Ok(())
 }
@@ -428,7 +428,7 @@ fn response_input_len(request: &ResponsesApiRequest) -> usize {
 
 pub(crate) fn build_responses_continuation_turn(
     request: &ResponsesApiRequest,
-    extensions: &[Option<ChatMessageExtensions>],
+    extensions: &[Option<ChatMessageContinuation>],
 ) -> Result<CodexTurn, CodexTurnError> {
     let mut validated = request.clone();
     if let super::responses_api::ResponseInput::Items(items) = &mut validated.input {
@@ -492,7 +492,7 @@ fn take_nested_extensions(
     value: &mut Value,
     path: &[&str],
     nested_message: Option<&str>,
-) -> Result<Vec<ChatMessageExtensions>, String> {
+) -> Result<Vec<ChatMessageContinuation>, String> {
     nested_array_mut(value, path)?
         .iter_mut()
         .map(|item| {
@@ -511,7 +511,7 @@ fn insert_nested_extensions(
     value: &mut Value,
     path: &[&str],
     nested_message: Option<&str>,
-    extensions: &[ChatMessageExtensions],
+    extensions: &[ChatMessageContinuation],
 ) -> Result<(), String> {
     let items = nested_array_mut(value, path)?;
     ensure_len("nested extensions", items.len(), extensions.len())?;
@@ -529,7 +529,7 @@ fn insert_nested_extensions(
 fn take_item_extensions(
     value: &mut Value,
     field: &str,
-) -> Result<Vec<Option<ChatMessageExtensions>>, String> {
+) -> Result<Vec<Option<ChatMessageContinuation>>, String> {
     let Some(items) = value.get_mut(field).and_then(Value::as_array_mut) else {
         return Ok(Vec::new());
     };
@@ -541,7 +541,7 @@ fn take_item_extensions(
                 .ok_or_else(|| format!("{field} item must be an object"))?;
             let extension = object
                 .remove("extensions")
-                .map(serde_json::from_value::<ChatMessageExtensions>)
+                .map(serde_json::from_value::<ChatMessageContinuation>)
                 .transpose()
                 .map_err(|error| error.to_string())?;
             if extension.is_some() && object.get("type").and_then(Value::as_str) != Some("message")
@@ -558,7 +558,7 @@ fn take_item_extensions(
 fn insert_item_extensions(
     value: &mut Value,
     field: &str,
-    extensions: &[Option<ChatMessageExtensions>],
+    extensions: &[Option<ChatMessageContinuation>],
 ) -> Result<(), String> {
     let Some(items) = value.get_mut(field).and_then(Value::as_array_mut) else {
         return ensure_len(&format!("{field} extensions"), 0, extensions.len());
@@ -593,12 +593,12 @@ fn insert_item_extensions(
 mod tests {
     use super::*;
     use crate::core::types::anthropic_continuation::{
-        AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent, ChatMessageExtensions,
+        AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
     };
     use serde_json::json;
 
-    fn extension() -> ChatMessageExtensions {
-        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+    fn extension() -> ChatMessageContinuation {
+        ChatMessageContinuation::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
             AnthropicThinkingBlock::Thinking {
                 thinking: "plan".to_string(),
                 signature: AnthropicSignature::try_from("opaque-signature")
@@ -766,7 +766,7 @@ mod tests {
                 }
 
                 let chat = json!({
-                    "model": "claude-fable-5",
+                    "model": "claude-opus-5",
                     "messages": [{
                         "role": "assistant",
                         "content": "visible",
@@ -779,7 +779,7 @@ mod tests {
                 );
 
                 let responses = json!({
-                    "model": "claude-fable-5",
+                    "model": "claude-opus-5",
                     "input": [{
                         "type": "message",
                         "role": "assistant",

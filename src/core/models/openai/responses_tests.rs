@@ -756,36 +756,3 @@ fn test_token_details_serialization_preserves_null_reasoning_tokens() {
     );
     assert_eq!(comp_obj.get("audio_tokens"), Some(&serde_json::json!(4)));
 }
-
-#[test]
-fn empty_anthropic_thinking_is_not_a_continuation_opt_in() {
-    use crate::core::models::openai::continuation::{
-        ChatCompletionRequestWithExtensions, ResponsesApiRequestWithExtensions,
-    };
-
-    let chat: ChatCompletionRequestWithExtensions = serde_json::from_value(serde_json::json!({
-        "model": "claude-fable-5",
-        "messages": [{"role": "assistant", "content": null,
-            "extensions": {"anthropic_thinking": []}}]
-    }))
-    .unwrap();
-    assert!(!chat.has_continuation());
-    assert!(
-        serde_json::to_value(chat).unwrap()["messages"][0]
-            .get("extensions")
-            .is_none()
-    );
-
-    let responses: ResponsesApiRequestWithExtensions = serde_json::from_value(serde_json::json!({
-        "model": "claude-fable-5",
-        "input": [{"type": "message", "role": "assistant", "content": [],
-            "extensions": {"anthropic_thinking": []}}]
-    }))
-    .unwrap();
-    assert!(!responses.has_continuation());
-    assert!(
-        serde_json::to_value(responses).unwrap()["input"][0]
-            .get("extensions")
-            .is_none()
-    );
-}

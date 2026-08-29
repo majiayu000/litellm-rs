@@ -1,7 +1,7 @@
 use super::*;
+use crate::core::providers::ChatMessageContinuation;
 use crate::core::types::anthropic_continuation::{
     AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
-    ChatMessageExtensions,
 };
 
 // ==================== System Message Separation Tests ====================
@@ -31,7 +31,8 @@ fn test_separate_system_messages_no_system() {
 fn message_carrier_preserves_signed_redacted_and_tool_order() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: None,
@@ -45,8 +46,8 @@ fn message_carrier_preserves_signed_redacted_and_tool_order() {
         }]),
         ..Default::default()
     });
-    let extension =
-        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+    let extension = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![
             AnthropicThinkingBlock::Thinking {
                 thinking: "plan".to_string(),
                 signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
@@ -54,7 +55,8 @@ fn message_carrier_preserves_signed_redacted_and_tool_order() {
             AnthropicThinkingBlock::RedactedThinking {
                 data: AnthropicRedactedData::try_from("opaque-redacted").unwrap(),
             },
-        ]));
+        ]),
+    );
 
     let transformed = client
         .transform_chat_request_with_extensions(&request, &[extension])
@@ -74,13 +76,14 @@ fn message_carrier_preserves_signed_redacted_and_tool_order() {
 fn message_carrier_normalizes_visible_and_empty_string_content() {
     let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
     for (content, expected_len) in [(Some("visible answer"), 2), (None, 1)] {
-        let mut request = ChatRequest::new("claude-fable-5");
+        let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+        request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
         request.messages.push(ChatMessage {
             role: MessageRole::Assistant,
             content: content.map(|text| MessageContent::Text(text.to_string())),
             ..Default::default()
         });
-        let extension = ChatMessageExtensions::new().with_anthropic_thinking(
+        let extension = ChatMessageContinuation::new().with_anthropic_thinking(
             AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
                 thinking: "plan".to_string(),
                 signature: AnthropicSignature::try_from("opaque-signature").unwrap(),

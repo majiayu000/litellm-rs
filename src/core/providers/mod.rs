@@ -117,6 +117,7 @@ pub use provider_type::ProviderType;
 pub mod factory;
 pub use factory::{create_provider, is_provider_selector_supported};
 // Registry and unified provider
+mod chat_continuation;
 pub mod contextual_error;
 pub mod failure;
 pub mod provider_error_conversions;
@@ -128,7 +129,6 @@ pub mod unified_provider;
 mod unified_provider_tests;
 // Export main types
 pub use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::core::types::responses::{
     ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse,
 };
@@ -136,93 +136,14 @@ use crate::core::types::{
     chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest,
 };
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
+pub(crate) use chat_continuation::{
+    AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
+    ChatMessageContinuation,
+};
 pub use contextual_error::ContextualError;
 pub use failure::{ProviderFailureFacts, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
 pub use unified_provider::ProviderError;
-
-/// Internal synchronous request plus one validated continuation sidecar per message.
-#[derive(Debug, Clone)]
-pub(crate) struct ChatContinuationRequest {
-    request: ChatRequest,
-    message_extensions: Vec<ChatMessageExtensions>,
-}
-
-impl ChatContinuationRequest {
-    pub(crate) fn new(
-        request: ChatRequest,
-        message_extensions: Vec<ChatMessageExtensions>,
-    ) -> Result<Self, ProviderError> {
-        if request.messages.len() != message_extensions.len() {
-            return Err(ProviderError::invalid_request(
-                "continuation",
-                format!(
-                    "message extension length mismatch: expected {}, got {}",
-                    request.messages.len(),
-                    message_extensions.len()
-                ),
-            ));
-        }
-        Ok(Self {
-            request,
-            message_extensions,
-        })
-    }
-
-    pub(crate) fn request(&self) -> &ChatRequest {
-        &self.request
-    }
-
-    pub(crate) fn has_continuation(&self) -> bool {
-        self.message_extensions.iter().any(|item| !item.is_empty())
-    }
-
-    pub(crate) fn into_parts(self) -> (ChatRequest, Vec<ChatMessageExtensions>) {
-        (self.request, self.message_extensions)
-    }
-}
-
-/// Internal synchronous response plus one validated continuation sidecar per choice.
-#[derive(Debug, Clone)]
-pub(crate) struct ChatContinuationResponse {
-    response: ChatResponse,
-    choice_extensions: Vec<ChatMessageExtensions>,
-}
-
-impl ChatContinuationResponse {
-    pub(crate) fn new(
-        response: ChatResponse,
-        choice_extensions: Vec<ChatMessageExtensions>,
-    ) -> Result<Self, ProviderError> {
-        if response.choices.len() != choice_extensions.len() {
-            return Err(ProviderError::invalid_request(
-                "continuation",
-                format!(
-                    "choice extension length mismatch: expected {}, got {}",
-                    response.choices.len(),
-                    choice_extensions.len()
-                ),
-            ));
-        }
-        Ok(Self {
-            response,
-            choice_extensions,
-        })
-    }
-
-    pub(crate) fn response(&self) -> &ChatResponse {
-        &self.response
-    }
-
-    #[cfg(test)]
-    pub(crate) fn choice_extensions(&self) -> &[ChatMessageExtensions] {
-        &self.choice_extensions
-    }
-
-    pub(crate) fn into_parts(self) -> (ChatResponse, Vec<ChatMessageExtensions>) {
-        (self.response, self.choice_extensions)
-    }
-}
 #[derive(Debug, Clone)]
 pub(crate) struct GeminiNativeRequest {
     pub(crate) api_version: String,
@@ -657,7 +578,7 @@ impl Provider {
         if !opt_in && !envelope.has_continuation() {
             let (request, _) = envelope.into_parts();
             let response = self.chat_completion(request, context).await?;
-            let extensions = vec![ChatMessageExtensions::new(); response.choices.len()];
+            let extensions = vec![ChatMessageContinuation::new(); response.choices.len()];
             return ChatContinuationResponse::new(response, extensions);
         }
         match self {

@@ -1,6 +1,6 @@
 use super::RequestValidator;
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent, MessageRole};
-use crate::core::types::anthropic_continuation::ChatMessageExtensions;
+use crate::core::providers::ChatMessageContinuation;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 
 impl RequestValidator {
@@ -15,10 +15,10 @@ impl RequestValidator {
     }
 
     /// Validate a chat request carrying typed per-message provider extensions.
-    pub fn validate_chat_completion_request_with_extensions(
+    pub(crate) fn validate_chat_completion_request_with_extensions(
         model: &str,
         messages: &[ChatMessage],
-        extensions: &[ChatMessageExtensions],
+        extensions: &[ChatMessageContinuation],
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<()> {
@@ -41,7 +41,7 @@ impl RequestValidator {
     fn validate_chat_completion_request_inner(
         model: &str,
         messages: &[ChatMessage],
-        extensions: Option<&[ChatMessageExtensions]>,
+        extensions: Option<&[ChatMessageContinuation]>,
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<()> {
@@ -65,11 +65,7 @@ impl RequestValidator {
 
         // Validate max_tokens
         if let Some(max_tokens) = max_tokens {
-            let max_output_tokens = if model == "claude-fable-5" {
-                128_000
-            } else {
-                100_000
-            };
+            let max_output_tokens = 100_000;
             if max_tokens == 0 {
                 return Err(GatewayError::Validation(
                     "max_tokens must be greater than 0".to_string(),
@@ -101,7 +97,7 @@ impl RequestValidator {
 
     fn validate_chat_message_with_extension(
         message: &ChatMessage,
-        extension: Option<&ChatMessageExtensions>,
+        extension: Option<&ChatMessageContinuation>,
         index: usize,
     ) -> Result<()> {
         // Validate role

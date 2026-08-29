@@ -5,10 +5,11 @@ use serde_json::{Value, json};
 use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::providers::{ChatContinuationRequest, ChatContinuationResponse};
-use crate::core::types::anthropic_continuation::{
-    AnthropicContentBlockOrder, AnthropicThinkingBlock, ChatMessageExtensions,
+use crate::core::providers::{
+    AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
+    ChatMessageContinuation,
 };
+use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
 use crate::core::types::chat::ChatRequest;
 use crate::core::types::message::MessageRole;
 use crate::core::types::thinking::ThinkingEffort;
@@ -80,9 +81,8 @@ impl AnthropicClient {
             registry.get_model_spec(&request.model)
         };
         let claude_5 = !self.config.uses_compatible_model_allow_list()
-            && Self::is_claude_5_protocol_model(&request.model)
-            && (model_spec.is_some()
-                || Self::is_standalone_claude_5_protocol_model(&request.model));
+            && model_spec.is_some()
+            && Self::is_claude_5_protocol_model(&request.model);
         if model_spec.is_none() && !claude_5 && !self.config.allows_unknown_model(&request.model) {
             return Err(anthropic_api_error(
                 400,
@@ -91,7 +91,6 @@ impl AnthropicClient {
         }
         if claude_5 {
             Self::validate_claude_5_legacy_functions(request)?;
-            Self::validate_claude_5_sampling(request)?;
         } else if request.reasoning_effort.is_some() {
             return Err(ProviderError::not_supported(
                 "anthropic",
@@ -318,12 +317,32 @@ impl AnthropicClient {
     pub(crate) fn transform_chat_request_with_extensions(
         &self,
         request: &ChatRequest,
-        extensions: &[ChatMessageExtensions],
+        extensions: &[ChatMessageContinuation],
     ) -> Result<Value, ProviderError> {
         if request.messages.len() != extensions.len() {
             return Err(ProviderError::invalid_request(
                 "anthropic",
                 "message extension length mismatch",
+            ));
+        }
+        let replays_thinking = extensions.iter().any(|extension| {
+            extension
+                .anthropic_thinking()
+                .is_some_and(|thinking| !thinking.blocks().is_empty())
+        });
+        if replays_thinking
+            && !Self::is_claude_5_protocol_model(&request.model)
+            && !request
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| thinking.enabled)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic continuation replay for model {} requires an explicit thinking configuration",
+                    request.model
+                ),
             ));
         }
         let mut transformed = self.transform_chat_request(request)?;
@@ -538,44 +557,9 @@ impl AnthropicClient {
         )
     }
 
-    /// Claude 5 models without a registry entry are unsupported by default.
-    /// Fable is the sole temporary exception because the runtime pricing
-    /// authority already contains its exact ID. Opus and Sonnet remain
-    /// unsupported until #1216/#1222 supply exact callable and priced entries;
-    /// activation must come from that authority rather than another name rule.
-    pub(crate) fn is_standalone_claude_5_protocol_model(model: &str) -> bool {
-        model == "claude-fable-5"
-    }
-
-    fn validate_claude_5_sampling(request: &ChatRequest) -> Result<(), ProviderError> {
-        if request.model != "claude-fable-5" {
-            return Ok(());
-        }
-
-        let mut unsupported = Vec::with_capacity(3);
-        if request.temperature.is_some() {
-            unsupported.push("temperature");
-        }
-        if request.top_p.is_some() {
-            unsupported.push("top_p");
-        }
-        if request.extra_params.contains_key("top_k") {
-            unsupported.push("top_k");
-        }
-        if unsupported.is_empty() {
-            return Ok(());
-        }
-
-        Err(ProviderError::not_supported(
-            "anthropic",
-            format!(
-                "Model claude-fable-5 does not support {}",
-                unsupported.join(" or ")
-            ),
-        ))
-    }
-
-    fn validate_claude_5_legacy_functions(request: &ChatRequest) -> Result<(), ProviderError> {
+    pub(super) fn validate_claude_5_legacy_functions(
+        request: &ChatRequest,
+    ) -> Result<(), ProviderError> {
         if request
             .functions
             .as_ref()
@@ -606,25 +590,15 @@ impl AnthropicClient {
             .map(Self::parse_reasoning_effort)
             .transpose()?;
         let Some(thinking) = request.thinking.as_ref() else {
-            return Ok(match requested_effort {
-                Some(effort) => Some((
+            return Ok(requested_effort.map(|effort| {
+                (
                     json!({"type": "adaptive", "display": "summarized"}),
                     Some(effort),
-                )),
-                None if request.model == "claude-fable-5" => {
-                    Some((json!({"type": "adaptive", "display": "summarized"}), None))
-                }
-                None => None,
-            });
+                )
+            }));
         };
 
         if !thinking.enabled {
-            if request.model == "claude-fable-5" {
-                return Err(ProviderError::invalid_request(
-                    "anthropic",
-                    "claude-fable-5 cannot disable thinking",
-                ));
-            }
             if requested_effort.is_some() {
                 return Err(ProviderError::invalid_request(
                     "anthropic",

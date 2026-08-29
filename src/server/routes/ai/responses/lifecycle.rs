@@ -3,7 +3,6 @@ use crate::core::models::openai::responses_api::{
     ResponseInput, ResponseInputContent, ResponseInputItem, ResponseInputMessage,
     ResponseOutputContent, ResponseOutputItem, ResponsesApiRequest, ResponsesApiResponse,
 };
-use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::core::types::codex::wire::CodexFunctionCall;
 use crate::server::routes::ai::chat::handle_chat_completion_with_state;
 use crate::server::state::AppState;
@@ -222,56 +221,6 @@ pub(super) fn resolve_previous_response_context(
     let stored = get_owned_response(previous_response_id, owner)?;
     request.input = append_previous_context(&stored, &request.input);
     Ok(request)
-}
-
-pub(super) fn resolve_previous_response_context_with_extensions(
-    request: ResponsesApiRequest,
-    mut current_extensions: Vec<Option<ChatMessageExtensions>>,
-    owner: &Option<ResponseOwner>,
-) -> Result<(ResponsesApiRequest, Vec<Option<ChatMessageExtensions>>), GatewayError> {
-    let previous_response_requested = request.previous_response_id.is_some();
-    let current_items = match &request.input {
-        ResponseInput::Text(_) => 1,
-        ResponseInput::Items(items) => items.len(),
-    };
-    let text_input = matches!(request.input, ResponseInput::Text(_));
-    let request = resolve_previous_response_context(request, owner)?;
-    if !previous_response_requested {
-        return Ok((request, current_extensions));
-    }
-
-    let ResponseInput::Items(resolved_items) = &request.input else {
-        return Err(GatewayError::validation(
-            "previous response context did not resolve to item input",
-        ));
-    };
-    let history_items = resolved_items
-        .len()
-        .checked_sub(current_items)
-        .ok_or_else(|| {
-            GatewayError::validation(
-                "previous response context contains fewer items than the current input",
-            )
-        })?;
-    let mut aligned = vec![None; history_items];
-    if text_input {
-        if !current_extensions.is_empty() {
-            return Err(GatewayError::validation(
-                "text Responses input cannot carry item extensions",
-            ));
-        }
-        aligned.push(None);
-    } else {
-        aligned.append(&mut current_extensions);
-    }
-    if aligned.len() != resolved_items.len() {
-        return Err(GatewayError::validation(format!(
-            "Responses input extensions length mismatch after previous response resolution: expected {}, got {}",
-            resolved_items.len(),
-            aligned.len()
-        )));
-    }
-    Ok((request, aligned))
 }
 
 pub(super) fn response_owner(

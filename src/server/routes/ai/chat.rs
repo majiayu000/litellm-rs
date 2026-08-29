@@ -7,11 +7,10 @@ use crate::core::models::openai::{
     ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, Logprobs, Tool,
     ToolChoice, TopLogprob, Usage,
 };
-use crate::core::providers::{ChatContinuationRequest, ProviderError};
+use crate::core::providers::{ChatContinuationRequest, ChatMessageContinuation, ProviderError};
 use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
 };
-use crate::core::types::anthropic_continuation::ChatMessageExtensions;
 use crate::core::types::{
     self,
     chat::ChatRequest as CoreChatRequest,
@@ -120,6 +119,27 @@ pub(super) fn continuation_opt_in(
     }
 }
 
+fn continuation_budget_enabled(
+    limits: &crate::core::budget::UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    has_api_key_budget: bool,
+) -> bool {
+    has_api_key_budget
+        || (limits.providers.is_enabled()
+            && limits
+                .providers
+                .list_provider_budgets()
+                .iter()
+                .any(|budget| budget.enabled && budget.provider_name == provider))
+        || (limits.models.is_enabled()
+            && limits
+                .models
+                .list_model_budgets()
+                .iter()
+                .any(|budget| budget.enabled && budget.model_name == model))
+}
+
 /// Handle chat completion with app state (UnifiedRouter only)
 pub async fn handle_chat_completion_with_state(
     state: &AppState,
@@ -135,7 +155,7 @@ pub async fn handle_chat_completion_with_shared_state(
     context: SharedRequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
     crate::server::guardrails::check_chat_input(state, request.as_ref()).await?;
-    let extensions = vec![ChatMessageExtensions::new(); request.messages.len()];
+    let extensions = vec![ChatMessageContinuation::new(); request.messages.len()];
     Ok(
         handle_chat_completion_internal(state, request, context, extensions, false)
             .await?
@@ -148,7 +168,7 @@ pub(super) async fn handle_chat_completion_with_extensions(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
     context: SharedRequestContext,
-    extensions: Vec<ChatMessageExtensions>,
+    extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
     crate::server::guardrails::check_chat_input(state, request.as_ref()).await?;
@@ -159,7 +179,7 @@ async fn handle_chat_completion_internal(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
     context: SharedRequestContext,
-    extensions: Vec<ChatMessageExtensions>,
+    extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
     let unified_router = &state.unified_router;
@@ -174,7 +194,7 @@ async fn handle_chat_completion_internal(
     {
         super::response_cache::ensure_chat_cache_pricing_gate(state, request.as_ref())?;
         crate::server::guardrails::check_chat_output(state, &cached).await?;
-        let extensions = vec![ChatMessageExtensions::new(); cached.choices.len()];
+        let extensions = vec![ChatMessageContinuation::new(); cached.choices.len()];
         return ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
             .map_err(GatewayError::internal);
     }
@@ -196,6 +216,8 @@ async fn handle_chat_completion_internal(
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let budgeted = state.budgeted.clone();
+    let budget_limits = state.budgeted.budget_limits();
+    let has_continuation = core_request.has_continuation();
     let callback_for_execution = callback.clone();
 
     let core_response = match run_unary(
@@ -209,10 +231,24 @@ async fn handle_chat_completion_internal(
             let pricing_service = pricing_service.clone();
             let key_manager = key_manager.clone();
             let budgeted = budgeted.clone();
+            let budget_limits = budget_limits.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
             async move {
                 let provider_name = provider.name().to_string();
+                if has_continuation
+                    && continuation_budget_enabled(
+                        budget_limits.as_ref(),
+                        &provider_name,
+                        &selected_model,
+                        api_key_budget_id.is_some(),
+                    )
+                {
+                    return Err(ProviderError::not_supported(
+                        "budget",
+                        "Anthropic continuation cannot be metered safely while an API-key, provider, or model budget is enabled",
+                    ));
+                }
                 let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
                     pricing_service.as_ref(),
                     &provider,
@@ -226,11 +262,6 @@ async fn handle_chat_completion_internal(
                     &selected_model,
                     legacy_request,
                 )?;
-                let continuation_prompt_tokens =
-                    super::spend::estimate_chat_continuation_prompt_tokens(
-                        &pricing_model,
-                        &extensions,
-                    );
                 let request_for_provider =
                     ChatContinuationRequest::new(request_for_provider, extensions)?;
                 let request_for_budget =
@@ -238,8 +269,7 @@ async fn handle_chat_completion_internal(
                         .with_output_limits(
                             request_for_provider.request().max_tokens,
                             request_for_provider.request().max_completion_tokens,
-                        )
-                        .with_additional_prompt_tokens(continuation_prompt_tokens);
+                        );
                 let provider_context = context.as_ref().clone();
                 let reserve_pricing_service = pricing_service.clone();
                 let settle_pricing_service = pricing_service.clone();

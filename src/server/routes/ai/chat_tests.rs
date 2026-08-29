@@ -9,6 +9,48 @@ use crate::core::types::responses::{
 use crate::core::types::thinking::{ThinkingDelta, ThinkingUsage};
 
 #[test]
+fn typed_continuation_fails_closed_only_for_enabled_budget_scopes() {
+    use crate::core::budget::{
+        ModelLimitConfig, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits,
+    };
+
+    let budgets = UnifiedBudgetLimits::new();
+    assert!(!continuation_budget_enabled(
+        &budgets,
+        "anthropic",
+        "claude-opus-5",
+        false,
+    ));
+    budgets.providers.set_provider_limit(
+        "anthropic",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    assert!(continuation_budget_enabled(
+        &budgets,
+        "anthropic",
+        "claude-opus-5",
+        false,
+    ));
+    assert!(continuation_budget_enabled(
+        &UnifiedBudgetLimits::new(),
+        "anthropic",
+        "claude-opus-5",
+        true,
+    ));
+    let model_budgets = UnifiedBudgetLimits::new();
+    model_budgets.models.set_model_limit(
+        "claude-opus-5",
+        ModelLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    assert!(continuation_budget_enabled(
+        &model_budgets,
+        "anthropic",
+        "claude-opus-5",
+        false,
+    ));
+}
+
+#[test]
 fn test_convert_finish_reason() {
     assert_eq!(
         convert_finish_reason(types::responses::FinishReason::Stop),

@@ -2,8 +2,9 @@ use super::*;
 use crate::core::models::openai::{
     ChatMessage, ContentPart, FunctionCall, ImageUrl, MessageContent, MessageRole, ToolCall,
 };
+use crate::core::providers::ChatMessageContinuation;
 use crate::core::types::anthropic_continuation::{
-    AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent, ChatMessageExtensions,
+    AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
 };
 
 // ==================== Helper Functions ====================
@@ -131,14 +132,13 @@ fn assistant_extension_only_is_meaningful_and_role_bounded() {
         tool_call_id: None,
         audio: None,
     };
-    let extension =
-        ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
-            AnthropicThinkingBlock::Thinking {
-                thinking: "plan".to_string(),
-                signature: AnthropicSignature::try_from("opaque-signature")
-                    .expect("fixture signature is non-empty"),
-            },
-        ]));
+    let extension = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
+            thinking: "plan".to_string(),
+            signature: AnthropicSignature::try_from("opaque-signature")
+                .expect("fixture signature is non-empty"),
+        }]),
+    );
     assert!(
         RequestValidator::validate_chat_completion_request_with_extensions(
             "claude-opus-5",
@@ -175,12 +175,12 @@ fn empty_anthropic_thinking_does_not_make_an_empty_assistant_message_meaningful(
         tool_call_id: None,
         audio: None,
     };
-    let extension = ChatMessageExtensions::new()
+    let extension = ChatMessageContinuation::new()
         .with_anthropic_thinking(AnthropicThinkingContent::new(Vec::new()));
 
     assert!(
         RequestValidator::validate_chat_completion_request_with_extensions(
-            "claude-fable-5",
+            "claude-opus-5",
             std::slice::from_ref(&message),
             std::slice::from_ref(&extension),
             None,
@@ -216,41 +216,6 @@ fn test_validate_max_tokens_valid_boundary() {
     let result =
         RequestValidator::validate_chat_completion_request("gpt-4", &messages, Some(100000), None);
     assert!(result.is_ok());
-}
-
-#[test]
-fn exact_fable_uses_its_advertised_output_limit() {
-    let messages = vec![create_user_message("Hello")];
-
-    for max_tokens in [100_001, 128_000] {
-        let result = RequestValidator::validate_chat_completion_request(
-            "claude-fable-5",
-            &messages,
-            Some(max_tokens),
-            None,
-        );
-        assert!(result.is_ok(), "exact Fable should accept {max_tokens}");
-    }
-
-    let too_large = RequestValidator::validate_chat_completion_request(
-        "claude-fable-5",
-        &messages,
-        Some(128_001),
-        None,
-    )
-    .expect_err("Fable must reject output above 128k");
-    assert!(too_large.to_string().contains("128000"));
-
-    for model in ["gpt-4", "Claude-fable-5", "claude-fable-5-latest"] {
-        let error = RequestValidator::validate_chat_completion_request(
-            model,
-            &messages,
-            Some(100_001),
-            None,
-        )
-        .expect_err("the Fable exception must be exact and case-sensitive");
-        assert!(error.to_string().contains("100000"));
-    }
 }
 
 #[test]

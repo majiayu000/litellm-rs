@@ -2,11 +2,12 @@ use serde_json::json;
 
 use super::*;
 use crate::core::net::ProviderEndpointAccess;
-use crate::core::providers::ChatContinuationRequest;
 use crate::core::providers::anthropic::config::AnthropicConfig;
+use crate::core::providers::{
+    AnthropicContentBlockOrder, ChatContinuationRequest, ChatMessageContinuation,
+};
 use crate::core::types::anthropic_continuation::{
-    AnthropicContentBlockOrder, AnthropicSignature, AnthropicThinkingBlock,
-    AnthropicThinkingContent, ChatMessageExtensions,
+    AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
 };
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::content::{
@@ -71,7 +72,7 @@ async fn continuation_capture_server() -> (String, oneshot::Receiver<String>) {
         request_sender
             .send(String::from_utf8(request_bytes).unwrap())
             .unwrap();
-        let body = r#"{"id":"msg-response","model":"claude-fable-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}"#;
+        let body = r#"{"id":"msg-response","model":"claude-3-opus-20240229","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
@@ -81,8 +82,8 @@ async fn continuation_capture_server() -> (String, oneshot::Receiver<String>) {
     (format!("http://{address}"), request_receiver)
 }
 
-fn signed_continuation_extension() -> ChatMessageExtensions {
-    ChatMessageExtensions::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+fn signed_continuation_extension() -> ChatMessageContinuation {
+    ChatMessageContinuation::new().with_anthropic_thinking(AnthropicThinkingContent::new(vec![
         AnthropicThinkingBlock::Thinking {
             thinking: "plan".to_string(),
             signature: AnthropicSignature::try_from("opaque-signature").unwrap(),
@@ -90,77 +91,84 @@ fn signed_continuation_extension() -> ChatMessageExtensions {
     ]))
 }
 
-#[tokio::test]
-async fn continuation_send_path_adds_interleaved_beta_once() {
-    for legacy_thinking in [false, true] {
-        let (base_url, captured) = continuation_capture_server().await;
-        let client = AnthropicClient::new(
-            AnthropicConfig::new_test("test-key")
-                .with_base_url(base_url)
-                .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork),
-        )
-        .unwrap();
-        let mut request = ChatRequest::new("claude-fable-5");
-        request.messages.push(ChatMessage {
-            role: MessageRole::Assistant,
-            content: Some(MessageContent::Text("visible".to_string())),
-            ..Default::default()
-        });
-        if legacy_thinking {
-            request.thinking = Some(ThinkingConfig::new().enabled());
-            request.extra_params.insert(
-                "anthropic_beta".to_string(),
-                json!(["interleaved-thinking-2025-05-14"]),
-            );
-        }
-        let envelope =
-            ChatContinuationRequest::new(request, vec![signed_continuation_extension()]).unwrap();
+#[test]
+fn legacy_thinking_replay_requires_an_explicit_thinking_configuration() {
+    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("visible".to_string())),
+        ..Default::default()
+    });
 
-        client
-            .chat_with_continuation(envelope)
-            .await
-            .expect("mock Anthropic request should succeed");
-        let request = captured.await.unwrap();
-        let beta_lines = request
-            .lines()
-            .filter(|line| line.to_ascii_lowercase().starts_with("anthropic-beta:"))
-            .collect::<Vec<_>>();
-        assert_eq!(beta_lines.len(), 1, "request: {request}");
-        assert_eq!(
-            beta_lines[0]
-                .matches("interleaved-thinking-2025-05-14")
-                .count(),
-            1,
-            "request: {request}"
-        );
-    }
+    let error = anthropic_client()
+        .transform_chat_request_with_extensions(&request, &[signed_continuation_extension()])
+        .expect_err("legacy thinking replay must fail before transport without thinking config");
+
+    assert!(
+        error
+            .to_string()
+            .contains("requires an explicit thinking configuration")
+    );
 }
 
-#[test]
-fn reasoning_effort_maps_once_to_adaptive_output_config() {
-    let mut request = ChatRequest::new("claude-fable-5").add_user_message("solve");
-    request.reasoning_effort = Some("high".to_string());
+#[tokio::test]
+async fn continuation_send_path_adds_interleaved_beta_once() {
+    let (base_url, captured) = continuation_capture_server().await;
+    let client = AnthropicClient::new(
+        AnthropicConfig::new_test("test-key")
+            .with_base_url(base_url)
+            .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork),
+    )
+    .unwrap();
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("visible".to_string())),
+        ..Default::default()
+    });
+    request.thinking = Some(ThinkingConfig::new().enabled());
+    request.extra_params.insert(
+        "anthropic_beta".to_string(),
+        json!(["interleaved-thinking-2025-05-14"]),
+    );
+    let envelope =
+        ChatContinuationRequest::new(request, vec![signed_continuation_extension()]).unwrap();
 
-    let transformed = anthropic_client()
-        .transform_chat_request(&request)
-        .expect("exact Claude 5 reasoning must be supported");
-
-    assert_eq!(transformed["thinking"]["type"], "adaptive");
-    assert_eq!(transformed["output_config"], json!({"effort": "high"}));
+    client
+        .chat_with_continuation(envelope)
+        .await
+        .expect("mock Anthropic request should succeed");
+    let request = captured.await.unwrap();
+    let beta_lines = request
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().starts_with("anthropic-beta:"))
+        .collect::<Vec<_>>();
+    assert_eq!(beta_lines.len(), 1, "request: {request}");
     assert_eq!(
-        transformed
-            .as_object()
-            .expect("request is an object")
-            .keys()
-            .filter(|key| key.as_str() == "output_config")
+        beta_lines[0]
+            .matches("interleaved-thinking-2025-05-14")
             .count(),
-        1
+        1,
+        "request: {request}"
     );
 }
 
 #[test]
+fn reasoning_effort_maps_once_to_adaptive_output_config() {
+    let mut request = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    request.reasoning_effort = Some("high".to_string());
+
+    let (thinking, effort) = AnthropicClient::claude_5_thinking_config(&request)
+        .expect("exact Claude 5 reasoning must be valid")
+        .expect("reasoning enables thinking");
+
+    assert_eq!(thinking["type"], "adaptive");
+    assert_eq!(effort.expect("effort").as_str(), "high");
+}
+
+#[test]
 fn claude5_extended_reasoning_efforts_map_without_downshifting() {
-    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+    for model in ["claude-opus-5", "claude-sonnet-5"] {
         for effort in ["xhigh", "max"] {
             let mut request = ChatRequest::new(model).add_user_message("solve");
             request.reasoning_effort = Some(effort.to_string());
@@ -176,52 +184,26 @@ fn claude5_extended_reasoning_efforts_map_without_downshifting() {
 }
 
 #[test]
-fn fable_defaults_to_always_on_adaptive_while_registered_opus_and_sonnet_remain_optional() {
-    let client = anthropic_client();
-
-    let fable = client
-        .transform_chat_request(&ChatRequest::new("claude-fable-5").add_user_message("solve"))
-        .expect("Fable must default to adaptive thinking");
-    assert_eq!(
-        fable["thinking"],
-        json!({"type": "adaptive", "display": "summarized"})
-    );
-
-    for model in ["claude-opus-5", "claude-sonnet-5"] {
-        let request = ChatRequest::new(model).add_user_message("solve");
-        assert!(
-            AnthropicClient::claude_5_thinking_config(&request)
-                .expect("registered optional-thinking Claude 5 semantics remain valid")
-                .is_none()
-        );
-    }
-
-    let mut disabled = ChatRequest::new("claude-fable-5").add_user_message("solve");
-    disabled.thinking = Some(ThinkingConfig::new());
-    assert!(client.transform_chat_request(&disabled).is_err());
-}
-
-#[test]
 fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
     let client = anthropic_client();
 
-    let mut invalid = ChatRequest::new("claude-fable-5").add_user_message("solve");
+    let mut invalid = ChatRequest::new("claude-opus-5").add_user_message("solve");
     invalid.reasoning_effort = Some("maximum".to_string());
-    assert!(client.transform_chat_request(&invalid).is_err());
+    assert!(AnthropicClient::claude_5_thinking_config(&invalid).is_err());
 
-    let mut conflict = ChatRequest::new("claude-fable-5").add_user_message("solve");
+    let mut conflict = ChatRequest::new("claude-opus-5").add_user_message("solve");
     conflict.reasoning_effort = Some("high".to_string());
     conflict.thinking = Some(
         ThinkingConfig::new()
             .enabled()
             .with_effort(ThinkingEffort::Low),
     );
-    assert!(client.transform_chat_request(&conflict).is_err());
+    assert!(AnthropicClient::claude_5_thinking_config(&conflict).is_err());
 
-    let mut manual = ChatRequest::new("claude-fable-5").add_user_message("solve");
+    let mut manual = ChatRequest::new("claude-opus-5").add_user_message("solve");
     manual.reasoning_effort = Some("medium".to_string());
     manual.thinking = Some(ThinkingConfig::new().enabled().with_budget(1024));
-    assert!(client.transform_chat_request(&manual).is_err());
+    assert!(AnthropicClient::claude_5_thinking_config(&manual).is_err());
 
     let mut old_model = ChatRequest::new("claude-3-opus-20240229").add_user_message("solve");
     old_model.reasoning_effort = Some("high".to_string());
@@ -230,8 +212,7 @@ fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
 
 #[test]
 fn claude5_legacy_function_calls_error_while_modern_tools_remain_valid() {
-    let client = anthropic_client();
-    let mut legacy = ChatRequest::new("claude-fable-5").add_user_message("weather?");
+    let mut legacy = ChatRequest::new("claude-opus-5").add_user_message("weather?");
     legacy.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: None,
@@ -241,15 +222,14 @@ fn claude5_legacy_function_calls_error_while_modern_tools_remain_valid() {
         }),
         ..Default::default()
     });
-    let error = client
-        .transform_chat_request(&legacy)
+    let error = AnthropicClient::validate_claude_5_legacy_functions(&legacy)
         .expect_err("legacy function_call must fail");
     assert!(error.to_string().contains("tools/tool_choice"));
 
-    let modern = ChatRequest::new("claude-fable-5")
+    let modern = ChatRequest::new("claude-opus-5")
         .add_user_message("weather?")
         .with_tools(vec![tool("lookup")]);
-    assert!(client.transform_chat_request(&modern).is_ok());
+    assert!(AnthropicClient::validate_claude_5_legacy_functions(&modern).is_ok());
 }
 
 #[test]
@@ -415,67 +395,6 @@ fn issue_764_maps_user_and_top_level_cache_control()
     assert_eq!(transformed["metadata"]["user_id"], "user-123");
     assert_eq!(transformed["cache_control"], json!({"type": "ephemeral"}));
     Ok(())
-}
-
-#[test]
-fn claude_fable_5_accepts_official_prompt_cache_control_but_lookalikes_fail() {
-    let mut request = ChatRequest::new("claude-fable-5").add_user_message("hello");
-    request
-        .extra_params
-        .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
-
-    let transformed = anthropic_client()
-        .transform_chat_request(&request)
-        .expect("Fable 5 prompt caching is supported");
-    assert_eq!(transformed["cache_control"], json!({"type": "ephemeral"}));
-
-    request.model = "claude-fable-5-preview".to_string();
-    assert!(anthropic_client().transform_chat_request(&request).is_err());
-}
-
-#[test]
-fn claude_fable_5_rejects_unsupported_sampling_controls() {
-    let client = anthropic_client();
-
-    let mut temperature = ChatRequest::new("claude-fable-5").add_user_message("hello");
-    temperature.temperature = Some(0.2);
-    let error = client
-        .transform_chat_request(&temperature)
-        .expect_err("Fable must reject temperature");
-    assert!(error.to_string().contains("temperature"));
-
-    let mut top_p = ChatRequest::new("claude-fable-5").add_user_message("hello");
-    top_p.top_p = Some(0.8);
-    let error = client
-        .transform_chat_request(&top_p)
-        .expect_err("Fable must reject top_p");
-    assert!(error.to_string().contains("top_p"));
-}
-
-#[test]
-fn claude_fable_5_preserves_document_cache_control() {
-    let mut request = ChatRequest::new("claude-fable-5");
-    request.messages.push(ChatMessage {
-        role: MessageRole::User,
-        content: Some(MessageContent::Parts(vec![ContentPart::Document {
-            source: DocumentSource {
-                media_type: "application/pdf".to_string(),
-                data: "JVBERi0=".to_string(),
-            },
-            cache_control: Some(CacheControl {
-                cache_type: "ephemeral".to_string(),
-            }),
-        }])),
-        ..Default::default()
-    });
-
-    let transformed = anthropic_client()
-        .transform_chat_request(&request)
-        .expect("Fable 5 document caching is supported");
-    assert_eq!(
-        transformed["messages"][0]["content"][0]["cache_control"],
-        json!({"type": "ephemeral"})
-    );
 }
 
 #[test]
@@ -699,30 +618,14 @@ fn issue_802_rejects_cache_control_on_models_without_cache_support() {
 }
 
 #[test]
-fn fable_rejects_top_k_while_existing_models_keep_their_contract() {
-    let mut fable = ChatRequest::new("claude-fable-5").add_user_message("hello");
-    fable.extra_params.insert("top_k".to_string(), json!(40));
-    let error = anthropic_client()
-        .transform_chat_request(&fable)
-        .expect_err("Fable must reject every explicit top_k value");
-    assert!(error.to_string().contains("top_k"));
-
-    let mut existing = ChatRequest::new("claude-3-opus-20240229").add_user_message("hello");
-    existing.extra_params.insert("top_k".to_string(), json!(40));
-    anthropic_client()
-        .transform_chat_request(&existing)
-        .expect("this focused Fable policy must not change existing Anthropic models");
-}
-
-#[test]
 fn provider_rejects_internal_order_without_thinking_payload() {
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-3-opus-20240229");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("visible".to_string())),
         ..Default::default()
     });
-    let malformed = ChatMessageExtensions::new()
+    let malformed = ChatMessageContinuation::new()
         .with_anthropic_block_order(vec![AnthropicContentBlockOrder::Text { start: 0, end: 7 }]);
 
     let error = anthropic_client()

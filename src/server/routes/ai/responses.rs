@@ -15,7 +15,7 @@ use crate::core::models::openai::responses_api::{
     ResponseTool, ResponseUsage, ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::models::openai::tools::{Function, FunctionCall, Tool, ToolCall};
-use crate::core::types::anthropic_continuation::ChatMessageExtensions;
+use crate::core::providers::ChatMessageContinuation;
 use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
 use crate::core::types::codex::wire::{CodexCustomToolCall, CodexToolOutput};
 use crate::core::types::responses::FinishReason;
@@ -102,15 +102,19 @@ pub async fn create_response(
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    let (request, input_extensions) =
-        match lifecycle::resolve_previous_response_context_with_extensions(
-            request,
-            input_extensions,
-            &owner,
-        ) {
+    let (request, input_extensions) = if continuation_requested {
+        (request, input_extensions)
+    } else {
+        let request = match lifecycle::resolve_previous_response_context(request, &owner) {
             Ok(resolved) => resolved,
             Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
         };
+        let input_extensions = match &request.input {
+            ResponseInput::Text(_) => Vec::new(),
+            ResponseInput::Items(items) => vec![None; items.len()],
+        };
+        (request, input_extensions)
+    };
 
     let turn = match build_responses_continuation_turn(&request, &input_extensions) {
         Ok(turn) => turn,
@@ -175,7 +179,7 @@ pub async fn create_response(
 async fn handle_sync_response(
     state: &AppState,
     chat_request: ChatCompletionRequest,
-    chat_extensions: Vec<ChatMessageExtensions>,
+    chat_extensions: Vec<ChatMessageContinuation>,
     has_continuation: bool,
     original: ResponsesApiRequest,
     mut context: crate::core::types::context::RequestContext,
@@ -729,7 +733,7 @@ mod tests {
                 {"type":"function_call_output","call_id":"toolu_1","output":"result"},
                 {"type":"custom_tool_call_output","call_id":"toolu_2","name":"shell","output":"/tmp"}]
         })).unwrap();
-        let extension = ChatMessageExtensions::new().with_anthropic_thinking(
+        let extension = ChatMessageContinuation::new().with_anthropic_thinking(
             AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
                 thinking: "plan".into(),
                 signature: AnthropicSignature::try_from("opaque-signature").unwrap(),

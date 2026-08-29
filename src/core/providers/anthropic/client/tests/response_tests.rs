@@ -1,5 +1,6 @@
 use super::*;
-use crate::core::types::anthropic_continuation::{AnthropicThinkingBlock, ChatMessageExtensions};
+use crate::core::providers::ChatMessageContinuation;
+use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
 
 // ==================== Chat Response Transformation Tests ====================
 
@@ -51,7 +52,7 @@ fn response_parser_returns_validated_secret_safe_sidecar() {
     let result = client
         .transform_chat_response_with_continuation(response, &std::collections::HashMap::new())
         .expect("valid continuation response");
-    let extension = &result.choice_extensions()[0];
+    let extension = &result.choice_continuations()[0];
     let blocks = extension
         .anthropic_thinking()
         .expect("thinking sidecar")
@@ -106,7 +107,7 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
     for original_content in cases {
         let response = json!({
             "id": "msg_interleaved",
-            "model": "claude-fable-5",
+            "model": "claude-sonnet-4-20250514",
             "content": original_content,
             "stop_reason": "tool_use"
         });
@@ -122,9 +123,10 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
                 "ordering metadata must remain index/span-only: {serialized_text}"
             );
         }
-        let extensions: Vec<ChatMessageExtensions> =
+        let extensions: Vec<ChatMessageContinuation> =
             serde_json::from_value(serialized_extensions).unwrap();
-        let mut request = ChatRequest::new("claude-fable-5");
+        let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+        request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
         request.messages.push(response.choices[0].message.clone());
 
         let replay = client
@@ -149,7 +151,8 @@ fn ordered_continuation_sidecars_are_isolated_per_message() {
             json!({"type": "thinking", "thinking": "b", "signature": "sig-b"}),
         ],
     ];
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
     let mut extensions = Vec::new();
 
     for (index, original) in originals.iter().enumerate() {
@@ -157,7 +160,7 @@ fn ordered_continuation_sidecars_are_isolated_per_message() {
             .transform_chat_response_with_continuation(
                 json!({
                     "id": format!("msg-{index}"),
-                    "model": "claude-fable-5",
+                    "model": "claude-sonnet-4-20250514",
                     "content": original,
                     "stop_reason": "tool_use"
                 }),
@@ -165,7 +168,7 @@ fn ordered_continuation_sidecars_are_isolated_per_message() {
             )
             .expect("isolated continuation response should parse");
         let (response, choice_extensions) = parsed.into_parts();
-        let mut choice_extensions: Vec<ChatMessageExtensions> =
+        let mut choice_extensions: Vec<ChatMessageContinuation> =
             serde_json::from_value(serde_json::to_value(choice_extensions).unwrap()).unwrap();
         request.messages.push(response.choices[0].message.clone());
         extensions.push(choice_extensions.remove(0));
@@ -185,7 +188,7 @@ fn ordered_continuation_metadata_fails_closed_on_span_drift() {
         .transform_chat_response_with_continuation(
             json!({
                 "id": "msg-span",
-                "model": "claude-fable-5",
+                "model": "claude-sonnet-4-20250514",
                 "content": [
                     {"type": "thinking", "thinking": "plan", "signature": "sig"},
                     {"type": "text", "text": "世界"}
@@ -195,13 +198,14 @@ fn ordered_continuation_metadata_fails_closed_on_span_drift() {
         )
         .unwrap();
     let (response, extensions) = parsed.into_parts();
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
     request.messages.push(response.choices[0].message.clone());
     let serialized = serde_json::to_value(extensions).unwrap();
 
     let mut invalid_utf8 = serialized.clone();
     invalid_utf8[0]["anthropic_block_order"][1]["end"] = json!(1);
-    let extensions: Vec<ChatMessageExtensions> = serde_json::from_value(invalid_utf8).unwrap();
+    let extensions: Vec<ChatMessageContinuation> = serde_json::from_value(invalid_utf8).unwrap();
     let error = client
         .transform_chat_request_with_extensions(&request, &extensions)
         .expect_err("a visible span cannot split a UTF-8 code point");
@@ -212,7 +216,7 @@ fn ordered_continuation_metadata_fails_closed_on_span_drift() {
         .as_array_mut()
         .unwrap()
         .pop();
-    let extensions: Vec<ChatMessageExtensions> = serde_json::from_value(missing_visible).unwrap();
+    let extensions: Vec<ChatMessageContinuation> = serde_json::from_value(missing_visible).unwrap();
     let error = client
         .transform_chat_request_with_extensions(&request, &extensions)
         .expect_err("the order must cover the complete canonical visible payload");

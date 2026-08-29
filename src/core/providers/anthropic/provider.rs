@@ -1,7 +1,15 @@
-//! Anthropic provider implementation.
+//! Anthropic Provider Implementation
+//!
+//! Implementation
 
-use crate::core::providers::unified_provider::ProviderError;
-use crate::core::providers::{ChatContinuationRequest, ChatContinuationResponse};
+use futures::Stream;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::pin::Pin;
+
+use crate::core::providers::{
+    ChatContinuationRequest, ChatContinuationResponse, unified_provider::ProviderError,
+};
 use crate::core::traits::provider::ProviderConfig as _;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
@@ -12,20 +20,15 @@ use crate::core::types::{
     model::ProviderCapability,
     responses::{ChatChunk, ChatResponse},
 };
-use futures::Stream;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::pin::Pin;
 
 use super::client::AnthropicClient;
 use super::config::AnthropicConfig;
-use super::models::{
-    ModelFeature, get_anthropic_registry, standalone_fable_model_info, supported_openai_params,
-};
+use super::models::{ModelFeature, get_anthropic_registry};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
+
 const COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 
-/// Anthropic provider.
+/// Anthropic Provider - unified implementation
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
     client: Box<AnthropicClient>,
@@ -60,15 +63,11 @@ impl AnthropicProvider {
                 .collect()
         } else {
             let registry = get_anthropic_registry();
-            let mut models = registry
+            registry
                 .list_models()
                 .into_iter()
                 .map(|spec| spec.model_info.clone())
-                .collect::<Vec<_>>();
-            if !models.iter().any(|model| model.id == "claude-fable-5") {
-                models.push(standalone_fable_model_info());
-            }
-            models
+                .collect()
         };
 
         Ok(Self {
@@ -101,13 +100,6 @@ impl AnthropicProvider {
         };
 
         let Some(model_spec) = model_spec else {
-            if AnthropicClient::is_standalone_claude_5_protocol_model(&request.model) {
-                return crate::core::providers::base::validate_chat_request_common(
-                    "anthropic",
-                    request,
-                    COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS,
-                );
-            }
             if !self.client.allows_unknown_model(&request.model) {
                 return Err(ProviderError::invalid_request(
                     "anthropic",
@@ -177,12 +169,14 @@ impl AnthropicProvider {
             return Ok(());
         };
 
+        // Common validation: empty messages + max_tokens
         crate::core::providers::base::validate_chat_request_common(
             "anthropic",
             request,
             model_spec.limits.max_output_tokens,
         )?;
 
+        // Check multimodal content
         let has_multimodal_content = AnthropicClient::has_multimodal_content(request);
 
         if has_multimodal_content
@@ -199,6 +193,7 @@ impl AnthropicProvider {
             ));
         }
 
+        // Check tool calling support
         if request
             .tools
             .as_ref()
@@ -242,12 +237,20 @@ impl LLMProvider for AnthropicProvider {
         }
 
         self.supported_models.iter().any(|info| info.id == model)
-            || AnthropicClient::is_standalone_claude_5_protocol_model(model)
             || self.client.allows_unknown_model(model)
     }
 
-    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        supported_openai_params(model)
+    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        &[
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "top_k",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stop",
+        ]
     }
 
     async fn map_openai_params(
@@ -255,6 +258,7 @@ impl LLMProvider for AnthropicProvider {
         mut params: HashMap<String, Value>,
         _model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
+        // Anthropic uses max_tokens instead of max_tokens_to_sample
         if let Some(max_tokens) = params.remove("max_tokens") {
             params.insert("max_tokens".to_string(), max_tokens);
         }
@@ -269,44 +273,53 @@ impl LLMProvider for AnthropicProvider {
     ) -> Result<Value, ProviderError> {
         self.validate_request(&request)?;
 
-        // Preserve the provider-trait core wire contract. The execution client
-        // performs Anthropic-native block conversion at the HTTP boundary.
-        let mut transformed = serde_json::json!({
+        // Request
+        let mut anthropic_request = serde_json::json!({
             "model": request.model,
             "messages": request.messages,
         });
+
+        // Add optional parameters
         if let Some(max_tokens) = request.max_tokens {
-            transformed["max_tokens"] = Value::Number(max_tokens.into());
+            anthropic_request["max_tokens"] = Value::Number(max_tokens.into());
         }
+
         if let Some(temperature) = request.temperature {
-            let value = f64::from(temperature);
-            transformed["temperature"] =
-                Value::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
+            let temp_f64: f64 = temperature.into();
+            anthropic_request["temperature"] = Value::Number(
+                serde_json::Number::from_f64(temp_f64).ok_or_else(|| {
                     ProviderError::invalid_request(
                         "anthropic",
-                        format!("invalid temperature value: {value}"),
+                        format!("invalid temperature value: {temp_f64} (NaN and Infinity are not allowed)"),
                     )
-                })?);
+                })?,
+            );
         }
+
         if let Some(top_p) = request.top_p {
-            let value = f64::from(top_p);
-            transformed["top_p"] =
-                Value::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
+            let top_p_f64: f64 = top_p.into();
+            anthropic_request["top_p"] =
+                Value::Number(serde_json::Number::from_f64(top_p_f64).ok_or_else(|| {
                     ProviderError::invalid_request(
                         "anthropic",
-                        format!("invalid top_p value: {value}"),
+                        format!(
+                            "invalid top_p value: {top_p_f64} (NaN and Infinity are not allowed)"
+                        ),
                     )
                 })?);
         }
+
         if request.stream {
-            transformed["stream"] = Value::Bool(true);
+            anthropic_request["stream"] = Value::Bool(request.stream);
         }
+
         if let Some(tools) = request.tools
             && !tools.is_empty()
         {
-            transformed["tools"] = serde_json::to_value(tools)?;
+            anthropic_request["tools"] = serde_json::to_value(tools)?;
         }
-        Ok(transformed)
+
+        Ok(anthropic_request)
     }
 
     async fn transform_response(
@@ -318,6 +331,7 @@ impl LLMProvider for AnthropicProvider {
         let response_text = String::from_utf8_lossy(raw_response);
         let anthropic_response: Value = serde_json::from_str(&response_text)?;
 
+        // Response
         let response = serde_json::from_value(anthropic_response)?;
         Ok(response)
     }

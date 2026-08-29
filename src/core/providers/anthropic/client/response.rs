@@ -2,11 +2,12 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::core::providers::ChatContinuationResponse;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::{
+    AnthropicContentBlockOrder, ChatContinuationResponse, ChatMessageContinuation,
+};
 use crate::core::types::anthropic_continuation::{
-    AnthropicContentBlockOrder, AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock,
-    AnthropicThinkingContent, ChatMessageExtensions,
+    AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
 };
 use crate::core::types::{
     chat::ChatMessage,
@@ -252,9 +253,9 @@ impl AnthropicClient {
             system_fingerprint: None,
         };
         let extension = if continuation.blocks().is_empty() {
-            ChatMessageExtensions::new()
+            ChatMessageContinuation::new()
         } else {
-            ChatMessageExtensions::new()
+            ChatMessageContinuation::new()
                 .with_anthropic_thinking(continuation)
                 .with_anthropic_block_order(block_order)
         };
