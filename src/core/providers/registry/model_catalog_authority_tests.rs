@@ -2,9 +2,25 @@ use super::model_catalog_authority::{
     CatalogAuthority, CatalogClassification, CatalogDecision, CatalogEndpoint, CatalogResolution,
 };
 use crate::core::types::model::ProviderCapability;
+use sha2::{Digest, Sha256};
+
+fn with_valid_classification_digest(mut document: serde_json::Value) -> String {
+    let metadata = document["_metadata"].clone();
+    let semantic = serde_json::json!({
+        "schema_version": metadata["schema_version"],
+        "revision": metadata["revision"],
+        "enforced_providers": metadata["enforced_providers"],
+        "provider_aliases": document["provider_aliases"],
+        "entries": document["entries"],
+    });
+    let canonical = serde_json::to_vec(&semantic).expect("test semantic JSON must serialize");
+    document["_metadata"]["classification_sha256"] =
+        serde_json::json!(format!("{:x}", Sha256::digest(canonical)));
+    document.to_string()
+}
 
 fn authority_json() -> String {
-    serde_json::json!({
+    with_valid_classification_digest(serde_json::json!({
         "_metadata": {
             "schema_version": 1,
             "revision": "test-ledger-1",
@@ -69,8 +85,7 @@ fn authority_json() -> String {
                 "aliases": []
             }
         ]
-    })
-    .to_string()
+    }))
 }
 
 fn cross_class_authority_json(
@@ -129,7 +144,7 @@ fn cross_class_authority_json(
             target_provider: target_counts
         })
     };
-    serde_json::json!({
+    with_valid_classification_digest(serde_json::json!({
         "_metadata": {
             "schema_version": 1,
             "revision": "test-ledger-1",
@@ -152,8 +167,45 @@ fn cross_class_authority_json(
             },
             target_entry
         ]
-    })
-    .to_string()
+    }))
+}
+
+#[test]
+fn classification_digest_must_match_the_canonical_entries() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    document["entries"][0]["catalog_model_id"] = serde_json::json!("tampered-model");
+
+    let error = CatalogAuthority::from_json(&document.to_string())
+        .expect_err("entry mutation with the old classification digest must fail");
+    assert!(error.to_string().contains("classification_sha256 mismatch"));
+}
+
+#[test]
+fn empty_entry_provider_and_pricing_identity_fail_closed() {
+    let mut empty_provider: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    empty_provider["entries"][2]["provider"] = serde_json::json!("");
+    let other_coverage = empty_provider["_metadata"]["provider_coverage"]["other"].take();
+    empty_provider["_metadata"]["provider_coverage"]
+        .as_object_mut()
+        .expect("coverage object")
+        .remove("other");
+    empty_provider["_metadata"]["provider_coverage"][""] = other_coverage;
+    empty_provider["provider_aliases"]
+        .as_object_mut()
+        .expect("provider aliases object")
+        .remove("other");
+    let error = CatalogAuthority::from_json(&with_valid_classification_digest(empty_provider))
+        .expect_err("empty entry provider must fail");
+    assert!(error.to_string().contains("entry provider cannot be empty"));
+
+    let mut empty_pricing_key: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    empty_pricing_key["entries"][2]["pricing_key"] = serde_json::json!("");
+    let error = CatalogAuthority::from_json(&with_valid_classification_digest(empty_pricing_key))
+        .expect_err("empty pricing identity must fail");
+    assert!(error.to_string().contains("pricing key cannot be empty"));
 }
 
 #[test]
@@ -271,11 +323,11 @@ fn strict_schema_and_exact_collisions_fail_closed() {
     );
     assert!(CatalogAuthority::from_json(&with_unknown).is_err());
 
-    let duplicate = authority_json().replace(
-        "\"pricing_key\":\"openai/container\"",
-        "\"pricing_key\":\"gpt-test\"",
-    );
-    let error = CatalogAuthority::from_json(&duplicate).expect_err("duplicate must fail");
+    let mut duplicate: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("test fixture must parse");
+    duplicate["entries"][1]["pricing_key"] = serde_json::json!("gpt-test");
+    let error = CatalogAuthority::from_json(&with_valid_classification_digest(duplicate))
+        .expect_err("duplicate must fail");
     assert!(
         error
             .to_string()
