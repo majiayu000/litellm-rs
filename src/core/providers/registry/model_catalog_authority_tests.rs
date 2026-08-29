@@ -438,6 +438,11 @@ fn embedded_authority_enforces_reviewed_and_unreviewed_rows_without_inference() 
         CatalogClassification::PricingOnly
     );
     assert_eq!(
+        authority.resolve_model("azure", "azure-openai/container"),
+        CatalogResolution::PricingOnly,
+        "an alias-qualified exact pricing key must preserve its canonical classification"
+    );
+    assert_eq!(
         authority.classification("azure_ai", "azure_ai/FW-DeepSeek-V4-Pro"),
         CatalogClassification::Unreviewed
     );

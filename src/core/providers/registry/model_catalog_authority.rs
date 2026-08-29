@@ -321,6 +321,12 @@ impl CatalogAuthority {
         {
             return CatalogResolution::Unknown;
         }
+        if qualifier != provider {
+            let canonical_qualified = format!("{provider}/{remainder}");
+            if let Some(resolution) = self.resolve_exact(provider, &canonical_qualified) {
+                return resolution;
+            }
+        }
         self.resolve_exact(provider, remainder)
             .unwrap_or(CatalogResolution::Unknown)
     }
