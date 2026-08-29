@@ -147,10 +147,7 @@ mod pricing_tests {
         assert!((input - 0.30).abs() < 1e-12);
         assert!((output - 2.50).abs() < 1e-12);
         // The compatibility overlay keeps the promotional rate through 2026-12-31.
-        assert_eq!(
-            get_model_pricing("gemini-3.6-flash").unwrap(),
-            (0.75, 3.75)
-        );
+        assert_eq!(get_model_pricing("gemini-3.6-flash").unwrap(), (0.75, 3.75));
         assert_eq!(
             get_model_pricing("gemini-3.5-flash-lite").unwrap(),
             (0.3, 2.5)
