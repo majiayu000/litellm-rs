@@ -9,7 +9,6 @@
 pub mod client;
 pub mod config;
 pub mod error;
-pub(crate) mod http_annotations;
 pub mod models;
 pub mod provider;
 pub mod streaming;

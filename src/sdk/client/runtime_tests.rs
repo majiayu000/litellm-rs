@@ -89,16 +89,3 @@ fn stream_adapter_fails_closed_for_unrepresentable_deltas() {
     let error = core_chunk_to_sdk(chunk).unwrap_err();
     assert!(matches!(error, SDKError::NotSupported(_)));
 }
-
-#[test]
-fn anthropic_annotation_marker_is_not_sdk_text() {
-    let chunk = CoreChatChunk::provider_annotation_marker(
-        "msg-1".to_string(),
-        1,
-        "claude-test".to_string(),
-        0,
-    );
-
-    let converted = core_chunk_to_sdk(chunk).unwrap();
-    assert!(converted.choices[0].delta.content.is_none());
-}

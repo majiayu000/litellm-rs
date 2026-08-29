@@ -9,8 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::core::models::openai::ChatCompletionRequest;
-use crate::core::providers::anthropic::http_annotations::http_annotation_channel;
-use crate::core::providers::{Provider, ProviderError};
+use crate::core::providers::ProviderError;
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::state::AppState;
@@ -67,13 +66,11 @@ pub(super) async fn handle_streaming_chat_completion(
     let api_key_id = context.api_key_id();
     let api_key_budget_id = context.api_key_budget_id();
     let callback_for_execution = callback.clone();
-    let (annotation_sender, mut annotation_receiver) = http_annotation_channel();
     match run_stream(
         state.unified_router.clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
         move |provider, selected_model, _selected_deployment_id| {
-            let annotation_sender = annotation_sender.clone();
             let core_request = core_request.clone();
             let context = Arc::clone(&context_for_execution);
             let original_request = Arc::clone(&request_for_execution);
@@ -132,31 +129,14 @@ pub(super) async fn handle_streaming_chat_completion(
                                 request_for_budget,
                             )
                         },
-                        || async move {
+                        || {
                             callback.begin_provider_execution(
                                 callback_provider,
                                 callback_model,
                                 callback_pricing_provider,
                                 callback_pricing_model,
                             );
-                            match &provider {
-                                Provider::Anthropic(anthropic) => {
-                                    anthropic
-                                        .chat_completion_stream_with_http_annotations(
-                                            request_for_provider,
-                                            Some(annotation_sender),
-                                        )
-                                        .await
-                                }
-                                _ => {
-                                    provider
-                                        .chat_completion_stream(
-                                            request_for_provider,
-                                            provider_context,
-                                        )
-                                        .await
-                                }
-                            }
+                            provider.chat_completion_stream(request_for_provider, provider_context)
                         },
                     )
                     .await?;
@@ -309,10 +289,8 @@ pub(super) async fn handle_streaming_chat_completion(
                                 continue;
                             }
                             saw_upstream_output |= has_candidate_output;
-                            let mut chat_chunk = match super::convert_core_chunk_to_streaming(
-                                chunk,
-                                Some(&mut annotation_receiver),
-                            ) {
+                            let mut chat_chunk = match super::convert_core_chunk_to_streaming(chunk)
+                            {
                                 Ok(chat_chunk) => chat_chunk,
                                 Err(e) => {
                                     flush_guardrail!();

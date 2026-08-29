@@ -7,8 +7,6 @@ use super::delta::ChatDelta;
 use super::logprobs::{FinishReason, LogProbs};
 use super::usage::Usage;
 
-pub(crate) const PROVIDER_ANNOTATION_CHUNK_OBJECT: &str = "litellm.provider.annotation.chunk";
-
 /// Chat completion response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
@@ -97,37 +95,6 @@ pub struct ChatStreamChoice {
     /// Log probabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<LogProbs>,
-}
-
-impl ChatChunk {
-    pub(crate) fn is_provider_annotation(&self) -> bool {
-        self.object == PROVIDER_ANNOTATION_CHUNK_OBJECT
-    }
-
-    /// Build a crate-internal provider annotation marker without widening the
-    /// stable public response structs. The HTTP boundary pairs this marker with
-    /// its private typed channel and projects the payload into annotations.
-    pub(crate) fn provider_annotation_marker(
-        id: String,
-        created: i64,
-        model: String,
-        choice_index: u32,
-    ) -> Self {
-        Self {
-            id,
-            object: PROVIDER_ANNOTATION_CHUNK_OBJECT.to_string(),
-            created,
-            model,
-            choices: vec![ChatStreamChoice {
-                index: choice_index,
-                delta: ChatDelta::default(),
-                finish_reason: None,
-                logprobs: None,
-            }],
-            usage: None,
-            system_fingerprint: None,
-        }
-    }
 }
 
 impl ChatResponse {

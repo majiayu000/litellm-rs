@@ -3,8 +3,6 @@ use crate::core::models::openai::{
     ChatMessage, Function, FunctionCall, MessageContent, MessageRole, ToolChoiceFunction,
     ToolChoiceFunctionSpec,
 };
-use crate::core::providers::anthropic::http_annotations::http_annotation_channel;
-use crate::core::providers::base::sse::{AnthropicTransformer, SSETransformer};
 use crate::core::types::responses::{
     ChatChunk, ChatDelta, ChatStreamChoice, LogProbs, TokenLogProb,
 };
@@ -135,7 +133,7 @@ fn test_convert_core_chunk_preserves_thinking_and_function_call() {
         system_fingerprint: None,
     };
 
-    let converted = convert_core_chunk_to_streaming(chunk, None).unwrap();
+    let converted = convert_core_chunk_to_streaming(chunk).unwrap();
     let delta = &converted.choices[0].delta;
     assert_eq!(delta.reasoning_content.as_deref(), Some("reasoning"));
     assert_eq!(
@@ -178,7 +176,7 @@ fn test_convert_core_chunk_preserves_audio_delta() {
         system_fingerprint: None,
     };
 
-    let converted = convert_core_chunk_to_streaming(chunk, None).unwrap();
+    let converted = convert_core_chunk_to_streaming(chunk).unwrap();
     let Some(audio) = converted.choices[0].delta.audio.as_ref() else {
         panic!("audio delta should be preserved");
     };
@@ -221,60 +219,10 @@ fn test_convert_core_chunk_preserves_stream_logprobs() {
         system_fingerprint: None,
     };
 
-    let converted = convert_core_chunk_to_streaming(chunk, None).unwrap();
+    let converted = convert_core_chunk_to_streaming(chunk).unwrap();
     let logprobs = converted.choices[0].logprobs.as_ref().unwrap();
     assert_eq!(logprobs["content"][0]["token"], "hello");
     assert_eq!(logprobs["content"][0]["logprob"], -0.25);
-}
-
-#[test]
-fn test_anthropic_citation_reaches_http_stream_annotations_losslessly() {
-    let (annotation_sender, mut annotation_receiver) = http_annotation_channel();
-    let transformer = AnthropicTransformer::new("claude-test")
-        .with_http_annotation_sender(Some(annotation_sender));
-    transformer
-        .transform_chunk(
-            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
-        )
-        .unwrap();
-    let citation = serde_json::json!({
-        "type":"page_location",
-        "cited_text":"source",
-        "document_index":0,
-        "document_title":"Reference",
-        "start_page_number":1,
-        "end_page_number":2
-    });
-    let chunk = transformer
-        .transform_chunk(
-            &serde_json::json!({
-                "type":"content_block_delta", "index":0,
-                "delta":{"type":"citations_delta", "citation":citation}
-            })
-            .to_string(),
-        )
-        .unwrap()
-        .expect("citation delta should produce an internal stream event");
-
-    let converted = convert_core_chunk_to_streaming(chunk, Some(&mut annotation_receiver)).unwrap();
-    let serialized = serde_json::to_value(converted).unwrap();
-    assert_eq!(
-        serialized["choices"][0]["delta"]["annotations"][0],
-        citation
-    );
-    assert!(serialized["choices"][0]["delta"].get("content").is_none());
-}
-
-#[test]
-fn provider_annotation_carrier_never_uses_public_text_content() {
-    let chunk = types::responses::ChatChunk::provider_annotation_marker(
-        "msg-1".to_string(),
-        1,
-        "claude-test".to_string(),
-        0,
-    );
-
-    assert!(chunk.choices[0].delta.content.is_none());
 }
 
 #[test]

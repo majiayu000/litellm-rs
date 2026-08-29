@@ -5,7 +5,6 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::SSETransformer;
-use crate::core::providers::anthropic::http_annotations::HttpAnnotationSender;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
 use crate::core::types::responses::{
@@ -29,7 +28,6 @@ pub struct AnthropicTransformer {
     tool_name_map: HashMap<String, String>,
     message_id: Mutex<Option<String>>,
     thinking_state: Mutex<AnthropicThinkingStreamState>,
-    http_annotation_sender: Option<HttpAnnotationSender>,
 }
 
 impl Clone for AnthropicTransformer {
@@ -39,7 +37,6 @@ impl Clone for AnthropicTransformer {
             tool_name_map: self.tool_name_map.clone(),
             message_id: Mutex::new(None),
             thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
-            http_annotation_sender: self.http_annotation_sender.clone(),
         }
     }
 }
@@ -51,20 +48,11 @@ impl AnthropicTransformer {
             tool_name_map: HashMap::new(),
             message_id: Mutex::new(None),
             thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
-            http_annotation_sender: None,
         }
     }
 
     pub fn with_tool_name_map(mut self, tool_name_map: HashMap<String, String>) -> Self {
         self.tool_name_map = tool_name_map;
-        self
-    }
-
-    pub(crate) fn with_http_annotation_sender(
-        mut self,
-        sender: Option<HttpAnnotationSender>,
-    ) -> Self {
-        self.http_annotation_sender = sender;
         self
     }
 
@@ -365,22 +353,13 @@ impl SSETransformer for AnthropicTransformer {
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
                     "citations_delta" => {
-                        let citation = delta_json.get("citation").cloned().ok_or_else(|| {
+                        delta_json.get("citation").ok_or_else(|| {
                             ProviderError::response_parsing(
                                 "anthropic",
                                 "No citation in Anthropic citations_delta",
                             )
                         })?;
-                        let Some(sender) = &self.http_annotation_sender else {
-                            return Ok(None);
-                        };
-                        sender.send(0, citation)?;
-                        Ok(Some(ChatChunk::provider_annotation_marker(
-                            self.current_message_id(),
-                            created,
-                            self.model.clone(),
-                            0,
-                        )))
+                        Ok(None)
                     }
                     "thinking_delta" => {
                         let thinking = delta_json
@@ -520,6 +499,163 @@ impl SSETransformer for AnthropicTransformer {
     fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
         self.with_thinking_state(|state| state.ensure_stream_complete())?;
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk_from_event(transformer: &AnthropicTransformer, event: Value) -> ChatChunk {
+        match transformer.transform_chunk(&event.to_string()) {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => panic!("expected Anthropic SSE event to produce a chunk"),
+            Err(error) => panic!("unexpected Anthropic SSE error: {error}"),
+        }
+    }
+
+    #[test]
+    fn test_message_delta_extracts_cache_tokens() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        let chunk = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"},
+                "usage":{
+                    "input_tokens":12, "output_tokens":50,
+                    "cache_creation_input_tokens":1000,
+                    "cache_read_input_tokens":2000
+                }
+            }),
+        );
+        let usage = chunk.usage.as_ref().expect("usage must be present");
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 50);
+        let details = usage
+            .prompt_tokens_details
+            .as_ref()
+            .expect("cache token details must be present");
+        assert_eq!(details.cache_creation_tokens, Some(1000));
+        assert_eq!(details.cache_read_tokens, Some(2000));
+        assert_eq!(details.cached_tokens, Some(2000));
+    }
+
+    #[test]
+    fn test_message_delta_no_cache_tokens_yields_none_details() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        let chunk = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"},
+                "usage":{"input_tokens":12,"output_tokens":50}
+            }),
+        );
+        assert!(
+            chunk
+                .usage
+                .as_ref()
+                .expect("usage must be present")
+                .prompt_tokens_details
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_chunks_after_message_start_keep_message_id() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        assert_eq!(
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({"type":"message_start","message":{"id":"msg_123"}})
+            )
+            .id,
+            "msg_123"
+        );
+        transformer
+            .transform_chunk(
+                &serde_json::json!({
+                    "type":"content_block_start", "index":0,
+                    "content_block":{"type":"text","text":""}
+                })
+                .to_string(),
+            )
+            .expect("text start must be valid");
+        assert_eq!(
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({
+                    "type":"content_block_delta", "index":0,
+                    "delta":{"type":"text_delta","text":"hello"}
+                })
+            )
+            .id,
+            "msg_123"
+        );
+        transformer
+            .transform_chunk(
+                &serde_json::json!({"type":"content_block_stop","index":0}).to_string(),
+            )
+            .expect("text stop must be valid");
+        assert_eq!(
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}})
+            )
+            .id,
+            "msg_123"
+        );
+        assert_eq!(
+            chunk_from_event(&transformer, serde_json::json!({"type":"message_stop"})).id,
+            "msg_123"
+        );
+    }
+
+    #[test]
+    fn test_cloned_transformers_keep_independent_message_ids() {
+        let stream_a = AnthropicTransformer::new("claude-3-5-sonnet");
+        let stream_b = stream_a.clone();
+        assert_eq!(
+            chunk_from_event(
+                &stream_a,
+                serde_json::json!({"type":"message_start","message":{"id":"msg_a"}})
+            )
+            .id,
+            "msg_a"
+        );
+        assert_eq!(
+            chunk_from_event(
+                &stream_b,
+                serde_json::json!({"type":"message_start","message":{"id":"msg_b"}})
+            )
+            .id,
+            "msg_b"
+        );
+    }
+
+    #[test]
+    fn issue_761_stream_restores_original_tool_names() -> Result<(), crate::ProviderError> {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet").with_tool_name_map(
+            HashMap::from([("weather_lookup".to_string(), "weather.lookup".to_string())]),
+        );
+        let chunk = transformer.transform_chunk(
+            &serde_json::json!({
+                "type":"content_block_start", "index":0,
+                "content_block":{
+                    "type":"tool_use", "id":"toolu_123",
+                    "name":"weather_lookup", "input":{}
+                }
+            })
+            .to_string(),
+        )?;
+        let name = chunk
+            .as_ref()
+            .and_then(|chunk| chunk.choices.first())
+            .and_then(|choice| choice.delta.tool_calls.as_ref())
+            .and_then(|calls| calls.first())
+            .and_then(|call| call.function.as_ref())
+            .and_then(|function| function.name.as_deref());
+        assert_eq!(name, Some("weather.lookup"));
+        Ok(())
     }
 }
 

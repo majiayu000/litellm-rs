@@ -24,18 +24,6 @@ fn test_sse_error_contains_done() {
 }
 
 #[test]
-fn anthropic_annotation_marker_is_not_responses_text() {
-    let chunk = crate::core::types::responses::ChatChunk::provider_annotation_marker(
-        "msg-1".to_string(),
-        1,
-        "claude-test".to_string(),
-        0,
-    );
-
-    assert!(visible_text_delta(&chunk.choices[0]).is_none());
-}
-
-#[test]
 fn test_classify_auth_error() {
     let e = ProviderError::Authentication {
         provider: "openai",
