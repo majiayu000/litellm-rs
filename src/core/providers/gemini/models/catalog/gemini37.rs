@@ -49,4 +49,12 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
             },
         },
     );
+
+    #[cfg(test)]
+    {
+        let mut unpriced = registry.get_model_spec("gemini-3.7-flash").unwrap().clone();
+        unpriced.model_info.id = "unpriced-static-fallback-test".to_string();
+        unpriced.family = GeminiModelFamily::Gemini36Flash;
+        registry.register_model("unpriced-static-fallback-test", unpriced);
+    }
 }

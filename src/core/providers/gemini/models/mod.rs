@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 mod catalog;
 mod contract;
+#[cfg(test)]
+mod cost_tests;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
@@ -331,6 +333,16 @@ impl CostCalculator {
             {
                 Ok(cost) => cost.total_cost,
                 Err(crate::core::cost::types::CostError::ModelNotSupported { .. }) => {
+                    let rates = [
+                        pricing.input_cost_per_1k_tokens,
+                        pricing.output_cost_per_1k_tokens,
+                        pricing.cache_read_input_token_cost.unwrap_or(0.0),
+                    ];
+                    if rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0)
+                        || rates.iter().all(|rate| *rate == 0.0)
+                    {
+                        return None;
+                    }
                     let cached_tokens = cached_tokens.unwrap_or(0);
                     let remaining_prompt_tokens = prompt_tokens.saturating_sub(cached_tokens);
                     let cache_cost = pricing
@@ -710,7 +722,6 @@ mod tests {
         );
         assert!(cost.is_some());
         let cost_value = cost.unwrap();
-        // Should include cached tokens discount and image cost
         assert!(cost_value > 0.0);
     }
 
@@ -727,14 +738,12 @@ mod tests {
         );
         assert!(cost.is_some());
         let cost_value = cost.unwrap();
-        // Should include image, video, and audio costs
         assert!(cost_value > 0.0);
     }
 
     #[test]
     fn test_estimate_tokens() {
         let tokens = CostCalculator::estimate_tokens("Hello, world!");
-        // "Hello, world!" is 13 characters, ~4 tokens (13/4 = 3.25, ceil = 4)
         assert!((3..=5).contains(&tokens));
     }
 
