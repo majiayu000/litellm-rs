@@ -4,8 +4,8 @@ use crate::core::models::openai::continuation::{
     ChatCompletionRequestWithExtensions, ChatCompletionResponseWithExtensions,
 };
 use crate::core::models::openai::{
-    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, ContentPart,
-    Logprobs, MessageContent, Tool, ToolChoice, TopLogprob, Usage,
+    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentLogprob,
+    ContentPart, Logprobs, MessageContent, MessageRole, Tool, ToolChoice, TopLogprob, Usage,
 };
 use crate::core::providers::{ChatContinuationRequest, ChatMessageContinuation, ProviderError};
 use crate::core::streaming::types::{
@@ -171,7 +171,8 @@ pub(super) async fn handle_chat_completion_with_extensions(
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
-    crate::server::guardrails::check_chat_input(state, request.as_ref()).await?;
+    let guardrail_request = guardrail_request_with_continuation(request.as_ref(), &extensions)?;
+    crate::server::guardrails::check_chat_input(state, &guardrail_request).await?;
     handle_chat_completion_internal(state, request, context, extensions, opt_in).await
 }
 
@@ -403,28 +404,57 @@ fn guardrail_response_with_continuation(
 
     let mut projected = response.clone();
     for (choice, extension) in projected.choices.iter_mut().zip(choice_extensions) {
-        let Some(visible_thinking) = extension
-            .anthropic_thinking()
-            .and_then(|thinking| thinking.as_text())
-        else {
-            continue;
-        };
-        match &mut choice.message.content {
-            Some(MessageContent::Text(content)) => {
-                if !content.is_empty() {
-                    content.push('\n');
-                }
-                content.push_str(&visible_thinking);
-            }
-            Some(MessageContent::Parts(parts)) => parts.push(ContentPart::Text {
-                text: visible_thinking.into_owned(),
-            }),
-            None => {
-                choice.message.content = Some(MessageContent::Text(visible_thinking.into_owned()));
-            }
-        }
+        append_guardrail_visible_thinking(&mut choice.message, extension);
     }
     Ok(projected)
+}
+
+fn guardrail_request_with_continuation(
+    request: &ChatCompletionRequest,
+    message_extensions: &[ChatMessageContinuation],
+) -> Result<ChatCompletionRequest, GatewayError> {
+    if request.messages.len() != message_extensions.len() {
+        return Err(GatewayError::validation(format!(
+            "chat message extensions length mismatch: expected {}, got {}",
+            request.messages.len(),
+            message_extensions.len()
+        )));
+    }
+    let mut projected = request.clone();
+    for (message, extension) in projected.messages.iter_mut().zip(message_extensions) {
+        extension.validate().map_err(GatewayError::validation)?;
+        if !extension.is_empty() && message.role != MessageRole::Assistant {
+            return Err(GatewayError::validation(
+                "Anthropic continuation is only valid on assistant messages",
+            ));
+        }
+        append_guardrail_visible_thinking(message, extension);
+    }
+    Ok(projected)
+}
+
+fn append_guardrail_visible_thinking(
+    message: &mut ChatMessage,
+    extension: &ChatMessageContinuation,
+) {
+    let Some(visible) = extension
+        .anthropic_thinking()
+        .and_then(|thinking| thinking.as_text())
+    else {
+        return;
+    };
+    match &mut message.content {
+        Some(MessageContent::Text(content)) => {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&visible);
+        }
+        Some(MessageContent::Parts(parts)) => parts.push(ContentPart::Text {
+            text: visible.into_owned(),
+        }),
+        None => message.content = Some(MessageContent::Text(visible.into_owned())),
+    }
 }
 
 pub(crate) fn build_core_chat_request(

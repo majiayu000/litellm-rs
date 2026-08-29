@@ -335,6 +335,25 @@ fn claude5_rejects_extension_only_terminal_assistant_prefill() {
             .expect_err("sidecar-only terminal assistant payload is still a prefill");
         assert!(error.to_string().contains("assistant prefill"));
     }
+
+    let mut replay = ChatRequest::new("claude-opus-5");
+    replay.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("answer".to_string())),
+        ..Default::default()
+    });
+    replay = replay.add_user_message("continue");
+    let wire = anthropic_client()
+        .transform_chat_request_with_extensions(
+            &replay,
+            &[
+                signed_continuation_extension(),
+                ChatMessageContinuation::new(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(wire["thinking"], json!({"type": "adaptive"}));
+    assert!(wire["thinking"].get("budget_tokens").is_none());
 }
 
 #[test]
