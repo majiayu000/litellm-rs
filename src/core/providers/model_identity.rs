@@ -5,6 +5,7 @@ use crate::core::pricing_service::PricingSnapshot;
 use crate::core::providers::registry::model_catalog_authority::{
     CatalogAuthority, CatalogResolution,
 };
+use crate::core::types::model::ProviderCapability;
 use crate::core::types::model_id::ModelIdRef;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -60,6 +61,19 @@ pub struct DeploymentModelIdentity {
     wire_model: String,
     capability: Option<ExactCapabilityIdentity>,
     pricing: Option<ExactPricingIdentity>,
+    pricing_scope: PricingIdentityScope,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PricingIdentityScope {
+    AllSurfaces,
+    ChatOnly,
+}
+
+pub(crate) enum DeploymentPricingIdentity<'a> {
+    Priced { provider: &'a str, model: &'a str },
+    Unpriced,
+    NotApplicable,
 }
 
 /// Immutable provider-private binding created from one startup pricing authority.
@@ -93,6 +107,20 @@ impl DeploymentModelIdentity {
             wire_model: wire_model.into(),
             capability,
             pricing,
+            pricing_scope: PricingIdentityScope::AllSurfaces,
+        }
+    }
+
+    fn new_legacy_chat_mapping(
+        wire_model: impl Into<String>,
+        capability: ExactCapabilityIdentity,
+        pricing: ExactPricingIdentity,
+    ) -> Self {
+        Self {
+            wire_model: wire_model.into(),
+            capability: Some(capability),
+            pricing: Some(pricing),
+            pricing_scope: PricingIdentityScope::ChatOnly,
         }
     }
 
@@ -118,6 +146,27 @@ impl DeploymentModelIdentity {
 
     pub fn pricing_model(&self) -> Option<&str> {
         self.pricing.as_ref().map(ExactPricingIdentity::model)
+    }
+
+    pub(crate) fn pricing_identity_for_surface(
+        &self,
+        surface: &ProviderCapability,
+    ) -> DeploymentPricingIdentity<'_> {
+        if self.pricing_scope == PricingIdentityScope::ChatOnly
+            && !matches!(
+                surface,
+                ProviderCapability::ChatCompletion | ProviderCapability::ChatCompletionStream
+            )
+        {
+            return DeploymentPricingIdentity::NotApplicable;
+        }
+        match &self.pricing {
+            Some(pricing) => DeploymentPricingIdentity::Priced {
+                provider: pricing.provider(),
+                model: pricing.model(),
+            },
+            None => DeploymentPricingIdentity::Unpriced,
+        }
     }
 }
 
@@ -235,10 +284,10 @@ pub(crate) fn validate_deployment_identity(
             target,
             pricing,
         )?;
-        return Ok(DeploymentModelIdentity::new(
+        return Ok(DeploymentModelIdentity::new_legacy_chat_mapping(
             wire_model,
-            Some(capability),
-            Some(pricing_identity),
+            capability,
+            pricing_identity,
         ));
     }
 

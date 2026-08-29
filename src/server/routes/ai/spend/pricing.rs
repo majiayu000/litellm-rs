@@ -8,6 +8,7 @@ use crate::core::pricing_service::{
     PricingSnapshot, PricingUsage,
 };
 use crate::core::providers::Provider;
+use crate::core::providers::model_identity::DeploymentPricingIdentity;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::embedding::EmbeddingInput;
@@ -224,14 +225,30 @@ fn request_pricing_for_provider_with_snapshot_hook(
                 format!("deployment '{model}' lost its validated model identity"),
             )
         })?;
-        let identity = match (identity.pricing_provider(), identity.pricing_model()) {
-            (Some(provider), Some(model)) => PricingIdentity::Priced {
+        let identity = match identity.pricing_identity_for_surface(&surface) {
+            DeploymentPricingIdentity::Priced { provider, model } => PricingIdentity::Priced {
                 provider: provider.to_string(),
                 model: model.to_string(),
             },
-            _ => PricingIdentity::Unpriced {
+            DeploymentPricingIdentity::Unpriced => PricingIdentity::Unpriced {
                 provider: provider.name().to_string(),
             },
+            DeploymentPricingIdentity::NotApplicable => {
+                let (pricing_provider, pricing_model) =
+                    pricing_identity_for_provider(&snapshot, provider, model, surface);
+                let identity = snapshot
+                    .get_model_info_for_provider(&pricing_provider, &pricing_model)
+                    .map_or_else(
+                        || PricingIdentity::Unpriced {
+                            provider: pricing_provider.clone(),
+                        },
+                        |(resolved, _)| PricingIdentity::Priced {
+                            provider: pricing_provider.clone(),
+                            model: resolved,
+                        },
+                    );
+                return Ok(RequestPricing { snapshot, identity });
+            }
         };
         return Ok(RequestPricing { snapshot, identity });
     }
@@ -498,8 +515,10 @@ fn estimate_embedding_input_tokens(model: &str, input: &EmbeddingInput) -> u32 {
 #[cfg(test)]
 mod mapped_identity_tests {
     use super::*;
+    use crate::config::models::provider::ProviderConfig;
     use crate::core::pricing_service::LiteLLMModelInfo;
     use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
+    use crate::core::router::unified::Router;
     use std::collections::HashMap;
 
     fn pricing_info(provider: &str, input: f64, output: f64) -> LiteLLMModelInfo {
@@ -558,6 +577,71 @@ mod mapped_identity_tests {
             .expect("the pinned generation should remain priceable");
         assert!((cost.total_cost - 0.2).abs() < f64::EPSILON);
     }
+
+    #[tokio::test]
+    async fn gateway_bound_legacy_mapping_only_changes_chat_pricing_identity() {
+        let pricing = Arc::new(PricingService::new(None));
+        pricing.add_custom_model(
+            "review-wire-alias".to_string(),
+            pricing_info("openai", 0.01, 0.02),
+        );
+        pricing.add_custom_model("gpt-4".to_string(), pricing_info("openai", 1.0, 2.0));
+        let mut config = ProviderConfig {
+            name: "review-openai".to_string(),
+            provider_type: "openai".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["review-wire-alias".to_string()],
+            ..Default::default()
+        };
+        config.settings.insert(
+            "model_mappings".to_string(),
+            serde_json::json!({"review-wire-alias": "gpt-4"}),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
+            .await
+            .expect("legacy chat mapping should bind through the production gateway");
+        let deployment = router
+            .get_deployment("review-openai-review-wire-alias")
+            .expect("configured deployment should be published");
+
+        for surface in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+        ] {
+            let request_pricing = request_pricing_for_provider(
+                &pricing,
+                &deployment.provider,
+                &deployment.model,
+                surface,
+            )
+            .expect("chat pricing should resolve");
+            assert_eq!(request_pricing.priced_parts(), Some(("openai", "gpt-4")));
+        }
+
+        for surface in [
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::ImageEdit,
+            ProviderCapability::ImageVariation,
+            ProviderCapability::Embeddings,
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::AudioTranslation,
+            ProviderCapability::TextToSpeech,
+        ] {
+            let request_pricing = request_pricing_for_provider(
+                &pricing,
+                &deployment.provider,
+                &deployment.model,
+                surface.clone(),
+            )
+            .expect("non-chat raw pricing should resolve");
+            assert_eq!(
+                request_pricing.priced_parts(),
+                Some(("openai", "review-wire-alias")),
+                "legacy chat mapping changed {surface:?} pricing"
+            );
+        }
+    }
+
     #[test]
     fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
         assert_eq!(
