@@ -610,7 +610,7 @@ mod tests {
         let limits = registry.get_model_limits("gemini-1.5-pro");
         assert!(limits.is_some());
         let limits_value = limits.unwrap();
-        assert_eq!(limits_value.max_context_length, 2_000_000);
+        assert_eq!(limits_value.max_context_length, 2_097_152);
         assert_eq!(limits_value.max_output_tokens, 8192);
     }
 
