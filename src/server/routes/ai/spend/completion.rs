@@ -7,7 +7,8 @@ use crate::core::models::openai::{
 #[cfg(test)]
 use crate::core::pricing_service::PricingService;
 use crate::core::providers::unified_provider::ProviderError;
-use crate::utils::ai::counter::token_counter::TokenCounter;
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
+use crate::utils::error::gateway_error::{GatewayError, Result as GatewayResult};
 
 const IMAGE_PROMPT_BASE_TOKENS: u32 = 85;
 pub(in crate::server::routes::ai) const IMAGE_HIGH_DETAIL_PROMPT_TOKENS: u32 = 1_105;
@@ -272,14 +273,22 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request
     request: impl Into<ChatCompletionBudgetRequest<'a>>,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     let request = request.into();
-    let prompt_tokens = estimate_chat_prompt_tokens(
-        request_pricing.estimation_model(budget_model),
+    let prompt_tokens = try_estimate_chat_prompt_tokens(
+        request_pricing.token_identity(),
         request.messages,
         request.tools,
         request.functions,
         request.function_call,
         request.response_format,
-    );
+    )
+    .map_err(|error| {
+        super::token_count_error(
+            budget_provider,
+            budget_model,
+            request_pricing.token_identity(),
+            error,
+        )
+    })?;
     let max_output_tokens = request
         .max_completion_tokens
         .or(request.max_tokens)
@@ -310,6 +319,7 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request
         })
 }
 
+#[cfg(test)]
 pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
     model: &str,
     messages: &[ChatMessage],
@@ -319,54 +329,21 @@ pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
     response_format: Option<&ResponseFormat>,
 ) -> u32 {
     let counter = TokenCounter::new();
-    let message_tokens = match counter.count_chat_tokens(model, messages) {
-        Ok(estimate) => estimate.input_tokens,
-        Err(error) => {
-            tracing::warn!(
-                "token estimation failed for model '{model}': {error}; using fallback estimate"
-            );
-            fallback_message_tokens(messages)
-        }
-    };
+    let message_tokens = counter.count_chat_tokens(model, messages).map_or_else(
+        |_| fallback_message_tokens(messages),
+        |value| value.input_tokens,
+    );
     let multimodal_tokens = conservative_multimodal_prompt_extra(messages);
-
-    let tool_tokens = tools.map_or(0, |tools| {
-        let Ok(tool_json) = serde_json::to_string(tools) else {
-            return u32::try_from(tools.len().saturating_mul(256)).unwrap_or(u32::MAX);
-        };
-        counter
-            .count_completion_tokens(model, &tool_json)
-            .map(|estimate| estimate.input_tokens)
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    "tool token estimation failed for model '{model}': {error}; \
-                     using fallback estimate"
-                );
-                u32::try_from(tool_json.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
-            })
+    let tool_tokens = serialized_prompt_tokens_auto(&counter, model, tools, |value| {
+        value.len().saturating_mul(256)
     });
-
-    let function_tokens = serialized_prompt_tokens(
-        &counter,
-        model,
-        functions,
-        "legacy function token estimation failed",
-        |functions| functions.len().saturating_mul(256),
-    );
-    let function_call_tokens = serialized_prompt_tokens(
-        &counter,
-        model,
-        function_call,
-        "legacy function_call token estimation failed",
-        |_| 64,
-    );
-    let response_format_tokens = serialized_prompt_tokens(
-        &counter,
-        model,
-        response_format,
-        "response_format token estimation failed",
-        |_| 128,
-    );
+    let function_tokens = serialized_prompt_tokens_auto(&counter, model, functions, |value| {
+        value.len().saturating_mul(256)
+    });
+    let function_call_tokens =
+        serialized_prompt_tokens_auto(&counter, model, function_call, |_| 64);
+    let response_format_tokens =
+        serialized_prompt_tokens_auto(&counter, model, response_format, |_| 128);
 
     message_tokens
         .saturating_add(multimodal_tokens)
@@ -374,6 +351,35 @@ pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
         .saturating_add(function_tokens)
         .saturating_add(function_call_tokens)
         .saturating_add(response_format_tokens)
+}
+
+pub(in crate::server::routes::ai) fn try_estimate_chat_prompt_tokens(
+    identity: &TokenizerIdentity,
+    messages: &[ChatMessage],
+    tools: Option<&[Tool]>,
+    functions: Option<&[Function]>,
+    function_call: Option<&FunctionCall>,
+    response_format: Option<&ResponseFormat>,
+) -> GatewayResult<u32> {
+    let counter = TokenCounter::new();
+    let message_estimate = counter.count_chat_tokens_for_identity(identity, messages)?;
+    observe_approximate_estimate(identity, "messages", &message_estimate);
+    let message_tokens = message_estimate.input_tokens;
+    let multimodal_tokens = conservative_multimodal_prompt_extra(messages);
+
+    let tool_tokens = serialized_prompt_tokens(&counter, identity, tools, "tools")?;
+    let function_tokens = serialized_prompt_tokens(&counter, identity, functions, "functions")?;
+    let function_call_tokens =
+        serialized_prompt_tokens(&counter, identity, function_call, "function_call")?;
+    let response_format_tokens =
+        serialized_prompt_tokens(&counter, identity, response_format, "response_format")?;
+
+    Ok(message_tokens
+        .saturating_add(multimodal_tokens)
+        .saturating_add(tool_tokens)
+        .saturating_add(function_tokens)
+        .saturating_add(function_call_tokens)
+        .saturating_add(response_format_tokens))
 }
 
 #[cfg(test)]
@@ -530,11 +536,11 @@ fn encoded_media_tokens(data: &str) -> u32 {
     u32::try_from(data.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
 }
 
-fn serialized_prompt_tokens<T, F>(
+#[cfg(test)]
+fn serialized_prompt_tokens_auto<T, F>(
     counter: &TokenCounter,
     model: &str,
     value: Option<&T>,
-    warn_message: &str,
     fallback_units: F,
 ) -> u32
 where
@@ -547,16 +553,13 @@ where
     let Ok(json) = serde_json::to_string(value) else {
         return u32::try_from(fallback_units(value)).unwrap_or(u32::MAX);
     };
-
-    counter
-        .count_completion_tokens(model, &json)
-        .map(|estimate| estimate.input_tokens)
-        .unwrap_or_else(|error| {
-            tracing::warn!("{warn_message} for model '{model}': {error}; using fallback estimate");
-            u32::try_from(json.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
-        })
+    counter.count_completion_tokens(model, &json).map_or_else(
+        |_| u32::try_from(json.chars().count().div_ceil(4)).unwrap_or(u32::MAX),
+        |estimate| estimate.input_tokens,
+    )
 }
 
+#[cfg(test)]
 fn fallback_message_tokens(messages: &[ChatMessage]) -> u32 {
     let chars = messages
         .iter()
@@ -572,9 +575,121 @@ fn fallback_message_tokens(messages: &[ChatMessage]) -> u32 {
     u32::try_from(chars.div_ceil(4).saturating_add(overhead)).unwrap_or(u32::MAX)
 }
 
+fn serialized_prompt_tokens<T>(
+    counter: &TokenCounter,
+    identity: &TokenizerIdentity,
+    value: Option<&T>,
+    input: &str,
+) -> GatewayResult<u32>
+where
+    T: serde::Serialize + ?Sized,
+{
+    let Some(value) = value else {
+        return Ok(0);
+    };
+    let json = serde_json::to_string(value)
+        .map_err(|error| GatewayError::Config(format!("failed to serialize {input}: {error}")))?;
+    let estimate = counter.count_completion_tokens_for_identity(identity, &json)?;
+    observe_approximate_estimate(identity, input, &estimate);
+    Ok(estimate.input_tokens)
+}
+
+fn observe_approximate_estimate(
+    identity: &TokenizerIdentity,
+    input: &str,
+    estimate: &crate::utils::ai::counter::types::TokenEstimate,
+) {
+    if estimate.is_approximate {
+        tracing::warn!(
+            token_provider = identity.provider(),
+            token_model = identity.model(),
+            input,
+            is_approximate = true,
+            confidence = estimate.confidence,
+            "explicit approximate token count used"
+        );
+    }
+}
+
 #[cfg(test)]
 mod budget_request_tests {
     use super::*;
+
+    #[test]
+    fn selected_exact_openai_identity_fails_when_tokenizer_is_unavailable() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model(
+            "gpt-audio-1.5".to_string(),
+            crate::core::pricing_service::LiteLLMModelInfo {
+                max_tokens: Some(4_096),
+                max_input_tokens: Some(4_096),
+                max_output_tokens: Some(1_024),
+                input_cost_per_token: Some(0.01),
+                output_cost_per_token: Some(0.02),
+                input_cost_per_character: None,
+                output_cost_per_character: None,
+                cost_per_second: None,
+                litellm_provider: "openai".to_string(),
+                mode: "chat".to_string(),
+                supports_function_calling: None,
+                supports_vision: None,
+                supports_streaming: None,
+                supports_parallel_function_calling: None,
+                supports_system_message: None,
+                extra: std::collections::HashMap::new(),
+            },
+        );
+        let request_pricing =
+            super::super::pricing::RequestPricing::from_exact(&pricing, "openai", "gpt-audio-1.5");
+        assert_eq!(
+            request_pricing.priced_parts(),
+            Some(("openai", "gpt-audio-1.5"))
+        );
+        let messages = vec![ChatMessage {
+            role: crate::core::models::openai::MessageRole::User,
+            content: Some(MessageContent::Text("hello".to_string())),
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: None,
+        }];
+        let request = ChatCompletionBudgetRequest {
+            messages: &messages,
+            tools: None,
+            functions: None,
+            function_call: None,
+            response_format: None,
+            max_tokens: Some(16),
+            max_completion_tokens: None,
+            n: None,
+        };
+
+        let error = match reserve_chat_completion_budget_with_request_pricing(
+            &request_pricing,
+            &GatewayPricingConfig::default(),
+            &UnifiedBudgetLimits::new(),
+            "selected-openai",
+            "wire-audio-deployment",
+            request,
+        ) {
+            Err(error) => error,
+            Ok(_) => {
+                panic!("missing exact tokenizer must fail before pricing or upstream execution")
+            }
+        };
+
+        assert!(matches!(
+            error,
+            ProviderError::InvalidRequest {
+                provider: "token_count",
+                ..
+            }
+        ));
+        let message = error.to_string();
+        assert!(message.contains("selected-openai/wire-audio-deployment"));
+        assert!(message.contains("openai/gpt-audio-1.5"));
+    }
 
     #[test]
     fn budget_request_view_borrows_large_request_parts() {

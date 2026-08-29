@@ -4,7 +4,7 @@
 use crate::core::models::openai::{
     ChatMessage, ContentPart, FunctionCall, ImageUrl, MessageContent, MessageRole, ToolCall,
 };
-use crate::utils::ai::counter::token_counter::TokenCounter;
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 
 #[test]
 fn test_text_token_estimation() {
@@ -136,6 +136,88 @@ fn test_unknown_openai_like_model_remains_marked_approximate() {
     let estimate = counter
         .count_completion_tokens("gpt-future-unknown", "Hello world")
         .unwrap();
+
+    assert!(estimate.is_approximate);
+    assert!(estimate.confidence < 1.0);
+}
+
+#[test]
+fn test_typed_openai_identity_requires_an_exact_tokenizer() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::exact_openai("gpt-audio-1.5");
+
+    let error = counter
+        .count_completion_tokens_for_identity(&identity, "Hello world")
+        .expect_err("a selected exact OpenAI identity without a BPE must fail closed");
+
+    assert!(error.to_string().contains("tokenizer unavailable"));
+    assert!(error.to_string().contains("openai/gpt-audio-1.5"));
+}
+
+#[test]
+fn test_typed_openai_chat_identity_requires_an_exact_tokenizer() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::exact_openai("gpt-audio-1.5");
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("hello".to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    }];
+
+    let error = counter
+        .count_chat_tokens_for_identity(&identity, &messages)
+        .expect_err("exact chat tokenization must not silently approximate a missing BPE");
+
+    assert!(error.to_string().contains("tokenizer unavailable"));
+}
+
+#[test]
+fn test_typed_approximate_identity_stays_explicitly_approximate() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("azure_ai", "Phi-4");
+
+    let estimate = counter
+        .count_completion_tokens_for_identity(&identity, "Hello world")
+        .expect("an explicitly approximate identity may use estimation");
+
+    assert!(estimate.is_approximate);
+    assert!(estimate.confidence < 1.0);
+}
+
+#[test]
+fn test_typed_approximate_identity_does_not_infer_from_openai_like_model_name() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("azure", "gpt-4o");
+
+    let estimate = counter
+        .count_completion_tokens_for_identity(&identity, "Hello world")
+        .expect("explicit approximate contract should remain available");
+
+    assert!(estimate.is_approximate);
+    assert!(estimate.confidence < 1.0);
+}
+
+#[test]
+fn test_typed_approximate_chat_does_not_infer_from_openai_like_model_name() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("azure", "gpt-4o");
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("hello".to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    }];
+
+    let estimate = counter
+        .count_chat_tokens_for_identity(&identity, &messages)
+        .expect("explicit approximate chat contract should remain available");
 
     assert!(estimate.is_approximate);
     assert!(estimate.confidence < 1.0);

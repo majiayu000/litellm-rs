@@ -154,6 +154,7 @@ async fn handle_embedding_internal(
                 if let Some(cached) = cached_response {
                     super::response_cache::ensure_embedding_cache_pricing_for_attempt(
                         &request_pricing,
+                        &core_request.input,
                         &budget_provider,
                         &selected_model,
                     )?;
