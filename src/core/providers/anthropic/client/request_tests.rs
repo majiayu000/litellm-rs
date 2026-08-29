@@ -106,6 +106,11 @@ async fn continuation_send_path_adds_interleaved_beta_once() {
             content: Some(MessageContent::Text("visible".to_string())),
             ..Default::default()
         });
+        request.messages.push(ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("continue".to_string())),
+            ..Default::default()
+        });
         if legacy_thinking {
             request.thinking = Some(ThinkingConfig::new().enabled());
             request.extra_params.insert(
@@ -113,8 +118,14 @@ async fn continuation_send_path_adds_interleaved_beta_once() {
                 json!(["interleaved-thinking-2025-05-14"]),
             );
         }
-        let envelope =
-            ChatContinuationRequest::new(request, vec![signed_continuation_extension()]).unwrap();
+        let envelope = ChatContinuationRequest::new(
+            request,
+            vec![
+                signed_continuation_extension(),
+                ChatMessageExtensions::new(),
+            ],
+        )
+        .unwrap();
 
         client
             .chat_with_continuation(envelope)
@@ -199,6 +210,80 @@ fn fable_defaults_to_always_on_adaptive_while_registered_opus_and_sonnet_remain_
     let mut disabled = ChatRequest::new("claude-fable-5").add_user_message("solve");
     disabled.thinking = Some(ThinkingConfig::new());
     assert!(client.transform_chat_request(&disabled).is_err());
+}
+
+#[test]
+fn signed_legacy_continuation_enables_thinking_when_http_request_omits_it() {
+    let mut request = ChatRequest::new("claude-opus-4-8");
+    request.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("visible".to_string())),
+        ..Default::default()
+    });
+    request.messages.push(ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("continue".to_string())),
+        ..Default::default()
+    });
+
+    let transformed = anthropic_client()
+        .transform_chat_request_with_extensions(
+            &request,
+            &[
+                signed_continuation_extension(),
+                ChatMessageExtensions::new(),
+            ],
+        )
+        .expect("signed continuation should enable legacy thinking");
+
+    assert_eq!(
+        transformed["thinking"],
+        json!({"type": "enabled", "budget_tokens": 10_000})
+    );
+    assert_eq!(transformed["max_tokens"], 10_001);
+}
+
+#[test]
+fn fable_rejects_terminal_assistant_prefills_but_keeps_assistant_history() {
+    let client = anthropic_client();
+    let mut text_prefill = ChatRequest::new("claude-fable-5").add_user_message("question");
+    text_prefill.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text("partial answer".to_string())),
+        ..Default::default()
+    });
+    let error = client
+        .transform_chat_request(&text_prefill)
+        .expect_err("Fable must reject terminal assistant text");
+    assert!(error.to_string().contains("assistant prefill"));
+
+    let mut tool_prefill = ChatRequest::new("claude-fable-5").add_user_message("question");
+    tool_prefill.messages.push(ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        tool_calls: Some(vec![ToolCall {
+            id: "toolu_123".to_string(),
+            tool_type: "function".to_string(),
+            function: FunctionCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }]),
+        ..Default::default()
+    });
+    let error = client
+        .transform_chat_request(&tool_prefill)
+        .expect_err("Fable must reject terminal assistant tool calls");
+    assert!(error.to_string().contains("assistant prefill"));
+
+    text_prefill.messages.push(ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("continue".to_string())),
+        ..Default::default()
+    });
+    client
+        .transform_chat_request(&text_prefill)
+        .expect("non-terminal assistant history remains valid");
 }
 
 #[test]
@@ -716,7 +801,7 @@ fn fable_rejects_top_k_while_existing_models_keep_their_contract() {
 
 #[test]
 fn provider_rejects_internal_order_without_thinking_payload() {
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-opus-4-8");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("visible".to_string())),

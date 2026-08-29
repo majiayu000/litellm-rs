@@ -57,6 +57,7 @@ fn fable_supported_params_match_sampling_validation_exactly() {
     assert!(!fable.contains(&"top_p"));
     assert!(!fable.contains(&"top_k"));
     assert!(fable.contains(&"max_tokens"));
+    assert!(fable.contains(&"reasoning_effort"));
     assert!(fable.contains(&"tools"));
 
     for model in ["claude-3-opus-20240229", "Claude-fable-5"] {

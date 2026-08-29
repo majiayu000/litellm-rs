@@ -124,7 +124,7 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
         }
         let extensions: Vec<ChatMessageExtensions> =
             serde_json::from_value(serialized_extensions).unwrap();
-        let mut request = ChatRequest::new("claude-fable-5");
+        let mut request = ChatRequest::new("claude-opus-4-8");
         request.messages.push(response.choices[0].message.clone());
 
         let replay = client
@@ -149,7 +149,7 @@ fn ordered_continuation_sidecars_are_isolated_per_message() {
             json!({"type": "thinking", "thinking": "b", "signature": "sig-b"}),
         ],
     ];
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-opus-4-8");
     let mut extensions = Vec::new();
 
     for (index, original) in originals.iter().enumerate() {
@@ -195,7 +195,7 @@ fn ordered_continuation_metadata_fails_closed_on_span_drift() {
         )
         .unwrap();
     let (response, extensions) = parsed.into_parts();
-    let mut request = ChatRequest::new("claude-fable-5");
+    let mut request = ChatRequest::new("claude-opus-4-8");
     request.messages.push(response.choices[0].message.clone());
     let serialized = serde_json::to_value(extensions).unwrap();
 

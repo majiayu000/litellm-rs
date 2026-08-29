@@ -10,7 +10,8 @@ use crate::core::types::anthropic_continuation::{
     AnthropicContentBlockOrder, AnthropicThinkingBlock, ChatMessageExtensions,
 };
 use crate::core::types::chat::ChatRequest;
-use crate::core::types::message::MessageRole;
+use crate::core::types::content::ContentPart;
+use crate::core::types::message::{MessageContent, MessageRole};
 use crate::core::types::thinking::ThinkingEffort;
 
 use super::AnthropicClient;
@@ -92,6 +93,12 @@ impl AnthropicClient {
         if claude_5 {
             Self::validate_claude_5_legacy_functions(request)?;
             Self::validate_claude_5_sampling(request)?;
+            if request.model == "claude-fable-5" && Self::has_trailing_assistant_prefill(request) {
+                return Err(ProviderError::not_supported(
+                    "anthropic",
+                    "claude-fable-5 does not support assistant prefill",
+                ));
+            }
         } else if request.reasoning_effort.is_some() {
             return Err(ProviderError::not_supported(
                 "anthropic",
@@ -327,6 +334,7 @@ impl AnthropicClient {
             ));
         }
         let mut transformed = self.transform_chat_request(request)?;
+        Self::enable_legacy_continuation_thinking(request, extensions, &mut transformed)?;
         let messages = transformed["messages"].as_array_mut().ok_or_else(|| {
             anthropic_api_error(500, "Anthropic request messages must be an array")
         })?;
@@ -383,6 +391,88 @@ impl AnthropicClient {
             *wire_content = Value::Array(content);
         }
         Ok(transformed)
+    }
+
+    fn enable_legacy_continuation_thinking(
+        request: &ChatRequest,
+        extensions: &[ChatMessageExtensions],
+        transformed: &mut Value,
+    ) -> Result<(), ProviderError> {
+        let has_signed_continuation = extensions.iter().any(|extension| {
+            extension
+                .anthropic_thinking()
+                .is_some_and(|thinking| !thinking.blocks().is_empty())
+        });
+        if !has_signed_continuation || transformed.get("thinking").is_some() {
+            return Ok(());
+        }
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| !thinking.enabled)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Anthropic signed continuation requires thinking to be enabled",
+            ));
+        }
+
+        let registry = get_anthropic_registry();
+        let Some(model_spec) = registry.get_model_spec(&request.model) else {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} cannot replay Anthropic thinking continuation",
+                    request.model
+                ),
+            ));
+        };
+        if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!("Model {} does not support thinking", request.model),
+            ));
+        }
+
+        let budget = 10_000_u32;
+        let current_max = request.max_tokens.unwrap_or(4096);
+        if current_max <= budget {
+            transformed["max_tokens"] = json!(budget + 1);
+        }
+        transformed["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": budget
+        });
+        Ok(())
+    }
+
+    fn has_trailing_assistant_prefill(request: &ChatRequest) -> bool {
+        request
+            .messages
+            .iter()
+            .rev()
+            .filter(|message| !matches!(message.role, MessageRole::System | MessageRole::Developer))
+            .find(|message| Self::message_has_payload(message))
+            .is_some_and(|message| message.role == MessageRole::Assistant)
+    }
+
+    fn message_has_payload(message: &crate::core::types::chat::ChatMessage) -> bool {
+        let has_content = match message.content.as_ref() {
+            Some(MessageContent::Text(text)) => !text.trim().is_empty(),
+            Some(MessageContent::Parts(parts)) => parts.iter().any(|part| match part {
+                ContentPart::Text { text } => !text.trim().is_empty(),
+                _ => true,
+            }),
+            None => false,
+        };
+        has_content
+            || message.audio.is_some()
+            || message.thinking.is_some()
+            || message.function_call.is_some()
+            || message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty())
     }
 
     fn thinking_block_to_value(block: &AnthropicThinkingBlock) -> Value {
