@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use futures::{StreamExt, stream};
+use serde_json::Value;
 
 use super::{AnthropicTransformer, SSETransformer};
 use crate::core::providers::anthropic::http_annotations::http_annotation_channel;
@@ -1144,6 +1145,82 @@ fn message_delta_after_message_stop_requires_a_new_message_start() {
         )
         .expect("a new message_start reopens message_delta processing");
     }
+}
+
+#[test]
+fn terminal_message_delta_requires_message_stop_before_any_more_message_events() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({"type":"message_start", "message":{"id":"first"}}),
+    )
+    .unwrap();
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":"complete"}
+        }),
+    )
+    .unwrap();
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":0}),
+    )
+    .unwrap();
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"message_delta", "delta":{"stop_reason":"end_turn"}
+        }),
+    )
+    .expect("the first terminal message delta is accepted");
+
+    for event in [
+        serde_json::json!({
+            "type":"content_block_start", "index":1,
+            "content_block":{"type":"text", "text":"late"}
+        }),
+        serde_json::json!({
+            "type":"content_block_delta", "index":1,
+            "delta":{"type":"text_delta", "text":"late"}
+        }),
+        serde_json::json!({"type":"content_block_stop", "index":1}),
+        serde_json::json!({"type":"message_delta", "delta":{}}),
+        serde_json::json!({
+            "type":"message_delta", "delta":{"stop_reason":"end_turn"}
+        }),
+        serde_json::json!({"type":"message_start", "message":{"id":"too-early"}}),
+    ] {
+        let expected_index = event.get("index").and_then(Value::as_u64).unwrap_or(0);
+        let error = transform(&transformer, event)
+            .expect_err("message_stop must be the only accepted event after a terminal delta");
+        assert_lifecycle_error_contexts(error, expected_index, &["message_delta", "message_stop"]);
+    }
+
+    let error = transformer
+        .finish_stream()
+        .expect_err("a pending terminal delta still requires message_stop at EOF");
+    assert_lifecycle_error_contexts(error, 0, &["message_delta", "message_stop"]);
+
+    transform(&transformer, serde_json::json!({"type":"message_stop"}))
+        .expect("the protocol message_stop completes the pending terminal phase");
+    let error = transform(&transformer, serde_json::json!({"type":"message_stop"}))
+        .expect_err("message_stop is accepted exactly once per message");
+    assert_lifecycle_error_contexts(error, 0, &["message_stop", "message_start"]);
+    transform(
+        &transformer,
+        serde_json::json!({"type":"message_start", "message":{"id":"second"}}),
+    )
+    .expect("a new message may start only after the preceding message_stop");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":"accepted"}
+        }),
+    )
+    .expect("the new message has a fresh content lifecycle");
 }
 
 #[test]

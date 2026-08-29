@@ -24,6 +24,13 @@ pub(super) enum DeltaDisposition {
     Ignore,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MessagePhase {
+    Open,
+    PendingStop,
+    Stopped,
+}
+
 impl ActiveContentBlock {
     fn kind(self) -> &'static str {
         match self {
@@ -56,7 +63,7 @@ pub(super) struct AnthropicThinkingStreamState {
     active_content: BTreeMap<u32, ActiveContentBlock>,
     pub(super) completed: Vec<(u32, AnthropicThinkingBlock)>,
     completed_indexes: BTreeSet<u32>,
-    message_open: bool,
+    message_phase: MessagePhase,
 }
 
 impl Default for AnthropicThinkingStreamState {
@@ -69,7 +76,7 @@ impl Default for AnthropicThinkingStreamState {
             // Some compatible streams omit message_start. Preserve that
             // established first-message behavior while still making an
             // observed message_stop terminal until the next message_start.
-            message_open: true,
+            message_phase: MessagePhase::Open,
         }
     }
 }
@@ -87,24 +94,43 @@ impl fmt::Debug for AnthropicThinkingStreamState {
                 &self.active_content.keys().collect::<Vec<_>>(),
             )
             .field("completed_count", &self.completed.len())
+            .field("message_phase", &self.message_phase)
             .finish()
     }
 }
 
 impl AnthropicThinkingStreamState {
     pub(super) fn begin_message(&mut self) -> Result<(), ProviderError> {
+        if self.message_phase == MessagePhase::PendingStop {
+            return Err(lifecycle_error(
+                0,
+                "message_start after terminal message_delta requires message_stop first",
+            ));
+        }
         self.ensure_complete("message_start")?;
         self.active_content.clear();
         self.completed.clear();
         self.completed_indexes.clear();
-        self.message_open = true;
+        self.message_phase = MessagePhase::Open;
         Ok(())
     }
 
     pub(super) fn end_message(&mut self) -> Result<(), ProviderError> {
-        self.ensure_message_open(0, "message_stop")?;
+        if self.message_phase == MessagePhase::Stopped {
+            return Err(lifecycle_error(
+                0,
+                "message_stop after message_stop requires a new message_start",
+            ));
+        }
         self.ensure_complete("message_stop")?;
-        self.message_open = false;
+        self.message_phase = MessagePhase::Stopped;
+        Ok(())
+    }
+
+    pub(super) fn begin_pending_stop(&mut self) -> Result<(), ProviderError> {
+        self.ensure_message_open(0, "message_delta")?;
+        self.ensure_complete("message_delta stop_reason")?;
+        self.message_phase = MessagePhase::PendingStop;
         Ok(())
     }
 
@@ -328,15 +354,21 @@ impl AnthropicThinkingStreamState {
     }
 
     pub(super) fn ensure_message_open(&self, index: u32, event: &str) -> Result<(), ProviderError> {
-        if self.message_open {
-            return Ok(());
+        match self.message_phase {
+            MessagePhase::Open => Ok(()),
+            MessagePhase::PendingStop => Err(lifecycle_error(
+                index,
+                format!(
+                    "{event} after terminal message_delta requires message_stop before content resumes"
+                ),
+            )),
+            MessagePhase::Stopped => Err(lifecycle_error(
+                index,
+                format!(
+                    "{event} after message_stop requires a new message_start before content resumes"
+                ),
+            )),
         }
-        Err(lifecycle_error(
-            index,
-            format!(
-                "{event} after message_stop requires a new message_start before content resumes"
-            ),
-        ))
     }
 
     pub(super) fn ensure_complete(&self, boundary: &str) -> Result<(), ProviderError> {
@@ -365,6 +397,17 @@ impl AnthropicThinkingStreamState {
                 block.kind()
             ),
         ))
+    }
+
+    pub(super) fn ensure_stream_complete(&self) -> Result<(), ProviderError> {
+        self.ensure_complete("stream termination")?;
+        if self.message_phase == MessagePhase::PendingStop {
+            return Err(lifecycle_error(
+                0,
+                "stream ended after terminal message_delta without message_stop",
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -415,15 +415,16 @@ impl SSETransformer for AnthropicTransformer {
                 }
             }
             "message_delta" => {
-                self.with_thinking_state(|state| state.ensure_message_open(0, "message_delta"))?;
                 let finish_reason = json
                     .get("delta")
                     .and_then(|d| d.get("stop_reason"))
                     .and_then(|r| r.as_str())
                     .map(Self::parse_anthropic_finish_reason);
                 if finish_reason.is_some() {
+                    self.with_thinking_state(AnthropicThinkingStreamState::begin_pending_stop)?;
+                } else {
                     self.with_thinking_state(|state| {
-                        state.ensure_complete("message_delta stop_reason")
+                        state.ensure_message_open(0, "message_delta")
                     })?;
                 }
 
@@ -517,7 +518,7 @@ impl SSETransformer for AnthropicTransformer {
     }
 
     fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
-        self.with_thinking_state(|state| state.ensure_complete("stream termination"))?;
+        self.with_thinking_state(|state| state.ensure_stream_complete())?;
         Ok(None)
     }
 }
