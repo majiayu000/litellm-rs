@@ -675,5 +675,115 @@ mod mapped_identity_tests {
 }
 
 #[cfg(test)]
-#[path = "pricing_identity_tests.rs"]
-mod pricing_identity_tests;
+mod pricing_identity_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::core::pricing_service::LiteLLMModelInfo;
+
+    fn priced_model_info(provider: &str) -> LiteLLMModelInfo {
+        LiteLLMModelInfo {
+            max_tokens: Some(4096),
+            max_input_tokens: Some(4096),
+            max_output_tokens: Some(4096),
+            input_cost_per_token: Some(0.001),
+            output_cost_per_token: Some(0.002),
+            input_cost_per_character: None,
+            output_cost_per_character: None,
+            cost_per_second: None,
+            litellm_provider: provider.to_string(),
+            mode: "chat".to_string(),
+            supports_function_calling: Some(true),
+            supports_vision: Some(false),
+            supports_streaming: Some(true),
+            supports_parallel_function_calling: Some(true),
+            supports_system_message: Some(true),
+            extra: HashMap::new(),
+        }
+    }
+
+    async fn legacy_mapped_provider(provider_name: &str) -> Provider {
+        let mut config = crate::core::providers::openai::OpenAIConfig {
+            provider_name: provider_name.to_string(),
+            ..Default::default()
+        };
+        config.base.api_key = Some("sk-test".to_string());
+        config.model_mappings.insert(
+            "review-public-alias".to_string(),
+            "review-canonical-unpriced".to_string(),
+        );
+        Provider::OpenAI(
+            crate::core::providers::openai::OpenAIProvider::new(config)
+                .await
+                .expect("test provider should build"),
+        )
+    }
+
+    #[test]
+    fn retained_mapping_identity_does_not_price_non_image_requests() {
+        let pricing = PricingService::new(None);
+        let (provider, model) = unpriced_openai_mapping_identity(
+            &ProviderType::OpenAICompatible,
+            "openai",
+            "public-alias",
+            "canonical-model",
+        )
+        .expect("real mapping should retain canonical identity");
+        let error = pricing
+            .calculate_loaded_usage_cost_for_provider(&provider, &model, &PricingUsage::new(10, 5))
+            .expect_err("identity retention must not invent a non-image price");
+        assert!(error.to_string().contains("Model not found"));
+    }
+
+    #[tokio::test]
+    async fn legacy_mapping_preserves_explicit_unpriced_target_and_provider() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model(
+            "review-public-alias".to_string(),
+            priced_model_info("openai"),
+        );
+        for provider_name in ["openai", "review-custom-openai"] {
+            let provider = legacy_mapped_provider(provider_name).await;
+            assert_eq!(
+                pricing_identity_for_provider(
+                    &pricing.snapshot(),
+                    &provider,
+                    "review-public-alias",
+                    ProviderCapability::ChatCompletion,
+                ),
+                (
+                    provider_name.to_string(),
+                    "review-canonical-unpriced".to_string(),
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_only_mapping_does_not_change_non_chat_pricing_identity() {
+        let pricing = PricingService::new(None);
+        pricing.add_custom_model(
+            "review-public-alias".to_string(),
+            priced_model_info("review-custom-openai"),
+        );
+        let provider = legacy_mapped_provider("review-custom-openai").await;
+        for surface in [
+            ProviderCapability::Embeddings,
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::AudioTranscription,
+        ] {
+            assert_eq!(
+                pricing_identity_for_provider(
+                    &pricing.snapshot(),
+                    &provider,
+                    "review-public-alias",
+                    surface,
+                ),
+                (
+                    "review-custom-openai".to_string(),
+                    "review-public-alias".to_string(),
+                )
+            );
+        }
+    }
+}

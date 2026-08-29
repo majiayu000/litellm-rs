@@ -15,8 +15,6 @@ use crate::core::router::UnifiedRouter;
 use crate::core::types::model::ProviderCapability;
 use crate::utils::error::gateway_error::GatewayError;
 
-mod stream_settlement;
-
 use super::execution;
 pub(super) use super::execution::StreamingDeploymentLease;
 use super::spend;

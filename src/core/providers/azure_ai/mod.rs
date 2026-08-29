@@ -155,12 +155,30 @@ impl LLMProvider for AzureAIProvider {
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        if self
-            .model_identity
-            .as_ref()
-            .is_some_and(|binding| binding.identity().capability_catalog_model().is_none())
-        {
-            return &[];
+        if let Some(binding) = self.model_identity.as_ref() {
+            let identity = binding.identity();
+            let supports_chat = match (
+                identity.capability_catalog_provider(),
+                identity.capability_catalog_model(),
+            ) {
+                (Some("openai"), Some(model)) => {
+                    crate::core::providers::openai::models::get_openai_registry()
+                        .get_model_spec(model)
+                        .is_some_and(|model| {
+                            model
+                                .model_info
+                                .capabilities
+                                .contains(&ProviderCapability::ChatCompletion)
+                        })
+                }
+                (Some("azure_ai"), Some(model)) => self
+                    .model_registry
+                    .supports_capability(model, &ProviderCapability::ChatCompletion),
+                _ => false,
+            };
+            if !supports_chat {
+                return &[];
+            }
         }
         &[
             "temperature",
@@ -524,6 +542,40 @@ mod tests {
         assert!(params.contains(&"tools"));
         assert!(params.contains(&"tool_choice"));
         assert!(params.contains(&"stream"));
+    }
+
+    #[test]
+    fn mapped_rerank_deployment_exposes_no_chat_parameters() {
+        let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+        let catalog = crate::core::providers::registry::model_catalog_authority::CatalogAuthority::from_embedded()
+            .expect("embedded catalog should load");
+        let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+            Some("azure_ai/cohere-rerank-v3.5".to_string()),
+            None,
+        );
+        let identity = crate::core::providers::model_identity::validate_deployment_identity(
+            "review-azure-ai",
+            "azure_ai",
+            "wire-rerank",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        )
+        .expect("Azure AI rerank capability identity should validate");
+        let mut provider = AzureAIProvider::new(create_test_config())
+            .expect("Azure AI provider should be created");
+        provider.model_identity = Some(
+            crate::core::providers::model_identity::DeploymentProviderBinding::new(
+                identity, pricing,
+            ),
+        );
+
+        assert!(
+            provider
+                .get_supported_openai_params("wire-rerank")
+                .is_empty()
+        );
     }
 
     // ==================== Map OpenAI Params Tests ====================

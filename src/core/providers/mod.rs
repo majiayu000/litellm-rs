@@ -414,8 +414,6 @@ mod audio_dispatch;
 mod capability_dispatch;
 mod model_health_check;
 pub mod model_identity;
-#[cfg(test)]
-mod model_identity_tests;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///

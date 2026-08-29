@@ -35,6 +35,11 @@ pub(super) use chat_sse::sse_error_classification;
 #[path = "chat_streaming.rs"]
 mod chat_streaming;
 
+enum ChatAttemptResponse {
+    Cached(ChatCompletionResponse),
+    Provider(types::responses::ChatResponse),
+}
+
 /// Chat completions endpoint
 ///
 /// OpenAI-compatible chat completions API that supports streaming and non-streaming responses.
@@ -108,13 +113,8 @@ async fn handle_chat_completion_internal(
     let unified_router = &state.unified_router;
     let requested_model = request.model.clone();
     let core_request = build_core_chat_request(request.as_ref(), requested_model, false)?;
-    if let Some(cached) =
-        super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
-    {
-        super::response_cache::ensure_chat_cache_pricing_gate(state, request.as_ref())?;
-        crate::server::guardrails::check_chat_output(state, &cached).await?;
-        return Ok(cached);
-    }
+    let cached_response =
+        super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?;
     let requested_model = core_request.model.clone();
     let callback = CallbackLifecycle::new(
         &state.callbacks,
@@ -148,6 +148,7 @@ async fn handle_chat_completion_internal(
             let budgeted = budgeted.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
+            let cached_response = cached_response.clone();
             async move {
                 let provider_name = provider.name().to_string();
                 let request_pricing = super::spend::request_pricing_for_provider(
@@ -156,6 +157,15 @@ async fn handle_chat_completion_internal(
                     &selected_model,
                     ProviderCapability::ChatCompletion,
                 )?;
+                if let Some(cached) = cached_response {
+                    super::response_cache::ensure_chat_cache_pricing_for_attempt(
+                        &request_pricing,
+                        original_request.as_ref(),
+                        &provider_name,
+                        &selected_model,
+                    )?;
+                    return Ok((ChatAttemptResponse::Cached(cached), 0));
+                }
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
                     &provider_name,
@@ -234,6 +244,7 @@ async fn handle_chat_completion_internal(
                         },
                     )
                     .await
+                    .map(|(response, tokens)| (ChatAttemptResponse::Provider(response), tokens))
             }
         },
     )
@@ -246,6 +257,13 @@ async fn handle_chat_completion_internal(
         }
     };
 
+    let core_response = match core_response {
+        ChatAttemptResponse::Cached(cached) => {
+            crate::server::guardrails::check_chat_output(state, &cached).await?;
+            return Ok(cached);
+        }
+        ChatAttemptResponse::Provider(response) => response,
+    };
     let response = convert_core_chat_response(core_response);
     if let Err(error) = crate::server::guardrails::check_chat_output(state, &response).await {
         callback.fail(error.to_string(), "guardrail_output");

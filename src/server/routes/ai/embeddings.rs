@@ -15,6 +15,11 @@ use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
 use super::callbacks::CallbackLifecycle;
 use super::context::handle_ai_request;
 
+enum EmbeddingAttemptResponse {
+    Cached(EmbeddingResponse),
+    Provider(crate::core::types::responses::EmbeddingResponse),
+}
+
 fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, GatewayError> {
     match input {
         serde_json::Value::String(s) => Ok(EmbeddingInput::Text(s.clone())),
@@ -95,11 +100,8 @@ async fn handle_embedding_internal(
     if request.model.trim().is_empty() {
         return Err(GatewayError::validation("Model is required"));
     }
-    if let Some(cached) = super::response_cache::lookup_embedding(state, &request, &context).await?
-    {
-        super::response_cache::ensure_embedding_cache_pricing_gate(state, &request)?;
-        return Ok(cached);
-    }
+    let cached_response =
+        super::response_cache::lookup_embedding(state, &request, &context).await?;
     let request_for_cache = request.clone();
 
     let requested_model = request.model.clone();
@@ -140,6 +142,7 @@ async fn handle_embedding_internal(
             let pricing_service = pricing_service.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
+            let cached_response = cached_response.clone();
             async move {
                 let budget_provider = provider.name().to_string();
                 let request_pricing = super::spend::request_pricing_for_provider(
@@ -148,6 +151,14 @@ async fn handle_embedding_internal(
                     &selected_model,
                     ProviderCapability::Embeddings,
                 )?;
+                if let Some(cached) = cached_response {
+                    super::response_cache::ensure_embedding_cache_pricing_for_attempt(
+                        &request_pricing,
+                        &budget_provider,
+                        &selected_model,
+                    )?;
+                    return Ok((EmbeddingAttemptResponse::Cached(cached), 0));
+                }
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
                 let settle_pricing_service = pricing_service.clone();
@@ -231,6 +242,9 @@ async fn handle_embedding_internal(
                         },
                     )
                     .await
+                    .map(|(response, tokens)| {
+                        (EmbeddingAttemptResponse::Provider(response), tokens)
+                    })
             }
         },
     )
@@ -241,6 +255,11 @@ async fn handle_embedding_internal(
             callback.fail(error.to_string(), "provider_error");
             return Err(error);
         }
+    };
+
+    let core_response = match core_response {
+        EmbeddingAttemptResponse::Cached(cached) => return Ok(cached),
+        EmbeddingAttemptResponse::Provider(response) => response,
     };
 
     // Convert core response to OpenAI format

@@ -1,6 +1,4 @@
-use crate::core::pricing_service::LiteLLMModelInfo;
-#[cfg(test)]
-use crate::core::pricing_service::PricingService;
+use crate::core::pricing_service::{LiteLLMModelInfo, PricingService};
 
 pub(super) fn image_pricing_keys(
     pricing_provider: &str,
@@ -42,7 +40,6 @@ pub(super) fn image_pricing_keys(
     keys
 }
 
-#[cfg(test)]
 pub(super) fn resolve_image_pricing_model(
     pricing_service: &PricingService,
     pricing_provider: &str,
