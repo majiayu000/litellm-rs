@@ -148,6 +148,14 @@ mod pricing_tests {
         assert!((output - 2.50).abs() < 1e-12);
         // The compatibility overlay keeps the promotional rate through 2026-12-31.
         assert_eq!(get_model_pricing("gemini-3.6-flash").unwrap(), (0.75, 3.75));
+        let spec = get_gemini_registry()
+            .get_model_spec("gemini-3.6-flash")
+            .expect("gemini-3.6-flash should be registered");
+        assert_eq!(spec.model_info.input_cost_per_1k_tokens, Some(0.00075));
+        assert_eq!(spec.model_info.output_cost_per_1k_tokens, Some(0.00375));
+        assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.00075);
+        assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.00375);
+        assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
         assert_eq!(
             get_model_pricing("gemini-3.5-flash-lite").unwrap(),
             (0.3, 2.5)

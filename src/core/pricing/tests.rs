@@ -6,8 +6,15 @@ use std::path::{Path, PathBuf};
 fn parse_litellm_pricing_json_filters_metadata_entries() {
     let content = r#"{
             "sample_spec": {"this": "is not a model"},
-            "_comment": {"ignored": true},
-            "provider_example_model": {"ignored": true},
+            "_metadata": {"ignored": true},
+            "fallback_generalizations": {"ignored": true},
+            "provider_example_model": {
+                "max_tokens": 4096,
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000004,
+                "litellm_provider": "example_provider",
+                "mode": "chat"
+            },
             "gpt-test": {
                 "max_tokens": 4096,
                 "input_cost_per_token": 0.000001,
@@ -19,7 +26,11 @@ fn parse_litellm_pricing_json_filters_metadata_entries() {
 
     let parsed = parse_litellm_pricing_json(content).unwrap();
 
-    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(
+        parsed["provider_example_model"].litellm_provider,
+        "example_provider"
+    );
     assert_eq!(parsed["gpt-test"].litellm_provider, "openai");
     assert_eq!(parsed["gpt-test"].input_cost_per_token, Some(0.000001));
 }

@@ -10,6 +10,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from datetime import date
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -143,6 +144,44 @@ class SyncPricingTests(unittest.TestCase):
         self.assertEqual(rendered["_metadata"]["compatibility_overlay_keys"], ["gpt-5.5-pro"])
         self.assertEqual(rendered["_metadata"]["source_sha256"], "d" * 64)
 
+    def test_gemini_promo_override_expires_without_overwriting_corrections(self) -> None:
+        source = {
+            model: {"litellm_provider": "test"}
+            for model in sync.OFFICIAL_OVERRIDE_PATCHES
+        }
+        source["gemini-3.6-flash"] = {
+            "litellm_provider": "gemini",
+            "input_cost_per_token": 0.0000015,
+            "output_cost_per_token": 0.0000075,
+            "cache_read_input_token_cost": 0.00000015,
+        }
+        promotional = {
+            "gemini-3.6-flash": {
+                "litellm_provider": "gemini",
+                **sync.OFFICIAL_OVERRIDE_PATCHES["gemini-3.6-flash"],
+            }
+        }
+        corrected = {
+            "gemini-3.6-flash": {
+                **promotional["gemini-3.6-flash"],
+                "input_cost_per_token": 0.00000125,
+            }
+        }
+
+        active = sync.apply_official_overrides(
+            source, promotional, as_of_date=date(2026, 12, 31)
+        )
+        expired = sync.apply_official_overrides(
+            source, promotional, as_of_date=date(2027, 1, 1)
+        )
+        preserved = sync.apply_official_overrides(
+            source, corrected, as_of_date=date(2027, 1, 1)
+        )
+
+        self.assertEqual(active["gemini-3.6-flash"], promotional["gemini-3.6-flash"])
+        self.assertEqual(expired["gemini-3.6-flash"], source["gemini-3.6-flash"])
+        self.assertEqual(preserved["gemini-3.6-flash"], corrected["gemini-3.6-flash"])
+
 
 class PricingSchemaValidationTests(unittest.TestCase):
     def test_rejects_non_finite_or_negative_costs(self) -> None:
@@ -172,6 +211,26 @@ class PricingSchemaValidationTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(SystemExit, "peak_rates.*output_cost_per_token"):
             sync.validate_entries({"deepseek-v4-flash": row}, min_models=1)
+
+    def test_rejects_time_of_use_timezone_unsupported_by_runtime(self) -> None:
+        row = {
+            "litellm_provider": "test",
+            "input_cost_per_token": 0.000001,
+            "output_cost_per_token": 0.000002,
+            "time_of_use_pricing": {
+                "timezone": "Asia/Shanghai",
+                "peak_windows": [
+                    {"weekdays": [1], "start_hour": 1, "end_hour": 4}
+                ],
+                "peak_rates": {
+                    "input_cost_per_token": 0.000002,
+                    "output_cost_per_token": 0.000004,
+                },
+            },
+        }
+
+        with self.assertRaisesRegex(SystemExit, "timezone must be 'UTC'"):
+            sync.validate_entries({"future-model": row}, min_models=1)
 
     def test_required_tier_contract_rejects_partial_row(self) -> None:
         with self.assertRaisesRegex(SystemExit, "cache_read_input_token_cost_above_200k_tokens"):
