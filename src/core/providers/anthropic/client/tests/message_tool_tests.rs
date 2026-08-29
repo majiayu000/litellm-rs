@@ -31,7 +31,7 @@ fn test_separate_system_messages_no_system() {
 fn message_carrier_preserves_signed_redacted_and_tool_order() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
-    let mut request = ChatRequest::new("claude-opus-5");
+    let mut request = ChatRequest::new("claude-fable-5");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: None,
@@ -74,7 +74,7 @@ fn message_carrier_preserves_signed_redacted_and_tool_order() {
 fn message_carrier_normalizes_visible_and_empty_string_content() {
     let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
     for (content, expected_len) in [(Some("visible answer"), 2), (None, 1)] {
-        let mut request = ChatRequest::new("claude-opus-5");
+        let mut request = ChatRequest::new("claude-fable-5");
         request.messages.push(ChatMessage {
             role: MessageRole::Assistant,
             content: content.map(|text| MessageContent::Text(text.to_string())),

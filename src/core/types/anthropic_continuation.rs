@@ -275,6 +275,8 @@ impl ChatMessageExtensions {
 
     /// Whether this carrier has no provider extensions.
     pub fn is_empty(&self) -> bool {
-        self.anthropic_thinking.is_none()
+        self.anthropic_thinking
+            .as_ref()
+            .is_none_or(|thinking| thinking.blocks().is_empty())
     }
 }

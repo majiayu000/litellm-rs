@@ -556,7 +556,7 @@ impl AnthropicClient {
         model: &str,
         model_spec: Option<&ModelSpec>,
     ) -> Result<(), ProviderError> {
-        if model_spec.is_none() && Self::is_claude_5_protocol_model(model) {
+        if model_spec.is_none() && Self::is_standalone_claude_5_protocol_model(model) {
             return Ok(());
         }
         let Some(model_spec) = model_spec else {

@@ -95,7 +95,7 @@ impl AnthropicProvider {
         };
 
         let Some(model_spec) = model_spec else {
-            if AnthropicClient::is_claude_5_protocol_model(&request.model) {
+            if AnthropicClient::is_standalone_claude_5_protocol_model(&request.model) {
                 return crate::core::providers::base::validate_chat_request_common(
                     "anthropic",
                     request,
@@ -236,7 +236,7 @@ impl LLMProvider for AnthropicProvider {
         }
 
         self.supported_models.iter().any(|info| info.id == model)
-            || AnthropicClient::is_claude_5_protocol_model(model)
+            || AnthropicClient::is_standalone_claude_5_protocol_model(model)
             || self.client.allows_unknown_model(model)
     }
 

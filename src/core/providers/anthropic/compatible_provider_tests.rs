@@ -16,6 +16,35 @@ fn compatible_provider() -> AnthropicProvider {
     AnthropicProvider::new(config).unwrap_or_else(|err| panic!("provider should build: {err}"))
 }
 
+#[test]
+fn only_priced_standalone_claude_5_is_published_as_supported() {
+    let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
+        .unwrap_or_else(|err| panic!("provider should build: {err}"));
+
+    assert!(provider.supports_model("claude-fable-5"));
+    assert!(!provider.supports_model("claude-opus-5"));
+    assert!(!provider.supports_model("claude-sonnet-5"));
+}
+
+#[tokio::test]
+async fn unregistered_claude_5_models_fail_before_unpriced_budget_reservation() {
+    let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
+        .unwrap_or_else(|err| panic!("provider should build: {err}"));
+
+    for model in ["claude-opus-5", "claude-sonnet-5"] {
+        let error = provider
+            .transform_request(
+                ChatRequest::new(model).add_user_message("Hello"),
+                RequestContext::new(),
+            )
+            .await
+            .expect_err("catalog-less Claude 5 models must fail at provider validation");
+        let message = error.to_string();
+        assert!(message.contains(&format!("Unsupported model: {model}")));
+        assert!(!message.contains("model_not_priced"));
+    }
+}
+
 #[tokio::test]
 async fn compatible_models_allow_empty_tools_without_forwarding_tools() {
     let provider = compatible_provider();

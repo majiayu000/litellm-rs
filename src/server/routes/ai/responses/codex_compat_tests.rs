@@ -6,6 +6,7 @@ use crate::core::models::openai::{
     responses::{ChatChoice, ChatCompletionResponse},
     tools::{FunctionCall, ToolCall},
 };
+use crate::core::providers::anthropic::{AnthropicClient, AnthropicConfig};
 use crate::core::types::anthropic_continuation::{
     AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
     ChatMessageExtensions,
@@ -508,5 +509,25 @@ fn codex_turn_rejects_invalid_tool_definitions() {
     for (request, expected) in requests.into_iter().zip(expected) {
         let request = codex_request(serde_json::from_str(request).unwrap());
         assert_eq!(CodexTurn::try_from(&request).unwrap_err(), expected);
+    }
+}
+
+#[test]
+fn responses_fable_rejects_unsupported_sampling_controls() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+
+    for (field, value) in [("temperature", json!(0.2)), ("top_p", json!(0.8))] {
+        let request = codex_request(json!({
+            "model": "claude-fable-5",
+            "input": "hello",
+            (field): value
+        }));
+        let chat = super::build_chat_request(&request).unwrap();
+        let model = chat.model.clone();
+        let chat = super::super::chat::build_core_chat_request(&chat, model, false).unwrap();
+        let error = client
+            .transform_chat_request(&chat)
+            .expect_err("Responses sampling controls must share Anthropic validation");
+        assert!(error.to_string().contains(field));
     }
 }

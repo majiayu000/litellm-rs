@@ -14,7 +14,7 @@ use crate::core::types::thinking::ThinkingEffort;
 use super::AnthropicClient;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum AnthropicEffort {
+pub(super) enum AnthropicEffort {
     Low,
     Medium,
     High,
@@ -23,7 +23,7 @@ enum AnthropicEffort {
 }
 
 impl AnthropicEffort {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Low => "low",
             Self::Medium => "medium",
@@ -72,14 +72,15 @@ impl AnthropicClient {
         }
 
         let registry = get_anthropic_registry();
-        let claude_5 = !self.config.uses_compatible_model_allow_list()
-            && Self::is_claude_5_protocol_model(&request.model);
-
         let model_spec = if self.config.uses_compatible_model_allow_list() {
             None
         } else {
             registry.get_model_spec(&request.model)
         };
+        let claude_5 = !self.config.uses_compatible_model_allow_list()
+            && Self::is_claude_5_protocol_model(&request.model)
+            && (model_spec.is_some()
+                || Self::is_standalone_claude_5_protocol_model(&request.model));
         if model_spec.is_none() && !claude_5 && !self.config.allows_unknown_model(&request.model) {
             return Err(anthropic_api_error(
                 400,
@@ -88,6 +89,7 @@ impl AnthropicClient {
         }
         if claude_5 {
             Self::validate_claude_5_legacy_functions(request)?;
+            Self::validate_claude_5_sampling(request)?;
         } else if request.reasoning_effort.is_some() {
             return Err(ProviderError::not_supported(
                 "anthropic",
@@ -392,6 +394,40 @@ impl AnthropicClient {
         )
     }
 
+    /// Claude 5 models without a registry entry are unsupported by default.
+    /// Fable is the sole temporary exception because the runtime pricing
+    /// authority already contains its exact ID. Opus and Sonnet remain
+    /// unsupported until #1216/#1222 supply exact callable and priced entries;
+    /// activation must come from that authority rather than another name rule.
+    pub(crate) fn is_standalone_claude_5_protocol_model(model: &str) -> bool {
+        model == "claude-fable-5"
+    }
+
+    fn validate_claude_5_sampling(request: &ChatRequest) -> Result<(), ProviderError> {
+        if request.model != "claude-fable-5" {
+            return Ok(());
+        }
+
+        let mut unsupported = Vec::with_capacity(2);
+        if request.temperature.is_some() {
+            unsupported.push("temperature");
+        }
+        if request.top_p.is_some() {
+            unsupported.push("top_p");
+        }
+        if unsupported.is_empty() {
+            return Ok(());
+        }
+
+        Err(ProviderError::not_supported(
+            "anthropic",
+            format!(
+                "Model claude-fable-5 does not support {}",
+                unsupported.join(" or ")
+            ),
+        ))
+    }
+
     fn validate_claude_5_legacy_functions(request: &ChatRequest) -> Result<(), ProviderError> {
         if request
             .functions
@@ -414,7 +450,7 @@ impl AnthropicClient {
         Ok(())
     }
 
-    fn claude_5_thinking_config(
+    pub(super) fn claude_5_thinking_config(
         request: &ChatRequest,
     ) -> Result<Option<(Value, Option<AnthropicEffort>)>, ProviderError> {
         let requested_effort = request

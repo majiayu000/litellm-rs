@@ -29,7 +29,7 @@ fn tool(name: &str) -> Tool {
 
 #[test]
 fn reasoning_effort_maps_once_to_adaptive_output_config() {
-    let mut request = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    let mut request = ChatRequest::new("claude-fable-5").add_user_message("solve");
     request.reasoning_effort = Some("high".to_string());
 
     let transformed = anthropic_client()
@@ -56,18 +56,18 @@ fn claude5_extended_reasoning_efforts_map_without_downshifting() {
             let mut request = ChatRequest::new(model).add_user_message("solve");
             request.reasoning_effort = Some(effort.to_string());
 
-            let transformed = anthropic_client()
-                .transform_chat_request(&request)
-                .expect("official Claude 5 effort must be accepted");
+            let (thinking, output_effort) = AnthropicClient::claude_5_thinking_config(&request)
+                .expect("official Claude 5 effort must be accepted")
+                .expect("reasoning effort enables adaptive thinking");
 
-            assert_eq!(transformed["thinking"]["type"], "adaptive");
-            assert_eq!(transformed["output_config"]["effort"], effort);
+            assert_eq!(thinking["type"], "adaptive");
+            assert_eq!(output_effort.expect("effort").as_str(), effort);
         }
     }
 }
 
 #[test]
-fn fable_defaults_to_always_on_adaptive_while_opus_and_sonnet_remain_optional() {
+fn fable_defaults_to_always_on_adaptive_while_registered_opus_and_sonnet_remain_optional() {
     let client = anthropic_client();
 
     let fable = client
@@ -79,11 +79,12 @@ fn fable_defaults_to_always_on_adaptive_while_opus_and_sonnet_remain_optional() 
     );
 
     for model in ["claude-opus-5", "claude-sonnet-5"] {
-        let transformed = client
-            .transform_chat_request(&ChatRequest::new(model).add_user_message("solve"))
-            .expect("optional-thinking Claude 5 model should remain valid");
-        assert!(transformed.get("thinking").is_none());
-        assert!(transformed.get("output_config").is_none());
+        let request = ChatRequest::new(model).add_user_message("solve");
+        assert!(
+            AnthropicClient::claude_5_thinking_config(&request)
+                .expect("registered optional-thinking Claude 5 semantics remain valid")
+                .is_none()
+        );
     }
 
     let mut disabled = ChatRequest::new("claude-fable-5").add_user_message("solve");
@@ -95,11 +96,11 @@ fn fable_defaults_to_always_on_adaptive_while_opus_and_sonnet_remain_optional() 
 fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
     let client = anthropic_client();
 
-    let mut invalid = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    let mut invalid = ChatRequest::new("claude-fable-5").add_user_message("solve");
     invalid.reasoning_effort = Some("maximum".to_string());
     assert!(client.transform_chat_request(&invalid).is_err());
 
-    let mut conflict = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    let mut conflict = ChatRequest::new("claude-fable-5").add_user_message("solve");
     conflict.reasoning_effort = Some("high".to_string());
     conflict.thinking = Some(
         ThinkingConfig::new()
@@ -108,7 +109,7 @@ fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
     );
     assert!(client.transform_chat_request(&conflict).is_err());
 
-    let mut manual = ChatRequest::new("claude-opus-5").add_user_message("solve");
+    let mut manual = ChatRequest::new("claude-fable-5").add_user_message("solve");
     manual.reasoning_effort = Some("medium".to_string());
     manual.thinking = Some(ThinkingConfig::new().enabled().with_budget(1024));
     assert!(client.transform_chat_request(&manual).is_err());
@@ -121,7 +122,7 @@ fn reasoning_effort_invalid_conflicting_and_non_claude5_fail_closed() {
 #[test]
 fn claude5_legacy_function_calls_error_while_modern_tools_remain_valid() {
     let client = anthropic_client();
-    let mut legacy = ChatRequest::new("claude-opus-5").add_user_message("weather?");
+    let mut legacy = ChatRequest::new("claude-fable-5").add_user_message("weather?");
     legacy.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: None,
@@ -136,7 +137,7 @@ fn claude5_legacy_function_calls_error_while_modern_tools_remain_valid() {
         .expect_err("legacy function_call must fail");
     assert!(error.to_string().contains("tools/tool_choice"));
 
-    let modern = ChatRequest::new("claude-opus-5")
+    let modern = ChatRequest::new("claude-fable-5")
         .add_user_message("weather?")
         .with_tools(vec![tool("lookup")]);
     assert!(client.transform_chat_request(&modern).is_ok());
@@ -321,6 +322,25 @@ fn claude_fable_5_accepts_official_prompt_cache_control_but_lookalikes_fail() {
 
     request.model = "claude-fable-5-preview".to_string();
     assert!(anthropic_client().transform_chat_request(&request).is_err());
+}
+
+#[test]
+fn claude_fable_5_rejects_unsupported_sampling_controls() {
+    let client = anthropic_client();
+
+    let mut temperature = ChatRequest::new("claude-fable-5").add_user_message("hello");
+    temperature.temperature = Some(0.2);
+    let error = client
+        .transform_chat_request(&temperature)
+        .expect_err("Fable must reject temperature");
+    assert!(error.to_string().contains("temperature"));
+
+    let mut top_p = ChatRequest::new("claude-fable-5").add_user_message("hello");
+    top_p.top_p = Some(0.8);
+    let error = client
+        .transform_chat_request(&top_p)
+        .expect_err("Fable must reject top_p");
+    assert!(error.to_string().contains("top_p"));
 }
 
 #[test]

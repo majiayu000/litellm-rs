@@ -112,16 +112,6 @@ impl ChatCompletionResponseWithExtensions {
     }
 
     #[cfg(test)]
-    pub(crate) fn legacy(&self) -> &ChatCompletionResponse {
-        &self.response
-    }
-
-    #[cfg(test)]
-    pub(crate) fn choice_extensions(&self) -> &[ChatMessageExtensions] {
-        &self.choice_extensions
-    }
-
-    #[cfg(test)]
     pub(crate) fn has_continuation(&self) -> bool {
         self.choice_extensions
             .iter()
@@ -193,11 +183,6 @@ impl ResponsesApiRequestWithExtensions {
         &self.request
     }
 
-    #[cfg(test)]
-    pub(crate) fn input_extensions(&self) -> &[Option<ChatMessageExtensions>] {
-        &self.input_extensions
-    }
-
     pub(crate) fn has_continuation(&self) -> bool {
         self.input_extensions
             .iter()
@@ -261,26 +246,11 @@ impl ResponsesApiResponseWithExtensions {
     }
 
     #[cfg(test)]
-    pub(crate) fn legacy(&self) -> &ResponsesApiResponse {
-        &self.response
-    }
-
-    #[cfg(test)]
-    pub(crate) fn output_extensions(&self) -> &[Option<ChatMessageExtensions>] {
-        &self.output_extensions
-    }
-
-    #[cfg(test)]
     pub(crate) fn has_continuation(&self) -> bool {
         self.output_extensions
             .iter()
             .flatten()
             .any(|extension| !extension.is_empty())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn into_parts(self) -> (ResponsesApiResponse, Vec<Option<ChatMessageExtensions>>) {
-        (self.response, self.output_extensions)
     }
 }
 

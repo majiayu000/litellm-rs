@@ -142,8 +142,8 @@ fn assistant_extension_only_is_meaningful_and_role_bounded() {
     assert!(
         RequestValidator::validate_chat_completion_request_with_extensions(
             "claude-opus-5",
-            &[message.clone()],
-            &[extension.clone()],
+            std::slice::from_ref(&message),
+            std::slice::from_ref(&extension),
             None,
             None,
         )
@@ -157,6 +157,32 @@ fn assistant_extension_only_is_meaningful_and_role_bounded() {
             "claude-opus-5",
             &[user],
             &[extension],
+            None,
+            None,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn empty_anthropic_thinking_does_not_make_an_empty_assistant_message_meaningful() {
+    let message = ChatMessage {
+        role: MessageRole::Assistant,
+        content: None,
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    };
+    let extension = ChatMessageExtensions::new()
+        .with_anthropic_thinking(AnthropicThinkingContent::new(Vec::new()));
+
+    assert!(
+        RequestValidator::validate_chat_completion_request_with_extensions(
+            "claude-fable-5",
+            std::slice::from_ref(&message),
+            std::slice::from_ref(&extension),
             None,
             None,
         )
