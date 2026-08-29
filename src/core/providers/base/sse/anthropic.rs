@@ -226,7 +226,7 @@ impl SSETransformer for AnthropicTransformer {
                 }))
             }
             "content_block_start" => {
-                let index = json.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let index = Self::required_index(&json, "content block start")?;
                 let content_block = json.get("content_block").ok_or_else(|| {
                     ProviderError::response_parsing(
                         "anthropic",
@@ -469,7 +469,7 @@ impl SSETransformer for AnthropicTransformer {
                 )))
             }
             "message_stop" => {
-                self.with_thinking_state(|state| state.ensure_complete("message_stop"))?;
+                self.with_thinking_state(AnthropicThinkingStreamState::end_message)?;
                 let message_id = self.current_message_id();
                 self.clear_message_id();
                 Ok(Some(ChatChunk {

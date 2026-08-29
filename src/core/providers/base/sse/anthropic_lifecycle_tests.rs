@@ -4,9 +4,7 @@ use bytes::Bytes;
 use futures::{StreamExt, stream};
 
 use super::{AnthropicTransformer, SSETransformer};
-use crate::core::providers::anthropic::http_annotations::{
-    http_annotation_sender, register_http_annotation_channel,
-};
+use crate::core::providers::anthropic::http_annotations::http_annotation_channel;
 use crate::core::providers::base::sse::{OpenAICompatibleTransformer, UnifiedSSEStream};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
@@ -849,10 +847,9 @@ fn content_stops_require_a_matching_active_index() {
 
 #[test]
 fn citation_deltas_on_text_blocks_are_preserved_for_http_projection() {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let _annotation_receiver = register_http_annotation_channel(&request_id).unwrap();
+    let (annotation_sender, _annotation_receiver) = http_annotation_channel();
     let transformer = AnthropicTransformer::new("claude-test")
-        .with_http_annotation_sender(http_annotation_sender(&request_id));
+        .with_http_annotation_sender(Some(annotation_sender));
     transform(
         &transformer,
         serde_json::json!({
@@ -957,6 +954,96 @@ fn every_active_content_kind_requires_an_exact_stop_at_terminal_boundaries() {
             &["content_block_stop"],
         );
     }
+}
+
+#[test]
+fn orphan_content_deltas_are_rejected_before_public_output() {
+    for delta in [
+        serde_json::json!({"type":"text_delta", "text":"orphan"}),
+        serde_json::json!({"type":"input_json_delta", "partial_json":"{}"}),
+        serde_json::json!({
+            "type":"citations_delta",
+            "citation":{"type":"page_location", "cited_text":"orphan"}
+        }),
+        serde_json::json!({"type":"future_delta", "opaque":"orphan"}),
+    ] {
+        let transformer = AnthropicTransformer::new("claude-test");
+        let error = transform(
+            &transformer,
+            serde_json::json!({
+                "type":"content_block_delta", "index":7, "delta":delta
+            }),
+        )
+        .expect_err("a delta without content_block_start must fail closed");
+        assert_lifecycle_error_contexts(error, 7, &["inactive", "delta"]);
+    }
+}
+
+#[test]
+fn every_content_block_start_requires_an_exact_u32_index() {
+    for index in [
+        None,
+        Some(serde_json::json!(-1)),
+        Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        Some(serde_json::json!("0")),
+    ] {
+        for content_block in [
+            serde_json::json!({"type":"text", "text":""}),
+            serde_json::json!({"type":"tool_use", "id":"tool", "name":"lookup", "input":{}}),
+            serde_json::json!({"type":"future_block", "opaque":"value"}),
+        ] {
+            let transformer = AnthropicTransformer::new("claude-test");
+            let mut event = serde_json::json!({
+                "type":"content_block_start", "content_block":content_block
+            });
+            if let Some(index) = index.clone() {
+                event["index"] = index;
+            }
+            transform(&transformer, event)
+                .expect_err("every content block start needs an exact u32 index");
+        }
+    }
+}
+
+#[test]
+fn message_stop_closes_content_lifecycle_until_new_message_start() {
+    let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({"type":"message_start", "message":{"id":"first"}}),
+    )
+    .unwrap();
+    transform(&transformer, serde_json::json!({"type":"message_stop"})).unwrap();
+
+    for event in [
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":"late"}
+        }),
+        serde_json::json!({
+            "type":"content_block_delta", "index":0,
+            "delta":{"type":"text_delta", "text":"late"}
+        }),
+        serde_json::json!({"type":"content_block_stop", "index":0}),
+    ] {
+        let error = transform(&transformer, event)
+            .expect_err("content events after message_stop require a new message_start");
+        assert_lifecycle_error_contexts(error, 0, &["message_stop", "message_start"]);
+    }
+
+    transform(
+        &transformer,
+        serde_json::json!({"type":"message_start", "message":{"id":"second"}}),
+    )
+    .unwrap();
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":"accepted"}
+        }),
+    )
+    .expect("new message_start reopens the lifecycle");
 }
 
 #[test]
@@ -1089,6 +1176,14 @@ fn multiple_blocks_keep_upstream_completion_order_and_ignore_tool_blocks() {
 #[test]
 fn normal_text_and_tool_stream_is_semantically_unchanged() {
     let transformer = AnthropicTransformer::new("claude-test");
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":""}
+        }),
+    )
+    .unwrap();
     let text = transform(
         &transformer,
         serde_json::json!({
@@ -1099,6 +1194,11 @@ fn normal_text_and_tool_stream_is_semantically_unchanged() {
     .unwrap()
     .unwrap();
     assert_eq!(text.choices[0].delta.content.as_deref(), Some("hello"));
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":0}),
+    )
+    .unwrap();
 
     let tool = transform(
         &transformer,
@@ -1290,11 +1390,28 @@ fn test_chunks_after_message_start_keep_message_id() {
     );
     assert_eq!(start.id, "msg_123");
 
+    transform(
+        &transformer,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":""}
+        }),
+    )
+    .unwrap();
+
     let text = chunk_from_event(
         &transformer,
-        serde_json::json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}),
+        serde_json::json!({
+            "type":"content_block_delta", "index":0,
+            "delta":{"type":"text_delta","text":"hello"}
+        }),
     );
     assert_eq!(text.id, "msg_123");
+    transform(
+        &transformer,
+        serde_json::json!({"type":"content_block_stop", "index":0}),
+    )
+    .unwrap();
 
     let delta = chunk_from_event(
         &transformer,
@@ -1326,10 +1443,21 @@ fn test_cloned_transformers_keep_independent_message_ids() {
         .id,
         "msg_b"
     );
+    transform(
+        &stream_a,
+        serde_json::json!({
+            "type":"content_block_start", "index":0,
+            "content_block":{"type":"text", "text":""}
+        }),
+    )
+    .unwrap();
     assert_eq!(
         chunk_from_event(
             &stream_a,
-            serde_json::json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}})
+            serde_json::json!({
+                "type":"content_block_delta", "index":0,
+                "delta":{"type":"text_delta","text":"hello"}
+            })
         )
         .id,
         "msg_a"
@@ -1338,6 +1466,11 @@ fn test_cloned_transformers_keep_independent_message_ids() {
         chunk_from_event(&stream_b, serde_json::json!({"type":"message_stop"})).id,
         "msg_b"
     );
+    transform(
+        &stream_a,
+        serde_json::json!({"type":"content_block_stop", "index":0}),
+    )
+    .unwrap();
     assert_eq!(
         chunk_from_event(
             &stream_a,

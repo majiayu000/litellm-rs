@@ -29,7 +29,7 @@ const COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 /// Anthropic Provider - unified implementation
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
-    client: Box<AnthropicClient>,
+    pub(super) client: Box<AnthropicClient>,
     supported_models: Vec<ModelInfo>,
 }
 
@@ -78,7 +78,7 @@ impl AnthropicProvider {
     }
 
     /// Validate request
-    fn validate_request(&self, request: &ChatRequest) -> Result<(), ProviderError> {
+    pub(super) fn validate_request(&self, request: &ChatRequest) -> Result<(), ProviderError> {
         let registry = get_anthropic_registry();
 
         let model_spec = if self.client.uses_compatible_model_allow_list() {
@@ -347,31 +347,11 @@ impl LLMProvider for AnthropicProvider {
     async fn chat_completion_stream(
         &self,
         request: ChatRequest,
-        context: RequestContext,
+        _context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
-        self.validate_request(&request)?;
-
-        let registry = get_anthropic_registry();
-        if let Some(model_spec) = registry.get_model_spec(&request.model)
-            && !model_spec
-                .features
-                .contains(&ModelFeature::StreamingSupport)
-        {
-            return Err(ProviderError::not_supported(
-                "anthropic",
-                format!("Model {} does not support streaming", request.model),
-            ));
-        }
-
-        let annotation_sender =
-            super::http_annotations::http_annotation_sender(&context.request_id);
-        let stream = self
-            .client
-            .chat_stream_chunks(request, annotation_sender)
-            .await?;
-
-        Ok(Box::pin(stream))
+        self.chat_completion_stream_with_http_annotations(request, None)
+            .await
     }
 
     async fn health_check(&self) -> HealthStatus {

@@ -51,12 +51,27 @@ impl ActiveThinkingBlock {
     }
 }
 
-#[derive(Default)]
 pub(super) struct AnthropicThinkingStreamState {
     active: BTreeMap<u32, ActiveThinkingBlock>,
     active_content: BTreeMap<u32, ActiveContentBlock>,
     pub(super) completed: Vec<(u32, AnthropicThinkingBlock)>,
     completed_indexes: BTreeSet<u32>,
+    message_open: bool,
+}
+
+impl Default for AnthropicThinkingStreamState {
+    fn default() -> Self {
+        Self {
+            active: BTreeMap::new(),
+            active_content: BTreeMap::new(),
+            completed: Vec::new(),
+            completed_indexes: BTreeSet::new(),
+            // Some compatible streams omit message_start. Preserve that
+            // established first-message behavior while still making an
+            // observed message_stop terminal until the next message_start.
+            message_open: true,
+        }
+    }
 }
 
 impl fmt::Debug for AnthropicThinkingStreamState {
@@ -82,6 +97,14 @@ impl AnthropicThinkingStreamState {
         self.active_content.clear();
         self.completed.clear();
         self.completed_indexes.clear();
+        self.message_open = true;
+        Ok(())
+    }
+
+    pub(super) fn end_message(&mut self) -> Result<(), ProviderError> {
+        self.ensure_message_open(0, "message_stop")?;
+        self.ensure_complete("message_stop")?;
+        self.message_open = false;
         Ok(())
     }
 
@@ -90,6 +113,7 @@ impl AnthropicThinkingStreamState {
         index: u32,
         block: ActiveContentBlock,
     ) -> Result<(), ProviderError> {
+        self.ensure_message_open(index, "content_block_start")?;
         self.ensure_index_available(index)?;
         self.active_content.insert(index, block);
         Ok(())
@@ -179,6 +203,7 @@ impl AnthropicThinkingStreamState {
     }
 
     pub(super) fn complete(&mut self, index: u32) -> Result<bool, ProviderError> {
+        self.ensure_message_open(index, "content_block_stop")?;
         let Some(active) = self.active.get(&index) else {
             if self.active_content.remove(&index).is_some() {
                 self.completed_indexes.insert(index);
@@ -218,6 +243,7 @@ impl AnthropicThinkingStreamState {
     }
 
     fn insert(&mut self, index: u32, block: ActiveThinkingBlock) -> Result<(), ProviderError> {
+        self.ensure_message_open(index, "content_block_start")?;
         self.ensure_index_available(index)?;
         self.active.insert(index, block);
         Ok(())
@@ -256,6 +282,7 @@ impl AnthropicThinkingStreamState {
         index: u32,
         delta_type: &str,
     ) -> Result<DeltaDisposition, ProviderError> {
+        self.ensure_message_open(index, "content_block_delta")?;
         if let Some(block) = self.active.get(&index) {
             if matches!(block, ActiveThinkingBlock::Thinking { .. })
                 && matches!(delta_type, "thinking_delta" | "signature_delta")
@@ -294,7 +321,22 @@ impl AnthropicThinkingStreamState {
                 ),
             ));
         }
-        Ok(DeltaDisposition::Emit)
+        Err(lifecycle_error(
+            index,
+            format!("{delta_type} delta for inactive block index {index}"),
+        ))
+    }
+
+    fn ensure_message_open(&self, index: u32, event: &str) -> Result<(), ProviderError> {
+        if self.message_open {
+            return Ok(());
+        }
+        Err(lifecycle_error(
+            index,
+            format!(
+                "{event} after message_stop requires a new message_start before content resumes"
+            ),
+        ))
     }
 
     pub(super) fn ensure_complete(&self, boundary: &str) -> Result<(), ProviderError> {

@@ -3,9 +3,7 @@ use crate::core::models::openai::{
     ChatMessage, Function, FunctionCall, MessageContent, MessageRole, ToolChoiceFunction,
     ToolChoiceFunctionSpec,
 };
-use crate::core::providers::anthropic::http_annotations::{
-    http_annotation_sender, register_http_annotation_channel,
-};
+use crate::core::providers::anthropic::http_annotations::http_annotation_channel;
 use crate::core::providers::base::sse::{AnthropicTransformer, SSETransformer};
 use crate::core::types::responses::{
     ChatChunk, ChatDelta, ChatStreamChoice, LogProbs, TokenLogProb,
@@ -231,10 +229,9 @@ fn test_convert_core_chunk_preserves_stream_logprobs() {
 
 #[test]
 fn test_anthropic_citation_reaches_http_stream_annotations_losslessly() {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let mut annotation_receiver = register_http_annotation_channel(&request_id).unwrap();
+    let (annotation_sender, mut annotation_receiver) = http_annotation_channel();
     let transformer = AnthropicTransformer::new("claude-test")
-        .with_http_annotation_sender(http_annotation_sender(&request_id));
+        .with_http_annotation_sender(Some(annotation_sender));
     transformer
         .transform_chunk(
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
