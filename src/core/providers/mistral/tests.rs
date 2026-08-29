@@ -265,6 +265,17 @@ async fn test_mistral_small_4_static_pricing_and_alias_boundaries() {
         provider.canonical_model_id("mistral/mistral-small-2603-preview"),
         "mistral-small-2603-preview"
     );
+    for (candidate, canonical) in [
+        ("mistral/Mistral-Small-2603", "Mistral-Small-2603"),
+        ("MISTRAL/mistral-small-2603", "MISTRAL/mistral-small-2603"),
+        ("openai/mistral-small-2603", "openai/mistral-small-2603"),
+        (
+            "mistral/mistral/mistral-small-2603",
+            "mistral/mistral-small-2603",
+        ),
+    ] {
+        assert_eq!(provider.canonical_model_id(candidate), canonical);
+    }
 }
 
 // ==================== Supported Params Tests ====================
@@ -492,10 +503,33 @@ async fn test_calculate_cost_known_model() {
 async fn test_calculate_cost_current_small_model() {
     let provider = MistralProvider::new(create_test_config()).await.unwrap();
 
-    let cost = provider
-        .calculate_cost("mistral-small-latest", 1000, 500)
-        .await;
-    assert!(matches!(cost, Ok(v) if (v - 0.00045).abs() < f64::EPSILON));
+    for model in [
+        "mistral-small-latest",
+        "mistral-small-2603",
+        "mistral-small-4",
+        "mistral-small",
+        "mistral/mistral-small-2603",
+        "mistral/mistral-small-4",
+    ] {
+        let cost = provider.calculate_cost(model, 1000, 500).await;
+        assert!(
+            matches!(cost, Ok(value) if (value - 0.00045).abs() < f64::EPSILON),
+            "{model} should use the central Mistral Small 4 runtime price"
+        );
+    }
+
+    let central = crate::core::pricing::get_pricing_db()
+        .get_model_info("mistral/mistral-small-2603")
+        .unwrap_or_else(|| panic!("official Mistral Small 4 row should be centrally priced"));
+    assert_eq!(central.input_cost_per_token, Some(0.000_000_15));
+    assert_eq!(central.output_cost_per_token, Some(0.000_000_6));
+    assert_eq!(
+        central
+            .extra
+            .get("cache_read_input_token_cost")
+            .and_then(serde_json::Value::as_f64),
+        Some(0.000_000_015)
+    );
 }
 
 #[tokio::test]
