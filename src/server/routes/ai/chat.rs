@@ -217,6 +217,7 @@ async fn handle_chat_completion_internal(
                     pricing_service.as_ref(),
                     &provider,
                     &selected_model,
+                    ProviderCapability::ChatCompletion,
                 );
                 let (legacy_request, extensions) = core_request.into_parts();
                 let request_for_provider = super::token_policy::prepare_chat_request_for_provider(
