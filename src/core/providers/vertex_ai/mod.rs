@@ -72,6 +72,25 @@ pub(crate) fn is_vertex_gemini_catalog_model(model: &str, include_experimental: 
         .is_some_and(|spec| surface.includes(spec))
 }
 
+/// Exact Vertex Gemini IDs retained by the provider's enum and pricing contract but not exposed as
+/// exact keys by the shared Gemini registry. Keep this list bounded: the legacy parser uses fuzzy
+/// matching for backwards-compatible metadata and must not become transport authorization.
+const EXACT_LEGACY_VERTEX_GEMINI_IDS: &[&str] = &[
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-flash-002",
+];
+
+pub(crate) fn is_exact_legacy_vertex_gemini_model(model: &str) -> bool {
+    EXACT_LEGACY_VERTEX_GEMINI_IDS.contains(&model)
+}
+
+pub(crate) fn is_vertex_gemini_chat_model(model: &str, include_experimental: bool) -> bool {
+    is_vertex_gemini_catalog_model(model, include_experimental)
+        || is_exact_legacy_vertex_gemini_model(model)
+}
+
 fn vertex_pricing_error(model: &str, error: GatewayError) -> ProviderError {
     match error {
         GatewayError::NotFound(_) => ProviderError::model_not_found("vertex_ai", model),

@@ -565,6 +565,66 @@ fn gemini_flash_runtime_pricing_switches_at_the_exact_utc_boundary() {
 }
 
 #[test]
+fn gemini_flash_historical_pricing_survives_standard_catalog_refresh() {
+    use chrono::TimeZone;
+
+    let service = PricingService::new(None);
+    let mut standard = test_model_info("gemini");
+    standard.input_cost_per_token = Some(1.5e-6);
+    standard.output_cost_per_token = Some(7.5e-6);
+    standard.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::json!(1.5e-7),
+    );
+    standard.extra.insert(
+        "output_cost_per_reasoning_token".to_string(),
+        serde_json::json!(7.5e-6),
+    );
+    service.pricing_data.store(std::sync::Arc::new(
+        super::super::service::build_pricing_data(
+            std::collections::HashMap::from([("gemini-3.7-flash".to_string(), standard)]),
+            std::time::SystemTime::now(),
+        ),
+    ));
+
+    let promotional_time = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let standard_time = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+    let usage = PricingUsage {
+        prompt_tokens: 2_000,
+        completion_tokens: 1_000,
+        total_tokens: 3_000,
+        cached_tokens: Some(1_000),
+        ..PricingUsage::default()
+    };
+
+    let promotional = service
+        .calculate_loaded_usage_cost_for_provider_at(
+            "gemini",
+            "gemini-3.7-flash",
+            &usage,
+            promotional_time,
+        )
+        .expect("historical lookup should reconstruct promotional catalog pricing");
+    let standard = service
+        .calculate_loaded_usage_cost_for_provider_at(
+            "gemini",
+            "gemini-3.7-flash",
+            &usage,
+            standard_time,
+        )
+        .expect("cutoff lookup should retain standard catalog pricing");
+
+    assert!((promotional.input_cost - 0.000_75).abs() < 1e-12);
+    assert!((promotional.cache_cost - 0.000_075).abs() < 1e-12);
+    assert!((promotional.output_cost - 0.003_75).abs() < 1e-12);
+    assert!((promotional.total_cost - 0.004_575).abs() < 1e-12);
+    assert!((standard.input_cost - 0.001_5).abs() < 1e-12);
+    assert!((standard.cache_cost - 0.000_15).abs() < 1e-12);
+    assert!((standard.output_cost - 0.007_5).abs() < 1e-12);
+    assert!((standard.total_cost - 0.009_15).abs() < 1e-12);
+}
+
+#[test]
 fn gemini_flash_schedule_does_not_override_explicit_custom_pricing() {
     use chrono::TimeZone;
 

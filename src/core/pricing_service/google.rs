@@ -50,10 +50,6 @@ pub(super) fn effective_model_info_at<'a>(
     pricing_time: DateTime<Utc>,
     catalog_owned: bool,
 ) -> Cow<'a, LiteLLMModelInfo> {
-    if pricing_time.timestamp() < GEMINI_FLASH_STANDARD_PRICING_START_UTC {
-        return Cow::Borrowed(model_info);
-    }
-
     let requested_provider = crate::core::pricing::normalize_pricing_provider(requested_provider);
     let catalog_provider =
         crate::core::pricing::normalize_pricing_provider(&model_info.litellm_provider);
@@ -66,38 +62,80 @@ pub(super) fn effective_model_info_at<'a>(
     if !matches!(local_model, "gemini-3.6-flash" | "gemini-3.7-flash") {
         return Cow::Borrowed(model_info);
     }
-    if !is_promotional_catalog_row(model_info, catalog_owned) {
-        return Cow::Borrowed(model_info);
-    }
 
-    let mut effective = model_info.clone();
-    effective.input_cost_per_token = Some(GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN);
-    effective.output_cost_per_token = Some(GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN);
-    effective.extra.insert(
-        "cache_read_input_token_cost".to_string(),
-        serde_json::json!(GEMINI_FLASH_STANDARD_CACHE_READ_COST_PER_TOKEN),
+    let is_promotional = is_catalog_row_at_rate(
+        model_info,
+        catalog_owned,
+        GEMINI_FLASH_PROMOTIONAL_INPUT_COST_PER_TOKEN,
+        GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN,
+        GEMINI_FLASH_PROMOTIONAL_CACHE_READ_COST_PER_TOKEN,
     );
-    effective.extra.insert(
-        "output_cost_per_reasoning_token".to_string(),
-        serde_json::json!(GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN),
+    let is_standard = is_catalog_row_at_rate(
+        model_info,
+        catalog_owned,
+        GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN,
+        GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN,
+        GEMINI_FLASH_STANDARD_CACHE_READ_COST_PER_TOKEN,
     );
-    Cow::Owned(effective)
+    let standard_time = pricing_time.timestamp() >= GEMINI_FLASH_STANDARD_PRICING_START_UTC;
+
+    match (standard_time, is_promotional, is_standard) {
+        (true, true, false) => model_info_with_rate(
+            model_info,
+            GEMINI_FLASH_STANDARD_INPUT_COST_PER_TOKEN,
+            GEMINI_FLASH_STANDARD_OUTPUT_COST_PER_TOKEN,
+            GEMINI_FLASH_STANDARD_CACHE_READ_COST_PER_TOKEN,
+        ),
+        (false, false, true) => model_info_with_rate(
+            model_info,
+            GEMINI_FLASH_PROMOTIONAL_INPUT_COST_PER_TOKEN,
+            GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN,
+            GEMINI_FLASH_PROMOTIONAL_CACHE_READ_COST_PER_TOKEN,
+        ),
+        _ => Cow::Borrowed(model_info),
+    }
 }
 
-fn is_promotional_catalog_row(model_info: &LiteLLMModelInfo, catalog_owned: bool) -> bool {
+fn is_catalog_row_at_rate(
+    model_info: &LiteLLMModelInfo,
+    catalog_owned: bool,
+    input_cost: f64,
+    output_cost: f64,
+    cache_read_cost: f64,
+) -> bool {
     catalog_owned
-        && model_info.input_cost_per_token == Some(GEMINI_FLASH_PROMOTIONAL_INPUT_COST_PER_TOKEN)
-        && model_info.output_cost_per_token == Some(GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN)
+        && model_info.input_cost_per_token == Some(input_cost)
+        && model_info.output_cost_per_token == Some(output_cost)
         && model_info
             .extra
             .get("cache_read_input_token_cost")
             .and_then(serde_json::Value::as_f64)
-            == Some(GEMINI_FLASH_PROMOTIONAL_CACHE_READ_COST_PER_TOKEN)
+            == Some(cache_read_cost)
         && model_info
             .extra
             .get("output_cost_per_reasoning_token")
             .and_then(serde_json::Value::as_f64)
-            .is_none_or(|price| price == GEMINI_FLASH_PROMOTIONAL_OUTPUT_COST_PER_TOKEN)
+            .is_none_or(|price| price == output_cost)
+}
+
+fn model_info_with_rate<'a>(
+    model_info: &'a LiteLLMModelInfo,
+    input_cost: f64,
+    output_cost: f64,
+    cache_read_cost: f64,
+) -> Cow<'a, LiteLLMModelInfo> {
+    let mut effective = model_info.clone();
+    effective.input_cost_per_token = Some(input_cost);
+    effective.output_cost_per_token = Some(output_cost);
+    effective.extra.insert(
+        "cache_read_input_token_cost".to_string(),
+        serde_json::json!(cache_read_cost),
+    );
+    effective.extra.insert(
+        "output_cost_per_reasoning_token".to_string(),
+        serde_json::json!(output_cost),
+    );
+    Cow::Owned(effective)
 }
 
 pub(super) fn maximum_scheduled_model_info<'a>(

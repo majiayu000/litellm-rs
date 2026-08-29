@@ -149,9 +149,11 @@ impl VertexAIProvider {
         let model = super::parse_vertex_model(&request.model);
         let is_catalog_gemini =
             super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
+        let is_legacy_gemini = super::is_exact_legacy_vertex_gemini_model(&request.model);
+        let is_gemini = is_catalog_gemini || is_legacy_gemini;
 
         // Transform request based on model type
-        let (endpoint, body) = if is_catalog_gemini {
+        let (endpoint, body) = if is_gemini {
             let endpoint = if request.stream {
                 "streamGenerateContent"
             } else {
@@ -187,7 +189,7 @@ impl VertexAIProvider {
             .map_err(|e| ProviderError::response_parsing("vertex_ai", e.to_string()))?;
 
         // Transform response back to standard format
-        if is_catalog_gemini {
+        if is_gemini {
             self.gemini_transformer
                 .transform_chat_response(response_body, &model)
         } else {
@@ -534,7 +536,7 @@ impl LLMProvider for VertexAIProvider {
         _context: RequestContext,
     ) -> std::result::Result<Value, ProviderError> {
         let model = super::parse_vertex_model(&request.model);
-        if super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental) {
+        if super::is_vertex_gemini_chat_model(&request.model, self.config.enable_experimental) {
             self.gemini_transformer
                 .transform_chat_request(&request, &model)
         } else if model.is_partner_model() {
@@ -568,7 +570,7 @@ impl LLMProvider for VertexAIProvider {
 
         let raw_model = model;
         let model = super::parse_vertex_model(raw_model);
-        if super::is_vertex_gemini_catalog_model(raw_model, self.config.enable_experimental) {
+        if super::is_vertex_gemini_chat_model(raw_model, self.config.enable_experimental) {
             self.gemini_transformer
                 .transform_chat_response(response_json, &model)
         } else if model.is_partner_model() {
