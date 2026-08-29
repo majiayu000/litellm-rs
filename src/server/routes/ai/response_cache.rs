@@ -149,6 +149,7 @@ pub(super) fn ensure_chat_cache_pricing_gate(
                 pricing.as_ref(),
                 provider,
                 selected_model,
+                ProviderCapability::ChatCompletion,
             );
             let token_model = super::spend::token_count_model_id(&pricing_provider, &pricing_model);
             let prompt_tokens = super::spend::try_estimate_chat_prompt_tokens(
@@ -198,6 +199,7 @@ pub(super) fn ensure_embedding_cache_pricing_gate(
                 pricing.as_ref(),
                 provider,
                 selected_model,
+                ProviderCapability::Embeddings,
             );
             let prompt_tokens = super::spend::estimate_embedding_input_tokens(
                 &pricing_provider,
