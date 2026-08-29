@@ -4,6 +4,17 @@
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
+    use litellm_rs::core::models::openai::messages::ChatMessageWithExtensions;
+    use litellm_rs::core::models::openai::{
+        ChatMessage as OpenAiChatMessage, MessageContent as OpenAiMessageContent,
+        MessageRole as OpenAiMessageRole,
+    };
+    use litellm_rs::core::types::anthropic_continuation::{
+        AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock,
+        AnthropicThinkingContent, ChatMessageExtensions,
+    };
     use litellm_rs::core::types::chat::{ChatMessage, ChatRequest};
     use litellm_rs::core::types::message::{MessageContent, MessageRole};
     use litellm_rs::core::types::responses::Usage;
@@ -89,6 +100,174 @@ mod tests {
 
         msg.thinking = Some(ThinkingContent::text("Step 1: Analyze"));
         assert_eq!(msg.thinking_text(), Some("Step 1: Analyze"));
+    }
+
+    #[test]
+    fn public_chat_message_and_thinking_enum_remain_source_compatible() {
+        let message = OpenAiChatMessage {
+            role: OpenAiMessageRole::Assistant,
+            content: Some(OpenAiMessageContent::Text("done".to_string())),
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: None,
+        };
+        assert!(matches!(
+            &message.content,
+            Some(OpenAiMessageContent::Text(_))
+        ));
+
+        let legacy_json = serde_json::to_value(&message).expect("serialize legacy message");
+        let wrapped_json = serde_json::to_value(ChatMessageWithExtensions::new(message))
+            .expect("serialize extension wrapper without extensions");
+        assert_eq!(wrapped_json, legacy_json);
+
+        fn existing_exhaustive_match(content: ThinkingContent) -> &'static str {
+            match content {
+                ThinkingContent::Text { .. } => "text",
+                ThinkingContent::Block { .. } => "block",
+                ThinkingContent::Redacted { .. } => "redacted",
+            }
+        }
+
+        assert_eq!(
+            existing_exhaustive_match(ThinkingContent::redacted(None)),
+            "redacted"
+        );
+    }
+
+    #[test]
+    fn typed_anthropic_continuation_has_lossless_cow_and_secret_safe_output() {
+        let signature =
+            AnthropicSignature::try_from("opaque-signature").expect("non-empty signature is valid");
+        let redacted = AnthropicRedactedData::try_from("opaque-redacted-data")
+            .expect("non-empty redacted data is valid");
+        let single = AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
+            thinking: "visible".to_string(),
+            signature: signature.clone(),
+        }]);
+        assert!(matches!(single.as_text(), Some(Cow::Borrowed("visible"))));
+
+        let ordered = AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "first ".to_string(),
+                signature: signature.clone(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: redacted.clone(),
+            },
+            AnthropicThinkingBlock::Thinking {
+                thinking: "second".to_string(),
+                signature: signature.clone(),
+            },
+        ]);
+        assert!(matches!(ordered.as_text(), Some(Cow::Owned(ref text)) if text == "first second"));
+
+        let omitted = AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: String::new(),
+                signature: signature.clone(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: redacted.clone(),
+            },
+        ]);
+        assert_eq!(omitted.as_text(), None);
+
+        for rendered in [
+            format!("{signature:?}"),
+            signature.to_string(),
+            format!("{redacted:?}"),
+            redacted.to_string(),
+            format!("{ordered:?}"),
+        ] {
+            assert!(!rendered.contains("opaque-signature"));
+            assert!(!rendered.contains("opaque-redacted-data"));
+        }
+    }
+
+    #[test]
+    fn extended_chat_message_roundtrips_validated_anthropic_blocks() {
+        let content = AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "plan".to_string(),
+                signature: AnthropicSignature::try_from("opaque-signature")
+                    .expect("non-empty signature is valid"),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: AnthropicRedactedData::try_from("opaque-redacted-data")
+                    .expect("non-empty redacted data is valid"),
+            },
+        ]);
+        let extensions = ChatMessageExtensions::new().with_anthropic_thinking(content.clone());
+        let message = OpenAiChatMessage {
+            role: OpenAiMessageRole::Assistant,
+            content: None,
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: None,
+        };
+        let extended = ChatMessageWithExtensions::new(message).with_extensions(extensions);
+
+        let encoded = serde_json::to_value(&extended).expect("serialize extension DTO");
+        assert_eq!(encoded["role"], "assistant");
+        assert_eq!(
+            encoded["extensions"]["anthropic_thinking"][0]["type"],
+            "thinking"
+        );
+        let decoded: ChatMessageWithExtensions =
+            serde_json::from_value(encoded).expect("deserialize extension DTO");
+
+        assert_eq!(decoded.extensions().anthropic_thinking(), Some(&content));
+        assert_eq!(decoded.message().role, OpenAiMessageRole::Assistant);
+
+        let missing_signature = serde_json::from_str::<AnthropicThinkingContent>(
+            r#"[{"type":"thinking","thinking":"visible","signature":""}]"#,
+        );
+        assert!(missing_signature.is_err());
+        let missing_redacted_data = serde_json::from_str::<AnthropicThinkingContent>(
+            r#"[{"type":"redacted_thinking","data":""}]"#,
+        );
+        assert!(missing_redacted_data.is_err());
+
+        assert!(
+            serde_json::from_str::<AnthropicThinkingContent>(
+                r#"[{"type":"thinking","thinking":"visible"}]"#,
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<AnthropicThinkingContent>(r#"[{"type":"redacted_thinking"}]"#,)
+                .is_err()
+        );
+        assert!(AnthropicSignature::try_from("").is_err());
+        assert!(AnthropicRedactedData::try_from("").is_err());
+
+        let unknown_block_integrity = serde_json::from_str::<AnthropicThinkingContent>(
+            r#"[{"type":"thinking","thinking":"visible","signature":"opaque","future_integrity":"must-not-drop"}]"#,
+        );
+        assert!(unknown_block_integrity.is_err());
+
+        let unknown_provider_extension =
+            serde_json::from_value::<ChatMessageWithExtensions>(serde_json::json!({
+                "role": "assistant",
+                "content": null,
+                "extensions": {
+                    "future_provider": {"opaque": "must-not-drop"}
+                }
+            }));
+        assert!(unknown_provider_extension.is_err());
+
+        let legacy_with_unknown_top_level =
+            serde_json::from_value::<OpenAiChatMessage>(serde_json::json!({
+                "role": "assistant",
+                "content": "done",
+                "future_top_level": "legacy-compatible"
+            }));
+        assert!(legacy_with_unknown_top_level.is_ok());
     }
 
     // ==================== ChatRequest Tests ====================
