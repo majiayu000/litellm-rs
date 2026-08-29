@@ -17,6 +17,7 @@ impl ProviderConfigBuilder {
             base_url: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
             models: Vec::new(),
+            model_identity_mappings: std::collections::HashMap::new(),
             max_requests_per_minute: None,
             timeout: None,
             enabled: true,
@@ -67,6 +68,17 @@ impl ProviderConfigBuilder {
         self
     }
 
+    /// Bind a configured wire/deployment model to exact capability and pricing identities.
+    pub fn model_identity_mapping(
+        mut self,
+        deployment: impl Into<String>,
+        mapping: crate::core::providers::model_identity::ModelIdentityMapping,
+    ) -> Self {
+        self.model_identity_mappings
+            .insert(deployment.into(), mapping);
+        self
+    }
+
     /// Set the rate limit
     pub fn rate_limit(mut self, requests_per_minute: u32) -> Self {
         self.max_requests_per_minute = Some(requests_per_minute);
@@ -110,6 +122,14 @@ impl ProviderConfigBuilder {
             .provider_type
             .ok_or_else(|| GatewayError::Config("Provider type is required".to_string()))?;
 
+        let mut settings = std::collections::HashMap::new();
+        if !self.model_identity_mappings.is_empty() {
+            settings.insert(
+                crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+                serde_json::to_value(self.model_identity_mappings)
+                    .map_err(|error| GatewayError::Config(error.to_string()))?,
+            );
+        }
         Ok(ProviderConfig {
             name: name.into_string(),
             provider_type: provider_type.into_string(),
@@ -128,7 +148,7 @@ impl ProviderConfigBuilder {
             max_retries: 3,
             retry: crate::config::models::provider::RetryConfig::default(),
             health_check: crate::config::models::provider::ProviderHealthCheckConfig::default(),
-            settings: std::collections::HashMap::new(),
+            settings,
             models: self.models,
             enabled: self.enabled,
             tags: Vec::new(),
@@ -157,6 +177,7 @@ mod tests {
         assert!(builder.base_url.is_none());
         assert_eq!(builder.endpoint_access, ProviderEndpointAccess::PublicOnly);
         assert!(builder.models.is_empty());
+        assert!(builder.model_identity_mappings.is_empty());
         assert!(builder.max_requests_per_minute.is_none());
         assert!(builder.timeout.is_none());
         assert!(builder.enabled);
@@ -223,6 +244,35 @@ mod tests {
     fn test_provider_config_builder_add_model() {
         let builder = ProviderConfigBuilder::new().add_model("gpt-4");
         assert_eq!(builder.models, vec!["gpt-4"]);
+    }
+
+    #[test]
+    fn model_identity_mapping_serializes_typed_settings() {
+        let config = ProviderConfigBuilder::new()
+            .name("azure-prod")
+            .unwrap()
+            .provider_type("azure")
+            .unwrap()
+            .add_model("deployment-a")
+            .model_identity_mapping(
+                "deployment-a",
+                crate::core::providers::model_identity::ModelIdentityMapping::new(
+                    Some("gpt-4".to_string()),
+                    None,
+                ),
+            )
+            .build()
+            .unwrap();
+        assert_eq!(
+            config.settings[crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY]["deployment-a"]
+                ["capability_catalog_model"],
+            "gpt-4"
+        );
+        assert!(
+            config.settings[crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY]
+                ["deployment-a"]["pricing_model"]
+                .is_null()
+        );
     }
 
     #[test]

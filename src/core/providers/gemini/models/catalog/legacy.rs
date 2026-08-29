@@ -11,6 +11,8 @@ use crate::core::providers::shared::{
 };
 use crate::core::types::model::ModelInfo;
 
+const GEMINI_15_FLASH_CONTEXT_WINDOW: u32 = 1_048_576;
+
 pub(super) fn register(registry: &mut GeminiModelRegistry) {
     // ==================== Gemini 2.0 Series ====================
 
@@ -177,7 +179,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 id: "gemini-1.5-flash".to_string(),
                 name: "Gemini 1.5 Flash".to_string(),
                 provider: "gemini".to_string(),
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_15_FLASH_CONTEXT_WINDOW,
                 max_output_length: Some(8192),
                 supports_streaming: true,
                 supports_tools: true,
@@ -214,7 +216,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 Some(0.0001),
             ),
             limits: ModelLimits {
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_15_FLASH_CONTEXT_WINDOW,
                 max_output_tokens: 8192,
                 max_images: Some(3000),
                 max_video_seconds: Some(3600),
@@ -233,7 +235,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 id: "gemini-1.5-flash-8b".to_string(),
                 name: "Gemini 1.5 Flash 8B".to_string(),
                 provider: "gemini".to_string(),
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_15_FLASH_CONTEXT_WINDOW,
                 max_output_length: Some(8192),
                 supports_streaming: true,
                 supports_tools: true,
@@ -268,7 +270,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 Some(0.00005),
             ),
             limits: ModelLimits {
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_15_FLASH_CONTEXT_WINDOW,
                 max_output_tokens: 8192,
                 max_images: Some(3000),
                 max_video_seconds: Some(3600),

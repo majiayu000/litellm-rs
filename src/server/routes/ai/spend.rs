@@ -25,8 +25,8 @@ use crate::core::types::responses::{ChatChunk, Usage};
 use std::sync::LazyLock;
 
 pub(super) use completion::{
-    ChatCompletionBudgetRequest, reserve_chat_completion_budget_with_split_pricing,
-    try_estimate_chat_prompt_tokens,
+    ChatCompletionBudgetRequest, estimate_chat_prompt_tokens,
+    reserve_chat_completion_budget_with_request_pricing,
 };
 #[cfg(test)]
 pub(super) use completion::{
@@ -40,9 +40,9 @@ pub(in crate::server::routes::ai) use key_budget::{
     settle_api_key_budget_reservation,
 };
 pub(super) use pricing::{
-    estimate_embedding_input_tokens, pricing_identity_for_provider,
-    record_pricing_usage_spend_with_reservation_with_policy, reserve_embedding_budget_with_policy,
-    reserve_pricing_usage_budget_with_policy,
+    RequestPricing, record_pricing_usage_spend_with_request_pricing, request_pricing_for_provider,
+    reserve_embedding_budget_with_request_pricing,
+    reserve_pricing_usage_budget_with_request_pricing,
 };
 pub(super) use unpriced::{
     fallback_cost_for_usage, is_model_not_priced_error, model_not_priced_error,
@@ -150,6 +150,7 @@ pub(super) struct UsageSpendSettlement<'a> {
     pub(super) model: &'a str,
     pub(super) pricing_provider: &'a str,
     pub(super) pricing_model: &'a str,
+    pub(super) request_pricing: Option<RequestPricing>,
     pub(super) usage: Option<&'a Usage>,
     pub(super) budget_reservation: Option<UnifiedBudgetReservation>,
     pub(super) key_budget_reservation: Option<BudgetReservation>,
@@ -189,10 +190,24 @@ pub(super) fn usage_spend_settlement_with_pricing<'a>(
         model,
         pricing_provider,
         pricing_model,
+        request_pricing: None,
         usage,
         budget_reservation,
         key_budget_reservation,
     }
+}
+
+pub(super) fn usage_spend_settlement_with_request_pricing<'a>(
+    core: (&'a UnifiedBudgetLimits, &'a KeyManager, Option<Uuid>),
+    usage: (&'a str, &'a str, Option<&'a Usage>),
+    request_pricing: RequestPricing,
+    budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
+) -> UsageSpendSettlement<'a> {
+    let mut settlement =
+        usage_spend_settlement(core, usage, budget_reservation, key_budget_reservation);
+    settlement.request_pricing = Some(request_pricing);
+    settlement
 }
 
 #[cfg(test)]
@@ -231,6 +246,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
         model,
         pricing_provider,
         pricing_model,
+        request_pricing,
         usage,
         budget_reservation,
         key_budget_reservation,
@@ -253,11 +269,15 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     let total_tokens = u64::from(usage.total_tokens);
     let usage_tokens = PricingUsage::from(usage);
 
-    let cost = match pricing_service.calculate_loaded_settlement_cost_for_provider(
-        pricing_provider,
-        pricing_model,
-        &usage_tokens,
-    ) {
+    let priced = match request_pricing.as_ref() {
+        Some(request_pricing) => request_pricing.calculate_settlement(&usage_tokens),
+        None => pricing_service.calculate_loaded_settlement_cost_for_provider(
+            pricing_provider,
+            pricing_model,
+            &usage_tokens,
+        ),
+    };
+    let cost = match priced {
         Ok(breakdown) => breakdown.total_cost,
         Err(e) => {
             tracing::error!(
@@ -394,22 +414,34 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         model,
         pricing_provider,
         pricing_model,
+        request_pricing,
         usage,
         budget_reservation,
         key_budget_reservation,
     } = settlement;
 
     if let Some(usage) = usage {
-        record_completion_spend_with_reservation_with_policy(
-            pricing_service,
-            pricing_config,
+        let settlement = if let Some(request_pricing) = request_pricing {
+            usage_spend_settlement_with_request_pricing(
+                (budget_limits, key_manager, api_key_id),
+                (provider, model, Some(usage)),
+                request_pricing,
+                budget_reservation,
+                key_budget_reservation,
+            )
+        } else {
             usage_spend_settlement_with_pricing(
                 (budget_limits, key_manager, api_key_id),
                 (provider, model, Some(usage)),
                 (pricing_provider, pricing_model),
                 budget_reservation,
                 key_budget_reservation,
-            ),
+            )
+        };
+        record_completion_spend_with_reservation_with_policy(
+            pricing_service,
+            pricing_config,
+            settlement,
         )
         .await;
         return;
@@ -433,8 +465,7 @@ pub(super) struct StreamSpendSettlement<'a> {
     pub(super) api_key_id: Option<Uuid>,
     pub(super) provider: &'a str,
     pub(super) model: &'a str,
-    pub(super) pricing_provider: &'a str,
-    pub(super) pricing_model: &'a str,
+    pub(super) request_pricing: RequestPricing,
     pub(super) usage: Option<&'a Usage>,
     pub(super) saw_upstream_output: bool,
     pub(super) budget_reservation: Option<UnifiedBudgetReservation>,
@@ -477,8 +508,7 @@ pub(super) async fn record_finished_stream_spend_with_reservation_with_policy(
         api_key_id,
         provider,
         model,
-        pricing_provider,
-        pricing_model,
+        request_pricing,
         usage,
         saw_upstream_output,
         budget_reservation,
@@ -489,10 +519,10 @@ pub(super) async fn record_finished_stream_spend_with_reservation_with_policy(
         record_stream_disconnect_spend_with_reservation_with_policy(
             pricing_service,
             pricing_config,
-            usage_spend_settlement_with_pricing(
+            usage_spend_settlement_with_request_pricing(
                 (budget_limits, key_manager, api_key_id),
                 (provider, model, usage),
-                (pricing_provider, pricing_model),
+                request_pricing,
                 budget_reservation,
                 key_budget_reservation,
             ),
@@ -504,10 +534,10 @@ pub(super) async fn record_finished_stream_spend_with_reservation_with_policy(
     record_completion_spend_with_reservation_with_policy(
         pricing_service,
         pricing_config,
-        usage_spend_settlement_with_pricing(
+        usage_spend_settlement_with_request_pricing(
             (budget_limits, key_manager, api_key_id),
             (provider, model, usage),
-            (pricing_provider, pricing_model),
+            request_pricing,
             budget_reservation,
             key_budget_reservation,
         ),

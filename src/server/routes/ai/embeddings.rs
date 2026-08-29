@@ -15,6 +15,11 @@ use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
 use super::callbacks::CallbackLifecycle;
 use super::context::handle_ai_request;
 
+enum EmbeddingAttemptResponse {
+    Cached(EmbeddingResponse),
+    Provider(crate::core::types::responses::EmbeddingResponse),
+}
+
 fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, GatewayError> {
     match input {
         serde_json::Value::String(s) => Ok(EmbeddingInput::Text(s.clone())),
@@ -95,11 +100,8 @@ async fn handle_embedding_internal(
     if request.model.trim().is_empty() {
         return Err(GatewayError::validation("Model is required"));
     }
-    if let Some(cached) = super::response_cache::lookup_embedding(state, &request, &context).await?
-    {
-        super::response_cache::ensure_embedding_cache_pricing_gate(state, &request, &input)?;
-        return Ok(cached);
-    }
+    let cached_response =
+        super::response_cache::lookup_embedding(state, &request, &context).await?;
     let request_for_cache = request.clone();
 
     let requested_model = request.model.clone();
@@ -140,29 +142,34 @@ async fn handle_embedding_internal(
             let pricing_service = pricing_service.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
+            let cached_response = cached_response.clone();
             async move {
                 let budget_provider = provider.name().to_string();
-                let (pricing_provider, pricing_model) = super::spend::pricing_identity_for_provider(
-                    pricing_service.as_ref(),
+                let request_pricing = super::spend::request_pricing_for_provider(
+                    &pricing_service,
                     &provider,
                     &selected_model,
                     ProviderCapability::Embeddings,
-                );
+                )?;
+                if let Some(cached) = cached_response {
+                    super::response_cache::ensure_embedding_cache_pricing_for_attempt(
+                        &request_pricing,
+                        &budget_provider,
+                        &selected_model,
+                    )?;
+                    return Ok((EmbeddingAttemptResponse::Cached(cached), 0));
+                }
                 let mut request_for_provider = core_request.clone();
                 request_for_provider.model = selected_model.clone();
-                let reserve_pricing_service = pricing_service.clone();
                 let settle_pricing_service = pricing_service.clone();
                 let reserve_pricing_config = pricing_config.clone();
                 let settle_pricing_config = pricing_config;
-                let reserve_pricing_provider = pricing_provider.clone();
-                let reserve_pricing_model = pricing_model.clone();
-                let settle_pricing_provider = pricing_provider;
-                let settle_pricing_model = pricing_model;
+                let reserve_request_pricing = request_pricing.clone();
+                let settle_request_pricing = request_pricing.clone();
                 let settle_key_manager = key_manager.clone();
                 let callback_provider = budget_provider.clone();
                 let callback_model = selected_model.clone();
-                let callback_pricing_provider = reserve_pricing_provider.clone();
-                let callback_pricing_model = reserve_pricing_model.clone();
+                let callback_request_pricing = request_pricing;
                 budgeted
                     .for_selected_with_api_key_budget(
                         budget_provider.clone(),
@@ -172,23 +179,20 @@ async fn handle_embedding_internal(
                     )
                     .reserve_call_settle(
                         |budget| {
-                            super::spend::reserve_embedding_budget_with_policy(
-                                reserve_pricing_service.as_ref(),
+                            super::spend::reserve_embedding_budget_with_request_pricing(
+                                &reserve_request_pricing,
                                 &reserve_pricing_config,
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                &reserve_pricing_provider,
-                                &reserve_pricing_model,
                                 &core_request.input,
                             )
                         },
                         || {
-                            callback.begin_provider_execution(
+                            callback.begin_provider_execution_with_pricing(
                                 callback_provider,
                                 callback_model,
-                                callback_pricing_provider,
-                                callback_pricing_model,
+                                callback_request_pricing,
                             );
                             provider.create_embeddings(request_for_provider, context)
                         },
@@ -203,16 +207,14 @@ async fn handle_embedding_internal(
                                     .unwrap_or_default();
                                 if let Some(usage) = response.usage.as_ref() {
                                     let usage = PricingUsage::from(usage);
-                                    super::spend::record_pricing_usage_spend_with_reservation_with_policy(
-                                        settle_pricing_service.as_ref(),
+                                    super::spend::record_pricing_usage_spend_with_request_pricing(
+                                        &settle_request_pricing,
                                         &settle_pricing_config,
                                         budget.budget_limits(),
                                         &settle_key_manager,
                                         api_key_id,
                                         budget.provider(),
                                         budget.model(),
-                                        &settle_pricing_provider,
-                                        &settle_pricing_model,
                                         &usage,
                                         budget_reservation,
                                         key_budget_reservation,
@@ -240,6 +242,9 @@ async fn handle_embedding_internal(
                         },
                     )
                     .await
+                    .map(|(response, tokens)| {
+                        (EmbeddingAttemptResponse::Provider(response), tokens)
+                    })
             }
         },
     )
@@ -250,6 +255,11 @@ async fn handle_embedding_internal(
             callback.fail(error.to_string(), "provider_error");
             return Err(error);
         }
+    };
+
+    let core_response = match core_response {
+        EmbeddingAttemptResponse::Cached(cached) => return Ok(cached),
+        EmbeddingAttemptResponse::Provider(response) => response,
     };
 
     // Convert core response to OpenAI format

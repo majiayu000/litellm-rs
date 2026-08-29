@@ -413,6 +413,7 @@ macro_rules! dispatch_provider_selective {
 mod audio_dispatch;
 mod capability_dispatch;
 mod model_health_check;
+pub mod model_identity;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///
@@ -451,6 +452,84 @@ pub enum Provider {
 }
 
 impl Provider {
+    pub(crate) fn bind_deployment_model_identity(
+        &mut self,
+        identity: model_identity::DeploymentModelIdentity,
+        pricing: std::sync::Arc<crate::core::pricing_service::PricingService>,
+    ) -> Result<(), String> {
+        let binding = model_identity::DeploymentProviderBinding::new(identity, pricing);
+        match self {
+            Provider::OpenAI(provider) => provider.model_identity = Some(binding),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider.model_identity = Some(binding),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider.model_identity = Some(binding),
+            _ => {
+                return Err(format!(
+                    "provider '{}' does not use OpenAI-family deployment identity",
+                    self.name()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn deployment_model_identity(
+        &self,
+    ) -> Option<&model_identity::DeploymentModelIdentity> {
+        match self {
+            Provider::OpenAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn runtime_pricing(
+        &self,
+    ) -> Option<std::sync::Arc<crate::core::pricing_service::PricingService>> {
+        match self {
+            Provider::OpenAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            _ => None,
+        }
+        .map(std::sync::Arc::clone)
+    }
+
+    pub(crate) fn legacy_openai_model_target<'a>(&'a self, model: &'a str) -> Option<&'a str> {
+        match self {
+            Provider::OpenAI(provider) => provider
+                .config
+                .model_mappings
+                .get(model)
+                .map(String::as_str),
+            _ => None,
+        }
+    }
+
     pub(crate) async fn gemini_generate_content(
         &self,
         request: GeminiNativeRequest,
@@ -583,6 +662,14 @@ impl Provider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
+        if let Some(result) = model_identity::calculate_managed_provider_cost(
+            self,
+            model,
+            input_tokens,
+            output_tokens,
+        ) {
+            return result;
+        }
         use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
         let model = self.strip_provider_prefix(model);
         dispatch_provider!(

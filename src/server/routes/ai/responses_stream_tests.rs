@@ -219,16 +219,18 @@ async fn disconnect_after_upstream_output_settles_reserved_budget() {
             .unwrap()
             .unwrap();
     let reserved = reservation.reserved_amount();
+    let pricing_service = test_pricing_service();
+    let request_pricing =
+        spend::RequestPricing::from_exact(pricing_service.as_ref(), "openai", "gpt-4o");
     let mut settlement = StreamBudgetSettlement {
-        pricing_service: test_pricing_service(),
+        pricing_service,
         pricing_config: GatewayPricingConfig::default(),
         budget_limits: Arc::clone(&budget),
         key_manager: KeyManager::new(InMemoryKeyRepository::new()),
         api_key_id: None,
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
-        pricing_provider: "openai".to_string(),
-        pricing_model: "gpt-4o".to_string(),
+        request_pricing,
         budget_reservation: Some(reservation),
         key_budget_reservation: None,
     };
@@ -269,16 +271,18 @@ async fn completed_stream_without_usage_after_output_settles_reserved_budget() {
             .unwrap()
             .unwrap();
     let reserved = reservation.reserved_amount();
+    let pricing_service = test_pricing_service();
+    let request_pricing =
+        spend::RequestPricing::from_exact(pricing_service.as_ref(), "openai", "gpt-4o");
     let settlement = StreamBudgetSettlement {
-        pricing_service: test_pricing_service(),
+        pricing_service,
         pricing_config: GatewayPricingConfig::default(),
         budget_limits: Arc::clone(&budget),
         key_manager: KeyManager::new(InMemoryKeyRepository::new()),
         api_key_id: None,
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
-        pricing_provider: "openai".to_string(),
-        pricing_model: "gpt-4o".to_string(),
+        request_pricing,
         budget_reservation: Some(reservation),
         key_budget_reservation: None,
     };
