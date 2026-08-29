@@ -2,9 +2,53 @@ use super::model_catalog_authority::{
     CatalogAuthority, CatalogClassification, CatalogDecision, CatalogEndpoint, CatalogResolution,
 };
 use crate::core::types::model::ProviderCapability;
+use sha2::{Digest, Sha256};
+
+fn with_valid_classification_digest(mut document: serde_json::Value) -> String {
+    let metadata = document["_metadata"].clone();
+    let semantic = serde_json::json!({
+        "schema_version": metadata["schema_version"],
+        "revision": metadata["revision"],
+        "enforced_providers": metadata["enforced_providers"],
+        "provider_aliases": document["provider_aliases"],
+        "entries": document["entries"],
+    });
+    let canonical = serde_json::to_vec(&semantic).expect("test semantic JSON must serialize");
+    document["_metadata"]["classification_sha256"] =
+        serde_json::json!(format!("{:x}", Sha256::digest(canonical)));
+    document.to_string()
+}
+
+fn with_valid_authority_digests(document: serde_json::Value) -> String {
+    let mut document: serde_json::Value =
+        serde_json::from_str(&with_valid_classification_digest(document))
+            .expect("classification fixture must remain valid JSON");
+    let mut identities: Vec<_> = document["entries"]
+        .as_array()
+        .expect("entries array")
+        .iter()
+        .map(|entry| {
+            serde_json::json!([
+                entry["provider"].as_str().expect("provider string"),
+                entry["pricing_key"].as_str().expect("pricing key string")
+            ])
+        })
+        .collect();
+    identities.sort_unstable_by(|left, right| {
+        left[0]
+            .as_str()
+            .cmp(&right[0].as_str())
+            .then_with(|| left[1].as_str().cmp(&right[1].as_str()))
+    });
+    document["_metadata"]["pricing_universe_sha256"] = serde_json::json!(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&identities).expect("identities must serialize"))
+    ));
+    document.to_string()
+}
 
 fn authority_json() -> String {
-    serde_json::json!({
+    with_valid_authority_digests(serde_json::json!({
         "_metadata": {
             "schema_version": 1,
             "revision": "test-ledger-1",
@@ -69,8 +113,7 @@ fn authority_json() -> String {
                 "aliases": []
             }
         ]
-    })
-    .to_string()
+    }))
 }
 
 fn cross_class_authority_json(
@@ -129,7 +172,7 @@ fn cross_class_authority_json(
             target_provider: target_counts
         })
     };
-    serde_json::json!({
+    with_valid_authority_digests(serde_json::json!({
         "_metadata": {
             "schema_version": 1,
             "revision": "test-ledger-1",
@@ -152,8 +195,105 @@ fn cross_class_authority_json(
             },
             target_entry
         ]
-    })
-    .to_string()
+    }))
+}
+
+#[test]
+fn classification_digest_must_match_the_canonical_entries() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    document["entries"][0]["catalog_model_id"] = serde_json::json!("tampered-model");
+
+    let error = CatalogAuthority::from_json(&document.to_string())
+        .expect_err("entry mutation with the old classification digest must fail");
+    assert!(error.to_string().contains("classification_sha256 mismatch"));
+}
+
+#[test]
+fn pricing_universe_digest_must_match_entry_identities() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    document["entries"][0]["pricing_key"] = serde_json::json!("tampered-price-key");
+
+    let error = CatalogAuthority::from_json(&with_valid_classification_digest(document))
+        .expect_err("entry identity mutation with the old pricing digest must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("pricing_universe_sha256 mismatch")
+    );
+}
+
+#[test]
+fn runtime_rejects_callable_lists_that_the_generator_rejects() {
+    let invalid_lists = [
+        ("evidence_sources", serde_json::json!([""])),
+        ("evidence_sources", serde_json::json!(["review", "review"])),
+        (
+            "endpoints",
+            serde_json::json!(["chat_completions", "chat_completions"]),
+        ),
+        (
+            "capabilities",
+            serde_json::json!(["chat_completion", "chat_completion"]),
+        ),
+        ("supported_parameters", serde_json::json!([""])),
+        (
+            "supported_parameters",
+            serde_json::json!(["messages", "messages"]),
+        ),
+    ];
+
+    for (field, invalid_value) in invalid_lists {
+        let mut document: serde_json::Value =
+            serde_json::from_str(&authority_json()).expect("valid test authority");
+        document["entries"][0][field] = invalid_value;
+        let error = CatalogAuthority::from_json(&with_valid_authority_digests(document))
+            .expect_err("malformed callable list must fail closed");
+        assert!(error.to_string().contains(field), "{field}: {error}");
+    }
+}
+
+#[test]
+fn runtime_rejects_reserved_pricing_control_keys() {
+    for control_key in ["_metadata", "fallback_generalizations", "sample_spec"] {
+        let mut document: serde_json::Value =
+            serde_json::from_str(&authority_json()).expect("valid test authority");
+        document["entries"][2]["pricing_key"] = serde_json::json!(control_key);
+        let error = CatalogAuthority::from_json(&with_valid_authority_digests(document))
+            .expect_err("pricing control key must not become a model identity");
+        assert!(
+            error.to_string().contains("control key"),
+            "{control_key}: {error}"
+        );
+    }
+}
+
+#[test]
+fn empty_entry_provider_and_pricing_identity_fail_closed() {
+    let mut empty_provider: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    empty_provider["entries"][2]["provider"] = serde_json::json!("");
+    let other_coverage = empty_provider["_metadata"]["provider_coverage"]["other"].take();
+    empty_provider["_metadata"]["provider_coverage"]
+        .as_object_mut()
+        .expect("coverage object")
+        .remove("other");
+    empty_provider["_metadata"]["provider_coverage"][""] = other_coverage;
+    empty_provider["provider_aliases"]
+        .as_object_mut()
+        .expect("provider aliases object")
+        .remove("other");
+    let error = CatalogAuthority::from_json(&with_valid_authority_digests(empty_provider))
+        .expect_err("empty entry provider must fail");
+    assert!(error.to_string().contains("entry provider cannot be empty"));
+
+    let mut empty_pricing_key: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("valid test authority");
+    empty_pricing_key["entries"][2]["pricing_key"] = serde_json::json!("");
+    let error = CatalogAuthority::from_json(&with_valid_authority_digests(empty_pricing_key))
+        .expect_err("empty pricing identity must fail");
+    assert!(error.to_string().contains("pricing key cannot be empty"));
 }
 
 #[test]
@@ -271,11 +411,11 @@ fn strict_schema_and_exact_collisions_fail_closed() {
     );
     assert!(CatalogAuthority::from_json(&with_unknown).is_err());
 
-    let duplicate = authority_json().replace(
-        "\"pricing_key\":\"openai/container\"",
-        "\"pricing_key\":\"gpt-test\"",
-    );
-    let error = CatalogAuthority::from_json(&duplicate).expect_err("duplicate must fail");
+    let mut duplicate: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("test fixture must parse");
+    duplicate["entries"][1]["pricing_key"] = serde_json::json!("gpt-test");
+    let error = CatalogAuthority::from_json(&with_valid_authority_digests(duplicate))
+        .expect_err("duplicate must fail");
     assert!(
         error
             .to_string()
@@ -299,6 +439,17 @@ fn strict_schema_and_exact_collisions_fail_closed() {
     );
     let error = CatalogAuthority::from_json(&self_alias).expect_err("self alias must fail");
     assert!(error.to_string().contains("own exact pricing row"));
+}
+
+#[test]
+fn repeated_provider_aliases_fail_closed() {
+    let mut duplicate: serde_json::Value =
+        serde_json::from_str(&authority_json()).expect("test fixture must parse");
+    duplicate["provider_aliases"]["openai"] = serde_json::json!(["oa", "oa"]);
+
+    let error = CatalogAuthority::from_json(&with_valid_authority_digests(duplicate))
+        .expect_err("repeated provider aliases must fail");
+    assert!(error.to_string().contains("duplicate provider alias"));
 }
 
 #[test]
@@ -384,6 +535,11 @@ fn embedded_authority_enforces_reviewed_and_unreviewed_rows_without_inference() 
     assert_eq!(
         authority.classification("openai", "chatgpt-4o-latest"),
         CatalogClassification::PricingOnly
+    );
+    assert_eq!(
+        authority.resolve_model("azure", "azure-openai/container"),
+        CatalogResolution::PricingOnly,
+        "an alias-qualified exact pricing key must preserve its canonical classification"
     );
     assert_eq!(
         authority.classification("azure_ai", "azure_ai/FW-DeepSeek-V4-Pro"),

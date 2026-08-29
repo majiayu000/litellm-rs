@@ -9,14 +9,18 @@ fn parse_litellm_pricing_json_filters_metadata_entries() {
             "_metadata": {"source": "upstream"},
             "fallback_generalizations": {"gpt-test": "gpt"},
             "_comment": {
+                "max_tokens": 4096,
                 "input_cost_per_token": 0.000003,
                 "output_cost_per_token": 0.000004,
-                "litellm_provider": "test"
+                "litellm_provider": "test",
+                "mode": "chat"
             },
             "provider_example_model": {
+                "max_tokens": 4096,
                 "input_cost_per_token": 0.000005,
                 "output_cost_per_token": 0.000006,
-                "litellm_provider": "test"
+                "litellm_provider": "example_provider",
+                "mode": "chat"
             },
             "gpt-test": {
                 "max_tokens": 4096,
@@ -30,6 +34,10 @@ fn parse_litellm_pricing_json_filters_metadata_entries() {
     let parsed = parse_litellm_pricing_json(content).unwrap();
 
     assert_eq!(parsed.len(), 3);
+    assert_eq!(
+        parsed["provider_example_model"].litellm_provider,
+        "example_provider"
+    );
     assert_eq!(parsed["gpt-test"].litellm_provider, "openai");
     assert_eq!(parsed["gpt-test"].input_cost_per_token, Some(0.000001));
     assert!(parsed.contains_key("_comment"));

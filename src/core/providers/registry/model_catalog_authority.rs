@@ -1,11 +1,13 @@
 //! Strict, provider-scoped catalog classification authority.
 
 use crate::core::types::model::ProviderCapability;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 const CATALOG_SCHEMA_VERSION: u32 = 1;
 const ENFORCED_PROVIDERS: &[&str] = &["azure", "azure_ai", "openai"];
+const PRICING_CONTROL_KEYS: &[&str] = &["_metadata", "fallback_generalizations", "sample_spec"];
 const EMBEDDED_CATALOG_AUTHORITY: &str =
     include_str!("../../../../config/model_catalog_authority.json");
 
@@ -16,7 +18,7 @@ pub enum CatalogDecision {
     Unreviewed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogEndpoint {
     ChatCompletions,
@@ -158,6 +160,9 @@ impl CatalogAuthority {
                 "metadata enforced_providers does not match the phase-1 provider set",
             ));
         }
+        validate_classification_digest(&document)?;
+        validate_pricing_universe_digest(&document)?;
+        validate_entry_identities(&document.entries)?;
         validate_callable_ledger_collisions(&document.entries)?;
 
         let mut canonical_providers: HashSet<String> =
@@ -208,15 +213,25 @@ impl CatalogAuthority {
                     aliases,
                     ..
                 } => {
-                    if evidence_sources.is_empty()
-                        || endpoints.as_ref().is_some_and(Vec::is_empty)
-                        || capabilities.as_ref().is_some_and(Vec::is_empty)
-                        || supported_parameters.as_ref().is_some_and(Vec::is_empty)
-                    {
-                        return Err(invalid(format!(
-                            "callable {provider:?}/{pricing_key:?} has an empty contract"
-                        )));
-                    }
+                    let context = format!("callable {provider:?}/{pricing_key:?}");
+                    validate_string_list(
+                        &format!("{context}.evidence_sources"),
+                        &evidence_sources,
+                        true,
+                    )?;
+                    validate_optional_unique_list(
+                        &format!("{context}.endpoints"),
+                        endpoints.as_deref(),
+                    )?;
+                    validate_optional_unique_list(
+                        &format!("{context}.capabilities"),
+                        capabilities.as_deref(),
+                    )?;
+                    validate_optional_string_list(
+                        &format!("{context}.supported_parameters"),
+                        supported_parameters.as_deref(),
+                    )?;
+                    validate_string_list(&format!("{context}.aliases"), &aliases, false)?;
                     let index = authority.callable_models.len();
                     authority.callable_models.push(CallableCatalogModel {
                         provider: provider.clone(),
@@ -238,7 +253,12 @@ impl CatalogAuthority {
                     reason,
                     ..
                 } => {
-                    if evidence_sources.is_empty() || reason.is_empty() {
+                    validate_string_list(
+                        &format!("pricing_only {provider:?}/{pricing_key:?}.evidence_sources"),
+                        &evidence_sources,
+                        true,
+                    )?;
+                    if reason.is_empty() {
                         return Err(invalid(format!(
                             "pricing_only {provider:?}/{pricing_key:?} has an empty contract"
                         )));
@@ -248,11 +268,11 @@ impl CatalogAuthority {
                 AuthorityEntry::Unreviewed {
                     evidence_sources, ..
                 } => {
-                    if evidence_sources.is_empty() {
-                        return Err(invalid(format!(
-                            "unreviewed {provider:?}/{pricing_key:?} lacks evidence"
-                        )));
-                    }
+                    validate_string_list(
+                        &format!("unreviewed {provider:?}/{pricing_key:?}.evidence_sources"),
+                        &evidence_sources,
+                        true,
+                    )?;
                     None
                 }
             };
@@ -317,6 +337,12 @@ impl CatalogAuthority {
             .is_some_and(|(nested, _)| self.canonical_provider(nested).is_some())
         {
             return CatalogResolution::Unknown;
+        }
+        if qualifier != provider {
+            let canonical_qualified = format!("{provider}/{remainder}");
+            if let Some(resolution) = self.resolve_exact(provider, &canonical_qualified) {
+                return resolution;
+            }
         }
         self.resolve_exact(provider, remainder)
             .unwrap_or(CatalogResolution::Unknown)
@@ -421,9 +447,12 @@ fn build_provider_aliases(
                     "provider alias {alias:?} collides with a canonical provider"
                 )));
             }
-            if let Some(previous) = aliases.insert(alias.clone(), provider.clone())
-                && previous != *provider
-            {
+            if let Some(previous) = aliases.insert(alias.clone(), provider.clone()) {
+                if previous == *provider {
+                    return Err(invalid(format!(
+                        "duplicate provider alias {alias:?} for {provider:?}"
+                    )));
+                }
                 return Err(invalid(format!(
                     "provider alias {alias:?} belongs to {previous:?} and {provider:?}"
                 )));
@@ -490,8 +519,148 @@ fn validate_digest(field: &str, digest: &str) -> Result<(), CatalogAuthorityErro
     Ok(())
 }
 
+fn validate_classification_digest(
+    document: &AuthorityDocument,
+) -> Result<(), CatalogAuthorityError> {
+    let semantic = ClassificationSemantic {
+        schema_version: document.metadata.schema_version,
+        revision: &document.metadata.revision,
+        enforced_providers: &document.metadata.enforced_providers,
+        provider_aliases: &document.provider_aliases,
+        entries: &document.entries,
+    };
+    let canonical = canonical_json(serde_json::to_value(semantic)?);
+    let computed = format!("{:x}", Sha256::digest(serde_json::to_vec(&canonical)?));
+    if computed != document.metadata.classification_sha256 {
+        return Err(invalid(format!(
+            "classification_sha256 mismatch: metadata has {:?}, computed {:?}",
+            document.metadata.classification_sha256, computed
+        )));
+    }
+    Ok(())
+}
+
+fn validate_pricing_universe_digest(
+    document: &AuthorityDocument,
+) -> Result<(), CatalogAuthorityError> {
+    let mut identities: Vec<_> = document
+        .entries
+        .iter()
+        .map(|entry| [entry.provider(), entry.pricing_key()])
+        .collect();
+    identities.sort_unstable();
+    let computed = format!("{:x}", Sha256::digest(serde_json::to_vec(&identities)?));
+    if computed != document.metadata.pricing_universe_sha256 {
+        return Err(invalid(format!(
+            "pricing_universe_sha256 mismatch: metadata has {:?}, computed {:?}",
+            document.metadata.pricing_universe_sha256, computed
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_json(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(canonical_json).collect())
+        }
+        serde_json::Value::Object(values) => {
+            let mut entries: Vec<_> = values.into_iter().collect();
+            entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonical_json(value)))
+                    .collect(),
+            )
+        }
+        scalar => scalar,
+    }
+}
+
+fn validate_entry_identities(entries: &[AuthorityEntry]) -> Result<(), CatalogAuthorityError> {
+    for entry in entries {
+        if entry.provider().is_empty() {
+            return Err(invalid("entry provider cannot be empty"));
+        }
+        if entry.pricing_key().is_empty() {
+            return Err(invalid("pricing key cannot be empty"));
+        }
+        if PRICING_CONTROL_KEYS.contains(&entry.pricing_key()) {
+            return Err(invalid(format!(
+                "catalog authority cannot classify pricing control key {:?}",
+                entry.pricing_key()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_list(
+    field: &str,
+    values: &[String],
+    require_non_empty: bool,
+) -> Result<(), CatalogAuthorityError> {
+    if require_non_empty && values.is_empty() {
+        return Err(invalid(format!("{field} must be non-empty")));
+    }
+    if values.iter().any(String::is_empty) {
+        return Err(invalid(format!("{field} contains an empty value")));
+    }
+    validate_unique_list(field, values)
+}
+
+fn validate_optional_string_list(
+    field: &str,
+    values: Option<&[String]>,
+) -> Result<(), CatalogAuthorityError> {
+    let Some(values) = values else {
+        return Ok(());
+    };
+    if values.is_empty() {
+        return Err(invalid(format!("{field} must be omitted when empty")));
+    }
+    validate_string_list(field, values, false)
+}
+
+fn validate_optional_unique_list<T: PartialEq>(
+    field: &str,
+    values: Option<&[T]>,
+) -> Result<(), CatalogAuthorityError> {
+    let Some(values) = values else {
+        return Ok(());
+    };
+    if values.is_empty() {
+        return Err(invalid(format!("{field} must be omitted when empty")));
+    }
+    validate_unique_list(field, values)
+}
+
+fn validate_unique_list<T: PartialEq>(
+    field: &str,
+    values: &[T],
+) -> Result<(), CatalogAuthorityError> {
+    if values
+        .iter()
+        .enumerate()
+        .any(|(index, value)| values[..index].contains(value))
+    {
+        return Err(invalid(format!("{field} contains duplicates")));
+    }
+    Ok(())
+}
+
 fn invalid(message: impl Into<String>) -> CatalogAuthorityError {
     CatalogAuthorityError::Invalid(message.into())
+}
+
+#[derive(Debug, Serialize)]
+struct ClassificationSemantic<'a> {
+    schema_version: u32,
+    revision: &'a str,
+    enforced_providers: &'a [String],
+    provider_aliases: &'a HashMap<String, Vec<String>>,
+    entries: &'a [AuthorityEntry],
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,7 +703,7 @@ impl ProviderCoverage {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
 enum AuthorityEntry {
     Callable {
@@ -542,11 +711,11 @@ enum AuthorityEntry {
         pricing_key: String,
         evidence_sources: Vec<String>,
         catalog_model_id: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         endpoints: Option<Vec<CatalogEndpoint>>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<ProviderCapability>>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         supported_parameters: Option<Vec<String>>,
         aliases: Vec<String>,
     },
