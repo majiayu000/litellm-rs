@@ -4,7 +4,7 @@
 use crate::core::models::openai::{
     ChatMessage, ContentPart, FunctionCall, ImageUrl, MessageContent, MessageRole, ToolCall,
 };
-use crate::utils::ai::counter::token_counter::TokenCounter;
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 
 #[test]
 fn test_text_token_estimation() {
@@ -142,57 +142,22 @@ fn test_unknown_openai_like_model_remains_marked_approximate() {
 }
 
 #[test]
-fn test_explicit_unknown_openai_model_returns_tokenizer_error() {
+fn test_typed_openai_identity_requires_an_exact_tokenizer() {
     let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::exact_openai("gpt-audio-1.5");
 
     let error = counter
-        .count_completion_tokens("openai/gpt-future-unknown", "Hello world")
-        .expect_err("an explicit unknown OpenAI tokenizer must not be approximated");
+        .count_completion_tokens_for_identity(&identity, "Hello world")
+        .expect_err("a selected exact OpenAI identity without a BPE must fail closed");
 
-    let message = error.to_string();
-    assert!(message.contains("unknown OpenAI catalog model"));
-    assert!(message.contains("openai/gpt-future-unknown"));
+    assert!(error.to_string().contains("tokenizer unavailable"));
+    assert!(error.to_string().contains("openai/gpt-audio-1.5"));
 }
 
 #[test]
-fn test_fake_gpt5_prefix_is_rejected_as_unknown_catalog_model() {
+fn test_typed_openai_chat_identity_requires_an_exact_tokenizer() {
     let counter = TokenCounter::new();
-
-    let error = counter
-        .count_completion_tokens("openai/gpt-5-definitely-fake", "Hello world")
-        .expect_err("a tokenizer family prefix must not establish catalog identity");
-
-    let message = error.to_string();
-    assert!(
-        message.contains("unknown OpenAI catalog model"),
-        "{message}"
-    );
-    assert!(
-        message.contains("openai/gpt-5-definitely-fake"),
-        "{message}"
-    );
-}
-
-#[test]
-fn test_catalog_audio_models_report_tokenizer_unavailable() {
-    let counter = TokenCounter::new();
-
-    for model in ["openai/gpt-audio-1.5", "openai/gpt-realtime-1.5"] {
-        let error = counter
-            .count_completion_tokens(model, "Hello world")
-            .expect_err("catalog audio/realtime models without a BPE must fail clearly");
-        let message = error.to_string();
-        assert!(
-            message.contains("tokenizer unavailable"),
-            "{model}: {message}"
-        );
-        assert!(message.contains(model), "{model}: {message}");
-    }
-}
-
-#[test]
-fn test_explicit_unknown_openai_chat_model_returns_tokenizer_error() {
-    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::exact_openai("gpt-audio-1.5");
     let messages = vec![ChatMessage {
         role: MessageRole::User,
         content: Some(MessageContent::Text("hello".to_string())),
@@ -204,41 +169,58 @@ fn test_explicit_unknown_openai_chat_model_returns_tokenizer_error() {
     }];
 
     let error = counter
-        .count_chat_tokens("OPENAI/gpt-future-unknown", &messages)
-        .expect_err("explicit OpenAI chat tokenization must resolve exactly");
+        .count_chat_tokens_for_identity(&identity, &messages)
+        .expect_err("exact chat tokenization must not silently approximate a missing BPE");
 
-    assert!(error.to_string().contains("OPENAI/gpt-future-unknown"));
+    assert!(error.to_string().contains("tokenizer unavailable"));
 }
 
 #[test]
-fn test_provider_native_and_custom_deployments_remain_approximate() {
+fn test_typed_approximate_identity_stays_explicitly_approximate() {
     let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("azure_ai", "Phi-4");
 
-    for model in [
-        "azure/custom-deployment",
-        "azure_ai/Phi-4",
-        "anthropic/claude-private-deployment",
-        "unknown-provider/BAAI/bge-m3",
-        "openai_like/gpt-future-unknown",
-    ] {
-        let estimate = counter
-            .count_completion_tokens(model, "Hello world")
-            .unwrap_or_else(|error| panic!("{model} should permit approximation: {error}"));
+    let estimate = counter
+        .count_completion_tokens_for_identity(&identity, "Hello world")
+        .expect("an explicitly approximate identity may use estimation");
 
-        assert!(estimate.is_approximate, "{model}");
-        assert!(estimate.confidence < 1.0, "{model}");
-    }
+    assert!(estimate.is_approximate);
+    assert!(estimate.confidence < 1.0);
 }
 
 #[test]
-fn test_explicit_unknown_openai_output_estimation_returns_error() {
+fn test_typed_approximate_identity_does_not_infer_from_openai_like_model_name() {
     let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("azure", "gpt-4o");
 
-    let error = counter
-        .estimate_output_tokens(None, 10, "openai/gpt-future-unknown")
-        .expect_err("output reservation must not hide an explicit tokenizer error");
+    let estimate = counter
+        .count_completion_tokens_for_identity(&identity, "Hello world")
+        .expect("explicit approximate contract should remain available");
 
-    assert!(error.to_string().contains("unknown OpenAI catalog model"));
+    assert!(estimate.is_approximate);
+    assert!(estimate.confidence < 1.0);
+}
+
+#[test]
+fn test_typed_approximate_chat_does_not_infer_from_openai_like_model_name() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("azure", "gpt-4o");
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("hello".to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    }];
+
+    let estimate = counter
+        .count_chat_tokens_for_identity(&identity, &messages)
+        .expect("explicit approximate chat contract should remain available");
+
+    assert!(estimate.is_approximate);
+    assert!(estimate.confidence < 1.0);
 }
 
 #[test]

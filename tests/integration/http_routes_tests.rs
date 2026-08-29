@@ -14,7 +14,6 @@ mod tests {
     use litellm_rs::core::integrations::{
         CallbackRuntime, IntegrationManager, IntegrationManagerConfig,
     };
-    use litellm_rs::core::models::openai::{EmbeddingRequest, EmbeddingResponse};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::core::traits::integration::{
         EmbeddingEndEvent, EmbeddingStartEvent, Integration, IntegrationResult, LlmEndEvent,
@@ -204,30 +203,6 @@ mod tests {
             "sk-test",
             base_url,
             vec!["text-embedding-3-small".to_string()],
-        )];
-
-        build_state_with_config(config).await
-    }
-
-    async fn build_openai_embedding_state_for_model(
-        base_url: &str,
-        model: &str,
-        cache_enabled: bool,
-    ) -> AppState {
-        let mut config = Config::default();
-        config.gateway.auth.enable_jwt = false;
-        config.gateway.auth.enable_api_key = false;
-        config.gateway.auth.allow_anonymous = true;
-        config.gateway.storage.database.enabled = false;
-        config.gateway.storage.redis.enabled = false;
-        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
-        config.gateway.cache.enabled = cache_enabled;
-        config.gateway.providers = vec![mock_provider_config(
-            "openai",
-            "openai",
-            "sk-test",
-            base_url,
-            vec![model.to_string()],
         )];
 
         build_state_with_config(config).await
@@ -617,91 +592,6 @@ mod tests {
             1,
             "second identical embedding request should hit cache"
         );
-    }
-
-    #[tokio::test]
-    async fn test_explicit_openai_unknown_embedding_fails_on_cache_hit_and_miss() {
-        let captured_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
-        let address = listener
-            .local_addr()
-            .expect("mock server should have local address");
-        let captured_for_server = Arc::clone(&captured_requests);
-        let server = HttpServer::new(move || {
-            App::new()
-                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
-                .route("/embeddings", web::post().to(mock_embeddings))
-        })
-        .listen(listener)
-        .expect("mock server should listen")
-        .run();
-        let handle = server.handle();
-        let task = tokio::spawn(server);
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        let request_json = serde_json::json!({
-            "model": "gpt-5-definitely-fake",
-            "input": "hello"
-        });
-        for cache_enabled in [false, true] {
-            let state = build_openai_embedding_state_for_model(
-                &format!("http://{address}"),
-                "gpt-5-definitely-fake",
-                cache_enabled,
-            )
-            .await;
-            if cache_enabled {
-                let cache_request: EmbeddingRequest =
-                    serde_json::from_value(request_json.clone()).expect("valid cache request");
-                let cached_response: EmbeddingResponse =
-                    serde_json::from_value(serde_json::json!({
-                        "object": "list",
-                        "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
-                        "model": "gpt-5-definitely-fake",
-                        "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1}
-                    }))
-                    .expect("valid cached response");
-                state
-                    .response_cache
-                    .as_ref()
-                    .expect("cache enabled")
-                    .cache_embedding_response(&cache_request, cached_response)
-                    .await
-                    .expect("cache seed should succeed");
-                assert!(
-                    state
-                        .response_cache
-                        .as_ref()
-                        .expect("cache enabled")
-                        .get_embedding_response(&cache_request)
-                        .await
-                        .expect("cache lookup should succeed")
-                        .is_some()
-                );
-            }
-
-            let app = test::init_service(build_test_app(state)).await;
-            let request = test::TestRequest::post()
-                .uri("/v1/embeddings")
-                .set_json(&request_json)
-                .to_request();
-            let response = test::call_service(&app, request).await;
-
-            assert_eq!(
-                response.status(),
-                StatusCode::BAD_REQUEST,
-                "cache={cache_enabled}"
-            );
-            let body: Value = test::read_body_json(response).await;
-            assert!(
-                body.to_string().contains("unknown OpenAI catalog model"),
-                "cache={cache_enabled}: {body}"
-            );
-        }
-
-        handle.stop(true).await;
-        let _ = task.await;
-        assert!(captured_requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

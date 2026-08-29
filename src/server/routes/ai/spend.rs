@@ -9,7 +9,6 @@ mod key_budget;
 mod pricing;
 mod unpriced;
 
-use std::borrow::Cow;
 use uuid::Uuid;
 
 use crate::config::models::gateway::GatewayPricingConfig;
@@ -19,14 +18,13 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::model_id::ModelIdRef;
 use crate::core::types::responses::{ChatChunk, Usage};
 #[cfg(test)]
 use std::sync::LazyLock;
 
 pub(super) use completion::{
-    ChatCompletionBudgetRequest, estimate_chat_prompt_tokens,
-    reserve_chat_completion_budget_with_request_pricing,
+    ChatCompletionBudgetRequest, reserve_chat_completion_budget_with_request_pricing,
+    try_estimate_chat_prompt_tokens,
 };
 #[cfg(test)]
 pub(super) use completion::{
@@ -40,7 +38,8 @@ pub(in crate::server::routes::ai) use key_budget::{
     settle_api_key_budget_reservation,
 };
 pub(super) use pricing::{
-    RequestPricing, record_pricing_usage_spend_with_request_pricing, request_pricing_for_provider,
+    RequestPricing, estimate_embedding_input_tokens,
+    record_pricing_usage_spend_with_request_pricing, request_pricing_for_provider,
     reserve_embedding_budget_with_request_pricing,
     reserve_pricing_usage_budget_with_request_pricing,
 };
@@ -53,30 +52,18 @@ pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
     !chunk.choices.is_empty()
 }
 
-pub(super) fn token_count_model_id<'a>(provider: &str, model: &'a str) -> Cow<'a, str> {
-    let parsed = ModelIdRef::parse(model);
-    if parsed
-        .provider()
-        .is_some_and(|qualified| qualified.eq_ignore_ascii_case(provider))
-    {
-        Cow::Borrowed(model)
-    } else {
-        Cow::Owned(format!("{provider}/{model}"))
-    }
-}
-
 pub(super) fn token_count_error(
-    budget_provider: &str,
-    budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
+    provider: &str,
+    model: &str,
+    identity: &crate::utils::ai::counter::token_counter::TokenizerIdentity,
     error: impl std::fmt::Display,
 ) -> ProviderError {
     ProviderError::invalid_request(
         "token_count",
         format!(
-            "token counting failed for served model '{budget_provider}/{budget_model}' using \
-             pricing identity '{pricing_provider}/{pricing_model}': {error}"
+            "token counting failed for selected deployment '{provider}/{model}' using token identity '{}/{}': {error}",
+            identity.provider(),
+            identity.model()
         ),
     )
 }
