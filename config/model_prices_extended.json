@@ -196,8 +196,8 @@
     ],
     "total_model_count": 3474,
     "catalog_decision_revision": "classification-1241-v1",
-    "catalog_decision_source_sha256": "e6f047d1f6c2d644dd236bc0b51bbf4a82b0354a56c89b00eb68c816bce6e032",
-    "catalog_authority_sha256": "57d6bc1901811975420c2cfb43e208e2b578dd9dd99d6cd3cb379980d67bf1a0",
+    "catalog_decision_source_sha256": "e03662421df3507e8a5be175f8976b968f0f59d9acc51aa5bc67f7569b168476",
+    "catalog_authority_sha256": "1454b3bc526e00b6cafdc0fcf585a8aebb4c98a045cda5b3cd58b5c7c33df311",
     "catalog_authority_entry_count": 3474,
     "catalog_authority_enforced_providers": [
       "azure",
@@ -831,9 +831,9 @@
         "unreviewed": 29
       },
       "xai": {
-        "callable": 0,
+        "callable": 3,
         "pricing_only": 0,
-        "unreviewed": 36
+        "unreviewed": 33
       },
       "xiaomi_mimo": {
         "callable": 0,

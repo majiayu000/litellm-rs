@@ -620,6 +620,24 @@
       "location": "https://developers.openai.com/api/docs/pricing",
       "reviewed_on": "2026-08-28",
       "revision": "classification-1241-v1"
+    },
+    "evidence-104": {
+      "kind": "official_xai_model_contract",
+      "location": "https://docs.x.ai/developers/models/grok-4.5",
+      "reviewed_on": "2026-08-30",
+      "revision": "classification-1234-v1"
+    },
+    "evidence-105": {
+      "kind": "official_xai_model_contract",
+      "location": "https://docs.x.ai/developers/models/grok-4.6",
+      "reviewed_on": "2026-08-30",
+      "revision": "classification-1234-v1"
+    },
+    "evidence-106": {
+      "kind": "official_xai_reasoning_contract",
+      "location": "https://docs.x.ai/developers/model-capabilities/text/reasoning",
+      "reviewed_on": "2026-08-30",
+      "revision": "classification-1234-v1"
     }
   },
   "provider_aliases": {
@@ -29137,26 +29155,85 @@
     {
       "provider": "xai",
       "pricing_key": "xai/grok-4.5",
-      "decision": "unreviewed",
+      "decision": "callable",
       "evidence_sources": [
-        "evidence-001"
+        "evidence-104",
+        "evidence-106"
+      ],
+      "catalog_model_id": "grok-4.5",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
+      "supported_parameters": [
+        "messages",
+        "reasoning_effort",
+        "response_format",
+        "tools"
+      ],
+      "aliases": [
+        "grok-build-latest"
       ]
     },
     {
       "provider": "xai",
       "pricing_key": "xai/grok-4.5-latest",
-      "decision": "unreviewed",
+      "decision": "callable",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "evidence-104",
+        "evidence-106"
+      ],
+      "catalog_model_id": "grok-4.5-latest",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
+      "supported_parameters": [
+        "messages",
+        "reasoning_effort",
+        "response_format",
+        "tools"
+      ],
+      "aliases": []
     },
     {
       "provider": "xai",
       "pricing_key": "xai/grok-4.6",
-      "decision": "unreviewed",
+      "decision": "callable",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "evidence-105",
+        "evidence-106"
+      ],
+      "catalog_model_id": "grok-4.6",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
+      "supported_parameters": [
+        "messages",
+        "reasoning_effort",
+        "response_format",
+        "tools"
+      ],
+      "aliases": []
     },
     {
       "provider": "xai",

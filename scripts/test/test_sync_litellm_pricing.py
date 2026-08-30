@@ -732,7 +732,7 @@ class CatalogAuthorityTests(unittest.TestCase):
 
         target_counts = {"callable": 0, "pricing_only": 0, "unreviewed": 0}
         target_providers = {"openai", "azure", "azure_ai"}
-        callable_with_explicit_contract = 0
+        callable_with_explicit_contract = []
         for entry in authority["entries"]:
             if entry["provider"] in target_providers:
                 target_counts[entry["decision"]] += 1
@@ -740,14 +740,23 @@ class CatalogAuthorityTests(unittest.TestCase):
                 field in entry
                 for field in ("endpoints", "capabilities", "supported_parameters")
             ):
-                callable_with_explicit_contract += 1
+                callable_with_explicit_contract.append(
+                    (entry["provider"], entry["pricing_key"])
+                )
 
         self.assertEqual(authority["_metadata"]["total_entry_count"], 3474)
         self.assertEqual(
             target_counts,
             {"callable": 179, "pricing_only": 293, "unreviewed": 87},
         )
-        self.assertEqual(callable_with_explicit_contract, 0)
+        self.assertEqual(
+            sorted(callable_with_explicit_contract),
+            [
+                ("xai", "xai/grok-4.5"),
+                ("xai", "xai/grok-4.5-latest"),
+                ("xai", "xai/grok-4.6"),
+            ],
+        )
         historical = next(
             entry
             for entry in authority["entries"]
