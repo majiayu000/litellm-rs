@@ -87,7 +87,17 @@ impl TokenCounter {
     ) -> Result<TokenEstimate> {
         match identity {
             TokenizerIdentity::ExactOpenAi(_) => {
-                self.exact_chat_token_estimate(identity.tokenizer_model()?, messages)
+                let model = identity.tokenizer_model()?;
+                let Some(total_tokens) = self.exact_chat_tokens(model, messages)? else {
+                    return self.approximate_chat_tokens(messages);
+                };
+                Ok(TokenEstimate {
+                    input_tokens: total_tokens,
+                    output_tokens: None,
+                    total_tokens,
+                    is_approximate: false,
+                    confidence: 1.0,
+                })
             }
             TokenizerIdentity::Approximate { .. } => self.approximate_chat_tokens(messages),
         }
@@ -362,21 +372,21 @@ impl TokenCounter {
         self.model_configs.keys().cloned().collect()
     }
 
-    fn exact_chat_tokens(&self, model: &str, messages: &[ChatMessage]) -> Result<u32> {
+    fn exact_chat_tokens(&self, model: &str, messages: &[ChatMessage]) -> Result<Option<u32>> {
         let mut tiktoken_messages = Vec::with_capacity(messages.len());
         for message in messages {
             if message.tool_call_id.is_some() {
-                return Err(unsupported_exact_chat_input(model));
+                return Ok(None);
             }
             if message
                 .tool_calls
                 .as_ref()
                 .is_some_and(|calls| !calls.is_empty())
             {
-                return Err(unsupported_exact_chat_input(model));
+                return Ok(None);
             }
             let Some(content) = plain_text_message_content(message) else {
-                return Err(unsupported_exact_chat_input(model));
+                return Ok(None);
             };
             tiktoken_messages.push(ChatCompletionRequestMessage {
                 role: ToString::to_string(&message.role),
@@ -408,21 +418,7 @@ impl TokenCounter {
                 ))
             })
             .and_then(usize_to_u32)
-    }
-
-    fn exact_chat_token_estimate(
-        &self,
-        model: &str,
-        messages: &[ChatMessage],
-    ) -> Result<TokenEstimate> {
-        let total_tokens = self.exact_chat_tokens(model, messages)?;
-        Ok(TokenEstimate {
-            input_tokens: total_tokens,
-            output_tokens: None,
-            total_tokens,
-            is_approximate: false,
-            confidence: 1.0,
-        })
+            .map(Some)
     }
 }
 
@@ -452,12 +448,6 @@ fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
         Some(MessageContent::Text(text)) => Some(Some(text.clone())),
         Some(MessageContent::Parts(_)) => None,
     }
-}
-
-fn unsupported_exact_chat_input(model: &str) -> GatewayError {
-    GatewayError::Config(format!(
-        "exact tokenizer for 'openai/{model}' does not support this chat message shape"
-    ))
 }
 
 fn usize_to_u32(value: usize) -> Result<u32> {

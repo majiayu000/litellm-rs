@@ -94,10 +94,7 @@ fn test_multimodal_chat_token_count_remains_marked_approximate() {
     }];
 
     let estimate = counter
-        .count_chat_tokens(
-            &TokenizerIdentity::approximate("openai", "gpt-4o"),
-            &messages,
-        )
+        .count_chat_tokens(&TokenizerIdentity::exact_openai("gpt-4o"), &messages)
         .unwrap();
 
     assert!(estimate.is_approximate);
@@ -324,10 +321,7 @@ fn test_tool_call_chat_token_count_remains_marked_approximate() {
     }];
 
     let estimate = counter
-        .count_chat_tokens(
-            &TokenizerIdentity::approximate("openai", "gpt-4o"),
-            &messages,
-        )
+        .count_chat_tokens(&TokenizerIdentity::exact_openai("gpt-4o"), &messages)
         .unwrap();
 
     assert!(estimate.is_approximate);
