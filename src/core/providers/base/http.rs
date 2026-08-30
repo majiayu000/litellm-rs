@@ -137,6 +137,13 @@ impl BaseHttpClient {
         }
     }
 
+    #[cfg(feature = "providers-extended")]
+    pub(crate) fn request_error_may_have_been_dispatched(error: &reqwest::Error) -> bool {
+        !ProviderHttpClient::request_error_is_endpoint_policy(error)
+            && !error.is_builder()
+            && !error.is_connect()
+    }
+
     /// Create a policy-checked GET request builder.
     pub fn get<U: IntoUrl>(&self, url: U) -> Result<ProviderRequestBuilder, ProviderError> {
         self.request(Method::GET, url)

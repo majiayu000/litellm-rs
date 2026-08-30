@@ -195,8 +195,16 @@ impl BflProvider {
             _ = cancellation.cancelled() => return Err(cancelled()),
             response = submit.send() => response,
         }
-        .map_err(|error| self.client.map_preserved_request_error(error))
-        .map_err(mark_post_submit_error_non_retryable)?;
+        .map_err(|error| {
+            let may_have_been_dispatched =
+                BaseHttpClient::request_error_may_have_been_dispatched(&error);
+            let error = self.client.map_preserved_request_error(error);
+            if may_have_been_dispatched {
+                mark_post_submit_error_non_retryable(error)
+            } else {
+                error
+            }
+        })?;
         let status = response.status();
         let body = tokio::select! {
             _ = cancellation.cancelled() => return Err(cancelled()),

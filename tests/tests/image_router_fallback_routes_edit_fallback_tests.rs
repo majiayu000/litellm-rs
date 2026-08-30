@@ -485,6 +485,120 @@ async fn ambiguous_stability_image_submissions_settle_all_budgets() {
 }
 
 #[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn definite_connect_failures_cancel_native_image_budgets() {
+    let bfl_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("BFL address should bind");
+    let bfl_address = bfl_listener.local_addr().expect("BFL address should exist");
+    drop(bfl_listener);
+    let stability_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("Stability address should bind");
+    let stability_address = stability_listener
+        .local_addr()
+        .expect("Stability address should exist");
+    drop(stability_listener);
+
+    let state = build_route_policy_test_state_with_pricing(
+        vec![
+            image_provider(
+                "bfl-primary",
+                "black_forest_labs",
+                &format!("http://{bfl_address}"),
+                vec!["flux-pro-1.1".to_string()],
+            ),
+            image_provider(
+                "stability-primary",
+                "stability",
+                &format!("http://{stability_address}"),
+                vec!["inpaint".to_string()],
+            ),
+        ],
+        Some(HashMap::from([
+            (
+                "flux-pro-1.1".to_string(),
+                flat_image_model_info_for_provider("black_forest_labs", 0.06),
+            ),
+            (
+                "inpaint".to_string(),
+                flat_image_model_info_for_provider("stability", 0.06),
+            ),
+        ])),
+    )
+    .await;
+    for provider in ["bfl-primary", "stability-primary"] {
+        state.budget_limits.providers.set_provider_limit(
+            provider,
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+    }
+    for model in ["flux-pro-1.1", "inpaint"] {
+        state
+            .budget_limits
+            .models
+            .set_model_limit(model, ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
+    }
+    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
+    let budget_limits = state.budget_limits.clone();
+    let budget_manager = state.budget_manager.clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let generation_request = test::TestRequest::post()
+        .uri("/v1/images/generations")
+        .set_json(json!({
+            "model": "flux-pro-1.1",
+            "prompt": "a glass city",
+            "n": 1,
+            "response_format": "url"
+        }))
+        .to_request();
+    generation_request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let generation_response = test::call_service(&app, generation_request).await;
+    assert_eq!(generation_response.status(), StatusCode::BAD_GATEWAY);
+
+    let boundary = "litellm-rs-definite-connect-edit";
+    let edit_request = test::TestRequest::post()
+        .uri("/v1/images/edits")
+        .insert_header((
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        ))
+        .set_payload(image_edit_multipart_body_for_model(boundary, "inpaint", 1))
+        .to_request();
+    edit_request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let edit_response = test::call_service(&app, edit_request).await;
+    assert_eq!(edit_response.status(), StatusCode::BAD_GATEWAY);
+
+    for provider in ["bfl-primary", "stability-primary"] {
+        let spend = budget_limits
+            .providers
+            .get_provider_usage(provider)
+            .map(|usage| usage.current_spend)
+            .unwrap_or_default();
+        assert_eq!(spend, 0.0, "{provider}");
+    }
+    for model in ["flux-pro-1.1", "inpaint"] {
+        let spend = budget_limits
+            .models
+            .get_model_usage(model)
+            .map(|usage| usage.current_spend)
+            .unwrap_or_default();
+        assert_eq!(spend, 0.0, "{model}");
+    }
+    assert_eq!(budget_manager.get_current_spend(&api_key_scope), 0.0);
+}
+
+#[cfg(feature = "providers-extended")]
 async fn create_test_api_key_budget(state: &AppState) -> (BudgetScope, Uuid) {
     let scope = BudgetScope::ApiKey(format!("native-media-{}", Uuid::new_v4()));
     let budget = state

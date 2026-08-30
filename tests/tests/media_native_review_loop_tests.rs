@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test]
+async fn stability_dns_policy_failure_remains_pre_dispatch_configuration_error() {
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some("http://native-media-does-not-exist.invalid".to_string());
+    let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+    let error = provider
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "paint a lighthouse".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: Some("1024x1024".to_string()),
+                quality: None,
+                response_format: Some("png".to_string()),
+                style: None,
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("reserved invalid DNS name must fail before dispatch");
+
+    assert!(
+        matches!(error, ProviderError::Configuration { .. }),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
 async fn stability_rejects_sizes_its_model_cannot_express_before_network_access() {
     for (model, size) in [
         ("stable-image-core", "512x512"),

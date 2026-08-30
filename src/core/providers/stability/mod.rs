@@ -231,8 +231,7 @@ impl StabilityProvider {
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|error| self.client.map_preserved_request_error(error))
-                .map_err(mark_post_submit_error_non_retryable)?;
+                .map_err(|error| self.map_submit_error(error))?;
         let status = response.status();
         let content_type = response
             .headers()
@@ -319,8 +318,7 @@ impl StabilityProvider {
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|error| self.client.map_preserved_request_error(error))
-                .map_err(mark_post_submit_error_non_retryable)?;
+                .map_err(|error| self.map_submit_error(error))?;
         let status = response.status();
         let content_type = response
             .headers()
@@ -348,6 +346,17 @@ impl StabilityProvider {
                 revised_prompt: None,
             }],
         })
+    }
+
+    fn map_submit_error(&self, error: reqwest::Error) -> ProviderError {
+        let may_have_been_dispatched =
+            BaseHttpClient::request_error_may_have_been_dispatched(&error);
+        let error = self.client.map_preserved_request_error(error);
+        if may_have_been_dispatched {
+            mark_post_submit_error_non_retryable(error)
+        } else {
+            error
+        }
     }
 }
 

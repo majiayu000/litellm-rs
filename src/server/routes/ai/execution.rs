@@ -203,7 +203,7 @@ where
                     router.config(),
                     &deployment_lease.deployment().config,
                     &err,
-                    operation_retry_context(&capability, attempt, max_attempts),
+                    RetryContext::unary(attempt, max_attempts),
                 );
                 if retry_decision.should_retry {
                     router.record_failure_with_reason_for_deployment(
@@ -239,21 +239,6 @@ where
             message: "Unknown error during selected deployment retry".to_string(),
         },
     )))
-}
-
-fn operation_retry_context(
-    capability: &ProviderCapability,
-    attempt: u32,
-    max_attempts: u32,
-) -> RetryContext {
-    if matches!(
-        capability,
-        ProviderCapability::ImageGeneration | ProviderCapability::ImageEdit
-    ) {
-        RetryContext::unary_non_idempotent(attempt, max_attempts)
-    } else {
-        RetryContext::unary(attempt, max_attempts)
-    }
 }
 
 #[cfg(test)]
