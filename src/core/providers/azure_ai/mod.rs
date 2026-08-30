@@ -164,15 +164,14 @@ impl LLMProvider for AzureAIProvider {
     }
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        let azure_ai_features = |model| {
+        let azure_ai_features = |model_id| {
             self.model_registry
-                .get_model(model)
-                .filter(|model| {
-                    model
-                        .capabilities
+                .get_model(model_id)
+                .filter(|spec| {
+                    spec.capabilities
                         .contains(&ProviderCapability::ChatCompletion)
                 })
-                .map(|model| (model.supports_function_calling, model.supports_streaming))
+                .map(|spec| (spec.supports_function_calling, spec.supports_streaming))
         };
         let features = match self.model_identity.as_ref() {
             Some(binding) => {
@@ -181,17 +180,16 @@ impl LLMProvider for AzureAIProvider {
                     identity.capability_catalog_provider(),
                     identity.capability_catalog_model(),
                 ) {
-                    (Some("openai"), Some(model)) => {
+                    (Some("openai"), Some(model_id)) => {
                         crate::core::providers::openai::models::get_openai_registry()
-                            .get_model_spec(model)
-                            .filter(|model| {
-                                model
-                                    .model_info
+                            .get_model_spec(model_id)
+                            .filter(|spec| {
+                                spec.model_info
                                     .capabilities
                                     .contains(&ProviderCapability::ChatCompletion)
                             })
-                            .map(|model| {
-                                let capabilities = &model.model_info.capabilities;
+                            .map(|spec| {
+                                let capabilities = &spec.model_info.capabilities;
                                 (
                                     capabilities.contains(&ProviderCapability::ToolCalling),
                                     capabilities
@@ -199,7 +197,7 @@ impl LLMProvider for AzureAIProvider {
                                 )
                             })
                     }
-                    (Some("azure_ai"), Some(model)) => azure_ai_features(model),
+                    (Some("azure_ai"), Some(model_id)) => azure_ai_features(model_id),
                     _ => None,
                 }
             }
