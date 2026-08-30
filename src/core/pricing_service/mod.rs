@@ -30,6 +30,6 @@ pub(super) const REMOTE_LITELLM_PRICING_SOURCE: &str =
 pub use service::PricingService;
 pub(crate) use types::PricingSnapshot;
 pub use types::{
-    CostRange, CostResult, CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingCostEstimate,
-    PricingEventType, PricingStatistics, PricingUpdateEvent, PricingUsage,
+    CostRange, CostResult, CostType, LiteLLMModelInfo, PricingBillingMode, PricingCostBreakdown,
+    PricingCostEstimate, PricingEventType, PricingStatistics, PricingUpdateEvent, PricingUsage,
 };

@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::pricing_service::PricingBillingMode;
 
 fn test_model_info(provider: &str) -> LiteLLMModelInfo {
     LiteLLMModelInfo {
@@ -322,6 +323,173 @@ fn provider_aware_authority_rejects_missing_token_pricing() {
     };
 
     assert!(error.to_string().contains("output_cost_per_token"));
+}
+
+#[test]
+fn batch_usage_uses_exact_rates_for_reservation_and_settlement() {
+    let service = PricingService::new(None);
+    let mut model_info = test_model_info("runtime_provider");
+    model_info.extra.extend([
+        (
+            "input_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000005),
+        ),
+        (
+            "output_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000010),
+        ),
+        (
+            "cache_read_input_token_cost_batches".to_string(),
+            serde_json::json!(0.000001),
+        ),
+    ]);
+    service.add_custom_model("batch-priced-model".to_string(), model_info);
+
+    let mut usage = PricingUsage::new(1_000, 500);
+    usage.cached_tokens = Some(200);
+    usage.billing_mode = PricingBillingMode::Batch;
+
+    let reservation = service
+        .dry_run_loaded_usage_cost_for_provider("runtime_provider", "batch-priced-model", &usage)
+        .expect("batch reservation pricing");
+    let settlement = service
+        .calculate_loaded_settlement_cost_for_provider(
+            "runtime_provider",
+            "batch-priced-model",
+            &usage,
+        )
+        .expect("batch settlement pricing");
+
+    assert!((reservation.input_cost - 0.004).abs() < 1e-12);
+    assert!((reservation.output_cost - 0.005).abs() < 1e-12);
+    assert!((reservation.cache_cost - 0.0002).abs() < 1e-12);
+    assert!((reservation.total_cost - 0.0092).abs() < 1e-12);
+    assert!((settlement.total_cost - reservation.total_cost).abs() < 1e-12);
+    assert!(
+        service
+            .calculate_loaded_usage_cost_for_provider(
+                "runtime_provider",
+                "batch-priced-model-lookalike",
+                &usage,
+            )
+            .is_err(),
+        "batch pricing must retain exact model authority"
+    );
+}
+
+#[test]
+fn batch_usage_fails_closed_for_missing_rates_and_cache_storage() {
+    let service = PricingService::new(None);
+    let mut model_info = test_model_info("runtime_provider");
+    model_info.extra.extend([
+        (
+            "input_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000005),
+        ),
+        (
+            "output_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000010),
+        ),
+    ]);
+    service.add_custom_model("partial-batch-model".to_string(), model_info);
+
+    let mut cache_read = PricingUsage::new(1_000, 500);
+    cache_read.cached_tokens = Some(200);
+    cache_read.billing_mode = PricingBillingMode::Batch;
+    let error = service
+        .calculate_loaded_usage_cost_for_provider(
+            "runtime_provider",
+            "partial-batch-model",
+            &cache_read,
+        )
+        .expect_err("missing batch cache-read pricing must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("cache_read_input_token_cost_batches")
+    );
+
+    let mut cache_storage = PricingUsage::new(1_000, 500);
+    cache_storage.cache_creation_tokens = Some(200);
+    cache_storage.billing_mode = PricingBillingMode::Batch;
+    let error = service
+        .calculate_loaded_settlement_cost_for_provider(
+            "runtime_provider",
+            "partial-batch-model",
+            &cache_storage,
+        )
+        .expect_err("token-hour cache storage must not use a token rate");
+    assert!(error.to_string().contains("cache creation/storage"));
+
+    for (missing_key, prompt_tokens, completion_tokens) in [
+        ("input_cost_per_token_batches", 1_000, 0),
+        ("output_cost_per_token_batches", 0, 500),
+    ] {
+        let mut model_info = test_model_info("runtime_provider");
+        for (key, rate) in [
+            ("input_cost_per_token_batches", 0.000005),
+            ("output_cost_per_token_batches", 0.000010),
+            ("cache_read_input_token_cost_batches", 0.000001),
+        ] {
+            if key != missing_key {
+                model_info
+                    .extra
+                    .insert(key.to_string(), serde_json::json!(rate));
+            }
+        }
+        let model = format!("missing-{missing_key}");
+        service.add_custom_model(model.clone(), model_info);
+        let mut usage = PricingUsage::new(prompt_tokens, completion_tokens);
+        usage.billing_mode = PricingBillingMode::Batch;
+        let error = service
+            .calculate_loaded_usage_cost_for_provider("runtime_provider", &model, &usage)
+            .expect_err("a required batch token rate must not fall back to standard pricing");
+        assert!(error.to_string().contains(missing_key));
+    }
+}
+
+#[test]
+fn embedded_gemini_flash_batch_rates_cover_input_output_and_cache_read() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    let mut usage = PricingUsage::new(1_000, 500);
+    usage.cached_tokens = Some(200);
+    usage.billing_mode = PricingBillingMode::Batch;
+
+    for model in ["gemini-3.6-flash", "gemini-3.7-flash"] {
+        let cost = service
+            .calculate_loaded_usage_cost_for_provider("gemini", model, &usage)
+            .unwrap_or_else(|error| panic!("{model} batch pricing should resolve: {error}"));
+        assert!((cost.input_cost - 0.0003).abs() < 1e-12, "{model}");
+        assert!((cost.output_cost - 0.0009375).abs() < 1e-12, "{model}");
+        assert!((cost.cache_cost - 0.0000075).abs() < 1e-12, "{model}");
+    }
+}
+
+#[test]
+fn standard_usage_ignores_batch_rates() {
+    let service = PricingService::new(None);
+    let mut model_info = test_model_info("runtime_provider");
+    model_info.extra.extend([
+        (
+            "input_cost_per_token_batches".to_string(),
+            serde_json::json!(0.5),
+        ),
+        (
+            "output_cost_per_token_batches".to_string(),
+            serde_json::json!(0.5),
+        ),
+    ]);
+    service.add_custom_model("standard-priced-model".to_string(), model_info);
+
+    let cost = service
+        .calculate_loaded_usage_cost_for_provider(
+            "runtime_provider",
+            "standard-priced-model",
+            &PricingUsage::new(1_000, 500),
+        )
+        .expect("standard pricing");
+    assert!((cost.total_cost - 0.025).abs() < 1e-12);
 }
 
 #[test]
