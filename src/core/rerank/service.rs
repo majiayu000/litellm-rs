@@ -91,7 +91,7 @@ impl RerankService {
         let start = Instant::now();
 
         // Validate request
-        self.validate_request(&request)?;
+        Self::validate_request(&request)?;
 
         // Check cache if enabled
         if self.enable_cache
@@ -132,7 +132,7 @@ impl RerankService {
     }
 
     /// Validate rerank request
-    pub(crate) fn validate_request(&self, request: &RerankRequest) -> Result<()> {
+    pub(crate) fn validate_request(request: &RerankRequest) -> Result<()> {
         if request.query.is_empty() {
             return Err(GatewayError::BadRequest(
                 "Query cannot be empty".to_string(),

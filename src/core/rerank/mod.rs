@@ -42,6 +42,6 @@ mod tests;
 
 // Re-export all public types
 pub use cache::{RerankCache, RerankCacheStats};
-pub use providers::{CohereRerankProvider, JinaRerankProvider};
+pub use providers::{CohereRerankProvider, JinaRerankProvider, VoyageRerankProvider};
 pub use service::{RerankProvider, RerankService};
 pub use types::{RerankDocument, RerankRequest, RerankResponse, RerankResult, RerankUsage};

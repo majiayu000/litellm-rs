@@ -310,6 +310,7 @@ mod tests {
             dimensions: None,
             user: None,
             task_type: None,
+            truncation: None,
         };
 
         // Valid request should pass
@@ -357,6 +358,7 @@ mod tests {
             dimensions: Some(1536),
             user: Some("test-user".to_string()),
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureAIEmbeddingUtils::transform_request(&request);

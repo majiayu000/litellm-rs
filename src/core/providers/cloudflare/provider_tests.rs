@@ -496,6 +496,7 @@ async fn test_embeddings_not_implemented() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let context = RequestContext::default();

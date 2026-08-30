@@ -24,6 +24,7 @@ impl Provider {
             | Provider::Bedrock(_)
             | Provider::Mistral(_)
             | Provider::Cloudflare(_)
+            | Provider::Voyage(_)
             | Provider::OpenAILike(_)
             | Provider::Deepgram(_)
             | Provider::ElevenLabs(_) => NativeHealthProbeSemantics::Unsupported,

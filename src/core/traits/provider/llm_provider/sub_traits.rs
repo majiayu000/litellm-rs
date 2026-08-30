@@ -288,6 +288,7 @@ mod tests {
             encoding_format: None,
             dimensions: None,
             task_type: None,
+            truncation: None,
         };
         let result = LLMEmbed::embeddings(&provider, request, RequestContext::default()).await;
         assert!(result.is_err()); // default returns not_supported

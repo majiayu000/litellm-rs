@@ -111,6 +111,10 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
     ),
+    wire(
+        "voyage",
+        "ProviderType::Voyage dispatches to native embedding and rerank endpoints",
+    ),
 ];
 
 pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
