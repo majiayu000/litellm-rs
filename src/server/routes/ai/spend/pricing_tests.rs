@@ -130,6 +130,104 @@ mod mapped_identity_tests {
         }
     }
 
+    #[tokio::test]
+    async fn openai_compatible_request_pricing_consumes_exact_binding() {
+        use crate::core::providers::model_identity::{
+            MODEL_IDENTITY_MAPPINGS_KEY, ModelIdentityMapping,
+        };
+
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        let mapped = ModelIdentityMapping::new(
+            Some("xai/grok-4.6".to_string()),
+            Some("xai/grok-4.6".to_string()),
+        );
+        let mut config = ProviderConfig {
+            name: "mapped-openai-compatible".to_string(),
+            provider_type: "openai_compatible".to_string(),
+            api_key: "test-key".to_string(),
+            models: vec!["wire-grok".to_string()],
+            ..Default::default()
+        };
+        config.settings.insert(
+            "base_url".to_string(),
+            serde_json::json!("https://vertex.example.com/v1"),
+        );
+        config.settings.insert(
+            "provider_name".to_string(),
+            serde_json::json!("vertex_publisher"),
+        );
+        config.settings.insert(
+            MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({"wire-grok": mapped}),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
+            .await
+            .expect("mapped OpenAI-compatible deployment should bind");
+        let deployment = router
+            .get_deployment("mapped-openai-compatible-wire-grok")
+            .expect("mapped deployment should be published");
+
+        let request_pricing = request_pricing_for_provider(
+            &pricing,
+            &deployment.provider,
+            &deployment.model,
+            ProviderCapability::ChatCompletion,
+        )
+        .expect("bound request pricing should resolve");
+        assert_eq!(
+            request_pricing.priced_parts(),
+            Some(("xai", "xai/grok-4.6"))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicitly_unpriced_openai_compatible_binding_never_uses_wire_price() {
+        use crate::core::providers::model_identity::{
+            MODEL_IDENTITY_MAPPINGS_KEY, ModelIdentityMapping,
+        };
+
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        let mapped = ModelIdentityMapping::new(Some("xai/grok-4.6".to_string()), None);
+        let mut config = ProviderConfig {
+            name: "unpriced-openai-compatible".to_string(),
+            provider_type: "openai_compatible".to_string(),
+            api_key: "test-key".to_string(),
+            models: vec!["gpt-4".to_string()],
+            ..Default::default()
+        };
+        config.settings.insert(
+            "base_url".to_string(),
+            serde_json::json!("https://vertex.example.com/v1"),
+        );
+        config.settings.insert(
+            "provider_name".to_string(),
+            serde_json::json!("vertex_publisher"),
+        );
+        config.settings.insert(
+            MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({"gpt-4": mapped}),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
+            .await
+            .expect("explicitly unpriced deployment should bind");
+        let deployment = router
+            .get_deployment("unpriced-openai-compatible-gpt-4")
+            .expect("unpriced deployment should be published");
+
+        let request_pricing = request_pricing_for_provider(
+            &pricing,
+            &deployment.provider,
+            &deployment.model,
+            ProviderCapability::ChatCompletion,
+        )
+        .expect("explicitly unpriced identity should remain representable");
+        assert_eq!(request_pricing.priced_parts(), None);
+    }
+
     #[test]
     fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
         assert_eq!(
@@ -202,25 +300,55 @@ mod mapped_identity_tests {
 
         let catalog = CatalogAuthority::from_embedded().expect("embedded catalog");
         let pricing = PricingService::new(None);
-        for (transport, target, exact, expected_provider, expected_model) in [
-            ("azure", "openai/gpt-4", true, "openai", "gpt-4"),
-            ("azure_ai", "openai/gpt-4", true, "openai", "gpt-4"),
-            ("azure_ai", "azure_ai/Phi-4", false, "azure_ai", "Phi-4"),
+        for (transport, wire_model, target, exact, expected_provider, expected_model) in [
+            (
+                "openai",
+                "ft:tenant:custom-chat",
+                "gpt-4",
+                true,
+                "openai",
+                "gpt-4",
+            ),
+            (
+                "azure",
+                "wire-deployment",
+                "openai/gpt-4",
+                true,
+                "openai",
+                "gpt-4",
+            ),
+            (
+                "azure_ai",
+                "wire-deployment",
+                "openai/gpt-4",
+                true,
+                "openai",
+                "gpt-4",
+            ),
+            (
+                "azure_ai",
+                "wire-deployment",
+                "azure_ai/Phi-4",
+                false,
+                "azure_ai",
+                "Phi-4",
+            ),
         ] {
             let mapping = ModelIdentityMapping::new(Some(target.to_string()), None);
             let binding = validate_deployment_identity(
                 "selected",
                 transport,
-                "wire-deployment",
+                wire_model,
                 Some(&mapping),
                 None,
                 &catalog,
                 &pricing.snapshot(),
             )
             .expect("typed capability mapping should validate");
-            let token = token_identity_for_binding(&binding, transport, "wire-deployment")
+            let token = token_identity_for_binding(&binding, transport, wire_model)
                 .expect("validated capability must yield a token identity");
 
+            assert_eq!(binding.wire_model(), wire_model);
             assert_eq!(token.provider(), expected_provider);
             assert_eq!(token.model(), expected_model);
             assert_eq!(matches!(token, TokenizerIdentity::ExactOpenAi(_)), exact);

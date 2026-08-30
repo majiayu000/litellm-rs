@@ -35,6 +35,30 @@ use super::error::{
 use super::models::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
 use super::streaming::GeminiUsagePolicy;
 
+fn gemini_audio_mime_type(format: Option<&str>) -> Result<&'static str, ProviderError> {
+    match format {
+        Some("aac" | "audio/aac" | "audio/x-aac") => Ok("audio/aac"),
+        Some("flac" | "audio/flac") => Ok("audio/flac"),
+        Some("mp3" | "audio/mp3") => Ok("audio/mp3"),
+        Some("m4a" | "audio/m4a") => Ok("audio/m4a"),
+        Some("mpeg" | "audio/mpeg") => Ok("audio/mpeg"),
+        Some("mpga" | "audio/mpga") => Ok("audio/mpga"),
+        Some("mp4" | "audio/mp4") => Ok("audio/mp4"),
+        Some("ogg" | "audio/ogg") => Ok("audio/ogg"),
+        Some("pcm" | "audio/pcm") => Ok("audio/pcm"),
+        Some("wav" | "audio/wav") => Ok("audio/wav"),
+        Some("webm" | "audio/webm") => Ok("audio/webm"),
+        Some(format) => Err(ProviderError::invalid_request(
+            "gemini",
+            format!("Unsupported Gemini audio format: {format}"),
+        )),
+        None => Err(ProviderError::invalid_request(
+            "gemini",
+            "Gemini audio content requires a format",
+        )),
+    }
+}
+
 /// Gemini API client
 #[derive(Debug, Clone)]
 pub struct GeminiClient {
@@ -447,10 +471,20 @@ impl GeminiClient {
                                 ));
                             }
                         }
-                        ContentPart::Audio { .. } => {
-                            return Err(gemini_multimodal_error(
-                                "Audio content not yet implemented",
-                            ));
+                        ContentPart::Audio { audio } => {
+                            if audio.data.is_empty() {
+                                return Err(ProviderError::invalid_request(
+                                    "gemini",
+                                    "Audio content cannot be empty",
+                                ));
+                            }
+                            let mime_type = gemini_audio_mime_type(audio.format.as_deref())?;
+                            parts.push(json!({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": audio.data
+                                }
+                            }));
                         }
                         ContentPart::Image { source, .. } => {
                             // Handle
@@ -461,10 +495,19 @@ impl GeminiClient {
                                 }
                             }));
                         }
-                        ContentPart::Document { .. } => {
-                            return Err(gemini_multimodal_error(
-                                "Document content not yet supported in Gemini",
-                            ));
+                        ContentPart::Document { source, .. } => {
+                            if source.media_type != "application/pdf" || source.data.is_empty() {
+                                return Err(ProviderError::invalid_request(
+                                    "gemini",
+                                    "Document content requires non-empty base64 application/pdf data",
+                                ));
+                            }
+                            parts.push(json!({
+                                "inlineData": {
+                                    "mimeType": source.media_type,
+                                    "data": source.data
+                                }
+                            }));
                         }
                         ContentPart::ToolResult {
                             tool_use_id,

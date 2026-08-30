@@ -209,10 +209,13 @@ fn request_pricing_for_provider_with_snapshot_hook(
 ) -> Result<RequestPricing, ProviderError> {
     let snapshot = pricing_service.snapshot();
     after_snapshot();
-    if matches!(
-        provider.provider_type(),
-        ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
-    ) {
+    let bound_identity = provider.deployment_model_identity();
+    if bound_identity.is_some()
+        || matches!(
+            provider.provider_type(),
+            ProviderType::OpenAI | ProviderType::Azure | ProviderType::AzureAI
+        )
+    {
         let bound_pricing = provider.runtime_pricing().ok_or_else(|| {
             ProviderError::configuration(
                 "model_identity",
@@ -227,7 +230,7 @@ fn request_pricing_for_provider_with_snapshot_hook(
                 "selected deployment is bound to a different runtime pricing authority",
             ));
         }
-        let identity = provider.deployment_model_identity().ok_or_else(|| {
+        let identity = bound_identity.ok_or_else(|| {
             ProviderError::configuration(
                 "model_identity",
                 format!("deployment '{model}' lost its validated model identity"),

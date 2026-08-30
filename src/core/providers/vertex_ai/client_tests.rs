@@ -474,6 +474,173 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
 }
 
 #[tokio::test]
+async fn vertex_gemini_37_uses_gemini_response_and_fixed_sampling_contract() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    let params = provider.get_supported_openai_params("gemini-3.7-flash");
+    assert!(!params.contains(&"temperature"));
+    assert!(!params.contains(&"top_p"));
+    assert!(!params.contains(&"top_k"));
+
+    let request = ChatRequest {
+        model: "gemini-3.7-flash".to_string(),
+        messages: vec![crate::core::types::chat::ChatMessage {
+            role: crate::core::types::message::MessageRole::User,
+            content: Some(crate::core::types::message::MessageContent::Text(
+                "hello".to_string(),
+            )),
+            ..Default::default()
+        }],
+        temperature: Some(0.7),
+        top_p: Some(0.8),
+        ..Default::default()
+    };
+    let transformed = provider
+        .transform_request(request, RequestContext::default())
+        .await
+        .unwrap();
+    assert!(transformed["generationConfig"].get("temperature").is_none());
+    assert!(transformed["generationConfig"].get("top_p").is_none());
+
+    let response = serde_json::json!({
+        "candidates": [{
+            "index": 0,
+            "content": {"parts": [{"text": "ok"}]},
+            "finishReason": "STOP"
+        }]
+    });
+    let parsed = provider
+        .transform_response(
+            serde_json::to_vec(&response).unwrap().as_slice(),
+            "gemini-3.7-flash",
+            "request-id",
+        )
+        .await
+        .expect("3.7 must use the Gemini response transformer");
+    assert_eq!(parsed.choices.len(), 1);
+
+    let assistant_prefill = ChatRequest {
+        model: "gemini-3.7-flash".to_string(),
+        messages: vec![crate::core::types::chat::ChatMessage {
+            role: crate::core::types::message::MessageRole::Assistant,
+            content: Some(crate::core::types::message::MessageContent::Text(
+                "prefill".to_string(),
+            )),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(
+        provider
+            .transform_request(assistant_prefill, RequestContext::default())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn vertex_gemini_37_count_tokens_uses_the_google_publisher_endpoint() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+
+    let url = provider.count_tokens_url("gemini-3.7-flash");
+    assert!(
+        url.contains("/publishers/google/models/gemini-3.7-flash:countTokens"),
+        "unexpected countTokens URL: {url}"
+    );
+    assert!(!url.contains("/endpoints/"), "unexpected custom URL: {url}");
+
+    let global_provider = VertexAIProvider::new(VertexAIProviderConfig {
+        location: "global".to_string(),
+        ..test_vertex_provider_config()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        global_provider.count_tokens_url("gemini-3.7-flash"),
+        "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/\
+         publishers/google/models/gemini-3.7-flash:countTokens"
+    );
+
+    for lookalike in [
+        "gemini-3.7-flash-preview",
+        "gemini-3.7-flash-20260813",
+        "prefix-gemini-3.7-flash",
+    ] {
+        let url = provider.count_tokens_url(lookalike);
+        assert!(url.contains(&format!("/endpoints/{lookalike}:countTokens")));
+    }
+}
+
+#[tokio::test]
+async fn exact_legacy_vertex_gemini_ids_keep_the_gemini_transformer() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+
+    for model in [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro-002",
+        "gemini-1.5-flash-002",
+    ] {
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![crate::core::types::chat::ChatMessage {
+                role: crate::core::types::message::MessageRole::User,
+                content: Some(crate::core::types::message::MessageContent::Text(
+                    "hello".to_string(),
+                )),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let transformed = provider
+            .transform_request(request, RequestContext::default())
+            .await
+            .unwrap_or_else(|error| panic!("{model} should use the Gemini transformer: {error}"));
+        assert_eq!(transformed["contents"][0]["role"], "user");
+
+        let response = serde_json::json!({
+            "candidates": [{
+                "index": 0,
+                "content": {"parts": [{"text": "ok"}]},
+                "finishReason": "STOP"
+            }]
+        });
+        let parsed = provider
+            .transform_response(
+                serde_json::to_vec(&response).unwrap().as_slice(),
+                model,
+                "request-id",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{model} response should use Gemini: {error}"));
+        assert_eq!(parsed.choices.len(), 1);
+    }
+
+    for model in [
+        "prefix-gemini-2.0-flash-lite",
+        "gemini-2.0-flash-lite-suffix",
+        "GEMINI-1.5-PRO-002",
+    ] {
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![],
+            ..Default::default()
+        };
+        assert!(matches!(
+            provider
+                .transform_request(request, RequestContext::default())
+                .await,
+            Err(ProviderError::ModelNotFound { .. })
+        ));
+    }
+}
+
+#[tokio::test]
 async fn test_vertex_shared_catalog_new_model_request_contract() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await

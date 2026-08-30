@@ -110,6 +110,20 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::AI21,
+        "ai21",
+        &["ai21_chat", "ai21-chat"],
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
+    ),
+    entry(
+        ProviderType::Baseten,
+        "baseten",
+        &[],
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
+    ),
+    entry(
         ProviderType::Cohere,
         "cohere",
         &["cohere-ai"],
@@ -248,6 +262,13 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         &["github-copilot", "copilot"],
         providers_extended_native_dispatch_kind(),
         false,
+    ),
+    entry(
+        ProviderType::HuggingFace,
+        "huggingface",
+        &["hugging_face", "hugging-face"],
+        ProviderDispatchKind::CatalogOpenAiLike,
+        true,
     ),
     entry(
         ProviderType::Hyperbolic,

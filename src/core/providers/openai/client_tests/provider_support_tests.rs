@@ -189,6 +189,51 @@ fn test_get_supported_openai_params_gpt55_pro() {
 }
 
 #[test]
+fn test_get_supported_openai_params_gpt56_family() {
+    let provider = create_test_provider();
+
+    for model in [
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.6-cyber",
+    ] {
+        let params = provider.get_supported_openai_params(model);
+        let prefixed = provider.get_supported_openai_params(&format!("openai/{model}"));
+
+        for expected in [
+            "stream",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "reasoning_effort",
+            "store",
+            "metadata",
+            "service_tier",
+        ] {
+            assert!(
+                params.contains(&expected),
+                "{model} supported params should include {expected}"
+            );
+        }
+        assert_eq!(params, prefixed);
+    }
+
+    for model in [
+        "gpt-5.6-2026-08-01",
+        "gpt-5.6-solstice",
+        "OPENAI/gpt-5.6",
+        "openai/GPT-5.6",
+        "azure/gpt-5.6",
+    ] {
+        let params = provider.get_supported_openai_params(model);
+        assert!(!params.contains(&"tools"), "{model}");
+        assert!(!params.contains(&"reasoning_effort"), "{model}");
+    }
+}
+
+#[test]
 fn test_get_supported_openai_params_advertises_forwarded_chat_fields() {
     let provider = create_test_provider();
 
@@ -214,6 +259,11 @@ fn test_get_supported_openai_params_advertises_forwarded_chat_fields() {
         "gpt-5.4-nano",
         "gpt-5.5",
         "gpt-5.5-pro",
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.6-cyber",
         "o1-preview",
         "o1-pro",
         "o3",

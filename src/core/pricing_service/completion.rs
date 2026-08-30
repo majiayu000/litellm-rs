@@ -50,6 +50,13 @@ impl PricingService {
         let model_info = self
             .get_model_info(model)
             .ok_or_else(|| GatewayError::not_found(format!("Model not found: {model}")))?;
+        let model_info = super::google::effective_model_info_at(
+            &model_info.litellm_provider,
+            model,
+            &model_info,
+            pricing_time,
+        )
+        .into_owned();
 
         if model_info.cost_per_second.is_some() {
             let total_time_seconds = require_total_time_seconds(model, total_time_seconds)?;
@@ -152,5 +159,40 @@ mod tests {
             .unwrap();
 
         assert!((peak_cost.total_cost - off_peak_cost.total_cost * 2.0).abs() < 1e-12);
+    }
+
+    #[tokio::test]
+    async fn public_completion_cost_applies_gemini_flash_schedule() {
+        let service = PricingService::with_embedded_default().unwrap();
+        let promotional = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+        let standard = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+
+        let promotional_cost = service
+            .calculate_completion_cost_at(
+                "gemini-3.7-flash",
+                1_000,
+                1_000,
+                None,
+                None,
+                None,
+                promotional,
+            )
+            .await
+            .unwrap();
+        let standard_cost = service
+            .calculate_completion_cost_at(
+                "gemini-3.7-flash",
+                1_000,
+                1_000,
+                None,
+                None,
+                None,
+                standard,
+            )
+            .await
+            .unwrap();
+
+        assert!((promotional_cost.total_cost - 0.0045).abs() < 1e-12);
+        assert!((standard_cost.total_cost - 0.009).abs() < 1e-12);
     }
 }

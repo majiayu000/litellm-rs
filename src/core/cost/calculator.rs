@@ -112,7 +112,7 @@ pub fn get_model_pricing_at(
     pricing_time: DateTime<Utc>,
 ) -> Result<ModelPricing, CostError> {
     if let Some((resolved_model, info)) =
-        default_pricing_authority().get_model_info_for_provider(provider, model)
+        default_pricing_authority().get_model_info_for_provider_at(provider, model, pricing_time)
     {
         return litellm_to_cost_pricing_at(&resolved_model, &info, pricing_time);
     }

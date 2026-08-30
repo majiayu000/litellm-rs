@@ -1,9 +1,267 @@
 use crate::core::providers::provider_type::{ProviderType, all_non_custom_provider_types};
 use crate::core::providers::{Provider, ProviderError};
-#[cfg(feature = "providers-extended")]
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::types::chat::ChatRequest;
+use crate::core::types::context::RequestContext;
+use crate::core::types::tools::{FunctionDefinition, Tool, ToolType};
+use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-#[cfg(feature = "providers-extended")]
 use tokio::net::TcpListener;
+
+const MISSING_TEXT_PROVIDERS: [(&str, &str); 3] = [
+    ("ai21", "jamba-large"),
+    ("huggingface", "openai/gpt-oss-120b:fastest"),
+    ("baseten", "deepseek-ai/DeepSeek-V4-Pro"),
+];
+
+async fn serve_once(
+    status: &str,
+    content_type: &str,
+    body: &str,
+) -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("test listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("test listener should have an address");
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("provider should connect");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 2048];
+        loop {
+            let read = socket
+                .read(&mut buffer)
+                .await
+                .expect("request should be readable");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("response should be writable");
+        String::from_utf8(request).expect("request should be UTF-8")
+    });
+    (format!("http://{address}"), server)
+}
+
+async fn catalog_provider(selector: &str, base_url: String) -> Provider {
+    crate::core::providers::create_provider(crate::config::models::provider::ProviderConfig {
+        name: selector.to_string(),
+        provider_type: selector.to_string(),
+        api_key: "provider-contract-key".to_string(),
+        base_url: Some(base_url),
+        endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+        ..Default::default()
+    })
+    .await
+    .unwrap_or_else(|error| panic!("{selector} should create an OpenAI-like provider: {error}"))
+}
+
+fn tool_request(model: &str) -> ChatRequest {
+    ChatRequest {
+        model: model.to_string(),
+        tools: Some(vec![Tool {
+            tool_type: ToolType::Function,
+            function: FunctionDefinition {
+                name: "lookup".to_string(),
+                description: None,
+                parameters: Some(serde_json::json!({"type": "object"})),
+            },
+        }]),
+        ..Default::default()
+    }
+}
+
+fn assert_request_contract(request: &str, model: &str, stream: bool, has_tools: bool) {
+    let (headers, body) = request
+        .split_once("\r\n\r\n")
+        .expect("captured request should contain headers and body");
+    assert!(headers.starts_with("POST /chat/completions "), "{headers}");
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer provider-contract-key"),
+        "{headers}"
+    );
+    let body: serde_json::Value = serde_json::from_str(body).expect("request body should be JSON");
+    assert_eq!(body["model"], model);
+    assert_eq!(body["stream"].as_bool().unwrap_or(false), stream);
+    assert_eq!(body.get("tools").is_some(), has_tools);
+    if has_tools {
+        assert_eq!(body["tools"][0]["function"]["name"], "lookup");
+    }
+}
+
+#[tokio::test]
+async fn missing_text_provider_chat_stream_and_error_contracts() {
+    let unary_body = r#"{"id":"chatcmpl-contract","object":"chat.completion","created":1,"model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}"#;
+    let stream_body = concat!(
+        "data: {\"id\":\"chunk-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"upstream\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chunk-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"upstream\",\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let error_body =
+        r#"{"error":{"type":"rate_limit_error","message":"slow down","retry_after":7}}"#;
+
+    for (selector, model) in MISSING_TEXT_PROVIDERS {
+        let (base_url, server) = serve_once("200 OK", "application/json", unary_body).await;
+        let response = catalog_provider(selector, base_url)
+            .await
+            .chat_completion(tool_request(model), RequestContext::default())
+            .await
+            .unwrap_or_else(|error| panic!("{selector} unary chat should succeed: {error}"));
+        assert!(
+            response.has_tool_calls(),
+            "{selector} should preserve tool calls"
+        );
+        assert_eq!(
+            response
+                .usage
+                .expect("usage should be preserved")
+                .total_tokens,
+            5
+        );
+        assert_request_contract(
+            &server.await.expect("server should finish"),
+            model,
+            false,
+            true,
+        );
+
+        let (base_url, server) = serve_once("200 OK", "text/event-stream", stream_body).await;
+        let provider = catalog_provider(selector, base_url).await;
+        let mut stream = provider
+            .chat_completion_stream(ChatRequest::new(model), RequestContext::default())
+            .await
+            .unwrap_or_else(|error| panic!("{selector} stream should start: {error}"));
+        let mut chunks = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            chunks.push(chunk.unwrap_or_else(|error| panic!("{selector} stream chunk: {error}")));
+        }
+        assert_eq!(chunks[0].choices[0].delta.content.as_deref(), Some("ok"));
+        assert_eq!(
+            chunks[1]
+                .usage
+                .as_ref()
+                .expect("stream usage should be preserved")
+                .total_tokens,
+            5
+        );
+        assert_request_contract(
+            &server.await.expect("server should finish"),
+            model,
+            true,
+            false,
+        );
+
+        let (base_url, server) =
+            serve_once("429 Too Many Requests", "application/json", error_body).await;
+        let error = catalog_provider(selector, base_url)
+            .await
+            .chat_completion(tool_request(model), RequestContext::default())
+            .await
+            .expect_err("rate-limit envelope should fail clearly");
+        assert!(matches!(
+            error,
+            ProviderError::RateLimit {
+                retry_after: Some(7),
+                ..
+            }
+        ));
+        assert_request_contract(
+            &server.await.expect("server should finish"),
+            model,
+            false,
+            true,
+        );
+    }
+}
+
+#[tokio::test]
+async fn catalog_text_provider_wire_ids_remain_lossless() {
+    let cases = [
+        ("meta_llama", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
+        ("perplexity", "sonar"),
+        ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        (
+            "fireworks",
+            "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        ),
+        ("groq", "llama-3.3-70b-versatile"),
+        ("cerebras", "llama3.1-8b"),
+        ("sambanova", "Meta-Llama-3.1-8B-Instruct"),
+        ("deepinfra", "meta-llama/Meta-Llama-3.1-70B-Instruct"),
+    ];
+
+    for (selector, model) in cases {
+        let provider = crate::core::providers::create_provider(
+            crate::config::models::provider::ProviderConfig {
+                name: selector.to_string(),
+                provider_type: selector.to_string(),
+                api_key: "provider-contract-key".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{selector} should remain creatable: {error}"));
+        let Provider::OpenAILike(provider) = provider else {
+            panic!("{selector} should remain catalog-backed");
+        };
+        let transformed = LLMProvider::transform_request(
+            &provider,
+            ChatRequest::new(model),
+            RequestContext::default(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{selector} transform should succeed: {error}"));
+        assert_eq!(
+            transformed["model"], model,
+            "{selector} changed its wire ID"
+        );
+    }
+}
+
+#[tokio::test]
+async fn missing_text_provider_wrong_selectors_fail_closed() {
+    for selector in ["ai-21", "huggingface_inference", "base-ten", "unknown"] {
+        let error = crate::core::providers::create_provider(
+            crate::config::models::provider::ProviderConfig {
+                name: selector.to_string(),
+                provider_type: selector.to_string(),
+                api_key: "provider-contract-key".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("unknown or wrong provider selector must fail closed");
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains(selector));
+    }
+}
 
 #[tokio::test]
 async fn supported_variants_do_not_fallthrough_to_not_implemented() {

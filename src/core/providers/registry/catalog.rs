@@ -160,8 +160,10 @@ pub fn canonical_catalog_name(name: &str) -> Option<&'static str> {
     }
 
     match normalized.as_str() {
+        "ai21_chat" => Some("ai21"),
         "aimlapi" => Some("aiml_api"),
         "fireworksai" => Some("fireworks_ai"),
+        "hugging_face" => Some("huggingface"),
         "togetherai" => Some("together_ai"),
         "glm" | "zhipuai" => Some("zhipu"),
         _ => None,
@@ -177,6 +179,24 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "Groq",
             "https://api.groq.com/openai/v1",
             "GROQ_API_KEY",
+        ),
+        def_chat(
+            "ai21",
+            "AI21",
+            "https://api.ai21.com/studio/v1",
+            "AI21_API_KEY",
+        ),
+        def_chat(
+            "huggingface",
+            "Hugging Face Inference Providers",
+            "https://router.huggingface.co/v1",
+            "HF_TOKEN",
+        ),
+        def_chat(
+            "baseten",
+            "Baseten",
+            "https://inference.baseten.co/v1",
+            "BASETEN_API_KEY",
         ),
         ProviderDefinition {
             alternate_auth_env_vars: &[

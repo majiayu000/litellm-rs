@@ -9,7 +9,8 @@ mod matrix {
         "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
         "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
         "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "PERPLEXITY_API_KEY", "GITHUB_TOKEN",
+        "PERPLEXITY_API_KEY", "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
+        "BASETEN_API_KEY",
     ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";
@@ -154,6 +155,9 @@ mod matrix {
         Case { name: "catalog-blank", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","")], selected: None, shadowed: &[] },
         Case { name: "catalog-alias-pplx", selector: "pplx", top: "", settings: &[], env: &[("PERPLEXITY_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-baseten-env", selector: "baseten", top: "", settings: &[], env: &[("BASETEN_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "cf-settings", selector: "cf", top: "top", settings: &[("api_token","settings")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("settings"), shadowed: &["top","env"] },
         Case { name: "cf-top", selector: "cloudflare", top: "top", settings: &[("api_token"," ")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("top"), shadowed: &["env"] },
         Case { name: "cf-env", selector: "workers-ai", top: " ", settings: &[("api_token","")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("env"), shadowed: &[] },
@@ -190,6 +194,8 @@ mod matrix {
 }
 
 use super::Router;
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::types::model::ProviderCapability;
 use std::collections::HashMap;
 
 fn function<'a>(source: &'a str, signature: &str) -> &'a str {
@@ -355,6 +361,38 @@ fn identity_provider_config(
     config
 }
 
+fn openai_like_identity_config(
+    name: &str,
+    provider_type: &str,
+    model: &str,
+    mapping: Option<crate::core::providers::model_identity::ModelIdentityMapping>,
+) -> crate::config::models::provider::ProviderConfig {
+    let mut config = crate::config::models::provider::ProviderConfig {
+        name: name.to_string(),
+        provider_type: provider_type.to_string(),
+        api_key: "test-key".to_string(),
+        models: vec![model.to_string()],
+        ..Default::default()
+    };
+    if provider_type == "openai_compatible" {
+        config.settings.insert(
+            "base_url".to_string(),
+            serde_json::json!("https://vertex.example.com/v1"),
+        );
+        config.settings.insert(
+            "provider_name".to_string(),
+            serde_json::json!("vertex_publisher"),
+        );
+    }
+    if let Some(mapping) = mapping {
+        config.settings.insert(
+            crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({model: mapping}),
+        );
+    }
+    config
+}
+
 fn runtime_price(provider: &str) -> crate::core::pricing_service::LiteLLMModelInfo {
     crate::core::pricing_service::LiteLLMModelInfo {
         max_tokens: Some(4096),
@@ -410,7 +448,8 @@ async fn pricing_aware_default_openai_publishes_only_callable_catalog_models() {
 }
 
 #[tokio::test]
-async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_service() {
+async fn explicit_fine_tune_mapping_preserves_wire_id_and_uses_exact_openai_metadata() {
+    let wire_model = "ft:tenant:custom-chat";
     let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
     pricing.add_custom_model("runtime-only-price".to_string(), runtime_price("openai"));
     let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
@@ -419,42 +458,59 @@ async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_
     );
 
     let router = Router::from_gateway_config_with_pricing(
-        &[identity_provider_config("wire-deployment", Some(mapping))],
+        &[identity_provider_config(wire_model, Some(mapping))],
         None,
         pricing.clone(),
     )
     .await
     .expect("injected runtime target should validate");
     let deployment = router
-        .get_deployment("identity-openai-wire-deployment")
+        .get_deployment("identity-openai-ft:tenant:custom-chat")
         .expect("deployment should be published");
     let bound = deployment
         .provider
         .runtime_pricing()
         .expect("managed provider should retain injected authority");
     assert!(std::sync::Arc::ptr_eq(&pricing, &bound));
+    let identity = deployment
+        .provider
+        .deployment_model_identity()
+        .expect("configured fine-tune must retain typed identity");
+    assert_eq!(identity.wire_model(), wire_model);
+    assert_eq!(identity.capability_catalog_model(), Some("gpt-4"));
+    assert_eq!(identity.pricing_model(), Some("runtime-only-price"));
+    let crate::core::providers::Provider::OpenAI(provider) = &deployment.provider else {
+        panic!("fine-tune deployment must use the OpenAI provider");
+    };
+    let model = provider
+        .get_model_info(wire_model)
+        .expect("bound fine-tune metadata must resolve");
+    assert_eq!(model.id, "gpt-4");
+    assert_eq!(model.max_context_length, 8192);
+    assert_eq!(model.max_output_length, Some(8192));
     assert_eq!(
-        deployment
-            .provider
-            .deployment_model_identity()
-            .and_then(|identity| identity.pricing_model()),
-        Some("runtime-only-price")
+        provider
+            .get_model_context_window(wire_model)
+            .expect("bound fine-tune context must resolve"),
+        8192
     );
+    assert_eq!(crate::utils::ModelUtils::get_base_model(&model.id), "gpt-4");
     assert!(deployment.provider.supports_capability_for_model(
-        "wire-deployment",
+        wire_model,
         &crate::core::types::model::ProviderCapability::ChatCompletion,
     ));
     assert!(!deployment.provider.supports_capability_for_model(
-        "wire-deployment",
+        wire_model,
         &crate::core::types::model::ProviderCapability::Embeddings,
     ));
 }
 
 #[tokio::test]
-async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_selection() {
+async fn unmapped_fine_tune_stays_unprivileged_and_reports_mapping_hint() {
+    let wire_model = "ft:tenant:custom-chat";
     let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
     let router = Router::from_gateway_config_with_pricing(
-        &[identity_provider_config("wire-deployment", None)],
+        &[identity_provider_config(wire_model, None)],
         None,
         pricing,
     )
@@ -462,18 +518,18 @@ async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_sel
     .expect("an exact configured deployment must survive without semantic mappings");
 
     let deployment = router
-        .get_deployment("identity-openai-wire-deployment")
+        .get_deployment("identity-openai-ft:tenant:custom-chat")
         .expect("configured deployment should be published");
     let identity = deployment
         .provider
         .deployment_model_identity()
         .expect("configured deployment should retain a typed identity");
-    assert_eq!(identity.wire_model(), "wire-deployment");
+    assert_eq!(identity.wire_model(), wire_model);
     assert_eq!(identity.capability_catalog_model(), None);
     assert_eq!(identity.pricing_model(), None);
 
     let error = match router.select_deployment_lease_for_capability(
-        "wire-deployment",
+        wire_model,
         &crate::core::types::model::ProviderCapability::ChatCompletion,
     ) {
         Ok(_) => panic!("an unmapped deployment must not gain catalog capabilities"),
@@ -482,7 +538,7 @@ async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_sel
     assert!(
         error
             .to_string()
-            .contains("model_identity_mappings.wire-deployment.capability_catalog_model"),
+            .contains("model_identity_mappings.ft:tenant:custom-chat.capability_catalog_model"),
         "{error}"
     );
 }
@@ -577,4 +633,185 @@ async fn pricing_aware_constructor_fails_absent_target_before_snapshot_publicati
             && text.contains("missing-runtime-price"),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn xai_identity_is_automatic_only_for_native_or_explicitly_mapped_publishers() {
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default()
+            .expect("embedded pricing should load"),
+    );
+    let qualified = "xai/grok-4.6";
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some(qualified.to_string()),
+        Some(qualified.to_string()),
+    );
+    let mut custom = openai_like_identity_config("custom-xai", "xai", "custom/grok-4.6", None);
+    custom.models = [
+        "custom/grok-4.6",
+        "custom/xai/grok-4.6",
+        "custom/custom/grok-4.6",
+        "customized/grok-4.6",
+        "wrong/grok-4.6",
+        "custom/grok-4.6-latest",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    custom
+        .settings
+        .insert("model_prefix".to_string(), serde_json::json!("custom/"));
+    let providers = vec![
+        openai_like_identity_config("native-xai", "xai", qualified, None),
+        openai_like_identity_config(
+            "mapped-vertex",
+            "openai_compatible",
+            qualified,
+            Some(mapping),
+        ),
+        openai_like_identity_config("unmapped-vertex", "openai_compatible", qualified, None),
+        custom,
+    ];
+    let router = Router::from_gateway_config_with_pricing(&providers, None, pricing)
+        .await
+        .expect("exact native and explicitly mapped xAI identities should validate");
+    let ids = router.get_deployments_for_model(qualified);
+    let deployment = |name: &str| {
+        ids.iter()
+            .find(|id| id.starts_with(name))
+            .and_then(|id| router.get_deployment(id))
+            .unwrap_or_else(|| panic!("missing {name} deployment in {ids:?}"))
+    };
+
+    let native = deployment("native-xai");
+    let crate::core::providers::Provider::OpenAILike(native_provider) = &native.provider else {
+        panic!("xAI catalog provider must use OpenAI-compatible transport");
+    };
+    let native_json = LLMProvider::transform_request(
+        native_provider,
+        crate::core::types::chat::ChatRequest {
+            model: qualified.to_string(),
+            messages: vec![],
+            ..Default::default()
+        },
+        crate::core::types::context::RequestContext::default(),
+    )
+    .await
+    .expect("native xAI transform");
+    assert_eq!(native_json["model"], "grok-4.6");
+
+    let mapped = deployment("mapped-vertex");
+    assert!(
+        mapped
+            .provider
+            .supports_capability_for_model(qualified, &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        !mapped
+            .provider
+            .supports_capability_for_model(qualified, &ProviderCapability::BatchProcessing)
+    );
+    let crate::core::providers::Provider::OpenAILike(mapped_provider) = &mapped.provider else {
+        panic!("mapped publisher must use OpenAI-compatible transport");
+    };
+    let mapped_json = LLMProvider::transform_request(
+        mapped_provider,
+        crate::core::types::chat::ChatRequest {
+            model: qualified.to_string(),
+            messages: vec![],
+            extra_params: HashMap::from([(
+                "reasoning_effort".to_string(),
+                serde_json::json!("xhigh"),
+            )]),
+            ..Default::default()
+        },
+        crate::core::types::context::RequestContext::default(),
+    )
+    .await
+    .expect("mapped publisher transform");
+    assert_eq!(mapped_json["model"], qualified);
+    assert_eq!(mapped_json["reasoning_effort"], "xhigh");
+    for field in ["stop", "presence_penalty", "frequency_penalty"] {
+        let request = crate::core::types::chat::ChatRequest {
+            model: qualified.to_string(),
+            messages: vec![],
+            extra_params: HashMap::from([
+                ("reasoning_effort".to_string(), serde_json::json!("high")),
+                (field.to_string(), serde_json::json!(1)),
+            ]),
+            ..Default::default()
+        };
+        assert!(
+            LLMProvider::transform_request(
+                mapped_provider,
+                request,
+                crate::core::types::context::RequestContext::default(),
+            )
+            .await
+            .is_err(),
+            "{field} must be rejected after the final extra-body merge"
+        );
+    }
+
+    let unmapped = deployment("unmapped-vertex");
+    assert!(
+        !unmapped
+            .provider
+            .supports_capability_for_model(qualified, &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        unmapped
+            .provider
+            .calculate_cost(qualified, 1, 1)
+            .await
+            .is_err(),
+        "an unmapped publisher must not turn absent pricing into zero"
+    );
+
+    let short = native
+        .provider
+        .calculate_cost(qualified, 199_999, 0)
+        .await
+        .expect("short-context xAI pricing");
+    let long = native
+        .provider
+        .calculate_cost(qualified, 200_000, 0)
+        .await
+        .expect("long-context xAI pricing");
+    assert!((short - 0.399_998).abs() < 1e-12);
+    assert!((long - 0.8).abs() < 1e-12);
+
+    for (raw, wire) in [
+        ("custom/grok-4.6", "grok-4.6"),
+        ("custom/xai/grok-4.6", "xai/grok-4.6"),
+    ] {
+        let id = router
+            .get_deployments_for_model(raw)
+            .into_iter()
+            .next()
+            .expect("custom xAI deployment id");
+        let custom = router.get_deployment(&id).expect("custom xAI deployment");
+        let identity = custom
+            .provider
+            .deployment_model_identity()
+            .expect("custom xAI identity");
+        assert_eq!(identity.wire_model(), wire);
+        assert_eq!(identity.capability_catalog_model(), Some("grok-4.6"));
+        assert_eq!(identity.pricing_model(), Some(qualified));
+    }
+    for invalid in [
+        "custom/custom/grok-4.6",
+        "customized/grok-4.6",
+        "wrong/grok-4.6",
+        "custom/grok-4.6-latest",
+    ] {
+        assert!(
+            router
+                .select_deployment_lease_for_capability(
+                    invalid,
+                    &ProviderCapability::ChatCompletion,
+                )
+                .is_err(),
+            "{invalid} must not acquire xAI capability"
+        );
+    }
 }
