@@ -48,7 +48,7 @@ impl PricingService {
         }
 
         let model_info = self
-            .get_model_info_at(model, pricing_time)
+            .get_model_info(model)
             .ok_or_else(|| GatewayError::not_found(format!("Model not found: {model}")))?;
 
         if model_info.cost_per_second.is_some() {

@@ -117,6 +117,7 @@ pub use provider_type::ProviderType;
 pub mod factory;
 pub use factory::{create_provider, is_provider_selector_supported};
 // Registry and unified provider
+mod chat_continuation;
 pub mod contextual_error;
 pub mod failure;
 pub mod provider_error_conversions;
@@ -135,6 +136,10 @@ use crate::core::types::{
     chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest,
 };
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
+pub(crate) use chat_continuation::{
+    AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
+    ChatMessageContinuation,
+};
 pub use contextual_error::ContextualError;
 pub use failure::{ProviderFailureFacts, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
@@ -413,6 +418,7 @@ macro_rules! dispatch_provider_selective {
 mod audio_dispatch;
 mod capability_dispatch;
 mod model_health_check;
+pub mod model_identity;
 
 /// Unified built-in Provider enum (Rust-idiomatic design).
 ///
@@ -451,6 +457,84 @@ pub enum Provider {
 }
 
 impl Provider {
+    pub(crate) fn bind_deployment_model_identity(
+        &mut self,
+        identity: model_identity::DeploymentModelIdentity,
+        pricing: std::sync::Arc<crate::core::pricing_service::PricingService>,
+    ) -> Result<(), String> {
+        let binding = model_identity::DeploymentProviderBinding::new(identity, pricing);
+        match self {
+            Provider::OpenAI(provider) => provider.model_identity = Some(binding),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider.model_identity = Some(binding),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider.model_identity = Some(binding),
+            _ => {
+                return Err(format!(
+                    "provider '{}' does not use OpenAI-family deployment identity",
+                    self.name()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn deployment_model_identity(
+        &self,
+    ) -> Option<&model_identity::DeploymentModelIdentity> {
+        match self {
+            Provider::OpenAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn runtime_pricing(
+        &self,
+    ) -> Option<std::sync::Arc<crate::core::pricing_service::PricingService>> {
+        match self {
+            Provider::OpenAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            #[cfg(feature = "providers-extra")]
+            Provider::Azure(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            _ => None,
+        }
+        .map(std::sync::Arc::clone)
+    }
+
+    pub(crate) fn legacy_openai_model_target<'a>(&'a self, model: &'a str) -> Option<&'a str> {
+        match self {
+            Provider::OpenAI(provider) => provider
+                .config
+                .model_mappings
+                .get(model)
+                .map(String::as_str),
+            _ => None,
+        }
+    }
+
     pub(crate) async fn gemini_generate_content(
         &self,
         request: GeminiNativeRequest,
@@ -564,6 +648,27 @@ impl Provider {
         dispatch_provider!(async_err, self, chat_completion, request, context)
     }
 
+    pub(crate) async fn chat_completion_with_continuation(
+        &self,
+        envelope: ChatContinuationRequest,
+        context: RequestContext,
+        opt_in: bool,
+    ) -> Result<ChatContinuationResponse, ProviderError> {
+        if !opt_in && !envelope.has_continuation() {
+            let (request, _) = envelope.into_parts();
+            let response = self.chat_completion(request, context).await?;
+            let extensions = vec![ChatMessageContinuation::new(); response.choices.len()];
+            return ChatContinuationResponse::new(response, extensions);
+        }
+        match self {
+            Provider::Anthropic(provider) => provider.chat_with_continuation(envelope).await,
+            _ => Err(ProviderError::not_supported(
+                "router",
+                "Anthropic continuation is only supported by the Anthropic provider",
+            )),
+        }
+    }
+
     /// Execute health check
     pub async fn health_check(&self) -> crate::core::types::health::HealthStatus {
         use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -583,6 +688,14 @@ impl Provider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
+        if let Some(result) = model_identity::calculate_managed_provider_cost(
+            self,
+            model,
+            input_tokens,
+            output_tokens,
+        ) {
+            return result;
+        }
         use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
         let model = self.strip_provider_prefix(model);
         dispatch_provider!(

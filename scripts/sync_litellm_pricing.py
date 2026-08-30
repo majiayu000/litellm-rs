@@ -17,10 +17,13 @@ import os
 import re
 import sys
 import tempfile
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
+
+from model_catalog_authority import build_catalog_authority
 
 
 DEFAULT_SOURCE_COMMIT = "ec94a1f82aa9066dbf205773abf71595d3208388"
@@ -29,6 +32,8 @@ DEFAULT_SOURCE_URL = (
     f"{DEFAULT_SOURCE_COMMIT}/model_prices_and_context_window.json"
 )
 DEFAULT_OUTPUT = Path("config/model_prices_extended.json")
+DEFAULT_CATALOG_DECISIONS = Path("config/model_catalog_decisions.json")
+DEFAULT_CATALOG_AUTHORITY = Path("config/model_catalog_authority.json")
 DEFAULT_MIN_MODELS = 2500
 TOKEN_LIMIT_FIELDS = ("max_tokens", "max_input_tokens", "max_output_tokens")
 SOURCE_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -48,18 +53,23 @@ GPT_PRO_TIER_FIELDS = (
     "output_cost_per_token_above_272k_tokens",
     "cache_read_input_token_cost_above_272k_tokens",
 )
-GEMINI_BATCH_FIELDS = (
-    "input_cost_per_token_batches",
-    "output_cost_per_token_batches",
-    "cache_read_input_token_cost_batches",
+GEMINI_BATCH_RATES = {
+    "input_cost_per_token_batches": 0.000000375,
+    "output_cost_per_token_batches": 0.000001875,
+    "cache_read_input_token_cost_batches": 0.0000000375,
+}
+GEMINI_PROMO_VALID_THROUGH = date(2026, 12, 31)
+GEMINI_PROMO_MODELS = frozenset(
+    (
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini/gemini-3.6-flash",
+        "gemini/gemini-3.7-flash",
+    )
 )
 OFFICIAL_OVERRIDE_REMOVALS = {
     "gpt-5.5-pro": GPT_PRO_TIER_FIELDS,
     "gpt-5.5-pro-2026-04-23": GPT_PRO_TIER_FIELDS,
-    "gemini-3.6-flash": GEMINI_BATCH_FIELDS,
-    "gemini-3.7-flash": GEMINI_BATCH_FIELDS,
-    "gemini/gemini-3.6-flash": GEMINI_BATCH_FIELDS,
-    "gemini/gemini-3.7-flash": GEMINI_BATCH_FIELDS,
 }
 FORBIDDEN_PRICING_FIELDS = OFFICIAL_OVERRIDE_REMOVALS
 
@@ -111,6 +121,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -118,6 +129,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -125,6 +137,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -132,6 +145,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -309,6 +323,20 @@ def validate_source_identity(source_url: str, source_commit: str) -> None:
         raise SystemExit("source URL commit does not match --source-commit")
 
 
+def load_catalog_source_identity(path: Path) -> tuple[str, str]:
+    """Load and validate the immutable upstream identity recorded by a catalog."""
+    catalog = load_json(path)
+    metadata = catalog.get("_metadata")
+    if not isinstance(metadata, dict):
+        raise SystemExit(f"{path} is missing object _metadata")
+    source_url = metadata.get("source_url")
+    source_commit = metadata.get("source_commit")
+    if not isinstance(source_url, str) or not isinstance(source_commit, str):
+        raise SystemExit(f"{path} is missing string source_url/source_commit metadata")
+    validate_source_identity(source_url, source_commit)
+    return source_url, source_commit
+
+
 def load_url(url: str) -> tuple[dict[str, Any], str]:
     try:
         with urlopen(url, timeout=30) as response:
@@ -382,8 +410,8 @@ def validate_time_of_use_pricing(
 ) -> None:
     if not isinstance(time_of_use, dict):
         raise SystemExit(f"{model!r}.time_of_use_pricing must be a JSON object")
-    if not isinstance(time_of_use.get("timezone"), str) or not time_of_use["timezone"]:
-        raise SystemExit(f"{model!r}.time_of_use_pricing.timezone must be a non-empty string")
+    if time_of_use.get("timezone") != "UTC":
+        raise SystemExit(f"{model!r}.time_of_use_pricing.timezone must be 'UTC'")
     windows = time_of_use.get("peak_windows")
     if not isinstance(windows, list) or not windows:
         raise SystemExit(f"{model!r}.time_of_use_pricing.peak_windows must be non-empty")
@@ -417,9 +445,11 @@ def validate_time_of_use_pricing(
     peak_rates = time_of_use.get("peak_rates")
     if not isinstance(peak_rates, dict):
         raise SystemExit(f"{model!r}.time_of_use_pricing.peak_rates must be an object")
-    required_rates = ["input_cost_per_token", "output_cost_per_token"]
-    if "cache_read_input_token_cost" in entry:
-        required_rates.append("cache_read_input_token_cost")
+    required_rates = [
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+    ]
     for field in required_rates:
         value = peak_rates.get(field)
         if (
@@ -446,12 +476,16 @@ def validate_contract_entry(
             )
 
 
-def validate_official_contracts(entries: dict[str, dict[str, Any]]) -> None:
+def validate_official_contracts(
+    entries: dict[str, dict[str, Any]], as_of_date: date | None = None
+) -> None:
+    as_of_date = as_of_date or datetime.now(timezone.utc).date()
     for model, contract in OFFICIAL_PRICING_CONTRACTS.items():
         entry = entries.get(model)
         if entry is None:
             raise SystemExit(f"official pricing contract is missing exact model ID {model!r}")
-        validate_contract_entry(model, entry, contract)
+        if model not in GEMINI_PROMO_MODELS or as_of_date <= GEMINI_PROMO_VALID_THROUGH:
+            validate_contract_entry(model, entry, contract)
         validate_forbidden_fields(model, entry)
 
     for model in ("deepseek-v4-flash", "deepseek/deepseek-v4-flash"):
@@ -510,10 +544,21 @@ def load_overlay_entries(paths: list[Path]) -> dict[str, dict[str, Any]]:
 def apply_official_overrides(
     source_entries: dict[str, dict[str, Any]],
     overlay_entries: dict[str, dict[str, Any]],
+    as_of_date: date | None = None,
 ) -> dict[str, dict[str, Any]]:
+    as_of_date = as_of_date or datetime.now(timezone.utc).date()
     patched = {model: dict(entry) for model, entry in overlay_entries.items()}
     for model, patch in OFFICIAL_OVERRIDE_PATCHES.items():
-        original = patched.get(model, source_entries.get(model))
+        promo_expired = (
+            model in GEMINI_PROMO_MODELS and as_of_date > GEMINI_PROMO_VALID_THROUGH
+        )
+        overlay = patched.get(model)
+        overlay_has_promo_signature = overlay is not None and all(
+            overlay.get(field) == expected for field, expected in patch.items()
+        )
+        original = overlay if overlay is not None else source_entries.get(model)
+        if promo_expired and overlay_has_promo_signature:
+            original = source_entries.get(model)
         if original is None:
             raise SystemExit(
                 f"official override target {model!r} is missing from source and compatibility overlay"
@@ -521,7 +566,10 @@ def apply_official_overrides(
         entry = dict(original)
         for field in OFFICIAL_OVERRIDE_REMOVALS.get(model, ()):
             entry.pop(field, None)
-        entry.update(patch)
+        if promo_expired and overlay_has_promo_signature:
+            entry.pop("pricing_valid_through", None)
+        elif not promo_expired:
+            entry.update(patch)
         patched[model] = entry
     return patched
 
@@ -588,9 +636,20 @@ def write_catalog(path: Path, data: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-url", default=DEFAULT_SOURCE_URL)
-    parser.add_argument("--source-commit", default=DEFAULT_SOURCE_COMMIT)
+    parser.add_argument("--source-url")
+    parser.add_argument("--source-commit")
+    parser.add_argument(
+        "--source-catalog",
+        type=Path,
+        help="derive the immutable source identity from committed catalog metadata",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--catalog-decisions", type=Path, default=DEFAULT_CATALOG_DECISIONS
+    )
+    parser.add_argument(
+        "--catalog-authority-output", type=Path, default=DEFAULT_CATALOG_AUTHORITY
+    )
     parser.add_argument(
         "--overlay-file",
         action="append",
@@ -612,25 +671,64 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    validate_source_identity(args.source_url, args.source_commit)
-    source_data, source_sha256 = load_url(args.source_url)
+    as_of_date = datetime.now(timezone.utc).date()
+    if args.source_catalog is not None:
+        if not args.check:
+            raise SystemExit("--source-catalog requires --check")
+        if args.source_url is not None or args.source_commit is not None:
+            raise SystemExit(
+                "--source-catalog cannot be combined with --source-url/--source-commit"
+            )
+        source_url, source_commit = load_catalog_source_identity(args.source_catalog)
+    elif args.source_url is None and args.source_commit is None:
+        if args.check:
+            raise SystemExit(
+                "--check requires --source-catalog or an explicit source URL/commit"
+            )
+        source_url, source_commit = DEFAULT_SOURCE_URL, DEFAULT_SOURCE_COMMIT
+    elif args.source_url is None or args.source_commit is None:
+        raise SystemExit("--source-url and --source-commit must be provided together")
+    else:
+        source_url, source_commit = args.source_url, args.source_commit
+
+    validate_source_identity(source_url, source_commit)
+    source_data, source_sha256 = load_url(source_url)
     source_entries = model_entries(source_data)
     validate_entries(source_entries, args.min_models)
-    overlay_paths = args.overlay_file or [args.output]
+    overlay_paths = args.overlay_file or ([args.output] if args.output.exists() else [])
     overlay_entries = apply_official_overrides(
-        source_entries, load_overlay_entries(overlay_paths)
+        source_entries, load_overlay_entries(overlay_paths), as_of_date
     )
     data, overlay_count = render_catalog(
         source_data,
         source_entries,
         overlay_entries,
-        args.source_url,
-        args.source_commit,
+        source_url,
+        source_commit,
         source_sha256,
     )
     merged_entries = model_entries(data)
     validate_entries(merged_entries, args.min_models)
-    validate_official_contracts(merged_entries)
+    validate_official_contracts(merged_entries, as_of_date)
+    decisions = load_json(args.catalog_decisions)
+    catalog_authority = build_catalog_authority(merged_entries, decisions)
+    authority_metadata = catalog_authority["_metadata"]
+    data["_metadata"].update(
+        {
+            "catalog_decision_revision": authority_metadata["revision"],
+            "catalog_decision_source_sha256": authority_metadata[
+                "decision_source_sha256"
+            ],
+            "catalog_authority_sha256": authority_metadata["classification_sha256"],
+            "catalog_authority_entry_count": authority_metadata["total_entry_count"],
+            "catalog_authority_enforced_providers": authority_metadata[
+                "enforced_providers"
+            ],
+            "catalog_authority_provider_coverage": authority_metadata[
+                "provider_coverage"
+            ],
+        }
+    )
 
     if args.check:
         if not args.output.exists():
@@ -639,17 +737,29 @@ def main() -> int:
         current = load_json(args.output)
         if current != data:
             print(
-                f"{args.output} is out of sync with {args.source_url}",
+                f"{args.output} is out of sync with {source_url}",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.catalog_authority_output.exists():
+            print(f"{args.catalog_authority_output} does not exist", file=sys.stderr)
+            return 1
+        current_authority = load_json(args.catalog_authority_output)
+        if current_authority != catalog_authority:
+            print(
+                f"{args.catalog_authority_output} is out of sync with {args.catalog_decisions}",
                 file=sys.stderr,
             )
             return 1
     else:
+        write_catalog(args.catalog_authority_output, catalog_authority)
         write_catalog(args.output, data)
 
     print(
         (
             f"validated {len(source_entries)} upstream LiteLLM pricing entries "
-            f"and {overlay_count} local compatibility entries from {args.source_url}"
+            f"and {overlay_count} local compatibility entries from {source_url}"
+            f"; classified {authority_metadata['total_entry_count']} exact pricing rows"
         ),
         file=sys.stderr,
     )

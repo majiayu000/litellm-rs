@@ -7,13 +7,15 @@ mod tests {
     use actix_web::{App, HttpResponse, HttpServer, test, web};
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderHealthCheckConfig;
+    use litellm_rs::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY;
     use litellm_rs::core::router::HealthStatus;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use litellm_rs::server::middleware::AuthMiddleware;
     use litellm_rs::server::routes;
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::Duration;
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn successful_local_probe_makes_public_readiness_green() {
@@ -41,7 +43,28 @@ mod tests {
         config.gateway.storage.database.enabled = false;
         config.gateway.storage.redis.enabled = false;
         config.gateway.enterprise.audit_logging = true;
-        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        let mut pricing_file =
+            NamedTempFile::new().expect("readiness pricing fixture should be created");
+        serde_json::to_writer(
+            pricing_file.as_file_mut(),
+            &json!({
+                "readiness-model": {
+                    "max_tokens": 4096,
+                    "max_input_tokens": 4096,
+                    "max_output_tokens": 1024,
+                    "input_cost_per_token": 0.00001,
+                    "output_cost_per_token": 0.00002,
+                    "litellm_provider": "openai",
+                    "mode": "chat"
+                }
+            }),
+        )
+        .expect("readiness pricing fixture should serialize");
+        pricing_file
+            .as_file()
+            .sync_all()
+            .expect("readiness pricing fixture should be flushed");
+        config.gateway.pricing.source = Some(pricing_file.path().to_string_lossy().into_owned());
         let mut provider = mock_provider_config(
             "probe-primary",
             "openai",
@@ -56,6 +79,15 @@ mod tests {
             endpoint: Some("health".to_string()),
             expected_codes: vec![204],
         };
+        provider.settings.insert(
+            MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            json!({
+                "readiness-model": {
+                    "capability_catalog_model": "gpt-4",
+                    "pricing_model": "readiness-model"
+                }
+            }),
+        );
         config.gateway.providers = vec![provider];
 
         let gateway = GatewayHttpServer::new(&config)

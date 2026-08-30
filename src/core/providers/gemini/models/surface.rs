@@ -1,4 +1,4 @@
-use super::{GeminiModelFamily, ModelInfo, ModelPricing, ModelSpec};
+use super::{GeminiModelFamily, ModelInfo, ModelSpec};
 
 const OFFICIAL_LIFECYCLE_SOURCE: &str = "https://ai.google.dev/gemini-api/docs/deprecations";
 
@@ -81,7 +81,7 @@ pub enum GoogleGeminiApiSurface {
 }
 
 impl GoogleGeminiApiSurface {
-    pub(super) fn provider_name(self) -> &'static str {
+    fn provider_name(self) -> &'static str {
         match self {
             Self::DeveloperApi => "gemini",
             Self::VertexAi | Self::VertexAiExperimental => "vertex_ai",
@@ -133,15 +133,9 @@ impl GoogleGeminiApiSurface {
         }
     }
 
-    pub(super) fn overlay_model_info(
-        self,
-        spec: &ModelSpec,
-        pricing: Option<&ModelPricing>,
-    ) -> ModelInfo {
+    pub(super) fn overlay_model_info(self, spec: &ModelSpec) -> ModelInfo {
         let mut model_info = spec.model_info.clone();
         model_info.provider = self.provider_name().to_string();
-        model_info.input_cost_per_1k_tokens = pricing.map(|value| value.input_cost_per_1k_tokens);
-        model_info.output_cost_per_1k_tokens = pricing.map(|value| value.output_cost_per_1k_tokens);
         model_info.metadata.insert(
             "google_model_catalog_surface".to_string(),
             serde_json::json!(self.surface_name()),

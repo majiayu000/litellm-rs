@@ -8,12 +8,12 @@ use std::sync::OnceLock;
 mod catalog;
 mod contract;
 #[cfg(test)]
+mod cost_tests;
+#[cfg(test)]
 mod current_tests;
-mod pricing;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
-pub(crate) use pricing::{GeminiModelListings, GeminiUtcClock};
 pub use surface::GoogleGeminiApiSurface;
 
 pub use crate::core::cost::types::ModelPricing;
@@ -178,36 +178,37 @@ impl GeminiModelRegistry {
         self.models.values().collect()
     }
 
-    /// Check
+    /// List model metadata for a concrete Google API surface.
+    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
+        let mut models = self
+            .models
+            .values()
+            .filter(|spec| surface.includes(spec))
+            .map(|spec| surface.overlay_model_info(spec))
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        models
+    }
+
     pub fn supports_feature(&self, model_id: &str, feature: &ModelFeature) -> bool {
         self.get_model_spec(model_id)
             .map(|spec| spec.features.contains(feature))
             .unwrap_or(false)
     }
 
-    /// Model
     pub fn get_model_family(&self, model_id: &str) -> Option<&GeminiModelFamily> {
         self.get_model_spec(model_id).map(|spec| &spec.family)
     }
 
     /// Model
     pub fn get_model_pricing(&self, model_id: &str) -> Option<&ModelPricing> {
-        self.get_model_spec(model_id)
-            .and_then(pricing::current_pricing_for_spec)
+        self.get_model_spec(model_id).map(|spec| &spec.pricing)
     }
 
     /// Get model pricing in the shared core cost model shape.
     pub fn get_core_model_pricing(&self, model_id: &str) -> Option<ModelPricing> {
-        self.get_model_pricing(model_id).cloned()
-    }
-
-    pub(crate) fn get_core_model_pricing_at(
-        &self,
-        model_id: &str,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Option<ModelPricing> {
         self.get_model_spec(model_id)
-            .and_then(|spec| pricing::pricing_for_spec_at(spec, now))
+            .map(|spec| spec.pricing.clone())
     }
 
     /// Model
@@ -322,39 +323,64 @@ impl CostCalculator {
         video_seconds: Option<u32>,
         audio_seconds: Option<u32>,
     ) -> Option<f64> {
-        Self::calculate_multimodal_cost_at(
-            model_id,
-            prompt_tokens,
-            completion_tokens,
-            cached_tokens,
-            images,
-            video_seconds,
-            audio_seconds,
-            chrono::Utc::now(),
-        )
-    }
+        let registry = get_gemini_registry();
+        let pricing = registry.get_core_model_pricing(model_id)?;
+        let mut usage =
+            crate::core::cost::types::UsageTokens::new(prompt_tokens, completion_tokens);
+        usage.cached_tokens = cached_tokens;
+        let mut total_cost =
+            match crate::core::cost::calculator::generic_cost_per_token(model_id, &usage, "gemini")
+            {
+                Ok(cost) => cost.total_cost,
+                Err(crate::core::cost::types::CostError::ModelNotSupported { .. }) => {
+                    let rates = [
+                        pricing.input_cost_per_1k_tokens,
+                        pricing.output_cost_per_1k_tokens,
+                        pricing.cache_read_input_token_cost.unwrap_or(0.0),
+                    ];
+                    if rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0)
+                        || rates.iter().all(|rate| *rate == 0.0)
+                    {
+                        return None;
+                    }
+                    let cached_tokens = cached_tokens.unwrap_or(0);
+                    let remaining_prompt_tokens = prompt_tokens.saturating_sub(cached_tokens);
+                    let cache_cost = pricing
+                        .cache_read_input_token_cost
+                        .map(|price| cached_tokens as f64 / 1000.0 * price)
+                        .unwrap_or(0.0);
+                    cache_cost
+                        + remaining_prompt_tokens as f64 / 1000.0 * pricing.input_cost_per_1k_tokens
+                        + completion_tokens as f64 / 1000.0 * pricing.output_cost_per_1k_tokens
+                }
+                Err(_) => return None,
+            };
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn calculate_multimodal_cost_at(
-        model_id: &str,
-        prompt_tokens: u32,
-        completion_tokens: u32,
-        cached_tokens: Option<u32>,
-        images: Option<u32>,
-        video_seconds: Option<u32>,
-        audio_seconds: Option<u32>,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Option<f64> {
-        let pricing = get_gemini_registry().get_core_model_pricing_at(model_id, now)?;
-        Some(pricing::calculate_multimodal_cost(
-            &pricing,
-            prompt_tokens,
-            completion_tokens,
-            cached_tokens,
-            images,
-            video_seconds,
-            audio_seconds,
-        ))
+        // Image cost
+        let image_price = pricing
+            .cost_per_image
+            .as_ref()
+            .and_then(|costs| costs.get("default"))
+            .copied();
+        if let (Some(img_count), Some(img_price)) = (images, image_price) {
+            total_cost += img_count as f64 * img_price;
+        }
+
+        // Video cost
+        if let (Some(video_secs), Some(video_price)) =
+            (video_seconds, pricing.video_cost_per_second)
+        {
+            total_cost += video_secs as f64 * video_price;
+        }
+
+        // Audio cost
+        if let (Some(audio_secs), Some(audio_price)) =
+            (audio_seconds, pricing.audio_cost_per_second)
+        {
+            total_cost += audio_secs as f64 * audio_price;
+        }
+
+        Some(total_cost)
     }
 
     /// Estimate token count
@@ -696,7 +722,6 @@ mod tests {
         );
         assert!(cost.is_some());
         let cost_value = cost.unwrap();
-        // Should include cached tokens discount and image cost
         assert!(cost_value > 0.0);
     }
 
@@ -713,14 +738,12 @@ mod tests {
         );
         assert!(cost.is_some());
         let cost_value = cost.unwrap();
-        // Should include image, video, and audio costs
         assert!(cost_value > 0.0);
     }
 
     #[test]
     fn test_estimate_tokens() {
         let tokens = CostCalculator::estimate_tokens("Hello, world!");
-        // "Hello, world!" is 13 characters, ~4 tokens (13/4 = 3.25, ceil = 4)
         assert!((3..=5).contains(&tokens));
     }
 

@@ -9,7 +9,6 @@ use crate::core::budget::UnifiedBudgetLimits;
 use crate::core::guardrails::GuardrailEngine;
 use crate::core::integrations::CallbackRuntime;
 use crate::core::ip_access::{IpAccessControl, IpAccessMiddleware};
-use crate::core::pricing_service::PricingService;
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
 use crate::server::http_listener::{build_actix_server, validated_listener_settings};
 use crate::server::middleware::{
@@ -103,51 +102,8 @@ impl HttpServer {
         let auth =
             crate::auth::AuthSystem::new(&config.gateway.auth, Arc::new(storage.clone())).await?;
 
-        let pricing = Arc::new(PricingService::new(config.gateway.pricing.source.clone()));
-        if let Err(e) = pricing.initialize().await {
-            // A `None` pricing source is "pricing disabled" and is not
-            // expected to fail; any other failure is a configured-but-broken
-            // pricing source. Honor allow_degraded the same way as other
-            // dependencies.
-            let is_configured = config.gateway.pricing.source.is_some();
-            if !is_configured || config.gateway.pricing.allow_degraded {
-                error!(
-                    "Pricing service initial load failed; gateway will serve traffic \
-                     without pricing data (configured={}, allow_degraded={}). Error: {}",
-                    is_configured, config.gateway.pricing.allow_degraded, e
-                );
-            } else {
-                error!(
-                    "Pricing service initial load failed and pricing.allow_degraded=false; \
-                     failing startup. Set pricing.allow_degraded=true to keep running \
-                     without pricing data. Error: {}",
-                    e
-                );
-                return Err(e);
-            }
-        } else {
-            info!("Pricing service initial load completed");
-        }
-        info!("Pricing auto-refresh task is managed by on-demand refresh checks");
-
-        let runtime_router_config =
-            crate::core::router::gateway_config::runtime_router_config_from_gateway(
-                &config.gateway.router,
-            )
-            .map_err(|e| GatewayError::Config(format!("Invalid router config: {}", e)))?;
-
-        let unified_router = crate::core::router::UnifiedRouter::from_gateway_config_with_aliases(
-            &config.gateway.providers,
-            Some(runtime_router_config),
-            &config.gateway.model_aliases,
-        )
-        .await
-        .map_err(|e| {
-            GatewayError::Config(format!(
-                "Failed to initialize unified router from config: {}",
-                e
-            ))
-        })?;
+        let (pricing, unified_router) =
+            super::http_runtime::build_pricing_and_router(config).await?;
 
         let callback_runtime = crate::server::callbacks::build_callback_runtime(
             &config.gateway.monitoring.callbacks,

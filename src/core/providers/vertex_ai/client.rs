@@ -50,24 +50,11 @@ pub struct VertexAIProvider {
     // Cost calculation integrated internally
     gemini_transformer: GeminiTransformer,
     partner_transformer: PartnerModelTransformer,
-    model_listings: crate::core::providers::gemini::models::GeminiModelListings,
-    clock: crate::core::providers::gemini::models::GeminiUtcClock,
 }
 
 impl VertexAIProvider {
     /// Create a new Vertex AI provider
     pub async fn new(config: VertexAIProviderConfig) -> Result<Self, VertexAIError> {
-        Self::new_with_clock(
-            config,
-            crate::core::providers::gemini::models::GeminiUtcClock::system(),
-        )
-        .await
-    }
-
-    pub(crate) async fn new_with_clock(
-        config: VertexAIProviderConfig,
-        clock: crate::core::providers::gemini::models::GeminiUtcClock,
-    ) -> Result<Self, VertexAIError> {
         config
             .validate()
             .map_err(|error| ProviderError::configuration("vertex_ai", error))?;
@@ -82,24 +69,12 @@ impl VertexAIProvider {
             },
         )?;
 
-        let surface = if config.enable_experimental {
-            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental
-        } else {
-            crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi
-        };
-        let model_listings = crate::core::providers::gemini::models::GeminiModelListings::new(
-            crate::core::providers::gemini::get_gemini_registry(),
-            surface,
-        );
-
         Ok(Self {
             config: Box::new(config),
             auth,
             http_client,
             gemini_transformer: GeminiTransformer::new(),
             partner_transformer: PartnerModelTransformer::new(),
-            model_listings,
-            clock,
         })
     }
 
@@ -322,7 +297,40 @@ impl LLMProvider for VertexAIProvider {
     }
 
     fn models(&self) -> &[ModelInfo] {
-        self.model_listings.at(self.clock.now())
+        use std::sync::LazyLock;
+        fn load_models(
+            surface: crate::core::providers::gemini::GoogleGeminiApiSurface,
+        ) -> Vec<ModelInfo> {
+            let mut models = crate::core::providers::gemini::get_gemini_registry()
+                .list_model_infos_for_surface(surface);
+            for model in &mut models {
+                match super::vertex_prices_per_1k(&model.id) {
+                    Ok((input, output)) => {
+                        model.input_cost_per_1k_tokens = input;
+                        model.output_cost_per_1k_tokens = output;
+                    }
+                    Err(error) => {
+                        tracing::error!(model = %model.id, %error, "Vertex AI model pricing is unavailable");
+                        model.input_cost_per_1k_tokens = None;
+                        model.output_cost_per_1k_tokens = None;
+                    }
+                }
+            }
+            models
+        }
+        static STABLE_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi)
+        });
+        static EXPERIMENTAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+            )
+        });
+        if self.config.enable_experimental {
+            &EXPERIMENTAL_MODELS
+        } else {
+            &STABLE_MODELS
+        }
     }
 
     async fn chat_completion(

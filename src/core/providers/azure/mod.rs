@@ -75,6 +75,8 @@ pub struct AzureOpenAIProvider {
     embedding_handler: AzureEmbeddingHandler,
     image_handler: AzureImageHandler,
     cost_calculator: AzureCostCalculator,
+    pub(crate) model_identity:
+        Option<crate::core::providers::model_identity::DeploymentProviderBinding>,
 }
 
 impl AzureOpenAIProvider {
@@ -92,6 +94,7 @@ impl AzureOpenAIProvider {
             embedding_handler,
             image_handler,
             cost_calculator,
+            model_identity: None,
         })
     }
 
@@ -175,6 +178,25 @@ impl LLMProvider for AzureOpenAIProvider {
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        if let Some(binding) = self.model_identity.as_ref() {
+            let identity = binding.identity();
+            let supports_chat = identity.capability_catalog_provider() == Some("openai")
+                && identity
+                    .capability_catalog_model()
+                    .and_then(|model| {
+                        crate::core::providers::openai::models::get_openai_registry()
+                            .get_model_spec(model)
+                    })
+                    .is_some_and(|model| {
+                        model
+                            .model_info
+                            .capabilities
+                            .contains(&ProviderCapability::ChatCompletion)
+                    });
+            if !supports_chat {
+                return &[];
+            }
+        }
         &[
             "temperature",
             "max_tokens",
@@ -227,16 +249,18 @@ impl LLMProvider for AzureOpenAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // Basic cost calculation for Azure OpenAI models
-        let cost = match model {
-            "gpt-35-turbo" => {
-                (input_tokens as f64 * 0.0015 + output_tokens as f64 * 0.002) / 1000.0
-            }
-            "gpt-4" => (input_tokens as f64 * 0.03 + output_tokens as f64 * 0.06) / 1000.0,
-            "gpt-4-turbo" => (input_tokens as f64 * 0.01 + output_tokens as f64 * 0.03) / 1000.0,
-            _ => 0.0,
-        };
-        Ok(cost)
+        crate::core::providers::model_identity::calculate_managed_provider_cost(
+            &crate::core::providers::Provider::Azure(self.clone()),
+            model,
+            input_tokens,
+            output_tokens,
+        )
+        .unwrap_or_else(|| {
+            Err(ProviderError::configuration(
+                "pricing",
+                "Azure pricing authority dispatch is unavailable",
+            ))
+        })
     }
 
     async fn chat_completion(
@@ -398,6 +422,41 @@ mod tests {
 
         assert!(provider.supports_model("customer-gpt4o-prod"));
         assert!(!provider.supports_model("   "));
+    }
+
+    #[test]
+    fn mapped_whisper_deployment_exposes_no_chat_parameters() {
+        let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+        let catalog = crate::core::providers::registry::model_catalog_authority::CatalogAuthority::from_embedded()
+            .expect("embedded catalog should load");
+        let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+            Some("openai/whisper-1".to_string()),
+            None,
+        );
+        let identity = crate::core::providers::model_identity::validate_deployment_identity(
+            "review-azure",
+            "azure",
+            "wire-whisper",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        )
+        .expect("Azure whisper capability identity should validate");
+        let mut provider =
+            AzureOpenAIProvider::new(test_config("https://test.openai.azure.com".to_string()))
+                .expect("Azure provider should be created");
+        provider.model_identity = Some(
+            crate::core::providers::model_identity::DeploymentProviderBinding::new(
+                identity, pricing,
+            ),
+        );
+
+        assert!(
+            provider
+                .get_supported_openai_params("wire-whisper")
+                .is_empty()
+        );
     }
 
     #[test]

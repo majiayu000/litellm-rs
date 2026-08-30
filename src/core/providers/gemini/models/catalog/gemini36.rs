@@ -1,5 +1,8 @@
 use super::{
-    super::{GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec},
+    super::{
+        GeminiModelFamily, GeminiModelRegistry, ModelFeature, ModelLimits, ModelSpec,
+        pricing_per_million,
+    },
     advanced_text_capabilities, promotional_flash_pricing_metadata,
 };
 use crate::core::types::model::ModelInfo;
@@ -17,8 +20,8 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 supports_streaming: true,
                 supports_tools: true,
                 supports_multimodal: true,
-                input_cost_per_1k_tokens: None,
-                output_cost_per_1k_tokens: None,
+                input_cost_per_1k_tokens: Some(0.00075),
+                output_cost_per_1k_tokens: Some(0.00375),
                 currency: "USD".to_string(),
                 capabilities: advanced_text_capabilities(),
                 created_at: None,
@@ -40,7 +43,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::VideoUnderstanding,
                 ModelFeature::AudioUnderstanding,
             ],
-            pricing: Default::default(),
+            pricing: pricing_per_million(0.75, 3.75, Some(0.075), None, None, None),
             limits: ModelLimits {
                 max_context_length: 1_048_576,
                 max_output_tokens: 65_536,

@@ -146,10 +146,9 @@ mod pricing_tests {
             get_model_pricing("gemini-2.5-flash").expect("catalogued model should be priced");
         assert!((input - 0.30).abs() < 1e-12);
         assert!((output - 2.50).abs() < 1e-12);
-        let promotional_time = chrono::DateTime::from_timestamp(1_798_761_599, 0).unwrap();
         for model in ["gemini-3.6-flash", "gemini-3.7-flash"] {
             let pricing = get_gemini_registry()
-                .get_core_model_pricing_at(model, promotional_time)
+                .get_core_model_pricing(model)
                 .expect("promotional pricing should be available");
             assert_eq!(pricing.input_cost_per_1k_tokens, 0.00075);
             assert_eq!(pricing.output_cost_per_1k_tokens, 0.00375);
@@ -166,5 +165,30 @@ mod pricing_tests {
             get_model_pricing("unknown-google-model"),
             Err(ProviderError::ModelNotFound { .. })
         ));
+    }
+
+    #[test]
+    fn static_fallback_matches_shared_promotional_authority() {
+        let spec = get_gemini_registry()
+            .get_model_spec("gemini-3.6-flash")
+            .expect("gemini-3.6-flash should remain callable");
+
+        assert_eq!(spec.model_info.input_cost_per_1k_tokens, Some(0.00075));
+        assert_eq!(spec.model_info.output_cost_per_1k_tokens, Some(0.00375));
+        assert_eq!(spec.pricing.input_cost_per_1k_tokens, 0.00075);
+        assert_eq!(spec.pricing.output_cost_per_1k_tokens, 0.00375);
+        assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
+
+        let cost = models::CostCalculator::calculate_multimodal_cost(
+            "gemini-3.6-flash",
+            1_000,
+            500,
+            Some(200),
+            None,
+            None,
+            None,
+        )
+        .expect("shared catalog pricing should remain available");
+        assert!((cost - 0.00249).abs() < 1e-12, "unexpected cost: {cost}");
     }
 }

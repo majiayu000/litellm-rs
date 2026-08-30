@@ -2,7 +2,8 @@
 
 pub use crate::core::pricing::LiteLLMModelInfo;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Consolidated pricing data - single lock for all pricing state
@@ -11,10 +12,6 @@ pub(super) struct PricingData {
     /// Model pricing data (model_name -> LiteLLMModelInfo)
     pub models: HashMap<String, LiteLLMModelInfo>,
     pub exact_by_provider: HashMap<String, HashMap<String, Vec<String>>>,
-    /// Keys loaded from the configured catalog source. Runtime custom inserts
-    /// are intentionally excluded so time-based catalog schedules cannot
-    /// overwrite operator-provided pricing.
-    pub catalog_models: HashSet<String>,
     /// Last update time
     pub last_updated: SystemTime,
 }
@@ -24,14 +21,21 @@ impl Default for PricingData {
         Self {
             models: HashMap::new(),
             exact_by_provider: HashMap::new(),
-            catalog_models: HashSet::new(),
             last_updated: SystemTime::UNIX_EPOCH,
         }
     }
 }
 
-/// Pricing update event
-/// Event for pricing updates
+/// Clone-cheap immutable view of one atomically published pricing generation.
+///
+/// A request keeps this value for its whole attempt so refreshes cannot change
+/// the rates between reservation and settlement.
+#[derive(Debug, Clone)]
+pub(crate) struct PricingSnapshot {
+    pub(super) data: Arc<PricingData>,
+}
+
+/// Event for pricing updates.
 #[derive(Debug, Clone)]
 pub struct PricingUpdateEvent {
     /// Type of pricing event that occurred
@@ -78,9 +82,16 @@ pub struct CostResult {
     pub cost_type: CostType,
 }
 
-/// Usage information for authority-backed pricing calculations.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum PricingBillingMode {
+    #[default]
+    Standard,
+    Batch,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PricingUsage {
+    pub billing_mode: PricingBillingMode,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
@@ -98,6 +109,7 @@ pub struct PricingUsage {
 impl PricingUsage {
     pub fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
         Self {
+            billing_mode: PricingBillingMode::Standard,
             prompt_tokens,
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
@@ -140,6 +152,7 @@ impl From<&crate::core::types::responses::Usage> for PricingUsage {
         let prompt_details = usage.prompt_tokens_details.as_ref();
         let completion_details = usage.completion_tokens_details.as_ref();
         Self {
+            billing_mode: PricingBillingMode::Standard,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
@@ -186,7 +199,6 @@ pub struct PricingCostEstimate {
     pub currency: String,
 }
 
-/// Type of cost calculation method
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum CostType {
     /// Cost calculated based on token count
@@ -199,7 +211,6 @@ pub enum CostType {
     Custom,
 }
 
-/// Pricing statistics
 #[derive(Debug, Clone)]
 pub struct PricingStatistics {
     /// Total number of models in the pricing database
@@ -224,10 +235,6 @@ pub struct CostRange {
     /// Maximum output cost per token
     pub output_max: f64,
 }
-
-// ====================================================================================
-// TESTS
-// ====================================================================================
 
 #[cfg(test)]
 mod tests {
@@ -470,7 +477,6 @@ mod tests {
         let data = PricingData {
             models,
             exact_by_provider: HashMap::new(),
-            catalog_models: HashSet::new(),
             last_updated: SystemTime::now(),
         };
 

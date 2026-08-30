@@ -474,45 +474,6 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
 }
 
 #[tokio::test]
-async fn vertex_model_metadata_tracks_utc_pricing_boundary_without_restart() {
-    use chrono::{TimeZone, Utc};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicI64, Ordering},
-    };
-
-    let before = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
-    let at = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
-    let after = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
-    let timestamp = Arc::new(AtomicI64::new(before.timestamp()));
-    let clock_timestamp = Arc::clone(&timestamp);
-    let clock = crate::core::providers::gemini::models::GeminiUtcClock::new(move || {
-        chrono::DateTime::from_timestamp(clock_timestamp.load(Ordering::SeqCst), 0)
-            .expect("test clock timestamp")
-    });
-    let provider = VertexAIProvider::new_with_clock(test_vertex_provider_config(), clock)
-        .await
-        .unwrap();
-    let prices = || {
-        let model = provider
-            .models()
-            .iter()
-            .find(|model| model.id == "gemini-3.7-flash")
-            .expect("Vertex Gemini 3.7 listing");
-        (
-            model.input_cost_per_1k_tokens,
-            model.output_cost_per_1k_tokens,
-        )
-    };
-
-    assert_eq!(prices(), (Some(0.00075), Some(0.00375)));
-    timestamp.store(at.timestamp(), Ordering::SeqCst);
-    assert_eq!(prices(), (Some(0.0015), Some(0.0075)));
-    timestamp.store(after.timestamp(), Ordering::SeqCst);
-    assert_eq!(prices(), (Some(0.0015), Some(0.0075)));
-}
-
-#[tokio::test]
 async fn vertex_gemini_37_uses_gemini_response_and_fixed_sampling_contract() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await

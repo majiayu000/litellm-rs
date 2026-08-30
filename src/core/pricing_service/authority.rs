@@ -3,13 +3,12 @@
 use super::service::PricingService;
 use super::types::{
     CostResult, CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingCostEstimate, PricingData,
-    PricingUsage,
+    PricingSnapshot, PricingUsage,
 };
 use crate::core::types::model_id::ModelIdRef;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 use std::sync::LazyLock;
 use std::time::SystemTime;
 
@@ -31,7 +30,6 @@ impl PricingService {
 
     /// Return the process-wide embedded pricing authority for compatibility
     /// adapters that cannot access the runtime service in `AppState`.
-    #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
     pub(crate) fn shared_embedded_default() -> Result<&'static Self> {
         static SERVICE: LazyLock<std::result::Result<PricingService, String>> =
             LazyLock::new(|| {
@@ -51,28 +49,7 @@ impl PricingService {
         provider: &str,
         model: &str,
     ) -> Option<(String, LiteLLMModelInfo)> {
-        self.get_model_info_for_provider_at(provider, model, Utc::now())
-    }
-
-    /// Resolve provider-scoped pricing at an explicit UTC instant.
-    pub fn get_model_info_for_provider_at(
-        &self,
-        provider: &str,
-        model: &str,
-        pricing_time: DateTime<Utc>,
-    ) -> Option<(String, LiteLLMModelInfo)> {
-        let data = self.pricing_data.load();
-        let (resolved_model, model_info) = resolve_model_info_for_provider(&data, provider, model)?;
-        let catalog_owned = data.catalog_models.contains(&resolved_model);
-        let effective = super::google::effective_model_info_at(
-            provider,
-            &resolved_model,
-            &model_info,
-            pricing_time,
-            catalog_owned,
-        )
-        .into_owned();
-        Some((resolved_model, effective))
+        self.snapshot().get_model_info_for_provider(provider, model)
     }
 
     /// Calculate a completion cost from already-loaded pricing data.
@@ -117,7 +94,7 @@ impl PricingService {
         pricing_time: DateTime<Utc>,
     ) -> Result<CostResult> {
         let (resolved_model, model_info) = self
-            .get_model_info_for_provider_at(provider, model, pricing_time)
+            .get_model_info_for_provider(provider, model)
             .ok_or_else(|| model_not_found(provider, model))?;
 
         if model_info.cost_per_second.is_some() {
@@ -173,7 +150,8 @@ impl PricingService {
         model: &str,
         usage: &PricingUsage,
     ) -> Result<PricingCostBreakdown> {
-        self.calculate_loaded_usage_cost_for_provider_at(provider, model, usage, Utc::now())
+        self.snapshot()
+            .calculate_loaded_usage_cost_for_provider(provider, model, usage)
     }
 
     /// Calculate detailed token usage cost at a specific UTC instant.
@@ -184,14 +162,9 @@ impl PricingService {
         usage: &PricingUsage,
         pricing_time: DateTime<Utc>,
     ) -> Result<PricingCostBreakdown> {
-        let (resolved_model, model_info) = self
-            .get_model_info_for_provider_at(provider, model, pricing_time)
-            .ok_or_else(|| model_not_found(provider, model))?;
-
-        super::usage_cost::calculate_usage_cost_with_pricing_at(
+        self.snapshot().calculate_loaded_usage_cost_for_provider_at(
             provider,
-            &resolved_model,
-            &model_info,
+            model,
             usage,
             pricing_time,
         )
@@ -208,32 +181,8 @@ impl PricingService {
         model: &str,
         usage: &PricingUsage,
     ) -> Result<PricingCostBreakdown> {
-        let pricing_time = Utc::now();
-        match self.calculate_loaded_usage_cost_for_provider_at(provider, model, usage, pricing_time)
-        {
-            Ok(breakdown) => Ok(breakdown),
-            Err(error) => {
-                let Some(text_usage) = text_only_usage_for_modal_settlement(usage) else {
-                    return Err(error);
-                };
-                match self.calculate_loaded_usage_cost_for_provider_at(
-                    provider,
-                    model,
-                    &text_usage,
-                    pricing_time,
-                ) {
-                    Ok(mut breakdown) => {
-                        tracing::error!(
-                            "modal cost calculation failed for '{provider}'/'{model}': {error}; \
-                             settling text/token cost only"
-                        );
-                        breakdown.usage = usage.clone();
-                        Ok(breakdown)
-                    }
-                    Err(_) => Err(error),
-                }
-            }
-        }
+        self.snapshot()
+            .calculate_loaded_settlement_cost_for_provider(provider, model, usage)
     }
 
     /// Validate and estimate an arbitrary usage shape without mutating spend
@@ -260,59 +209,122 @@ impl PricingService {
         input_tokens: u32,
         max_output_tokens: Option<u32>,
     ) -> Result<PricingCostEstimate> {
-        self.estimate_loaded_completion_cost_for_provider_at(
+        self.snapshot()
+            .estimate_loaded_completion_cost_for_provider(
+                provider,
+                model,
+                input_tokens,
+                max_output_tokens,
+            )
+    }
+
+    /// Get provider-aware max output tokens from the loaded pricing catalog.
+    pub fn max_output_tokens_for_provider(&self, provider: &str, model: &str) -> Option<u32> {
+        self.snapshot()
+            .get_model_info_for_provider(provider, model)
+            .and_then(|(_, info)| info.max_output_tokens)
+    }
+}
+
+impl PricingSnapshot {
+    pub(crate) fn get_model_info_for_provider(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Option<(String, LiteLLMModelInfo)> {
+        resolve_model_info_for_provider(&self.data, provider, model)
+    }
+
+    pub(crate) fn calculate_loaded_usage_cost_for_provider(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &PricingUsage,
+    ) -> Result<PricingCostBreakdown> {
+        self.calculate_loaded_usage_cost_for_provider_at(provider, model, usage, Utc::now())
+    }
+
+    pub(crate) fn calculate_loaded_usage_cost_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &PricingUsage,
+        pricing_time: DateTime<Utc>,
+    ) -> Result<PricingCostBreakdown> {
+        let (resolved_model, model_info) = self
+            .get_model_info_for_provider(provider, model)
+            .ok_or_else(|| model_not_found(provider, model))?;
+        super::usage_cost::calculate_usage_cost_with_pricing_at(
             provider,
-            model,
-            input_tokens,
-            max_output_tokens,
-            Utc::now(),
+            &resolved_model,
+            &model_info,
+            usage,
+            pricing_time,
         )
     }
 
-    pub(crate) fn estimate_loaded_completion_cost_for_provider_at(
+    pub(crate) fn calculate_loaded_settlement_cost_for_provider(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &PricingUsage,
+    ) -> Result<PricingCostBreakdown> {
+        let pricing_time = Utc::now();
+        match self.calculate_loaded_usage_cost_for_provider_at(provider, model, usage, pricing_time)
+        {
+            Ok(breakdown) => Ok(breakdown),
+            Err(error) => {
+                if usage.billing_mode == super::types::PricingBillingMode::Batch {
+                    return Err(error);
+                }
+                let Some(text_usage) = text_only_usage_for_modal_settlement(usage) else {
+                    return Err(error);
+                };
+                match self.calculate_loaded_usage_cost_for_provider_at(
+                    provider,
+                    model,
+                    &text_usage,
+                    pricing_time,
+                ) {
+                    Ok(mut breakdown) => {
+                        tracing::error!(
+                            "modal cost calculation failed for '{provider}'/'{model}': {error}; \
+                             settling text/token cost only"
+                        );
+                        breakdown.usage = usage.clone();
+                        Ok(breakdown)
+                    }
+                    Err(_) => Err(error),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn estimate_loaded_completion_cost_for_provider(
         &self,
         provider: &str,
         model: &str,
         input_tokens: u32,
         max_output_tokens: Option<u32>,
-        pricing_time: DateTime<Utc>,
     ) -> Result<PricingCostEstimate> {
-        let data = self.pricing_data.load();
-        let (resolved_model, raw_model_info) =
-            resolve_model_info_for_provider(&data, provider, model)
-                .ok_or_else(|| model_not_found(provider, model))?;
-        let catalog_owned = data.catalog_models.contains(&resolved_model);
-        let effective = super::google::effective_model_info_at(
-            provider,
-            &resolved_model,
-            &raw_model_info,
-            pricing_time,
-            catalog_owned,
-        );
-        let model_info = super::google::maximum_scheduled_model_info(
-            provider,
-            &resolved_model,
-            effective.as_ref(),
-            catalog_owned,
-        );
+        let (resolved_model, model_info) = self
+            .get_model_info_for_provider(provider, model)
+            .ok_or_else(|| model_not_found(provider, model))?;
         let estimated_output_tokens = max_output_tokens.unwrap_or(100);
         let input_only = PricingUsage::new(input_tokens, 0);
         let full_usage = PricingUsage::new(input_tokens, estimated_output_tokens);
-        // Reserve against the highest declared rate so a request crossing into
-        // a peak window cannot exceed its budget reservation at settlement.
         let input = super::usage_cost::calculate_usage_cost_with_maximum_rates(
             provider,
             &resolved_model,
-            model_info.as_ref(),
+            &model_info,
             &input_only,
         )?;
         let full = super::usage_cost::calculate_usage_cost_with_maximum_rates(
             provider,
             &resolved_model,
-            model_info.as_ref(),
+            &model_info,
             &full_usage,
         )?;
-
         Ok(PricingCostEstimate {
             min_cost: input.total_cost,
             max_cost: full.total_cost,
@@ -320,12 +332,6 @@ impl PricingService {
             estimated_output_cost: full.output_cost,
             currency: full.currency,
         })
-    }
-
-    /// Get provider-aware max output tokens from the loaded pricing catalog.
-    pub fn max_output_tokens_for_provider(&self, provider: &str, model: &str) -> Option<u32> {
-        self.get_model_info_for_provider(provider, model)
-            .and_then(|(_, info)| info.max_output_tokens)
     }
 }
 

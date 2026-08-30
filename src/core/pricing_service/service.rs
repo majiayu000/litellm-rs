@@ -7,9 +7,8 @@ use super::types::{
 use crate::core::http::outbound::default_outbound_client;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use arc_swap::ArcSwap;
-use chrono::Utc;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
@@ -100,29 +99,17 @@ impl PricingService {
             && self.pricing_data.load().models.is_empty()
     }
 
-    /// Get model information with current time-dependent pricing applied.
+    /// Get model information
     pub fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
-        self.get_model_info_at(model, Utc::now())
+        let data = self.pricing_data.load();
+        data.models.get(model).cloned()
     }
 
-    pub(crate) fn get_model_info_at(
-        &self,
-        model: &str,
-        pricing_time: chrono::DateTime<Utc>,
-    ) -> Option<LiteLLMModelInfo> {
-        let data = self.pricing_data.load();
-        let model_info = data.models.get(model)?.clone();
-        let catalog_owned = data.catalog_models.contains(model);
-        Some(
-            super::google::effective_model_info_at(
-                &model_info.litellm_provider,
-                model,
-                &model_info,
-                pricing_time,
-                catalog_owned,
-            )
-            .into_owned(),
-        )
+    /// Pin the currently published pricing generation without taking a writer lock.
+    pub(crate) fn snapshot(&self) -> super::types::PricingSnapshot {
+        super::types::PricingSnapshot {
+            data: self.pricing_data.load_full(),
+        }
     }
 
     /// Calculate Google/Vertex AI cost (character or token based)
@@ -261,14 +248,8 @@ impl PricingService {
             let current = self.pricing_data.load_full();
             let mut models = current.models.clone();
             models.insert(model.clone(), model_info.clone());
-            let mut catalog_models = current.catalog_models.clone();
-            catalog_models.remove(&model);
             self.pricing_data
-                .store(Arc::new(build_pricing_data_with_catalog_models(
-                    models,
-                    current.last_updated,
-                    catalog_models,
-                )));
+                .store(Arc::new(build_pricing_data(models, current.last_updated)));
         }
 
         // Send update event
@@ -324,15 +305,6 @@ pub(super) fn build_pricing_data(
     models: HashMap<String, LiteLLMModelInfo>,
     last_updated: SystemTime,
 ) -> PricingData {
-    let catalog_models = models.keys().cloned().collect();
-    build_pricing_data_with_catalog_models(models, last_updated, catalog_models)
-}
-
-fn build_pricing_data_with_catalog_models(
-    models: HashMap<String, LiteLLMModelInfo>,
-    last_updated: SystemTime,
-    catalog_models: HashSet<String>,
-) -> PricingData {
     let mut exact_by_provider: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
     for (canonical, info) in &models {
         let provider = crate::core::pricing::normalize_pricing_provider(&info.litellm_provider);
@@ -350,7 +322,6 @@ fn build_pricing_data_with_catalog_models(
     PricingData {
         models,
         exact_by_provider,
-        catalog_models,
         last_updated,
     }
 }

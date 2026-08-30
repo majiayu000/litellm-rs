@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::pricing_service::PricingBillingMode;
 
 fn test_model_info(provider: &str) -> LiteLLMModelInfo {
     LiteLLMModelInfo {
@@ -325,6 +326,173 @@ fn provider_aware_authority_rejects_missing_token_pricing() {
 }
 
 #[test]
+fn batch_usage_uses_exact_rates_for_reservation_and_settlement() {
+    let service = PricingService::new(None);
+    let mut model_info = test_model_info("runtime_provider");
+    model_info.extra.extend([
+        (
+            "input_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000005),
+        ),
+        (
+            "output_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000010),
+        ),
+        (
+            "cache_read_input_token_cost_batches".to_string(),
+            serde_json::json!(0.000001),
+        ),
+    ]);
+    service.add_custom_model("batch-priced-model".to_string(), model_info);
+
+    let mut usage = PricingUsage::new(1_000, 500);
+    usage.cached_tokens = Some(200);
+    usage.billing_mode = PricingBillingMode::Batch;
+
+    let reservation = service
+        .dry_run_loaded_usage_cost_for_provider("runtime_provider", "batch-priced-model", &usage)
+        .expect("batch reservation pricing");
+    let settlement = service
+        .calculate_loaded_settlement_cost_for_provider(
+            "runtime_provider",
+            "batch-priced-model",
+            &usage,
+        )
+        .expect("batch settlement pricing");
+
+    assert!((reservation.input_cost - 0.004).abs() < 1e-12);
+    assert!((reservation.output_cost - 0.005).abs() < 1e-12);
+    assert!((reservation.cache_cost - 0.0002).abs() < 1e-12);
+    assert!((reservation.total_cost - 0.0092).abs() < 1e-12);
+    assert!((settlement.total_cost - reservation.total_cost).abs() < 1e-12);
+    assert!(
+        service
+            .calculate_loaded_usage_cost_for_provider(
+                "runtime_provider",
+                "batch-priced-model-lookalike",
+                &usage,
+            )
+            .is_err(),
+        "batch pricing must retain exact model authority"
+    );
+}
+
+#[test]
+fn batch_usage_fails_closed_for_missing_rates_and_cache_storage() {
+    let service = PricingService::new(None);
+    let mut model_info = test_model_info("runtime_provider");
+    model_info.extra.extend([
+        (
+            "input_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000005),
+        ),
+        (
+            "output_cost_per_token_batches".to_string(),
+            serde_json::json!(0.000010),
+        ),
+    ]);
+    service.add_custom_model("partial-batch-model".to_string(), model_info);
+
+    let mut cache_read = PricingUsage::new(1_000, 500);
+    cache_read.cached_tokens = Some(200);
+    cache_read.billing_mode = PricingBillingMode::Batch;
+    let error = service
+        .calculate_loaded_usage_cost_for_provider(
+            "runtime_provider",
+            "partial-batch-model",
+            &cache_read,
+        )
+        .expect_err("missing batch cache-read pricing must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("cache_read_input_token_cost_batches")
+    );
+
+    let mut cache_storage = PricingUsage::new(1_000, 500);
+    cache_storage.cache_creation_tokens = Some(200);
+    cache_storage.billing_mode = PricingBillingMode::Batch;
+    let error = service
+        .calculate_loaded_settlement_cost_for_provider(
+            "runtime_provider",
+            "partial-batch-model",
+            &cache_storage,
+        )
+        .expect_err("token-hour cache storage must not use a token rate");
+    assert!(error.to_string().contains("cache creation/storage"));
+
+    for (missing_key, prompt_tokens, completion_tokens) in [
+        ("input_cost_per_token_batches", 1_000, 0),
+        ("output_cost_per_token_batches", 0, 500),
+    ] {
+        let mut model_info = test_model_info("runtime_provider");
+        for (key, rate) in [
+            ("input_cost_per_token_batches", 0.000005),
+            ("output_cost_per_token_batches", 0.000010),
+            ("cache_read_input_token_cost_batches", 0.000001),
+        ] {
+            if key != missing_key {
+                model_info
+                    .extra
+                    .insert(key.to_string(), serde_json::json!(rate));
+            }
+        }
+        let model = format!("missing-{missing_key}");
+        service.add_custom_model(model.clone(), model_info);
+        let mut usage = PricingUsage::new(prompt_tokens, completion_tokens);
+        usage.billing_mode = PricingBillingMode::Batch;
+        let error = service
+            .calculate_loaded_usage_cost_for_provider("runtime_provider", &model, &usage)
+            .expect_err("a required batch token rate must not fall back to standard pricing");
+        assert!(error.to_string().contains(missing_key));
+    }
+}
+
+#[test]
+fn embedded_gemini_flash_batch_rates_cover_input_output_and_cache_read() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    let mut usage = PricingUsage::new(1_000, 500);
+    usage.cached_tokens = Some(200);
+    usage.billing_mode = PricingBillingMode::Batch;
+
+    for model in ["gemini-3.6-flash", "gemini-3.7-flash"] {
+        let cost = service
+            .calculate_loaded_usage_cost_for_provider("gemini", model, &usage)
+            .unwrap_or_else(|error| panic!("{model} batch pricing should resolve: {error}"));
+        assert!((cost.input_cost - 0.0003).abs() < 1e-12, "{model}");
+        assert!((cost.output_cost - 0.0009375).abs() < 1e-12, "{model}");
+        assert!((cost.cache_cost - 0.0000075).abs() < 1e-12, "{model}");
+    }
+}
+
+#[test]
+fn standard_usage_ignores_batch_rates() {
+    let service = PricingService::new(None);
+    let mut model_info = test_model_info("runtime_provider");
+    model_info.extra.extend([
+        (
+            "input_cost_per_token_batches".to_string(),
+            serde_json::json!(0.5),
+        ),
+        (
+            "output_cost_per_token_batches".to_string(),
+            serde_json::json!(0.5),
+        ),
+    ]);
+    service.add_custom_model("standard-priced-model".to_string(), model_info);
+
+    let cost = service
+        .calculate_loaded_usage_cost_for_provider(
+            "runtime_provider",
+            "standard-priced-model",
+            &PricingUsage::new(1_000, 500),
+        )
+        .expect("standard pricing");
+    assert!((cost.total_cost - 0.025).abs() < 1e-12);
+}
+
+#[test]
 fn provider_scoped_authority_preserves_native_slash_namespaces() {
     let service = PricingService::with_embedded_default()
         .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
@@ -522,339 +690,4 @@ fn provider_scoped_exact_rows_precede_old_fuzzy_aliases() {
             .0,
         "amazon.nova-2-lite-v1:0"
     );
-}
-
-#[test]
-fn gemini_flash_runtime_pricing_switches_at_the_exact_utc_boundary() {
-    use chrono::TimeZone;
-
-    let service = PricingService::with_embedded_default()
-        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
-    let promotional_time = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
-    let standard_time = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
-    let usage = PricingUsage {
-        prompt_tokens: 1_000,
-        completion_tokens: 1_000,
-        total_tokens: 2_000,
-        cached_tokens: Some(1_000),
-        ..PricingUsage::default()
-    };
-
-    for (provider, model) in [
-        ("gemini", "gemini-3.6-flash"),
-        ("gemini", "gemini/gemini-3.6-flash"),
-        ("gemini", "gemini-3.7-flash"),
-        ("gemini", "gemini/gemini-3.7-flash"),
-        ("vertex_ai", "gemini-3.7-flash"),
-        ("vertex_ai", "vertex_ai/gemini-3.7-flash"),
-    ] {
-        let promotional = service
-            .calculate_loaded_usage_cost_for_provider_at(provider, model, &usage, promotional_time)
-            .unwrap_or_else(|error| panic!("promotional {model} pricing: {error}"));
-        let standard = service
-            .calculate_loaded_usage_cost_for_provider_at(provider, model, &usage, standard_time)
-            .unwrap_or_else(|error| panic!("standard {model} pricing: {error}"));
-
-        assert!((promotional.cache_cost - 0.000_075).abs() < 1e-12);
-        assert!((promotional.output_cost - 0.003_75).abs() < 1e-12);
-        assert!((promotional.total_cost - 0.003_825).abs() < 1e-12);
-        assert!((standard.cache_cost - 0.000_15).abs() < 1e-12);
-        assert!((standard.output_cost - 0.007_5).abs() < 1e-12);
-        assert!((standard.total_cost - 0.007_65).abs() < 1e-12);
-    }
-}
-
-#[test]
-fn gemini_flash_historical_pricing_survives_standard_catalog_refresh() {
-    use chrono::TimeZone;
-
-    let service = PricingService::new(None);
-    let mut standard = test_model_info("gemini");
-    standard.input_cost_per_token = Some(1.5e-6);
-    standard.output_cost_per_token = Some(7.5e-6);
-    standard.extra.insert(
-        "cache_read_input_token_cost".to_string(),
-        serde_json::json!(1.5e-7),
-    );
-    standard.extra.insert(
-        "output_cost_per_reasoning_token".to_string(),
-        serde_json::json!(7.5e-6),
-    );
-    service.pricing_data.store(std::sync::Arc::new(
-        super::super::service::build_pricing_data(
-            std::collections::HashMap::from([("gemini-3.7-flash".to_string(), standard)]),
-            std::time::SystemTime::now(),
-        ),
-    ));
-
-    let promotional_time = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
-    let standard_time = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
-    let usage = PricingUsage {
-        prompt_tokens: 2_000,
-        completion_tokens: 1_000,
-        total_tokens: 3_000,
-        cached_tokens: Some(1_000),
-        ..PricingUsage::default()
-    };
-
-    let promotional = service
-        .calculate_loaded_usage_cost_for_provider_at(
-            "gemini",
-            "gemini-3.7-flash",
-            &usage,
-            promotional_time,
-        )
-        .expect("historical lookup should reconstruct promotional catalog pricing");
-    let standard = service
-        .calculate_loaded_usage_cost_for_provider_at(
-            "gemini",
-            "gemini-3.7-flash",
-            &usage,
-            standard_time,
-        )
-        .expect("cutoff lookup should retain standard catalog pricing");
-
-    assert!((promotional.input_cost - 0.000_75).abs() < 1e-12);
-    assert!((promotional.cache_cost - 0.000_075).abs() < 1e-12);
-    assert!((promotional.output_cost - 0.003_75).abs() < 1e-12);
-    assert!((promotional.total_cost - 0.004_575).abs() < 1e-12);
-    assert!((standard.input_cost - 0.001_5).abs() < 1e-12);
-    assert!((standard.cache_cost - 0.000_15).abs() < 1e-12);
-    assert!((standard.output_cost - 0.007_5).abs() < 1e-12);
-    assert!((standard.total_cost - 0.009_15).abs() < 1e-12);
-}
-
-#[test]
-fn gemini_flash_schedule_does_not_override_explicit_custom_pricing() {
-    use chrono::TimeZone;
-
-    let service = PricingService::new(None);
-    let mut custom = test_model_info("gemini");
-    custom.input_cost_per_token = Some(0.123);
-    custom.output_cost_per_token = Some(0.456);
-    custom.extra.insert(
-        "cache_read_input_token_cost".to_string(),
-        serde_json::json!(0.078),
-    );
-    service.add_custom_model("gemini-3.7-flash".to_string(), custom);
-
-    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
-    let (_, pricing) = service
-        .get_model_info_for_provider_at("gemini", "gemini-3.7-flash", after_cutoff)
-        .expect("explicit custom Gemini pricing should resolve");
-
-    assert_eq!(pricing.input_cost_per_token, Some(0.123));
-    assert_eq!(pricing.output_cost_per_token, Some(0.456));
-    assert_eq!(
-        pricing.extra["cache_read_input_token_cost"],
-        serde_json::json!(0.078)
-    );
-}
-
-#[test]
-fn gemini_flash_schedule_projects_flex_and_batch_rates_in_both_directions() {
-    use chrono::TimeZone;
-
-    let mut promotional_row = test_model_info("vertex_ai");
-    promotional_row.input_cost_per_token = Some(7.5e-7);
-    promotional_row.output_cost_per_token = Some(3.75e-6);
-    for (key, value) in [
-        ("cache_read_input_token_cost", 7.5e-8),
-        ("output_cost_per_reasoning_token", 3.75e-6),
-        ("input_cost_per_token_batches", 3.75e-7),
-        ("input_cost_per_token_flex", 3.75e-7),
-        ("output_cost_per_token_batches", 1.875e-6),
-        ("output_cost_per_token_flex", 1.875e-6),
-        ("cache_read_input_token_cost_flex", 3.75e-8),
-    ] {
-        promotional_row
-            .extra
-            .insert(key.to_string(), serde_json::json!(value));
-    }
-    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
-    let standard = super::super::google::effective_model_info_at(
-        "vertex_ai",
-        "gemini-3.7-flash",
-        &promotional_row,
-        after_cutoff,
-        true,
-    );
-    for (key, expected) in [
-        ("input_cost_per_token_batches", 7.5e-7),
-        ("input_cost_per_token_flex", 7.5e-7),
-        ("output_cost_per_token_batches", 3.75e-6),
-        ("output_cost_per_token_flex", 3.75e-6),
-        ("cache_read_input_token_cost_flex", 7.5e-8),
-    ] {
-        assert_eq!(
-            standard.extra.get(key).and_then(serde_json::Value::as_f64),
-            Some(expected),
-            "{key}"
-        );
-    }
-
-    let mut standard_row = test_model_info("vertex_ai");
-    standard_row.input_cost_per_token = Some(1.5e-6);
-    standard_row.output_cost_per_token = Some(7.5e-6);
-    for (key, value) in [
-        ("cache_read_input_token_cost", 1.5e-7),
-        ("output_cost_per_reasoning_token", 7.5e-6),
-        ("input_cost_per_token_batches", 7.5e-7),
-        ("input_cost_per_token_flex", 7.5e-7),
-        ("output_cost_per_token_batches", 3.75e-6),
-        ("output_cost_per_token_flex", 3.75e-6),
-        ("cache_read_input_token_cost_flex", 7.5e-8),
-    ] {
-        standard_row
-            .extra
-            .insert(key.to_string(), serde_json::json!(value));
-    }
-    let before_cutoff = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
-    let promotional = super::super::google::effective_model_info_at(
-        "vertex_ai",
-        "gemini-3.7-flash",
-        &standard_row,
-        before_cutoff,
-        true,
-    );
-    for (key, expected) in [
-        ("input_cost_per_token_batches", 3.75e-7),
-        ("input_cost_per_token_flex", 3.75e-7),
-        ("output_cost_per_token_batches", 1.875e-6),
-        ("output_cost_per_token_flex", 1.875e-6),
-        ("cache_read_input_token_cost_flex", 3.75e-8),
-    ] {
-        assert_eq!(promotional.extra[key].as_f64(), Some(expected), "{key}");
-    }
-}
-
-#[test]
-fn gemini_flash_schedule_preserves_every_auxiliary_only_catalog_correction() {
-    use chrono::TimeZone;
-
-    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
-    let before_cutoff = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
-    for (key, promotional_value, standard_value) in [
-        ("input_cost_per_token_batches", 3.75e-7, 7.5e-7),
-        ("input_cost_per_token_flex", 3.75e-7, 7.5e-7),
-        ("output_cost_per_token_batches", 1.875e-6, 3.75e-6),
-        ("output_cost_per_token_flex", 1.875e-6, 3.75e-6),
-        ("cache_read_input_token_cost_flex", 3.75e-8, 7.5e-8),
-    ] {
-        let corrected_value = promotional_value + standard_value;
-
-        let mut promotional_row = test_model_info("vertex_ai");
-        promotional_row.input_cost_per_token = Some(7.5e-7);
-        promotional_row.output_cost_per_token = Some(3.75e-6);
-        promotional_row.extra.insert(
-            "cache_read_input_token_cost".to_string(),
-            serde_json::json!(7.5e-8),
-        );
-        promotional_row.extra.insert(
-            "output_cost_per_reasoning_token".to_string(),
-            serde_json::json!(3.75e-6),
-        );
-        promotional_row
-            .extra
-            .insert(key.to_string(), serde_json::json!(corrected_value));
-        let effective = super::super::google::effective_model_info_at(
-            "vertex_ai",
-            "gemini-3.7-flash",
-            &promotional_row,
-            after_cutoff,
-            true,
-        );
-        assert_eq!(effective.input_cost_per_token, Some(7.5e-7), "{key}");
-        assert_eq!(
-            effective.extra[key].as_f64(),
-            Some(corrected_value),
-            "{key}"
-        );
-
-        let mut standard_row = test_model_info("vertex_ai");
-        standard_row.input_cost_per_token = Some(1.5e-6);
-        standard_row.output_cost_per_token = Some(7.5e-6);
-        standard_row.extra.insert(
-            "cache_read_input_token_cost".to_string(),
-            serde_json::json!(1.5e-7),
-        );
-        standard_row.extra.insert(
-            "output_cost_per_reasoning_token".to_string(),
-            serde_json::json!(7.5e-6),
-        );
-        standard_row
-            .extra
-            .insert(key.to_string(), serde_json::json!(corrected_value));
-        let effective = super::super::google::effective_model_info_at(
-            "vertex_ai",
-            "gemini-3.7-flash",
-            &standard_row,
-            before_cutoff,
-            true,
-        );
-        assert_eq!(effective.input_cost_per_token, Some(1.5e-6), "{key}");
-        assert_eq!(
-            effective.extra[key].as_f64(),
-            Some(corrected_value),
-            "{key}"
-        );
-    }
-}
-
-#[test]
-fn gemini_flash_schedule_does_not_override_corrected_catalog_pricing() {
-    use chrono::TimeZone;
-
-    let service = PricingService::new(None);
-    let mut corrected = test_model_info("gemini");
-    corrected.input_cost_per_token = Some(0.123);
-    corrected.output_cost_per_token = Some(0.456);
-    corrected.extra.insert(
-        "cache_read_input_token_cost".to_string(),
-        serde_json::json!(0.078),
-    );
-    service.pricing_data.store(std::sync::Arc::new(
-        super::super::service::build_pricing_data(
-            std::collections::HashMap::from([("gemini-3.7-flash".to_string(), corrected)]),
-            std::time::SystemTime::now(),
-        ),
-    ));
-
-    let after_cutoff = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap();
-    let (_, pricing) = service
-        .get_model_info_for_provider_at("gemini", "gemini-3.7-flash", after_cutoff)
-        .expect("corrected catalog Gemini pricing should resolve");
-
-    assert_eq!(pricing.input_cost_per_token, Some(0.123));
-    assert_eq!(pricing.output_cost_per_token, Some(0.456));
-    assert_eq!(
-        pricing.extra["cache_read_input_token_cost"],
-        serde_json::json!(0.078)
-    );
-}
-
-#[test]
-fn gemini_flash_reservation_uses_the_maximum_known_schedule_rate() {
-    use chrono::TimeZone;
-
-    let service = PricingService::with_embedded_default()
-        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
-    for pricing_time in [
-        Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap(),
-        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
-        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 1).unwrap(),
-    ] {
-        let estimate = service
-            .estimate_loaded_completion_cost_for_provider_at(
-                "gemini",
-                "gemini-3.7-flash",
-                1_000,
-                Some(1_000),
-                pricing_time,
-            )
-            .unwrap_or_else(|error| panic!("scheduled reservation should resolve: {error}"));
-        assert!((estimate.input_cost - 0.0015).abs() < 1e-12);
-        assert!((estimate.estimated_output_cost - 0.0075).abs() < 1e-12);
-        assert!((estimate.max_cost - 0.009).abs() < 1e-12);
-    }
 }

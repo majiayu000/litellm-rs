@@ -61,6 +61,19 @@ pub(crate) fn calculate_vertex_cost(
         .map_err(|error| vertex_pricing_error(model, error))
 }
 
+pub(crate) fn vertex_prices_per_1k(
+    model: &str,
+) -> Result<(Option<f64>, Option<f64>), ProviderError> {
+    let (_, pricing) = PricingService::shared_embedded_default()
+        .map_err(|error| vertex_pricing_error(model, error))?
+        .get_model_info_for_provider("vertex_ai", model)
+        .ok_or_else(|| ProviderError::model_not_found("vertex_ai", model))?;
+    Ok((
+        pricing.input_cost_per_token.map(|price| price * 1_000.0),
+        pricing.output_cost_per_token.map(|price| price * 1_000.0),
+    ))
+}
+
 pub(crate) fn is_vertex_gemini_catalog_model(model: &str, include_experimental: bool) -> bool {
     let surface = if include_experimental {
         crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental

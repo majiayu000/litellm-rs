@@ -25,6 +25,7 @@ fn create_test_provider() -> OpenAIProvider {
         pool_manager: Arc::new(GlobalPoolManager::default()),
         config: create_test_config(),
         model_registry: get_openai_registry(),
+        model_identity: None,
     }
 }
 
