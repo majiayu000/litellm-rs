@@ -3,6 +3,7 @@
 use crate::config::models::provider::ProviderConfig;
 mod generation;
 mod multipart;
+mod native_edit;
 mod pricing_keys;
 mod proxy_spend;
 
@@ -145,6 +146,18 @@ async fn proxy_image_multipart_endpoint(
         replace_text_field(&body, &content_type, "model", &requested_model)?
     };
     let requested_model = requested_model.as_str();
+    if matches!(endpoint, ImageProxyEndpoint::Edits)
+        && native_edit::is_native_image_edit_selected(state, requested_model)
+    {
+        return native_edit::handle_native_image_edit(
+            state,
+            context,
+            &body,
+            &content_type,
+            requested_model,
+        )
+        .await;
+    }
     ensure_image_proxy_candidate_configured(
         state.config().gateway.providers.as_slice(),
         requested_model,

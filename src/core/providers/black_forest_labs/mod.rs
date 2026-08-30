@@ -37,9 +37,6 @@ const MODELS: &[&str] = &[
     "flux-dev",
     "flux-kontext-pro",
     "flux-kontext-max",
-    "flux-2-pro",
-    "flux-2-flex",
-    "flux-2-dev",
 ];
 
 /// Black Forest Labs provider configuration.
@@ -184,10 +181,11 @@ impl BflProvider {
         }
         .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let body = tokio::select! {
+            _ = cancellation.cancelled() => return Err(cancelled()),
+            body = response.text() => body,
+        }
+        .map_err(|error| self.client.map_preserved_request_error(error))?;
         if !status.is_success() {
             return Err(HttpErrorMapper::map_status_code(
                 PROVIDER,
@@ -297,6 +295,9 @@ impl BflProvider {
             ));
         }
         let mut native = BflImageRequest::new(model, request.prompt);
+        if let Some(size) = request.size {
+            insert_size_parameters(model, &size, &mut native.parameters)?;
+        }
         native.parameters.insert(
             "input_image".to_string(),
             Value::String(base64::engine::general_purpose::STANDARD.encode(request.image)),

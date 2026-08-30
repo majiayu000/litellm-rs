@@ -222,7 +222,15 @@ pub async fn create_provider(
         factory_config.insert("api_key".to_string(), Value::String(api_key.clone()));
     }
     if let Some(value) = base_url.filter(|v| !v.is_empty()) {
-        factory_config.insert("base_url".to_string(), Value::String(value));
+        let endpoint_key = if matches!(
+            provider_type_enum,
+            ProviderType::Stability | ProviderType::BlackForestLabs
+        ) {
+            "api_base"
+        } else {
+            "base_url"
+        };
+        factory_config.insert(endpoint_key.to_string(), Value::String(value));
     }
     if let Some(value) = api_version.filter(|v| !v.is_empty()) {
         factory_config.insert("api_version".to_string(), Value::String(value));

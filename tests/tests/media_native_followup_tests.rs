@@ -1,0 +1,192 @@
+use super::*;
+
+#[tokio::test]
+async fn bfl_kontext_edit_preserves_requested_size_as_aspect_ratio() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock BFL listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_for_server = Arc::clone(&captured);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("submit should arrive");
+        *captured_for_server.lock().expect("capture lock") = read_http_request(&mut socket).await;
+        let body = format!(r#"{{"id":"task-1","polling_url":"http://{address}/poll/task-1"}}"#);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("submit response should write");
+
+        let (mut socket, _) = listener.accept().await.expect("poll should arrive");
+        let _request = read_http_request(&mut socket).await;
+        let body = r#"{"status":"Ready","result":{"sample":"https://cdn.example/edit.png"}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("poll response should write");
+    });
+
+    let mut config = BflConfig::with_api_key("bfl-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config.poll_policy = PollPolicy::from_millis(1, 4, 200);
+    let provider = BflProvider::new(config).expect("BFL provider should initialize");
+    provider
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "make the sky green".to_string(),
+                model: Some("flux-kontext-pro".to_string()),
+                n: Some(1),
+                size: Some("1024x768".to_string()),
+                response_format: Some("url".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect("BFL edit should finish");
+    server.await.expect("mock server should finish");
+
+    let request = captured.lock().expect("capture lock");
+    assert!(request.contains("\"aspect_ratio\":\"4:3\""));
+    assert!(!request.contains("\"width\":"));
+    assert!(!request.contains("\"height\":"));
+}
+
+#[tokio::test]
+async fn bfl_cancellation_interrupts_submit_body_read() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock BFL listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let (headers_sent_tx, headers_sent_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("submit should arrive");
+        let _request = read_http_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("headers should write");
+        let _ = headers_sent_tx.send(());
+        let mut byte = [0_u8; 1];
+        let _ = socket.read(&mut byte).await;
+    });
+
+    let mut config = BflConfig::with_api_key("bfl-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = BflProvider::new(config).expect("BFL provider should initialize");
+    let cancellation = CancellationToken::new();
+    let cancellation_for_request = cancellation.clone();
+    let request = tokio::spawn(async move {
+        provider
+            .generate_native(
+                BflImageRequest::new("flux-pro-1.1", "a glass city"),
+                &cancellation_for_request,
+            )
+            .await
+    });
+    headers_sent_rx
+        .await
+        .expect("response headers should arrive");
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    cancellation.cancel();
+    let error = tokio::time::timeout(std::time::Duration::from_millis(200), request)
+        .await
+        .expect("cancellation must interrupt the stalled body read")
+        .expect("request task should finish")
+        .expect_err("cancellation must return an error");
+    server.await.expect("mock server should finish");
+
+    assert!(matches!(error, ProviderError::Cancelled { .. }));
+}
+
+#[tokio::test]
+async fn bfl_does_not_advertise_unpriced_flux_2_models() {
+    let provider = BflProvider::new(BflConfig::with_api_key("bfl-secret"))
+        .expect("BFL provider should initialize");
+    let model_ids = provider
+        .models()
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(!model_ids.contains(&"flux-2-pro"));
+    assert!(!model_ids.contains(&"flux-2-flex"));
+    assert!(!model_ids.contains(&"flux-2-dev"));
+}
+
+#[tokio::test]
+async fn media_factory_maps_gateway_base_url_for_native_providers() {
+    for (name, provider_type) in [
+        ("stability", "stability"),
+        ("black_forest_labs", "black_forest_labs"),
+    ] {
+        let provider = litellm_rs::core::providers::create_provider(
+            litellm_rs::config::models::provider::ProviderConfig {
+                name: name.to_string(),
+                provider_type: provider_type.to_string(),
+                api_key: "test-key".to_string(),
+                base_url: Some("http://127.0.0.1:9".to_string()),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{name} factory should preserve the gateway endpoint: {error}")
+        });
+
+        assert!(matches!(
+            (provider_type, provider),
+            ("stability", Provider::Stability(_))
+                | ("black_forest_labs", Provider::BlackForestLabs(_))
+        ));
+    }
+}
+
+#[cfg(feature = "runway-media")]
+#[tokio::test]
+async fn runway_accepts_official_cancelled_status() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Runway listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("query should arrive");
+        let _request = read_http_request(&mut socket).await;
+        let body = r#"{"id":"task-1","status":"CANCELLED"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("response should write");
+    });
+
+    let mut config = RunwayConfig::with_api_key("runway-secret");
+    config.base.api_base = Some(format!("http://{address}/v1"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = RunwayProvider::new(config).expect("Runway provider should initialize");
+    let task = provider
+        .get_task("task-1")
+        .await
+        .expect("official CANCELLED status should decode");
+    server.await.expect("mock server should finish");
+
+    assert_eq!(task.status, RunwayTaskStatus::Canceled);
+}

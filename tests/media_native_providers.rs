@@ -794,3 +794,6 @@ async fn runway_rejects_invalid_submit_task_id() {
 
     assert!(matches!(error, ProviderError::ResponseParsing { .. }));
 }
+
+#[path = "tests/media_native_followup_tests.rs"]
+mod followup_tests;

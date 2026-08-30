@@ -27,6 +27,38 @@ pub(super) fn extract_text_field(
     None
 }
 
+pub(super) fn extract_file_field(
+    body: &Bytes,
+    content_type: &str,
+    field_name: &str,
+) -> Option<Vec<u8>> {
+    let boundary = boundary(content_type)?;
+    let marker = format!("--{boundary}");
+    let next_marker = format!("\r\n{marker}");
+    let bytes = body.as_ref();
+    let mut boundary_offset = find_bytes(bytes, marker.as_bytes())?;
+
+    loop {
+        let after_boundary = boundary_offset + marker.len();
+        if bytes.get(after_boundary..after_boundary + 2) == Some(b"--") {
+            return None;
+        }
+        if bytes.get(after_boundary..after_boundary + 2) != Some(b"\r\n") {
+            return None;
+        }
+
+        let headers_start = after_boundary + 2;
+        let headers_end = find_bytes(&bytes[headers_start..], b"\r\n\r\n")? + headers_start;
+        let value_start = headers_end + 4;
+        let value_end = find_bytes(&bytes[value_start..], next_marker.as_bytes())? + value_start;
+        let headers = std::str::from_utf8(&bytes[headers_start..headers_end]).ok()?;
+        if part_has_field_name(headers, field_name) {
+            return Some(bytes[value_start..value_end].to_vec());
+        }
+        boundary_offset = value_end + 2;
+    }
+}
+
 pub(super) fn replace_text_field(
     body: &Bytes,
     content_type: &str,
@@ -153,5 +185,26 @@ mod tests {
         );
         assert!(find_bytes(&replaced, binary).is_some());
         assert!(find_bytes(&replaced, b"public-image").is_none());
+    }
+
+    #[test]
+    fn extracting_file_field_preserves_binary_bytes() {
+        let boundary = "binary-boundary";
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let binary = b"\x00png\r\nbinary\xff";
+        let mut body = Vec::new();
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(binary);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        assert_eq!(
+            extract_file_field(&Bytes::from(body), &content_type, "image").as_deref(),
+            Some(binary.as_slice())
+        );
     }
 }

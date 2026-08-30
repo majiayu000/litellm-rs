@@ -572,7 +572,7 @@ pub mod runway {
             Some("RUNNING") => RunwayTaskStatus::Running,
             Some("SUCCEEDED") => RunwayTaskStatus::Succeeded,
             Some("FAILED") => RunwayTaskStatus::Failed,
-            Some("CANCELED") => RunwayTaskStatus::Canceled,
+            Some("CANCELED" | "CANCELLED") => RunwayTaskStatus::Canceled,
             status => {
                 return Err(ProviderError::response_parsing(
                     PROVIDER,
