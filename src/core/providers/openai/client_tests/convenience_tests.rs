@@ -8,17 +8,17 @@ fn test_model_recommendations() {
 
     assert_eq!(
         provider.get_best_model_for_task(super::client::OpenAITask::GeneralChat),
-        Some("gpt-5.5".to_string())
+        Some("gpt-5.6".to_string())
     );
 
     assert_eq!(
         provider.get_best_model_for_task(super::client::OpenAITask::ComplexReasoning),
-        Some("o3-pro".to_string())
+        Some("gpt-5.6".to_string())
     );
 
     assert_eq!(
         provider.get_best_model_for_task(super::client::OpenAITask::CostSensitive),
-        Some("gpt-5.4-nano".to_string())
+        Some("gpt-5.6-luna".to_string())
     );
 }
 

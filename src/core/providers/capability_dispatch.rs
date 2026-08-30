@@ -67,6 +67,14 @@ impl Provider {
                             _ => false,
                         }
                 }
+                Provider::OpenAILike(provider) => {
+                    catalog_provider == "xai"
+                        && LLMProvider::supports_capability(provider, capability)
+                        && provider
+                            .get_model_info(catalog_model)
+                            .capabilities
+                            .contains(capability)
+                }
                 _ => false,
             };
         }
@@ -84,6 +92,10 @@ impl Provider {
                     && provider
                         .get_model_registry()
                         .supports_capability(model, capability)
+            }
+            Provider::OpenAILike(provider) if provider.name() == "xai" => {
+                LLMProvider::supports_model(provider, model)
+                    && LLMProvider::supports_capability(provider, capability)
             }
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())

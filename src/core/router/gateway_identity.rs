@@ -12,8 +12,9 @@ use crate::core::providers::model_identity::{
 };
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::model_catalog_authority::{
-    CatalogAuthority, CatalogResolution,
+    CatalogAuthority, CatalogDecision, CatalogResolution,
 };
+use crate::core::types::model_id::ModelIdRef;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,8 +44,60 @@ impl GatewayIdentityAuthority {
         wire_model: &str,
         mapping: Option<&ModelIdentityMapping>,
     ) -> Result<(), RouterError> {
-        let Some(identity_provider) = identity_provider(provider) else {
-            return Ok(());
+        let (identity_provider, identity_model) = match provider {
+            Provider::OpenAILike(openai_like) if openai_like.config().provider_name == "xai" => {
+                let configured = openai_like.config().get_effective_model(wire_model);
+                let has_double_xai_qualifier = |model: &str| {
+                    let parsed = ModelIdRef::parse(model);
+                    parsed.provider() == Some("xai")
+                        && ModelIdRef::parse(parsed.model()).provider() == Some("xai")
+                };
+                if has_double_xai_qualifier(wire_model) || has_double_xai_qualifier(&configured) {
+                    return Err(RouterError::InvalidConfiguration(format!(
+                        "provider '{provider_name}' deployment '{wire_model}' has double provider qualification"
+                    )));
+                }
+                let effective = crate::core::providers::openai_like::models::xai_native_wire_model(
+                    "xai",
+                    openai_like.config().model_prefix.is_some(),
+                    configured,
+                );
+                if mapping.is_none() {
+                    let resolution = self.catalog.resolve_model("xai", &effective);
+                    let pricing_key = if ModelIdRef::parse(&effective).provider() == Some("xai") {
+                        effective.clone()
+                    } else {
+                        format!("xai/{effective}")
+                    };
+                    let legacy_unreviewed = matches!(resolution, CatalogResolution::Unreviewed)
+                        || (matches!(resolution, CatalogResolution::Unknown)
+                            && self.catalog.decision_for_pricing_key("xai", &pricing_key)
+                                == Some(CatalogDecision::Unreviewed));
+                    let registered_legacy = matches!(resolution, CatalogResolution::Unknown)
+                        && crate::core::traits::provider::llm_provider::trait_definition::LLMProvider::supports_model(
+                            openai_like,
+                            &effective,
+                        );
+                    if legacy_unreviewed || registered_legacy {
+                        return Ok(());
+                    }
+                }
+                ("xai", effective)
+            }
+            Provider::OpenAILike(openai_like)
+                if mapping.is_some() || ModelIdRef::parse(wire_model).provider() == Some("xai") =>
+            {
+                (
+                    "openai_compatible",
+                    openai_like.config().get_effective_model(wire_model),
+                )
+            }
+            _ => {
+                let Some(identity_provider) = identity_provider(provider) else {
+                    return Ok(());
+                };
+                (identity_provider, wire_model.to_string())
+            }
         };
         debug_assert!(canonical_identity_provider(identity_provider).is_some());
         let legacy_target = provider
@@ -53,7 +106,7 @@ impl GatewayIdentityAuthority {
         let identity = validate_deployment_identity(
             provider_name,
             identity_provider,
-            wire_model,
+            &identity_model,
             mapping,
             legacy_target.as_deref(),
             &self.catalog,
@@ -161,4 +214,133 @@ pub(super) fn take_identity_mappings(
         }
     }
     Ok(mappings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GatewayIdentityAuthority;
+    use crate::core::pricing_service::PricingService;
+    use crate::core::providers::Provider;
+    use crate::core::providers::model_identity::ModelIdentityMapping;
+    use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
+    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+    use crate::core::types::{chat::ChatRequest, context::RequestContext};
+    use std::sync::Arc;
+
+    async fn native_xai_provider() -> Provider {
+        let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+            .with_provider_name("xai")
+            .with_model_prefix("xai/")
+            .with_skip_api_key(true);
+        Provider::OpenAILike(
+            OpenAILikeProvider::new(config)
+                .await
+                .expect("native xAI provider"),
+        )
+    }
+
+    fn authority() -> GatewayIdentityAuthority {
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        GatewayIdentityAuthority::new(pricing).expect("identity authority")
+    }
+
+    #[tokio::test]
+    async fn native_xai_rejects_double_qualifier_before_wire_normalization() {
+        let mut provider = native_xai_provider().await;
+        let error = authority()
+            .bind("native-xai", &mut provider, "xai/xai/grok-4.6", None)
+            .expect_err("double xAI qualification must fail before stripping");
+        assert!(error.to_string().contains("double provider qualification"));
+    }
+
+    #[tokio::test]
+    async fn native_xai_unknown_models_bind_unpriced_while_legacy_pricing_remains() {
+        for model in ["grok-4.6-latest", "unknown-xai-model"] {
+            let mut provider = native_xai_provider().await;
+            authority()
+                .bind("native-xai", &mut provider, model, None)
+                .expect("unknown configured model should bind without privilege");
+            let identity = provider
+                .deployment_model_identity()
+                .expect("unknown configured model must retain an identity");
+            assert_eq!(identity.wire_model(), model);
+            assert_eq!(identity.capability_catalog_model(), None);
+            assert_eq!(identity.pricing_model(), None);
+            assert!(provider.calculate_cost(model, 1, 1).await.is_err());
+        }
+
+        for model in ["grok-4.3", "grok-latest", "grok-4-fast", "grok-4.20"] {
+            let mut legacy = native_xai_provider().await;
+            authority()
+                .bind("native-xai", &mut legacy, model, None)
+                .expect("registered legacy model should preserve compatibility");
+            assert!(
+                legacy.deployment_model_identity().is_none(),
+                "{model} must remain on the registered compatibility path"
+            );
+            assert!(legacy.supports_capability_for_model(
+                model,
+                &crate::core::types::model::ProviderCapability::ChatCompletion,
+            ));
+            assert!(legacy.calculate_cost(model, 1_000, 1_000).await.unwrap() > 0.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn native_xai_accepts_its_qualified_explicit_mapping() {
+        let mut provider = native_xai_provider().await;
+        let mapping = ModelIdentityMapping::new(
+            Some("xai/grok-4.6".to_string()),
+            Some("xai/grok-4.6".to_string()),
+        );
+        authority()
+            .bind("native-xai", &mut provider, "grok-4.6", Some(&mapping))
+            .expect("native xAI should accept its own exact qualifier");
+        let identity = provider
+            .deployment_model_identity()
+            .expect("explicit xAI mapping should bind");
+        assert_eq!(identity.capability_catalog_model(), Some("grok-4.6"));
+        assert_eq!(identity.pricing_model(), Some("xai/grok-4.6"));
+    }
+
+    #[tokio::test]
+    async fn bound_openai_compatible_identity_preserves_model_prefix_stripping() {
+        let config = OpenAILikeConfig::new("https://vertex.example.com/v1")
+            .with_provider_name("vertex_publisher")
+            .with_model_prefix("vertex/")
+            .with_skip_api_key(true);
+        let mut provider = Provider::OpenAILike(
+            OpenAILikeProvider::new(config)
+                .await
+                .expect("mapped provider"),
+        );
+        let mapping = ModelIdentityMapping::new(Some("xai/grok-4.6".to_string()), None);
+        authority()
+            .bind(
+                "mapped-vertex",
+                &mut provider,
+                "vertex/grok-4.6",
+                Some(&mapping),
+            )
+            .expect("mapped prefixed deployment should bind");
+        let identity = provider
+            .deployment_model_identity()
+            .expect("mapped identity should bind");
+        assert_eq!(identity.wire_model(), "grok-4.6");
+
+        let Provider::OpenAILike(provider) = provider else {
+            panic!("mapped provider should use OpenAI-compatible transport");
+        };
+        let request = ChatRequest {
+            model: "vertex/grok-4.6".to_string(),
+            messages: vec![],
+            ..Default::default()
+        };
+        let json = LLMProvider::transform_request(&provider, request, RequestContext::default())
+            .await
+            .expect("mapped prefixed request should transform");
+        assert_eq!(json["model"], "grok-4.6");
+    }
 }

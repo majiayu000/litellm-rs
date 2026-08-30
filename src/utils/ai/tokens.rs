@@ -1,3 +1,5 @@
+use super::models::utils::{openai_gpt56_limits, openai_realtime2_limits};
+use crate::core::pricing_service::PricingService;
 use crate::core::providers::unified_provider::ProviderError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -77,6 +79,18 @@ impl TokenUtils {
 
     pub fn select_tokenizer(model: &str) -> Result<TokenizerType, ProviderError> {
         let model_lower = model.to_lowercase();
+
+        if model_lower.contains("gpt-5.6") {
+            return Ok(if openai_gpt56_limits(model).is_some() {
+                TokenizerType::OpenAI
+            } else {
+                TokenizerType::Custom(model.to_string())
+            });
+        }
+
+        if openai_realtime2_limits(model).is_some() {
+            return Ok(TokenizerType::OpenAI);
+        }
 
         if Self::OPENAI_MODELS
             .iter()
@@ -247,6 +261,13 @@ impl TokenUtils {
     }
 
     pub fn get_max_tokens_for_model(model: &str) -> Option<usize> {
+        if let Some((context_window, _)) = openai_realtime2_limits(model) {
+            return Some(context_window);
+        }
+        if let Some((context_window, _)) = openai_gpt56_limits(model) {
+            return Some(context_window);
+        }
+
         match model.to_lowercase().as_str() {
             m if m.contains("gpt-5.5") => Some(1_048_576),
             m if m.contains("gpt-5.4")
@@ -284,6 +305,29 @@ impl TokenUtils {
         input_tokens: usize,
         output_tokens: usize,
     ) -> Result<f64, ProviderError> {
+        if openai_gpt56_limits(model).is_some() || openai_realtime2_limits(model).is_some() {
+            let input_tokens = u32::try_from(input_tokens).map_err(|_| {
+                ProviderError::invalid_request("pricing", "input token count exceeds u32")
+            })?;
+            let output_tokens = u32::try_from(output_tokens).map_err(|_| {
+                ProviderError::invalid_request("pricing", "output token count exceeds u32")
+            })?;
+            let pricing = PricingService::shared_embedded_default()
+                .map_err(|error| ProviderError::configuration("pricing", error.to_string()))?;
+            let cost = pricing
+                .calculate_loaded_completion_cost_for_provider(
+                    "openai",
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|error| ProviderError::configuration("pricing", error.to_string()))?;
+            return Ok(cost.total_cost);
+        }
+
         let model_lower = model.to_lowercase();
         if model_lower.contains("gpt-5.5") {
             let input_price = if model_lower.contains("gpt-5.5-pro") {
@@ -528,9 +572,99 @@ mod tests {
     }
 
     #[test]
+    fn test_gpt56_limits_are_registry_aligned_and_boundary_safe() {
+        for model in [
+            "gpt-5.6",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "openai/gpt-5.6-terra",
+        ] {
+            assert_eq!(
+                TokenUtils::get_max_tokens_for_model(model),
+                Some(1_050_000),
+                "{model}"
+            );
+            assert!(TokenUtils::validate_token_limit(model, 1_000_000).is_ok());
+        }
+
+        assert_eq!(
+            TokenUtils::get_max_tokens_for_model("gpt-5.6-cyber"),
+            Some(400_000)
+        );
+        assert!(TokenUtils::validate_token_limit("gpt-5.6-cyber", 400_001).is_err());
+
+        for model in [
+            "gpt-5.60",
+            "gpt-5.6-foo",
+            "gpt-5.6-solstice",
+            "gpt-5.6-cybernetic",
+            "gpt-5.6-2026-08-01",
+            "openai/gpt-5.6-cyber-2026-08-01",
+            "OPENAI/gpt-5.6",
+            "openai/GPT-5.6",
+        ] {
+            assert_eq!(
+                TokenUtils::get_max_tokens_for_model(model),
+                Some(272_000),
+                "{model} must retain the generic GPT-5 limit"
+            );
+        }
+
+        assert!(matches!(
+            TokenUtils::select_tokenizer("openai/gpt-5.6"),
+            Ok(TokenizerType::OpenAI)
+        ));
+        assert!(matches!(
+            TokenUtils::select_tokenizer("azure/gpt-5.6"),
+            Ok(TokenizerType::Custom(_))
+        ));
+    }
+
+    #[test]
+    fn test_realtime2_limits_and_pricing_are_registry_backed() {
+        for (model, expected_cost) in [
+            ("gpt-realtime-2", 0.016),
+            ("gpt-realtime-2.1", 0.016),
+            ("gpt-realtime-2.1-mini", 0.0018),
+            ("openai/gpt-realtime-2", 0.016),
+        ] {
+            assert_eq!(TokenUtils::get_max_tokens_for_model(model), Some(128_000));
+            assert!(TokenUtils::validate_token_limit(model, 128_001).is_err());
+            assert!(matches!(
+                TokenUtils::select_tokenizer(model),
+                Ok(TokenizerType::OpenAI)
+            ));
+            let cost = TokenUtils::calculate_cost(model, 1_000, 500)
+                .unwrap_or_else(|error| panic!("{model} cost should calculate: {error}"));
+            assert!((cost - expected_cost).abs() < 1e-12, "{model}: {cost}");
+        }
+        assert!(matches!(
+            TokenUtils::select_tokenizer("azure/gpt-realtime-2"),
+            Ok(TokenizerType::Custom(_))
+        ));
+    }
+
+    #[test]
     fn test_cost_calculation() {
         let cost = TokenUtils::calculate_cost("gpt-4", 1000, 500).unwrap();
         assert!(cost > 0.0);
+
+        for (model, expected) in [
+            ("gpt-5.6", 0.014),
+            ("gpt-5.6-sol", 0.014),
+            ("gpt-5.6-terra", 0.008),
+            ("gpt-5.6-luna", 0.0008),
+            ("gpt-5.6-cyber", 0.05),
+            ("openai/gpt-5.6-luna", 0.0008),
+        ] {
+            let actual = TokenUtils::calculate_cost(model, 1_000, 500)
+                .unwrap_or_else(|error| panic!("{model} cost should calculate: {error}"));
+            assert!((actual - expected).abs() < 1e-12, "{model}: {actual}");
+        }
+        let gpt56_long = TokenUtils::calculate_cost("gpt-5.6", 300_000, 2_000)
+            .unwrap_or_else(|error| panic!("gpt-5.6 long-context cost should calculate: {error}"));
+        assert!((gpt56_long - 2.46).abs() < 1e-12);
 
         let Ok(gpt55_long_context_cost) = TokenUtils::calculate_cost("gpt-5.5", 300_000, 2_000)
         else {

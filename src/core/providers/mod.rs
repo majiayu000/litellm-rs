@@ -469,6 +469,7 @@ impl Provider {
             Provider::Azure(provider) => provider.model_identity = Some(binding),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(provider) => provider.model_identity = Some(binding),
+            Provider::OpenAILike(provider) => provider.model_identity = Some(binding),
             _ => {
                 return Err(format!(
                     "provider '{}' does not use OpenAI-family deployment identity",
@@ -497,6 +498,10 @@ impl Provider {
                 .model_identity
                 .as_ref()
                 .map(model_identity::DeploymentProviderBinding::identity),
+            Provider::OpenAILike(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::identity),
             _ => None,
         }
     }
@@ -516,6 +521,10 @@ impl Provider {
                 .map(model_identity::DeploymentProviderBinding::pricing),
             #[cfg(feature = "providers-extra")]
             Provider::AzureAI(provider) => provider
+                .model_identity
+                .as_ref()
+                .map(model_identity::DeploymentProviderBinding::pricing),
+            Provider::OpenAILike(provider) => provider
                 .model_identity
                 .as_ref()
                 .map(model_identity::DeploymentProviderBinding::pricing),
