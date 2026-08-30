@@ -31,6 +31,8 @@ pub enum OpenAIModelFeature {
     AudioInput,
     /// Audio output support (TTS)
     AudioOutput,
+    /// Audio output over the Realtime transport (not `/audio/speech`)
+    RealtimeAudioOutput,
     /// Image generation (DALL-E)
     ImageGeneration,
     /// Image editing
@@ -67,16 +69,17 @@ impl OpenAIModelFeature {
             OpenAIModelFeature::AudioOutput => Some(ProviderCapability::TextToSpeech),
             OpenAIModelFeature::ImageEditing => Some(ProviderCapability::ImageEdit),
             OpenAIModelFeature::Moderation => Some(ProviderCapability::Moderation),
+            OpenAIModelFeature::RealtimeAudio => Some(ProviderCapability::RealtimeApi),
             // Features that don't map directly to provider capabilities
             OpenAIModelFeature::SystemMessages
             | OpenAIModelFeature::JsonMode
             | OpenAIModelFeature::ReasoningMode
             | OpenAIModelFeature::VisionSupport
             | OpenAIModelFeature::AudioInput
+            | OpenAIModelFeature::RealtimeAudioOutput
             | OpenAIModelFeature::FineTuning
             | OpenAIModelFeature::CodeCompletion
-            | OpenAIModelFeature::LargeContext
-            | OpenAIModelFeature::RealtimeAudio => None,
+            | OpenAIModelFeature::LargeContext => None,
         }
     }
 }
@@ -115,6 +118,10 @@ pub enum OpenAIModelFamily {
     GPT52Codex,    // GPT-5.2 Codex models (2025)
     GPT55,         // GPT-5.5 models (2026)
     GPT55Pro,      // GPT-5.5 Pro models (2026)
+    GPT56Sol,      // GPT-5.6 flagship tier (2026)
+    GPT56Terra,    // GPT-5.6 balanced tier (2026)
+    GPT56Luna,     // GPT-5.6 cost-optimized tier (2026)
+    GPT56Cyber,    // GPT-5.6 restricted cybersecurity tier (2026)
     O1,            // O1 reasoning models
     O1Pro,         // O1 Pro reasoning models
     O3,            // O3 reasoning models (2025)

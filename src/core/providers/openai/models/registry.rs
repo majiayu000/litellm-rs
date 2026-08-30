@@ -48,6 +48,9 @@ impl OpenAIModelRegistry {
         // Load from pricing database
         for model_id in &model_ids {
             if let Some(mut model_info) = pricing_db.to_model_info(model_id, "openai") {
+                if is_realtime_model_id(model_id) {
+                    model_info.supports_streaming = false;
+                }
                 let features = self.detect_features(&model_info);
 
                 // Convert features to capabilities
@@ -77,15 +80,17 @@ impl OpenAIModelRegistry {
         let mut features = vec![OpenAIModelFeature::SystemMessages];
 
         let model_id = &model_info.id;
+        let is_realtime = is_realtime_model_id(model_id);
 
         if model_info.supports_streaming
+            && !is_realtime
             && !model_id.contains("embedding")
             && !model_id.starts_with("whisper")
         {
             features.push(OpenAIModelFeature::StreamingSupport);
         }
 
-        if model_id.starts_with("gpt-") {
+        if model_id.starts_with("gpt-") && !is_realtime {
             features.push(OpenAIModelFeature::ChatCompletion);
             features.push(OpenAIModelFeature::JsonMode);
         }
@@ -102,6 +107,8 @@ impl OpenAIModelRegistry {
             || model_id.starts_with("o3")
             || model_id.starts_with("o4")
             || model_id.starts_with("gpt-5.5")
+            || gpt56_family(model_id).is_some()
+            || is_realtime_2_reasoning_model(model_id)
         {
             features.push(OpenAIModelFeature::ReasoningMode);
         }
@@ -111,9 +118,9 @@ impl OpenAIModelRegistry {
             features.push(OpenAIModelFeature::AudioOutput);
         }
 
-        if model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime") {
+        if is_realtime {
             features.push(OpenAIModelFeature::AudioInput);
-            features.push(OpenAIModelFeature::AudioOutput);
+            features.push(OpenAIModelFeature::RealtimeAudioOutput);
             features.push(OpenAIModelFeature::RealtimeAudio);
         }
 
@@ -192,6 +199,8 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
+        } else if let Some(family) = gpt56_family(model_id) {
+            family
         } else if model_id.starts_with("gpt-5.5-pro") {
             OpenAIModelFamily::GPT55Pro
         } else if model_id.starts_with("gpt-5.5") {
@@ -284,7 +293,8 @@ impl OpenAIModelRegistry {
             }
         }
 
-        config.supports_batch = model_id.starts_with("gpt-5.5")
+        config.supports_batch = gpt56_family(model_id).is_some()
+            || model_id.starts_with("gpt-5.5")
             || matches!(
                 model_id.as_str(),
                 "gpt-4"
@@ -296,6 +306,7 @@ impl OpenAIModelRegistry {
             );
 
         config.supports_streaming = model_info.supports_streaming
+            && !is_realtime_model_id(model_id)
             && !model_id.contains("embedding")
             && !model_id.contains("whisper");
 
@@ -315,7 +326,8 @@ impl OpenAIModelRegistry {
                 max_output_length: max_output,
                 supports_streaming: family != OpenAIModelFamily::Embedding
                     && family != OpenAIModelFamily::Whisper
-                    && family != OpenAIModelFamily::Moderation,
+                    && family != OpenAIModelFamily::Moderation
+                    && family != OpenAIModelFamily::Realtime,
                 supports_tools: matches!(
                     family,
                     OpenAIModelFamily::GPT4
@@ -333,6 +345,10 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52Codex
                         | OpenAIModelFamily::GPT55
                         | OpenAIModelFamily::GPT55Pro
+                        | OpenAIModelFamily::GPT56Sol
+                        | OpenAIModelFamily::GPT56Terra
+                        | OpenAIModelFamily::GPT56Luna
+                        | OpenAIModelFamily::GPT56Cyber
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -361,6 +377,10 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT52Codex
                         | OpenAIModelFamily::GPT55
                         | OpenAIModelFamily::GPT55Pro
+                        | OpenAIModelFamily::GPT56Sol
+                        | OpenAIModelFamily::GPT56Terra
+                        | OpenAIModelFamily::GPT56Luna
+                        | OpenAIModelFamily::GPT56Cyber
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -479,15 +499,15 @@ impl OpenAIModelRegistry {
     /// Get the best model for a specific use case
     pub fn get_recommended_model(&self, use_case: OpenAIUseCase) -> Option<String> {
         match use_case {
-            OpenAIUseCase::GeneralChat => Some("gpt-5.5".to_string()),
-            OpenAIUseCase::CodeGeneration => Some("gpt-5.5".to_string()),
-            OpenAIUseCase::Reasoning => Some("o3-pro".to_string()),
-            OpenAIUseCase::Vision => Some("gpt-5.5".to_string()),
+            OpenAIUseCase::GeneralChat => Some("gpt-5.6".to_string()),
+            OpenAIUseCase::CodeGeneration => Some("gpt-5.6".to_string()),
+            OpenAIUseCase::Reasoning => Some("gpt-5.6".to_string()),
+            OpenAIUseCase::Vision => Some("gpt-5.6".to_string()),
             OpenAIUseCase::ImageGeneration => Some("gpt-image-2".to_string()),
             OpenAIUseCase::AudioTranscription => Some("whisper-1".to_string()),
             OpenAIUseCase::TextToSpeech => Some("tts-1-hd".to_string()),
             OpenAIUseCase::Embeddings => Some("text-embedding-3-large".to_string()),
-            OpenAIUseCase::CostOptimized => Some("gpt-5.4-nano".to_string()),
+            OpenAIUseCase::CostOptimized => Some("gpt-5.6-luna".to_string()),
         }
     }
 }
@@ -503,6 +523,31 @@ pub fn get_openai_registry() -> &'static OpenAIModelRegistry {
 fn normalize_price_per_1k(cost: f64) -> f64 {
     (cost * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
+
+fn gpt56_family(model_id: &str) -> Option<OpenAIModelFamily> {
+    match model_id {
+        "gpt-5.6" | "gpt-5.6-sol" => Some(OpenAIModelFamily::GPT56Sol),
+        "gpt-5.6-terra" => Some(OpenAIModelFamily::GPT56Terra),
+        "gpt-5.6-luna" => Some(OpenAIModelFamily::GPT56Luna),
+        "gpt-5.6-cyber" => Some(OpenAIModelFamily::GPT56Cyber),
+        _ => None,
+    }
+}
+
+fn is_realtime_model_id(model_id: &str) -> bool {
+    model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime")
+}
+
+fn is_realtime_2_reasoning_model(model_id: &str) -> bool {
+    matches!(
+        model_id,
+        "gpt-realtime-2" | "gpt-realtime-2.1" | "gpt-realtime-2.1-mini"
+    )
+}
+
+#[cfg(test)]
+#[path = "registry/current_tests.rs"]
+mod current_tests;
 
 #[cfg(test)]
 mod tests {
@@ -626,15 +671,15 @@ mod tests {
 
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::GeneralChat),
-            Some("gpt-5.5".to_string())
+            Some("gpt-5.6".to_string())
         );
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::Reasoning),
-            Some("o3-pro".to_string())
+            Some("gpt-5.6".to_string())
         );
         assert_eq!(
             registry.get_recommended_model(OpenAIUseCase::CostOptimized),
-            Some("gpt-5.4-nano".to_string())
+            Some("gpt-5.6-luna".to_string())
         );
     }
 
@@ -647,7 +692,10 @@ mod tests {
         );
         assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::VisionSupport));
         assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioInput));
-        assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioOutput));
+        assert!(
+            registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::RealtimeAudioOutput)
+        );
+        assert!(!registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioOutput));
         assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::RealtimeAudio));
 
         assert!(registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::AudioInput));

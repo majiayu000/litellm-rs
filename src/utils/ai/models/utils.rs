@@ -1,3 +1,4 @@
+use crate::core::providers::openai::{get_openai_registry, models::OpenAIModelFeature};
 use crate::core::providers::shared::gemini_context_window;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -7,13 +8,50 @@ pub struct ModelUtils;
 
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
+        let gpt56_limits = openai_gpt56_limits(model);
+        let realtime2 = realtime2_catalog_id(model)
+            .and_then(|catalog_id| get_openai_registry().get_model_spec(catalog_id));
         let model_lower = model
             .to_lowercase()
             .rsplit_once('/')
             .map(|(_, model)| model.to_string())
             .unwrap_or_else(|| model.to_lowercase());
 
-        if model_lower.starts_with("gpt-5") {
+        if let Some(spec) = realtime2 {
+            let supports_tools = spec.model_info.supports_tools;
+            ModelCapabilities {
+                supports_function_calling: supports_tools,
+                supports_parallel_function_calling: supports_tools,
+                supports_tool_choice: supports_tools,
+                supports_response_schema: false,
+                supports_system_messages: spec
+                    .features
+                    .contains(&OpenAIModelFeature::SystemMessages),
+                supports_web_search: false,
+                supports_url_context: false,
+                supports_vision: spec.model_info.supports_multimodal,
+                supports_streaming: spec.model_info.supports_streaming,
+                max_tokens: spec
+                    .model_info
+                    .max_output_length
+                    .map(|limit| limit as usize),
+                context_window: Some(spec.model_info.max_context_length as usize),
+            }
+        } else if let Some((context_window, max_output)) = gpt56_limits {
+            ModelCapabilities {
+                supports_function_calling: true,
+                supports_parallel_function_calling: true,
+                supports_tool_choice: true,
+                supports_response_schema: true,
+                supports_system_messages: true,
+                supports_web_search: true,
+                supports_url_context: true,
+                supports_vision: true,
+                supports_streaming: true,
+                max_tokens: Some(max_output),
+                context_window: Some(context_window),
+            }
+        } else if model_lower.starts_with("gpt-5") {
             ModelCapabilities {
                 supports_function_calling: true,
                 supports_parallel_function_calling: true,
@@ -270,6 +308,10 @@ impl ModelUtils {
     }
 
     pub fn get_base_model(model: &str) -> String {
+        if let Some(catalog_id) = gpt56_catalog_id(model) {
+            return catalog_id.to_string();
+        }
+
         let model_lower = model.to_lowercase();
 
         if model_lower.starts_with("gpt-5") {
@@ -438,6 +480,12 @@ impl ModelUtils {
         ];
 
         let model_lower = model.to_lowercase();
+        if model_lower.contains("gpt-5.6") {
+            return gpt56_catalog_id(model).is_some();
+        }
+        if model_lower.contains("gpt-realtime-2") {
+            return realtime2_catalog_id(model).is_some();
+        }
 
         for provider in &known_providers {
             if model_lower.contains(provider) {
@@ -494,14 +542,30 @@ impl ModelUtils {
             }
         });
 
-        let model_matches = compatible_models.iter().any(|compatible_model| {
-            let compatible_model = compatible_model.to_lowercase();
-            if compatible_model == "gemini-3.7-flash" {
-                model_for_exact_match == compatible_model
+        let model_matches = if provider.eq_ignore_ascii_case("openai") {
+            if model_lower.contains("gpt-5.6") {
+                gpt56_catalog_id(model).is_some()
+            } else if model_lower.contains("gpt-realtime-2") {
+                realtime2_catalog_id(model).is_some()
             } else {
-                model_for_match.starts_with(&compatible_model)
+                compatible_models.iter().any(|compatible_model| {
+                    model_for_match.starts_with(&compatible_model.to_lowercase())
+                })
             }
-        });
+        } else if provider.eq_ignore_ascii_case("google") {
+            compatible_models.iter().any(|compatible_model| {
+                let compatible_model = compatible_model.to_lowercase();
+                if compatible_model == "gemini-3.7-flash" {
+                    model_for_exact_match == compatible_model
+                } else {
+                    model_for_match.starts_with(&compatible_model)
+                }
+            })
+        } else {
+            compatible_models.iter().any(|compatible_model| {
+                model_for_match.starts_with(&compatible_model.to_lowercase())
+            })
+        };
 
         if !model_matches {
             return Err(ProviderError::ModelNotFound {
@@ -519,6 +583,14 @@ impl ModelUtils {
     pub fn get_compatible_models_for_provider(provider: &str) -> Vec<String> {
         match provider.to_lowercase().as_str() {
             "openai" => vec![
+                "gpt-5.6".to_string(),
+                "gpt-5.6-sol".to_string(),
+                "gpt-5.6-terra".to_string(),
+                "gpt-5.6-luna".to_string(),
+                "gpt-5.6-cyber".to_string(),
+                "gpt-realtime-2".to_string(),
+                "gpt-realtime-2.1".to_string(),
+                "gpt-realtime-2.1-mini".to_string(),
                 "gpt-5.5".to_string(),
                 "gpt-5.5-pro".to_string(),
                 "gpt-5.4".to_string(),
@@ -592,6 +664,48 @@ impl ModelUtils {
             ],
             _ => vec![],
         }
+    }
+}
+
+pub(crate) fn openai_gpt56_limits(model: &str) -> Option<(usize, usize)> {
+    let catalog_id = gpt56_catalog_id(model)?;
+    let model_info = &get_openai_registry().get_model_spec(catalog_id)?.model_info;
+
+    Some((
+        model_info.max_context_length as usize,
+        model_info.max_output_length? as usize,
+    ))
+}
+
+pub(crate) fn openai_realtime2_limits(model: &str) -> Option<(usize, usize)> {
+    let catalog_id = realtime2_catalog_id(model)?;
+    let model_info = &get_openai_registry().get_model_spec(catalog_id)?.model_info;
+
+    Some((
+        model_info.max_context_length as usize,
+        model_info.max_output_length? as usize,
+    ))
+}
+
+fn gpt56_catalog_id(model: &str) -> Option<&'static str> {
+    let model_id = model.strip_prefix("openai/").unwrap_or(model);
+    match model_id {
+        "gpt-5.6" => Some("gpt-5.6"),
+        "gpt-5.6-sol" => Some("gpt-5.6-sol"),
+        "gpt-5.6-terra" => Some("gpt-5.6-terra"),
+        "gpt-5.6-luna" => Some("gpt-5.6-luna"),
+        "gpt-5.6-cyber" => Some("gpt-5.6-cyber"),
+        _ => None,
+    }
+}
+
+fn realtime2_catalog_id(model: &str) -> Option<&'static str> {
+    let model_id = model.strip_prefix("openai/").unwrap_or(model);
+    match model_id {
+        "gpt-realtime-2" => Some("gpt-realtime-2"),
+        "gpt-realtime-2.1" => Some("gpt-realtime-2.1"),
+        "gpt-realtime-2.1-mini" => Some("gpt-realtime-2.1-mini"),
+        _ => None,
     }
 }
 

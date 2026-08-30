@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(feature = "providers-extended")]
 use crate::core::providers::gemini::get_gemini_registry;
+use crate::core::providers::openai::get_openai_registry;
 use crate::core::providers::shared::{
     GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW, GEMINI_31_CONTEXT_WINDOW,
 };
@@ -57,6 +58,62 @@ fn test_get_model_capabilities_gpt55_matches_catalog_shape() {
     assert_eq!(prefixed_pro_caps.context_window, Some(1_048_576));
     assert_eq!(prefixed_pro_caps.max_tokens, Some(128000));
     assert!(!prefixed_pro_caps.supports_streaming);
+}
+
+#[test]
+fn test_get_model_capabilities_gpt56_matches_registry_shape() {
+    let registry = get_openai_registry();
+    for (model, catalog_id) in [
+        ("gpt-5.6", "gpt-5.6"),
+        ("gpt-5.6-sol", "gpt-5.6-sol"),
+        ("gpt-5.6-terra", "gpt-5.6-terra"),
+        ("gpt-5.6-luna", "gpt-5.6-luna"),
+        ("gpt-5.6-cyber", "gpt-5.6-cyber"),
+        ("openai/gpt-5.6-terra", "gpt-5.6-terra"),
+    ] {
+        let spec = registry
+            .get_model_spec(catalog_id)
+            .expect("GPT-5.6 catalog entry should exist");
+        let caps = ModelUtils::get_model_capabilities(model);
+
+        assert_eq!(
+            caps.context_window,
+            Some(spec.model_info.max_context_length as usize),
+            "{model} context window should match the OpenAI registry"
+        );
+        assert_eq!(
+            caps.max_tokens,
+            spec.model_info
+                .max_output_length
+                .map(|limit| limit as usize),
+            "{model} max output should match the OpenAI registry"
+        );
+        assert!(caps.supports_function_calling, "{model}");
+        assert!(caps.supports_response_schema, "{model}");
+        assert!(caps.supports_web_search, "{model}");
+        assert!(caps.supports_vision, "{model}");
+        assert!(caps.supports_streaming, "{model}");
+    }
+}
+
+#[test]
+fn test_get_model_capabilities_realtime2_matches_registry_shape() {
+    for model in [
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "openai/gpt-realtime-2",
+    ] {
+        let caps = ModelUtils::get_model_capabilities(model);
+        assert!(caps.supports_function_calling, "{model}");
+        assert!(caps.supports_parallel_function_calling, "{model}");
+        assert!(caps.supports_tool_choice, "{model}");
+        assert!(caps.supports_system_messages, "{model}");
+        assert!(caps.supports_vision, "{model}");
+        assert!(!caps.supports_streaming, "{model}");
+        assert_eq!(caps.context_window, Some(128_000), "{model}");
+        assert_eq!(caps.max_tokens, Some(32_000), "{model}");
+    }
 }
 
 #[test]
@@ -344,6 +401,23 @@ fn test_get_base_model_gpt55() {
 }
 
 #[test]
+fn test_get_base_model_gpt56_preserves_exact_family() {
+    for model in [
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.6-cyber",
+    ] {
+        assert_eq!(ModelUtils::get_base_model(model), model);
+    }
+    assert_eq!(
+        ModelUtils::get_base_model("openai/gpt-5.6-terra"),
+        "gpt-5.6-terra"
+    );
+}
+
+#[test]
 fn test_get_base_model_gpt35() {
     assert_eq!(
         ModelUtils::get_base_model("gpt-3.5-turbo-0613"),
@@ -432,6 +506,73 @@ fn test_is_valid_model_unknown() {
     assert!(!ModelUtils::is_valid_model("unknown-xyz-123"));
 }
 
+#[test]
+fn test_gpt56_validation_is_registry_aligned_and_boundary_safe() {
+    for model in [
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.6-cyber",
+        "openai/gpt-5.6-luna",
+    ] {
+        assert!(ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_ok(),
+            "{model}"
+        );
+    }
+
+    for model in [
+        "gpt-5.60",
+        "gpt-5.6-foo",
+        "gpt-5.6-solstice",
+        "gpt-5.6-cybernetic",
+        "openai/gpt-5.6-lunatic",
+        "gpt-5.6-2026-08-01",
+        "OPENAI/gpt-5.6",
+        "openai/GPT-5.6",
+        "azure/gpt-5.6",
+    ] {
+        assert!(!ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_err(),
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn test_realtime2_validation_is_exact_and_provider_safe() {
+    for model in [
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "openai/gpt-realtime-2.1",
+    ] {
+        assert!(ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_ok(),
+            "{model}"
+        );
+    }
+
+    for model in [
+        "gpt-realtime-2.2",
+        "gpt-realtime-2.1-mini-preview",
+        "gpt-realtime-2-2026-08-01",
+        "OPENAI/gpt-realtime-2",
+        "openai/GPT-REALTIME-2",
+        "azure/gpt-realtime-2",
+    ] {
+        assert!(!ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_err(),
+            "{model}"
+        );
+    }
+}
+
 // ==================== get_model_family Tests ====================
 
 #[test]
@@ -517,6 +658,11 @@ fn test_validate_model_with_provider_unknown_provider() {
 #[test]
 fn test_get_compatible_models_openai() {
     let models = ModelUtils::get_compatible_models_for_provider("openai");
+    assert!(models.contains(&"gpt-5.6".to_string()));
+    assert!(models.contains(&"gpt-5.6-sol".to_string()));
+    assert!(models.contains(&"gpt-5.6-terra".to_string()));
+    assert!(models.contains(&"gpt-5.6-luna".to_string()));
+    assert!(models.contains(&"gpt-5.6-cyber".to_string()));
     assert!(models.contains(&"gpt-5.5".to_string()));
     assert!(models.contains(&"gpt-5.5-pro".to_string()));
     assert!(models.contains(&"gpt-4".to_string()));
