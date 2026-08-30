@@ -58,6 +58,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     internal("base", "shared provider infrastructure"),
     wire("bedrock", "native Provider enum variant"),
     wire("cloudflare", "native Provider enum variant"),
+    wire("databricks", "typed Databricks Model Serving runtime"),
     providers_extended_wire(
         "cohere",
         "ProviderType::Cohere dispatches to native Cohere API paths when providers-extended is enabled",
@@ -95,11 +96,14 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     wire("openai", "native Provider enum variant"),
     wire("openai_like", "shared OpenAI-compatible runtime provider"),
+    wire("oci", "typed OCI compatible and native retrieval runtime"),
     internal("registry", "provider catalog and lifecycle infrastructure"),
     providers_extended_wire(
         "replicate",
         "ProviderType::Replicate dispatches to native prediction lifecycle paths when providers-extended is enabled",
     ),
+    wire("sagemaker", "typed SageMaker InvokeEndpoint runtime"),
+    wire("snowflake", "typed Snowflake Cortex runtime"),
     internal("thinking", "shared thinking/reasoning support"),
     stub(
         "v0",
@@ -109,6 +113,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
     ),
+    wire("watsonx", "typed watsonx native inference runtime"),
 ];
 
 pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[

@@ -15,6 +15,7 @@ mod cohere_builder;
 #[cfg(test)]
 mod endpoint_access_tests;
 mod endpoint_policy;
+mod enterprise_builder;
 #[cfg(test)]
 mod factory_creation_tests;
 #[cfg(feature = "providers-extended")]

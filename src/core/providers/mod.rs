@@ -29,6 +29,7 @@ pub mod bedrock;
 pub mod cloudflare;
 #[cfg(feature = "providers-extended")]
 pub mod cohere;
+pub mod databricks;
 // comet_api: Tier 1 -> registry/catalog.rs
 // compactifai: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
@@ -50,6 +51,7 @@ pub mod fal_ai;
 // fireworks: Tier 1 -> registry/catalog.rs
 // friendliai: Tier 1 -> registry/catalog.rs
 // galadriel: Tier 1 -> registry/catalog.rs
+mod enterprise;
 #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
@@ -82,6 +84,7 @@ pub mod mistral;
 #[cfg(feature = "providers-extended")]
 pub mod ollama;
 // oobabooga: Tier 1 -> registry/catalog.rs
+pub mod oci;
 pub mod openai;
 pub mod openai_like;
 // openrouter: Tier 1 -> registry/catalog.rs
@@ -91,6 +94,8 @@ pub mod openai_like;
 // qwen: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extended")]
 pub mod replicate;
+pub mod sagemaker;
+pub mod snowflake;
 // sambanova: Tier 1 -> registry/catalog.rs
 // siliconflow: Tier 1 -> registry/catalog.rs
 // together: Tier 1 -> registry/catalog.rs
@@ -101,6 +106,7 @@ pub mod vertex_ai;
 // vllm: Tier 1 -> registry/catalog.rs
 // volcengine: Tier 1 -> registry/catalog.rs
 // wandb: Tier 1 -> registry/catalog.rs
+pub mod watsonx;
 // xai: Tier 1 -> registry/catalog.rs
 // xiaomi_mimo: Tier 1 -> registry/catalog.rs
 // xinference: Tier 1 -> registry/catalog.rs
@@ -232,21 +238,7 @@ pub(crate) fn gemini_transport_error(is_timeout: bool) -> ProviderError {
     }
     ProviderError::network("gemini_proxy", message)
 }
-// ==================== Provider Dispatch Macros ====================
-//
-// Consolidated into a single `dispatch_provider!` macro with 4 dispatch kinds,
-// selected by the first token.  The Provider variant list appears once per
-// `@expand` arm (4 arms total).  To add or remove a variant, update only the
-// `@expand` arms below.
-//
-// Former macros -> new calling convention:
-//   dispatch_provider!(self, method)              -> dispatch_provider!(sync, self, method)
-//   dispatch_provider!(self, method, arg)         -> dispatch_provider!(sync, self, method, arg)
-//   dispatch_provider_async!(self, m, a, b)       -> dispatch_provider!(async_err, self, m, a, b)
-//   dispatch_provider_value!(self, method)        -> dispatch_provider!(value, self, method)
-//   dispatch_provider_value!(self, method, arg)   -> dispatch_provider!(value, self, method, arg)
-//   dispatch_provider_async_direct!(self, method) -> dispatch_provider!(async_direct, self, method)
-
+// Keep every Provider variant in each dispatch arm below.
 macro_rules! dispatch_provider {
     // -- sync: p.$method(args...) --
     (sync, $self:expr, $method:ident) => {
@@ -304,6 +296,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => p.$method($($arg),*),
+            Provider::Enterprise(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
         }
     };
@@ -333,6 +326,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::Enterprise(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
     };
@@ -362,6 +356,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::Enterprise(p) => LLMProvider::$method(p, $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
         }
     };
@@ -391,6 +386,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p).await,
+            Provider::Enterprise(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
         }
     };
@@ -452,6 +448,7 @@ pub enum Provider {
     Cohere(cohere::CohereProvider),
     #[cfg(feature = "providers-extended")]
     Replicate(replicate::ReplicateProvider),
+    Enterprise(enterprise::EnterpriseProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
     OpenAILike(openai_like::OpenAILikeProvider),
 }
@@ -588,6 +585,7 @@ impl Provider {
             Provider::Cohere(_) => "cohere",
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => "replicate",
+            Provider::Enterprise(p) => p.name(),
             Provider::OpenAILike(p) => {
                 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
                 p.name()
@@ -621,6 +619,7 @@ impl Provider {
             Provider::Cohere(_) => ProviderType::Cohere,
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => ProviderType::Replicate,
+            Provider::Enterprise(p) => p.provider_type(),
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
         }
     }

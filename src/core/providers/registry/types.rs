@@ -75,6 +75,41 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::Databricks,
+        "databricks",
+        &["databricks_model_serving"],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
+        ProviderType::Snowflake,
+        "snowflake",
+        &["snowflake_cortex"],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
+        ProviderType::Oci,
+        "oci",
+        &["oci_genai"],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
+        ProviderType::Watsonx,
+        "watsonx",
+        &["ibm_watsonx"],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
+        ProviderType::SageMaker,
+        "sagemaker",
+        &["aws_sagemaker"],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
         ProviderType::OpenRouter,
         "openrouter",
         &[],
@@ -499,6 +534,11 @@ mod tests {
             ProviderType::Bedrock,
             ProviderType::Mistral,
             ProviderType::Cloudflare,
+            ProviderType::Databricks,
+            ProviderType::Snowflake,
+            ProviderType::Oci,
+            ProviderType::Watsonx,
+            ProviderType::SageMaker,
         ]
         .into_iter()
         .chain([

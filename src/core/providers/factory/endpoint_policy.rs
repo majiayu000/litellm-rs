@@ -7,7 +7,7 @@ pub(super) fn provider_type_supports(provider_type: &ProviderType) -> bool {
     use ProviderType::*;
     match provider_type {
         OpenAI | OpenAICompatible | Anthropic | Mistral | Cohere | Azure | AzureAI | Bedrock
-        | VertexAI | Gemini | Ollama => true,
+        | VertexAI | Gemini | Ollama | Databricks | Snowflake | Oci | Watsonx | SageMaker => true,
         Cloudflare | FalAI | Replicate | GitHubCopilot => false,
         _ => provider_registry::catalog_definition_for_provider_type(provider_type).is_some(),
     }
@@ -32,12 +32,14 @@ const STANDARD_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base"];
 const AZURE_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "endpoint", "azure_endpoint"];
 const AZURE_AI_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "endpoint", "azure_ai_endpoint"];
 const VERTEX_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "endpoint"];
+const DATABRICKS_ENDPOINT_KEYS: &[&str] = &["base_url", "workspace_url"];
 
 pub(crate) fn endpoint_keys_for_selector(selector: &str) -> &'static [&'static str] {
     match selector.parse::<ProviderType>() {
         Ok(ProviderType::Azure) => AZURE_ENDPOINT_KEYS,
         Ok(ProviderType::AzureAI) => AZURE_AI_ENDPOINT_KEYS,
         Ok(ProviderType::VertexAI) => VERTEX_ENDPOINT_KEYS,
+        Ok(ProviderType::Databricks) => DATABRICKS_ENDPOINT_KEYS,
         _ => STANDARD_ENDPOINT_KEYS,
     }
 }

@@ -173,6 +173,20 @@ fn build_rerank_service(provider: &SelectedRerankProvider) -> Result<RerankServi
             )?;
             service.register_provider("jina", Arc::new(rerank_provider));
         }
+        RerankProviderKind::Watsonx => {
+            let config = watsonx_rerank_config(provider)?;
+            let rerank_provider = crate::core::providers::watsonx::WatsonxProvider::new(config)
+                .map_err(|error| GatewayError::Config(error.to_string()))?
+                .rerank_adapter();
+            service.register_provider("watsonx", Arc::new(rerank_provider));
+        }
+        RerankProviderKind::Oci => {
+            let config = oci_rerank_config(provider)?;
+            let rerank_provider = crate::core::providers::oci::OciNativeProvider::new(config)
+                .map_err(|error| GatewayError::Config(error.to_string()))?
+                .rerank_adapter();
+            service.register_provider("oci", Arc::new(rerank_provider));
+        }
     }
 
     Ok(service)
@@ -220,7 +234,7 @@ fn selected_rerank_provider_from_config(
     provider: &ProviderConfig,
     kind: RerankProviderKind,
 ) -> Result<SelectedRerankProvider, GatewayError> {
-    if provider.api_key.trim().is_empty() {
+    if kind != RerankProviderKind::Oci && provider.api_key.trim().is_empty() {
         return Err(GatewayError::Config(format!(
             "Rerank provider '{}' is missing api_key",
             provider.name
@@ -234,6 +248,11 @@ fn selected_rerank_provider_from_config(
         base_url: provider.base_url.clone(),
         timeout: Duration::from_secs(provider.timeout),
         endpoint_access: provider.endpoint_access,
+        max_retries: provider.max_retries,
+        models: provider.models.clone(),
+        settings: provider.settings.clone(),
+        project: provider.project.clone(),
+        api_version: provider.api_version.clone(),
     })
 }
 
@@ -383,6 +402,12 @@ fn rerank_provider_kind(provider: &ProviderConfig) -> Option<RerankProviderKind>
     if provider_type.contains("jina") || provider_name.contains("jina") {
         return Some(RerankProviderKind::Jina);
     }
+    if provider_type == "watsonx" || provider_name == "watsonx" {
+        return Some(RerankProviderKind::Watsonx);
+    }
+    if provider_type == "oci" || provider_name == "oci" {
+        return Some(RerankProviderKind::Oci);
+    }
 
     None
 }
@@ -424,7 +449,7 @@ fn rerank_gateway_error_to_provider_error(error: GatewayError) -> ProviderError 
 
 fn missing_rerank_provider_error() -> GatewayError {
     GatewayError::NotFound(
-        "No configured rerank provider found; configure a cohere or jina provider".to_string(),
+        "No configured rerank provider found; configure cohere, jina, watsonx, or OCI native retrieval".to_string(),
     )
 }
 
@@ -441,6 +466,8 @@ fn split_rerank_model(model: &str) -> (Option<&str>, &str) {
 enum RerankProviderKind {
     Cohere,
     Jina,
+    Watsonx,
+    Oci,
 }
 
 impl RerankProviderKind {
@@ -448,6 +475,8 @@ impl RerankProviderKind {
         match self {
             Self::Cohere => "cohere",
             Self::Jina => "jina",
+            Self::Watsonx => "watsonx",
+            Self::Oci => "oci",
         }
     }
 
@@ -466,6 +495,7 @@ impl RerankProviderKind {
                     | "jina-reranker-v1-base-en"
                     | "jina-reranker-v1-turbo-en"
             ),
+            Self::Watsonx | Self::Oci => false,
         }
     }
 }
@@ -478,6 +508,82 @@ struct SelectedRerankProvider {
     base_url: Option<String>,
     timeout: Duration,
     endpoint_access: crate::core::net::ProviderEndpointAccess,
+    max_retries: u32,
+    models: Vec<String>,
+    settings: std::collections::HashMap<String, serde_json::Value>,
+    project: Option<String>,
+    api_version: Option<String>,
+}
+
+fn watsonx_rerank_config(
+    provider: &SelectedRerankProvider,
+) -> Result<crate::core::providers::watsonx::WatsonxConfig, GatewayError> {
+    let required = |key: &str| {
+        provider
+            .settings
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| GatewayError::Config(format!("watsonx rerank requires settings.{key}")))
+    };
+    let project_id = provider
+        .settings
+        .get("project_id")
+        .or_else(|| provider.settings.get("project"))
+        .cloned()
+        .or_else(|| provider.project.clone().map(serde_json::Value::String));
+    let api_version = match provider.settings.get("api_version") {
+        Some(serde_json::Value::String(version)) if !version.trim().is_empty() => version.clone(),
+        Some(_) => {
+            return Err(GatewayError::Config(
+                "watsonx rerank settings.api_version must be a non-empty string".to_string(),
+            ));
+        }
+        None => provider
+            .api_version
+            .clone()
+            .unwrap_or_else(|| "2024-05-31".to_string()),
+    };
+    let config = serde_json::json!({
+        "access_token": provider.api_key,
+        "project_id": project_id,
+        "space_id": provider.settings.get("space_id"),
+        "region": required("region")?,
+        "api_version": api_version,
+        "base_url": provider.base_url,
+        "endpoint_access": provider.endpoint_access,
+        "timeout": provider.timeout.as_secs(),
+        "max_retries": provider.max_retries,
+        "models": provider.models,
+    });
+    serde_json::from_value(config)
+        .map_err(|error| GatewayError::Config(format!("invalid watsonx rerank config: {error}")))
+}
+
+fn oci_rerank_config(
+    provider: &SelectedRerankProvider,
+) -> Result<crate::core::providers::oci::OciConfig, GatewayError> {
+    let required = |key: &str| {
+        provider
+            .settings
+            .get(key)
+            .cloned()
+            .ok_or_else(|| GatewayError::Config(format!("OCI rerank requires settings.{key}")))
+    };
+    let config = serde_json::json!({
+        "region": required("region")?,
+        "compartment_id": required("compartment_id")?,
+        "auth": required("auth")?,
+        "api_mode": "native",
+        "base_url": provider.base_url,
+        "endpoint_access": provider.endpoint_access,
+        "timeout": provider.timeout.as_secs(),
+        "max_retries": provider.max_retries,
+        "models": provider.models,
+    });
+    serde_json::from_value(config)
+        .map_err(|error| GatewayError::Config(format!("invalid OCI rerank config: {error}")))
 }
 
 #[cfg(test)]
@@ -499,6 +605,8 @@ mod tests {
         let by_type = provider_config("primary", "cohere_rerank", Vec::new());
         let by_name = provider_config("jina-reranker", "custom", Vec::new());
         let unsupported = provider_config("voyage", "voyage", Vec::new());
+        let watsonx = provider_config("primary", "watsonx", vec!["ibm-rerank"]);
+        let oci = provider_config("oci", "oci", vec!["cohere.rerank-v3-5"]);
 
         assert_eq!(
             rerank_provider_kind(&by_type),
@@ -509,6 +617,24 @@ mod tests {
             Some(RerankProviderKind::Jina)
         );
         assert_eq!(rerank_provider_kind(&unsupported), None);
+        assert_eq!(
+            rerank_provider_kind(&watsonx),
+            Some(RerankProviderKind::Watsonx)
+        );
+        assert_eq!(rerank_provider_kind(&oci), Some(RerankProviderKind::Oci));
+    }
+
+    #[test]
+    fn watsonx_rerank_preserves_top_level_project_and_api_version() {
+        let mut provider = provider_config("watsonx", "watsonx", vec!["ibm-rerank"]);
+        provider.project = Some("project-id".to_string());
+        provider.api_version = Some("2025-01-01".to_string());
+        provider.settings.insert("region".into(), "us-south".into());
+        let selected = selected_rerank_provider_from_config(&provider, RerankProviderKind::Watsonx)
+            .expect("watsonx deployment should select");
+        let config = watsonx_rerank_config(&selected).expect("watsonx config should normalize");
+        assert_eq!(config.project_id.as_deref(), Some("project-id"));
+        assert_eq!(config.api_version, "2025-01-01");
     }
 
     #[test]

@@ -144,6 +144,16 @@ impl Provider {
                     })?;
                 Ok(Provider::OpenAILike(provider))
             }
+            provider_type @ (ProviderType::Databricks
+            | ProviderType::Snowflake
+            | ProviderType::Oci
+            | ProviderType::Watsonx
+            | ProviderType::SageMaker) => {
+                let provider =
+                    super::enterprise_builder::build_enterprise_provider(provider_type, config)
+                        .await?;
+                Ok(Provider::Enterprise(provider))
+            }
             ProviderType::AzureAI => {
                 #[cfg(feature = "providers-extra")]
                 {
@@ -346,6 +356,9 @@ mod tests {
     }
 
     fn minimal_dispatch_config_for(provider_type: &ProviderType) -> serde_json::Value {
+        if let Some(config) = super::super::enterprise_builder::minimal_test_config(provider_type) {
+            return config;
+        }
         match provider_type {
             ProviderType::Anthropic => serde_json::json!({
                 "api_key": "sk-ant-test1234567890123",
@@ -441,6 +454,8 @@ mod tests {
                     | (ProviderType::Bedrock, Provider::Bedrock(_))
                     | (ProviderType::Mistral, Provider::Mistral(_))
                     | (ProviderType::Cloudflare, Provider::Cloudflare(_)) => {}
+                    (provider_type, Provider::Enterprise(provider))
+                        if provider.provider_type() == *provider_type => {}
                     #[cfg(feature = "providers-extra")]
                     (ProviderType::Azure, Provider::Azure(_))
                     | (ProviderType::AzureAI, Provider::AzureAI(_))

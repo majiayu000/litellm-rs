@@ -28,12 +28,23 @@ impl SigV4Signer {
         session_token: Option<String>,
         region: String,
     ) -> Self {
+        Self::new_for_service(access_key, secret_key, session_token, region, "bedrock")
+    }
+
+    /// Create a signer for another AWS runtime using the same SigV4 contract.
+    pub fn new_for_service(
+        access_key: String,
+        secret_key: String,
+        session_token: Option<String>,
+        region: String,
+        service: impl Into<String>,
+    ) -> Self {
         Self {
             access_key,
             secret_key,
             session_token,
             region,
-            service: "bedrock".to_string(),
+            service: service.into(),
         }
     }
 
@@ -189,6 +200,28 @@ mod tests {
         assert_eq!(signer.access_key, "AKIATEST");
         assert_eq!(signer.region, "us-east-1");
         assert_eq!(signer.service, "bedrock");
+    }
+
+    #[test]
+    fn service_specific_signer_uses_sagemaker_scope() {
+        let signer = SigV4Signer::new_for_service(
+            "AKIATEST".to_string(),
+            "testsecret".to_string(),
+            None,
+            "us-east-1".to_string(),
+            "sagemaker",
+        );
+        let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let signed = signer
+            .sign_request(
+                "POST",
+                "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/demo/invocations",
+                &HashMap::new(),
+                "{}",
+                timestamp,
+            )
+            .expect("SageMaker request should sign");
+        assert!(signed["Authorization"].contains("/us-east-1/sagemaker/aws4_request"));
     }
 
     #[test]

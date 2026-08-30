@@ -105,6 +105,10 @@ impl Provider {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
             }
+            Provider::Enterprise(provider) => {
+                LLMProvider::supports_model(provider, model)
+                    && LLMProvider::supports_capability(provider, capability)
+            }
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }

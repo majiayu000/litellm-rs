@@ -124,6 +124,31 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         "Core Bedrock runtime supports chat, stream, and embeddings; public completion() routing is not registered.",
     ),
     row(
+        "databricks",
+        [P, P, U, U, U, U, U, U, U],
+        "Databricks Model Serving OpenAI-compatible chat and SSE.",
+    ),
+    row(
+        "snowflake",
+        [P, P, U, U, U, U, U, U, U],
+        "Snowflake Cortex OpenAI-compatible chat and SSE.",
+    ),
+    row(
+        "oci",
+        [P, P, S, U, U, U, U, U, U],
+        "OCI compatible mode provides chat/SSE; IAM native mode provides embeddings and rerank.",
+    ),
+    row(
+        "watsonx",
+        [S, U, S, U, U, U, U, U, U],
+        "watsonx native chat, embeddings, and rerank; streaming is not implemented.",
+    ),
+    row(
+        "sagemaker",
+        [S, U, U, U, U, U, U, U, U],
+        "SageMaker InvokeEndpoint chat requires an explicit supported payload transformer.",
+    ),
+    row(
         "mistral",
         [S, S, P, U, U, U, U, U, U],
         "Native HTTP provider; SDK/completion adapters are not implemented.",
