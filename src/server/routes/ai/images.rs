@@ -146,11 +146,14 @@ async fn proxy_image_multipart_endpoint(
         replace_text_field(&body, &content_type, "model", &requested_model)?
     };
     let requested_model = requested_model.as_str();
-    if matches!(endpoint, ImageProxyEndpoint::Variations) {
-        ensure_image_proxy_candidate_configured(
+    match endpoint {
+        ImageProxyEndpoint::Edits => {
+            ensure_image_edit_candidate_configured(state, requested_model)?;
+        }
+        ImageProxyEndpoint::Variations => ensure_image_proxy_candidate_configured(
             state.config().gateway.providers.as_slice(),
             requested_model,
-        )?;
+        )?,
     }
     let budgeted = state.budgeted.clone();
     let pricing_service = budgeted.pricing();
@@ -477,6 +480,32 @@ fn ensure_image_proxy_candidate_configured(
             requested_model,
         )))
     }
+}
+
+fn ensure_image_edit_candidate_configured(
+    state: &AppState,
+    requested_model: &str,
+) -> Result<(), GatewayError> {
+    let native_candidate = state
+        .unified_router
+        .get_deployments_for_model(requested_model)
+        .into_iter()
+        .filter_map(|deployment_id| state.unified_router.get_deployment(&deployment_id))
+        .any(|deployment| {
+            native_edit::is_native_image_provider(&deployment.provider)
+                && deployment.provider.supports_capability_for_model(
+                    &deployment.model,
+                    &ProviderCapability::ImageEdit,
+                )
+        });
+    if native_candidate {
+        return Ok(());
+    }
+
+    ensure_image_proxy_candidate_configured(
+        state.config().gateway.providers.as_slice(),
+        requested_model,
+    )
 }
 
 fn image_proxy_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
