@@ -21,6 +21,7 @@ const VOYAGE_RERANK_MODELS: &[&str] = &[
     "rerank-lite-1",
 ];
 
+#[derive(Clone)]
 pub struct VoyageRerankProvider {
     api_key: String,
     base_url: String,
@@ -28,6 +29,18 @@ pub struct VoyageRerankProvider {
 }
 
 impl VoyageRerankProvider {
+    pub(crate) fn from_transport(
+        api_key: String,
+        base_url: String,
+        client: BaseHttpClient,
+    ) -> Self {
+        Self {
+            api_key,
+            base_url,
+            client,
+        }
+    }
+
     pub fn new_with_endpoint(
         api_key: impl Into<String>,
         base_url: impl Into<String>,

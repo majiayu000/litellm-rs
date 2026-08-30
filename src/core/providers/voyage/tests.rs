@@ -1,5 +1,7 @@
 use super::VoyageProvider;
 use crate::core::net::ProviderEndpointAccess;
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::types::health::HealthStatus;
 use crate::core::types::model::ProviderCapability;
 
 fn provider(models: &[&str]) -> Result<VoyageProvider, crate::core::providers::ProviderError> {
@@ -30,4 +32,11 @@ fn unknown_configured_model_fails_closed() {
     let error = provider(&["voyage-4-lookalike"]).expect_err("unknown model must fail");
 
     assert!(error.to_string().contains("Unknown Voyage model"));
+}
+
+#[tokio::test]
+async fn health_is_unknown_without_a_probe() {
+    let provider = provider(&["voyage-4"]).expect("provider should bind");
+
+    assert_eq!(provider.health_check().await, HealthStatus::Unknown);
 }

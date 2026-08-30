@@ -169,6 +169,14 @@ impl VoyageProvider {
             .is_some_and(|info| info.capabilities.contains(capability))
     }
 
+    pub(crate) fn rerank_provider(&self) -> crate::core::rerank::VoyageRerankProvider {
+        crate::core::rerank::VoyageRerankProvider::from_transport(
+            self.api_key.clone(),
+            self.api_base.clone(),
+            self.client.clone(),
+        )
+    }
+
     fn embedding_request_body(
         request: &EmbeddingRequest,
     ) -> Result<VoyageEmbeddingRequest<'_>, ProviderError> {
@@ -438,7 +446,7 @@ impl LLMProvider for VoyageProvider {
     }
 
     async fn health_check(&self) -> HealthStatus {
-        HealthStatus::Healthy
+        HealthStatus::Unknown
     }
 
     async fn calculate_cost(

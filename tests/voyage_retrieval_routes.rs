@@ -10,6 +10,7 @@ mod tests {
     use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::net::ProviderEndpointAccess;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
@@ -250,6 +251,61 @@ mod tests {
         assert_eq!(requests[0].body["model"], "rerank-2.5");
         assert_eq!(requests[0].body["top_k"], 2);
         assert_eq!(requests[0].body["truncation"], false);
+        mock.shutdown_voyage_mock().await;
+    }
+
+    #[tokio::test]
+    async fn voyage_rerank_uses_configured_alias_and_records_canonical_spend() {
+        let mock = MockVoyageServer::start_voyage_mock().await;
+        let mut provider = voyage_provider("");
+        provider.name = "custom-voyage".to_string();
+        provider.base_url = None;
+        provider
+            .settings
+            .insert("api_base".to_string(), json!(mock.base_url));
+        let state = build_state(provider).await;
+        state.budget_limits.providers.set_provider_limit(
+            "voyage",
+            ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/rerank")
+                .set_json(json!({
+                    "model": "rerank-2.5",
+                    "query": "best document",
+                    "documents": ["first", "second"]
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/rerank");
+        let usage = state
+            .budget_limits
+            .providers
+            .get_provider_usage("voyage")
+            .expect("canonical Voyage budget should be metered");
+        assert!((usage.current_spend - 11.0 * 5e-8).abs() < f64::EPSILON);
+        assert!(
+            state
+                .budget_limits
+                .providers
+                .get_provider_usage("custom-voyage")
+                .is_none(),
+            "deployment name must not replace canonical pricing identity"
+        );
         mock.shutdown_voyage_mock().await;
     }
 

@@ -1,10 +1,11 @@
 //! Rerank endpoint.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::rerank::{
-    CohereRerankProvider, JinaRerankProvider, RerankRequest, RerankResponse, RerankService,
-    VoyageRerankProvider,
+    CohereRerankProvider, JinaRerankProvider, RerankProvider, RerankRequest, RerankResponse,
+    RerankService, VoyageRerankProvider,
 };
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -37,7 +38,26 @@ pub async fn rerank(
         return Ok(openai_errors::gateway_error_response(&error));
     }
 
-    match handle_rerank_with_state(state.get_ref(), request.into_inner()).await {
+    let context = match super::context::get_request_context(&req) {
+        Ok(context) => context,
+        Err(error) => {
+            return Ok(openai_errors::gateway_error_response(&GatewayError::Auth(
+                error.to_string(),
+            )));
+        }
+    };
+    let api_key_id = context
+        .api_key_id()
+        .or_else(|| super::context::get_authenticated_api_key(&req).map(|key| key.metadata.id));
+
+    match handle_rerank_with_state(
+        state.get_ref(),
+        request.into_inner(),
+        api_key_id,
+        context.api_key_budget_id(),
+    )
+    .await
+    {
         Ok(response) => Ok(HttpResponse::Ok().json(response)),
         Err(error) => {
             error!("Rerank error: {}", error);
@@ -49,6 +69,8 @@ pub async fn rerank(
 async fn handle_rerank_with_state(
     state: &AppState,
     mut request: RerankRequest,
+    api_key_id: Option<uuid::Uuid>,
+    api_key_budget_id: Option<uuid::Uuid>,
 ) -> Result<RerankResponse, GatewayError> {
     let requested_model = state.unified_router.resolve_model_name(&request.model);
     request.model = requested_model.clone();
@@ -63,7 +85,9 @@ async fn handle_rerank_with_state(
 
     let mut last_router_error = None;
     let budgeted = state.budgeted.clone();
+    let key_manager = budgeted.key_manager();
     let pricing_service = budgeted.pricing();
+    let pricing_config = state.config().gateway.pricing.clone();
     for router_model in router_models {
         let result = run_unary(
             &state.unified_router,
@@ -73,14 +97,18 @@ async fn handle_rerank_with_state(
                 let request = request.clone();
                 let requested_model = requested_model.clone();
                 let budgeted = budgeted.clone();
+                let key_manager = key_manager.clone();
                 let pricing_service = pricing_service.clone();
+                let pricing_config = pricing_config.clone();
                 move |selected_provider, selected_model, selected_deployment_id| {
                     let request = request.clone();
                     let requested_model = requested_model.clone();
                     let budgeted = budgeted.clone();
+                    let key_manager = key_manager.clone();
                     let pricing_service = pricing_service.clone();
+                    let pricing_config = pricing_config.clone();
                     async move {
-                        if matches!(&selected_provider, Provider::Voyage(_)) {
+                        if let Provider::Voyage(provider) = &selected_provider {
                             let request_pricing = super::spend::request_pricing_for_provider(
                                 &pricing_service,
                                 &selected_provider,
@@ -94,6 +122,73 @@ async fn handle_rerank_with_state(
                                     "the selected Voyage model has no exact catalog price",
                                 ));
                             }
+                            let estimated_usage = estimated_rerank_usage(&request);
+                            let voyage = provider.rerank_provider();
+                            let mut request_for_provider = request;
+                            request_for_provider.model = selected_model.clone();
+                            let reserve_pricing = request_pricing.clone();
+                            let settle_pricing = request_pricing;
+                            let reserve_usage = estimated_usage;
+                            let reserve_pricing_config = pricing_config.clone();
+                            let settle_pricing_config = pricing_config;
+                            let settle_key_manager = key_manager;
+                            return budgeted
+                                .for_selected_with_api_key_budget(
+                                    "voyage",
+                                    selected_model,
+                                    api_key_budget_id,
+                                    SettlementMode::Metered,
+                                )
+                                .reserve_call_settle(
+                                    |budget| {
+                                        super::spend::reserve_pricing_usage_budget_with_request_pricing(
+                                            &reserve_pricing,
+                                            &reserve_pricing_config,
+                                            budget.budget_limits(),
+                                            budget.provider(),
+                                            budget.model(),
+                                            &reserve_usage,
+                                        )
+                                    },
+                                    || async move {
+                                        let response = voyage
+                                            .rerank(request_for_provider)
+                                            .await
+                                            .map_err(rerank_gateway_error_to_provider_error)?;
+                                        let total_tokens = response
+                                            .usage
+                                            .as_ref()
+                                            .and_then(|usage| usage.total_tokens)
+                                            .ok_or_else(|| {
+                                                ProviderError::response_parsing(
+                                                    "voyage",
+                                                    "Voyage rerank response omitted total token usage",
+                                                )
+                                            })?;
+                                        Ok((response, total_tokens))
+                                    },
+                                    |(response, total_tokens), reservations, budget| async move {
+                                        let usage = PricingUsage::new(total_tokens, 0);
+                                        let (budget_reservation, key_budget_reservation) =
+                                            reservations.into_parts();
+                                        super::spend::record_pricing_usage_spend_with_request_pricing(
+                                            &settle_pricing,
+                                            &settle_pricing_config,
+                                            budget.budget_limits(),
+                                            &settle_key_manager,
+                                            api_key_id,
+                                            budget.provider(),
+                                            budget.model(),
+                                            &usage,
+                                            budget_reservation,
+                                            key_budget_reservation,
+                                        )
+                                        .await;
+                                        ((response, total_tokens), u64::from(total_tokens))
+                                    },
+                                )
+                                .await
+                                .map(|((response, _total_tokens), tokens)| (response, tokens));
                         }
                         let selected = selected_rerank_provider(
                             state.config().gateway.providers.as_slice(),
@@ -142,6 +237,20 @@ async fn handle_rerank_with_state(
     }
 
     Err(last_router_error.unwrap_or_else(missing_rerank_provider_error))
+}
+
+fn estimated_rerank_usage(request: &RerankRequest) -> PricingUsage {
+    let total_tokens = std::iter::once(request.query.as_str())
+        .chain(request.documents.iter().map(|document| document.get_text()))
+        .map(estimated_text_tokens)
+        .fold(0_u32, u32::saturating_add);
+    PricingUsage::new(total_tokens, 0)
+}
+
+fn estimated_text_tokens(text: &str) -> u32 {
+    u32::try_from(text.len().div_ceil(4))
+        .unwrap_or(u32::MAX)
+        .max(1)
 }
 
 fn ensure_rerank_route_authorized(state: &AppState, req: &HttpRequest) -> Result<(), GatewayError> {
@@ -262,7 +371,7 @@ fn selected_rerank_provider_from_config(
         provider_name: provider.name.clone(),
         kind,
         api_key: provider.api_key.clone(),
-        base_url: provider.base_url.clone(),
+        base_url: provider.configured_endpoint().map(str::to_string),
         timeout: Duration::from_secs(provider.timeout),
         endpoint_access: provider.endpoint_access,
     })
@@ -528,149 +637,5 @@ struct SelectedRerankProvider {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn provider_config(name: &str, provider_type: &str, models: Vec<&str>) -> ProviderConfig {
-        ProviderConfig {
-            name: name.to_string(),
-            provider_type: provider_type.to_string(),
-            api_key: "test-key".to_string(),
-            models: models.into_iter().map(ToString::to_string).collect(),
-            ..ProviderConfig::default()
-        }
-    }
-
-    #[test]
-    fn detects_provider_kind_from_type_or_name() {
-        let by_type = provider_config("primary", "cohere_rerank", Vec::new());
-        let by_name = provider_config("jina-reranker", "custom", Vec::new());
-        let voyage = provider_config("voyage", "voyage", Vec::new());
-        let unsupported = provider_config("custom", "custom", Vec::new());
-
-        assert_eq!(
-            rerank_provider_kind(&by_type),
-            Some(RerankProviderKind::Cohere)
-        );
-        assert_eq!(
-            rerank_provider_kind(&by_name),
-            Some(RerankProviderKind::Jina)
-        );
-        assert_eq!(
-            rerank_provider_kind(&voyage),
-            Some(RerankProviderKind::Voyage)
-        );
-        assert_eq!(rerank_provider_kind(&unsupported), None);
-    }
-
-    #[test]
-    fn provider_model_filter_accepts_prefixed_and_unprefixed_models() {
-        let provider = provider_config("cohere", "cohere", vec!["rerank-english-v3.0"]);
-
-        assert!(rerank_provider_supports_model(
-            &provider,
-            RerankProviderKind::Cohere,
-            "rerank-english-v3.0"
-        ));
-        assert!(rerank_provider_supports_model(
-            &provider,
-            RerankProviderKind::Cohere,
-            "cohere/rerank-english-v3.0"
-        ));
-        assert!(!rerank_provider_supports_model(
-            &provider,
-            RerankProviderKind::Cohere,
-            "jina/rerank-english-v3.0"
-        ));
-        assert!(!rerank_provider_supports_model(
-            &provider,
-            RerankProviderKind::Cohere,
-            "rerank-multilingual-v3.0"
-        ));
-    }
-
-    #[test]
-    fn provider_model_filter_allows_explicit_new_provider_models() {
-        let cohere = provider_config("cohere", "cohere", vec!["rerank-v4.0-pro"]);
-        let jina = provider_config("jina", "jina", vec!["jina-colbert-v2"]);
-
-        assert!(rerank_provider_supports_model(
-            &cohere,
-            RerankProviderKind::Cohere,
-            "rerank-v4.0-pro"
-        ));
-        assert!(rerank_provider_supports_model(
-            &cohere,
-            RerankProviderKind::Cohere,
-            "cohere/rerank-v4.0-pro"
-        ));
-        assert!(rerank_provider_supports_model(
-            &jina,
-            RerankProviderKind::Jina,
-            "jina-colbert-v2"
-        ));
-        assert!(rerank_provider_supports_model(
-            &jina,
-            RerankProviderKind::Jina,
-            "jina/jina-colbert-v2"
-        ));
-    }
-
-    #[test]
-    fn provider_model_filter_rejects_unconfigured_unknown_models() {
-        let cohere = provider_config("cohere", "cohere", Vec::new());
-
-        assert!(!rerank_provider_supports_model(
-            &cohere,
-            RerankProviderKind::Cohere,
-            "rerank-v4.0-pro"
-        ));
-    }
-
-    #[test]
-    fn selects_matching_enabled_provider() {
-        let wrong = provider_config("wrong-cohere", "cohere", vec!["rerank-multilingual-v3.0"]);
-        let selected = provider_config("right-cohere", "cohere", vec!["rerank-english-v3.0"]);
-        let request = RerankRequest {
-            model: "rerank-english-v3.0".to_string(),
-            query: "hello".to_string(),
-            documents: vec!["doc".into()],
-            ..RerankRequest::default()
-        };
-
-        let selected = select_rerank_provider(&[wrong, selected], &request)
-            .expect("matching provider should be selected");
-
-        assert_eq!(selected.provider_name, "right-cohere");
-        assert_eq!(selected.kind, RerankProviderKind::Cohere);
-    }
-
-    #[cfg(feature = "providers-extended")]
-    #[tokio::test]
-    async fn selected_provider_uses_deployment_id_for_native_cohere_duplicate_model() {
-        let primary = provider_config("cohere-a", "cohere", vec!["rerank-english-v3.0"]);
-        let fallback = provider_config("cohere-b", "cohere", vec!["rerank-english-v3.0"]);
-        let cohere =
-            match crate::core::providers::cohere::CohereProvider::with_api_key("test-key").await {
-                Ok(provider) => provider,
-                Err(error) => panic!("native cohere provider should build: {error}"),
-            };
-        let provider = Provider::Cohere(cohere);
-
-        let selected = match selected_rerank_provider(
-            &[primary, fallback],
-            "cohere-b-rerank-english-v3.0",
-            &provider,
-            "rerank-english-v3.0",
-            "rerank-english-v3.0",
-        ) {
-            Ok(selected) => selected,
-            Err(error) => {
-                panic!("selected deployment id should identify the fallback config: {error}")
-            }
-        };
-
-        assert_eq!(selected.provider_name, "cohere-b");
-        assert_eq!(selected.kind, RerankProviderKind::Cohere);
-    }
-}
+#[path = "rerank/tests.rs"]
+mod tests;
