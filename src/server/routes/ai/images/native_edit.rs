@@ -9,7 +9,7 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::super::budgeted::ApiKeyBudgetPolicy;
-use super::multipart::{extract_file_field, extract_file_fields, extract_text_field};
+use super::multipart::{extract_file_fields, extract_text_field};
 
 #[cfg(feature = "providers-extended")]
 pub(super) fn is_native_image_provider(provider: &Provider) -> bool {
@@ -131,10 +131,16 @@ pub(super) fn parse_native_image_edit(
                 .ok_or_else(|| GatewayError::validation("n must be a positive integer"))
         })
         .transpose()?;
+    let mut masks = extract_file_fields(body, content_type, "mask").unwrap_or_default();
+    if masks.len() > 1 {
+        return Err(GatewayError::validation(
+            "native image editing accepts at most one mask",
+        ));
+    }
 
     Ok(ImageEditRequest {
         image,
-        mask: extract_file_field(body, content_type, "mask"),
+        mask: masks.pop(),
         prompt,
         model: Some(model.to_string()),
         n,

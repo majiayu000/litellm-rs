@@ -12,6 +12,7 @@ use crate::core::net::validate_outbound_url_str;
 use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, apply_provider_headers, header_owned,
 };
+use crate::core::providers::media::config_boundary::{MediaCredential, validate_media_config};
 use crate::core::providers::media::{
     GenerationLifecycle, GenerationOutput, GenerationPoll, PollPolicy,
 };
@@ -42,12 +43,23 @@ const MODELS: &[&str] = &[
 ];
 
 /// Black Forest Labs provider configuration.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BflConfig {
     #[serde(flatten)]
     pub base: BaseConfig,
     #[serde(skip, default)]
     pub poll_policy: PollPolicy,
+}
+
+impl std::fmt::Debug for BflConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BflConfig")
+            .field("endpoint_access", &self.base.endpoint_access)
+            .field("has_api_key", &self.base.api_key.is_some())
+            .field("custom_header_count", &self.base.headers.len())
+            .finish()
+    }
 }
 
 impl Default for BflConfig {
@@ -123,7 +135,7 @@ impl BflImageRequest {
 }
 
 /// Native BFL provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BflProvider {
     config: BflConfig,
     client: BaseHttpClient,
@@ -132,7 +144,8 @@ pub struct BflProvider {
 }
 
 impl BflProvider {
-    pub fn new(config: BflConfig) -> Result<Self, ProviderError> {
+    pub fn new(mut config: BflConfig) -> Result<Self, ProviderError> {
+        validate_media_config(PROVIDER, &mut config.base, MediaCredential::Raw, &["x-key"])?;
         config
             .validate()
             .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
@@ -369,6 +382,16 @@ impl BflProvider {
                 revised_prompt: None,
             }],
         })
+    }
+}
+
+impl std::fmt::Debug for BflProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BflProvider")
+            .field("provider", &PROVIDER)
+            .field("model_count", &self.models.len())
+            .finish()
     }
 }
 

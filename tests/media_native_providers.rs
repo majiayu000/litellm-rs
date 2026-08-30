@@ -72,7 +72,7 @@ async fn stability_generation_uses_native_multipart_contract() {
             .expect("response body should write");
     });
 
-    let mut config = StabilityConfig::with_api_key("stability-secret");
+    let mut config = StabilityConfig::with_api_key("  stability-secret  ");
     config.base.api_base = Some(format!("http://{address}"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     config
@@ -428,7 +428,7 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
         }
     });
 
-    let mut config = BflConfig::with_api_key("bfl-secret");
+    let mut config = BflConfig::with_api_key("  bfl-secret  ");
     config.base.api_base = Some(format!("http://{address}"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     config
@@ -738,7 +738,7 @@ async fn runway_submit_query_cancel_and_wait_use_native_task_contract() {
         }
     });
 
-    let mut config = RunwayConfig::with_api_key("runway-secret");
+    let mut config = RunwayConfig::with_api_key("  runway-secret  ");
     config.base.api_base = Some(format!("http://{address}/v1"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     config

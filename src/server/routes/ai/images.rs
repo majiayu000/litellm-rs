@@ -41,6 +41,8 @@ use routing::{
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
 const MAX_IMAGE_MULTIPART_BYTES: usize = 64 * 1024 * 1024;
+const NATIVE_EDIT_QUALITY_UNSUPPORTED: &str =
+    "native image editing does not support the quality parameter";
 #[derive(Debug, Clone, Copy)]
 enum ImageProxyEndpoint {
     Edits,
@@ -212,9 +214,7 @@ async fn proxy_image_multipart_endpoint(
                             if let Some(quality) = form_fields.quality.as_deref() {
                                 return Err(ProviderError::invalid_request(
                                     "image_edit",
-                                    format!(
-                                        "native image editing does not support the quality parameter '{quality}'"
-                                    ),
+                                    format!("{NATIVE_EDIT_QUALITY_UNSUPPORTED} '{quality}'"),
                                 ));
                             }
                             let request = native_edit::parse_native_image_edit(
@@ -351,7 +351,8 @@ async fn proxy_image_multipart_endpoint(
                 if matches!(endpoint, ImageProxyEndpoint::Edits)
                     && native_edit_candidate
                     && router_model == requested_model
-                    && is_retryable_image_router_error(&error) =>
+                    && (is_retryable_image_router_error(&error)
+                        || is_native_quality_unsupported(&error)) =>
             {
                 last_router_error = Some(error);
             }
@@ -360,6 +361,16 @@ async fn proxy_image_multipart_endpoint(
     }
 
     Err(last_router_error.unwrap_or_else(missing_image_proxy_provider_error))
+}
+
+fn is_native_quality_unsupported(error: &GatewayError) -> bool {
+    matches!(
+        error,
+        GatewayError::Provider(ProviderError::InvalidRequest {
+            provider: "image_edit",
+            message,
+        }) if message.starts_with(NATIVE_EDIT_QUALITY_UNSUPPORTED)
+    )
 }
 
 fn is_retryable_image_router_error(error: &GatewayError) -> bool {

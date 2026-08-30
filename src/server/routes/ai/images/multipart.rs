@@ -28,6 +28,7 @@ pub(super) fn extract_text_field(
     None
 }
 
+#[cfg(test)]
 pub(super) fn extract_file_field(
     body: &Bytes,
     content_type: &str,

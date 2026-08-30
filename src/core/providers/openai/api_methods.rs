@@ -11,7 +11,7 @@
 //! vector stores, realtime, advanced chat) were declared but never reached from
 //! any live code path and have been removed.
 
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use reqwest::multipart;
 use serde_json::Value;
 
@@ -267,6 +267,12 @@ pub(crate) async fn execute_image_edit(
     request: ImageEditRequest,
     provider: &'static str,
 ) -> Result<ImageGenerationResponse, OpenAIError> {
+    for (name, value) in &headers {
+        HeaderName::from_bytes(name.as_ref().as_bytes())
+            .map_err(|_| OpenAIError::configuration(provider, "invalid image edit header name"))?;
+        HeaderValue::from_str(value.as_ref())
+            .map_err(|_| OpenAIError::configuration(provider, "invalid image edit header value"))?;
+    }
     let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
     let mut form = multipart::Form::new()
         .part(
@@ -309,9 +315,27 @@ pub(crate) async fn execute_image_edit(
             &String::from_utf8_lossy(&bytes),
         ));
     }
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let response: ImageGenerationResponse = serde_json::from_slice(&bytes).map_err(|error| {
         OpenAIError::response_parsing(provider, format!("invalid image edit response: {error}"))
-    })
+    })?;
+    if response.data.is_empty()
+        || response.data.iter().any(|image| {
+            image
+                .url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+                && image
+                    .b64_json
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+        })
+    {
+        return Err(OpenAIError::response_parsing(
+            provider,
+            "image edit response did not contain usable image data",
+        ));
+    }
+    Ok(response)
 }
 
 fn transcription_form(request: TranscriptionRequest) -> multipart::Form {

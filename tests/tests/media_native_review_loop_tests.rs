@@ -1,5 +1,85 @@
 use super::*;
 
+#[test]
+fn native_media_constructors_reject_blank_api_keys() {
+    for blank in ["", "   "] {
+        assert!(matches!(
+            StabilityProvider::new(StabilityConfig::with_api_key(blank)),
+            Err(ProviderError::Configuration { .. })
+        ));
+        assert!(matches!(
+            BflProvider::new(BflConfig::with_api_key(blank)),
+            Err(ProviderError::Configuration { .. })
+        ));
+        #[cfg(feature = "runway-media")]
+        assert!(matches!(
+            RunwayProvider::new(RunwayConfig::with_api_key(blank)),
+            Err(ProviderError::Configuration { .. })
+        ));
+    }
+
+    let mut stability = StabilityConfig::default();
+    stability.base.api_key = Some(" \t ".to_string());
+    assert!(matches!(
+        StabilityProvider::new(stability),
+        Err(ProviderError::Configuration { .. })
+    ));
+    let mut bfl = BflConfig::default();
+    bfl.base.api_key = Some(" \t ".to_string());
+    assert!(matches!(
+        BflProvider::new(bfl),
+        Err(ProviderError::Configuration { .. })
+    ));
+    #[cfg(feature = "runway-media")]
+    {
+        let mut runway = RunwayConfig::default();
+        runway.base.api_key = Some(" \t ".to_string());
+        assert!(matches!(
+            RunwayProvider::new(runway),
+            Err(ProviderError::Configuration { .. })
+        ));
+    }
+}
+
+#[test]
+fn native_media_environment_blank_api_keys_fail_construction() {
+    let status =
+        std::process::Command::new(std::env::current_exe().expect("test executable should exist"))
+            .args([
+                "--exact",
+                "followup_tests::review_loop_tests::native_media_environment_blank_api_keys_child",
+                "--nocapture",
+            ])
+            .env("NATIVE_MEDIA_BLANK_KEYS_CHILD", "1")
+            .env("STABILITY_API_KEY", "   ")
+            .env("BFL_API_KEY", "   ")
+            .env("RUNWAYML_API_SECRET", "   ")
+            .env("RUNWAYML_API_KEY", "   ")
+            .status()
+            .expect("isolated media environment test should run");
+    assert!(status.success());
+}
+
+#[test]
+fn native_media_environment_blank_api_keys_child() {
+    if std::env::var_os("NATIVE_MEDIA_BLANK_KEYS_CHILD").is_none() {
+        return;
+    }
+    assert!(matches!(
+        StabilityProvider::from_env(),
+        Err(ProviderError::Configuration { .. })
+    ));
+    assert!(matches!(
+        BflProvider::from_env(),
+        Err(ProviderError::Configuration { .. })
+    ));
+    #[cfg(feature = "runway-media")]
+    assert!(matches!(
+        RunwayProvider::from_env(),
+        Err(ProviderError::Configuration { .. })
+    ));
+}
+
 async fn truncated_error_responses(
     responses: Vec<(u16, &'static str)>,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {

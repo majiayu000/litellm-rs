@@ -533,6 +533,9 @@ async fn native_image_factory_merges_gateway_custom_headers() {
 #[path = "media_native_review_loop_tests.rs"]
 mod review_loop_tests;
 
+#[path = "media_native_boundary_tests.rs"]
+mod boundary_tests;
+
 #[path = "media_native_final_invariant_tests.rs"]
 mod final_invariant_tests;
 

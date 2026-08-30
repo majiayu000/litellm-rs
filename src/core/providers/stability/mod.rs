@@ -12,6 +12,7 @@ use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, apply_provider_headers, header,
     header_owned,
 };
+use crate::core::providers::media::config_boundary::{MediaCredential, validate_media_config};
 use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
 use crate::core::traits::provider::ProviderConfig;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -43,10 +44,21 @@ const GENERATION_MODELS: &[&str] = &[
 ];
 
 /// Stability AI provider configuration.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct StabilityConfig {
     #[serde(flatten)]
     pub base: BaseConfig,
+}
+
+impl std::fmt::Debug for StabilityConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StabilityConfig")
+            .field("endpoint_access", &self.base.endpoint_access)
+            .field("has_api_key", &self.base.api_key.is_some())
+            .field("custom_header_count", &self.base.headers.len())
+            .finish()
+    }
 }
 
 impl Default for StabilityConfig {
@@ -103,7 +115,7 @@ impl ProviderConfig for StabilityConfig {
 }
 
 /// Native Stability AI provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StabilityProvider {
     config: StabilityConfig,
     client: BaseHttpClient,
@@ -111,7 +123,13 @@ pub struct StabilityProvider {
 }
 
 impl StabilityProvider {
-    pub fn new(config: StabilityConfig) -> Result<Self, ProviderError> {
+    pub fn new(mut config: StabilityConfig) -> Result<Self, ProviderError> {
+        validate_media_config(
+            PROVIDER,
+            &mut config.base,
+            MediaCredential::Bearer,
+            &["authorization", "accept"],
+        )?;
         config
             .validate()
             .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
@@ -359,6 +377,16 @@ impl StabilityProvider {
         } else {
             error
         }
+    }
+}
+
+impl std::fmt::Debug for StabilityProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StabilityProvider")
+            .field("provider", &PROVIDER)
+            .field("model_count", &self.models.len())
+            .finish()
     }
 }
 

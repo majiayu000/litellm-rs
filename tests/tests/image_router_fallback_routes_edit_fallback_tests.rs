@@ -154,6 +154,188 @@ async fn native_image_edit_precedes_wildcard_proxy_router_key() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
+async fn quality_image_edit_skips_native_and_uses_wildcard_proxy() {
+    let native = MockImageServer::start().await;
+    let proxy = MockImageServer::start().await;
+    let native_base = native.base_url.trim_end_matches("/v1");
+    let state = build_route_policy_test_state_with_pricing(
+        vec![
+            image_provider(
+                "stability-native",
+                "stability",
+                native_base,
+                vec!["inpaint".to_string()],
+            ),
+            image_provider(
+                "wild-proxy",
+                "openai_compatible",
+                &proxy.base_url,
+                Vec::new(),
+            ),
+        ],
+        Some(HashMap::from([(
+            "inpaint".to_string(),
+            flat_image_model_info_for_provider("stability", 0.06),
+        )])),
+    )
+    .await;
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.pricing.unpriced_model_policy =
+        litellm_rs::config::models::gateway::UnpricedModelPolicy::AllowUnpriced;
+    runtime_config
+        .gateway
+        .pricing
+        .unpriced_fallback_cost_per_1k_tokens = Some(0.01);
+    state.config.store(runtime_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-quality-wildcard";
+    let mut body = Vec::new();
+    add_text_field(&mut body, boundary, "model", "inpaint");
+    add_text_field(&mut body, boundary, "prompt", "make it sharper");
+    add_text_field(&mut body, boundary, "quality", "hd");
+    add_file_field(&mut body, boundary, "image", "input.png", b"png-bytes");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let response_body = test::read_body(response).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "wildcard edit failed: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+    assert!(native.paths().is_empty(), "native edit must be skipped");
+    assert_eq!(proxy.paths(), vec!["/v1/images/edits".to_string()]);
+    native.stop().await;
+    proxy.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn native_image_edit_rejects_duplicate_masks_before_provider_io() {
+    let native = MockImageServer::start().await;
+    let native_base = native.base_url.trim_end_matches("/v1");
+    let state = build_route_policy_test_state_with_pricing(
+        vec![image_provider(
+            "stability-native",
+            "stability",
+            native_base,
+            vec!["inpaint".to_string()],
+        )],
+        Some(HashMap::from([(
+            "inpaint".to_string(),
+            flat_image_model_info_for_provider("stability", 0.06),
+        )])),
+    )
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-duplicate-native-mask";
+    let mut body = Vec::new();
+    add_text_field(&mut body, boundary, "model", "inpaint");
+    add_text_field(&mut body, boundary, "prompt", "replace the sky");
+    add_file_field(&mut body, boundary, "image", "input.png", b"png-bytes");
+    add_file_field(&mut body, boundary, "mask", "one.png", b"mask-one");
+    add_file_field(&mut body, boundary, "mask", "two.png", b"mask-two");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        native.paths().is_empty(),
+        "duplicate masks must fail before I/O"
+    );
+    native.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn compatible_image_edit_preserves_duplicate_mask_parts() {
+    let proxy = MockImageServer::start().await;
+    let state = build_route_policy_test_state(vec![image_provider(
+        "wild-proxy",
+        "openai_compatible",
+        &proxy.base_url,
+        Vec::new(),
+    )])
+    .await;
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.pricing.unpriced_model_policy =
+        litellm_rs::config::models::gateway::UnpricedModelPolicy::AllowUnpriced;
+    runtime_config
+        .gateway
+        .pricing
+        .unpriced_fallback_cost_per_1k_tokens = Some(0.01);
+    state.config.store(runtime_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-duplicate-compatible-mask";
+    let mut body = Vec::new();
+    add_text_field(&mut body, boundary, "model", "custom-edit");
+    add_text_field(&mut body, boundary, "prompt", "replace the sky");
+    add_file_field(&mut body, boundary, "image", "input.png", b"png-bytes");
+    add_file_field(&mut body, boundary, "mask", "one.png", b"mask-one");
+    add_file_field(&mut body, boundary, "mask", "two.png", b"mask-two");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(proxy.paths(), vec!["/v1/images/edits".to_string()]);
+    proxy.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
 async fn retryable_native_image_edit_failure_continues_to_wildcard_proxy() {
     let native_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await

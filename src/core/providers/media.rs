@@ -12,6 +12,13 @@ use crate::core::providers::base::{
 };
 use crate::core::providers::unified_provider::ProviderError;
 
+#[path = "media_config.rs"]
+pub(crate) mod config_boundary;
+#[path = "media_factory.rs"]
+mod factory;
+#[cfg(feature = "providers-extended")]
+pub(crate) use factory::build_image_provider;
+
 /// Normalized terminal output from an asynchronous generation task.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationOutput {
@@ -208,74 +215,6 @@ fn next_delay(current: Duration, maximum: Duration) -> Duration {
     current.saturating_mul(2).min(maximum)
 }
 
-#[cfg(feature = "providers-extended")]
-pub(crate) fn build_image_provider(
-    provider_type: crate::core::providers::ProviderType,
-    mut config: serde_json::Value,
-) -> Result<crate::core::providers::Provider, ProviderError> {
-    use crate::core::providers::{Provider, ProviderType, bfl, stability};
-
-    normalize_native_image_endpoint(&mut config);
-    match provider_type {
-        ProviderType::Stability => {
-            let mut typed: stability::StabilityConfig = serde_json::from_value(config.clone())
-                .map_err(|error| ProviderError::configuration("stability", error.to_string()))?;
-            merge_custom_headers(&mut typed.base.headers, &config);
-            Ok(Provider::Stability(stability::StabilityProvider::new(
-                typed,
-            )?))
-        }
-        ProviderType::BlackForestLabs => {
-            let mut typed: bfl::BflConfig =
-                serde_json::from_value(config.clone()).map_err(|error| {
-                    ProviderError::configuration("black_forest_labs", error.to_string())
-                })?;
-            merge_custom_headers(&mut typed.base.headers, &config);
-            Ok(Provider::BlackForestLabs(Box::new(bfl::BflProvider::new(
-                typed,
-            )?)))
-        }
-        _ => Err(ProviderError::configuration(
-            "media",
-            "unsupported native image provider type",
-        )),
-    }
-}
-
-#[cfg(feature = "providers-extended")]
-fn normalize_native_image_endpoint(config: &mut serde_json::Value) {
-    let Some(config) = config.as_object_mut() else {
-        return;
-    };
-    let endpoint = config
-        .get("base_url")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| config.get("api_base").and_then(serde_json::Value::as_str))
-        .map(str::to_string);
-    if let Some(endpoint) = endpoint {
-        config.insert("api_base".to_string(), endpoint.into());
-    }
-    config.remove("base_url");
-}
-
-#[cfg(feature = "providers-extended")]
-fn merge_custom_headers(
-    headers: &mut std::collections::HashMap<String, String>,
-    config: &serde_json::Value,
-) {
-    let Some(custom_headers) = config
-        .get("custom_headers")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return;
-    };
-    for (key, value) in custom_headers {
-        if let Some(value) = value.as_str() {
-            headers.insert(key.clone(), value.to_string());
-        }
-    }
-}
-
 /// Narrow Runway video contract, separately gated because the gateway has no video route.
 #[cfg(feature = "runway-media")]
 pub mod runway {
@@ -300,7 +239,7 @@ pub mod runway {
     const DEFAULT_API_BASE: &str = "https://api.dev.runwayml.com/v1";
     const API_VERSION: &str = "2024-11-06";
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct RunwayConfig {
         #[serde(flatten)]
         pub base: BaseConfig,
@@ -348,6 +287,16 @@ pub mod runway {
                 config.base.api_base = env.api_base;
             }
             config
+        }
+    }
+
+    impl std::fmt::Debug for RunwayConfig {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("RunwayConfig")
+                .field("endpoint_access", &self.base.endpoint_access)
+                .field("has_api_key", &self.base.api_key.is_some())
+                .field("custom_header_count", &self.base.headers.len())
+                .finish()
         }
     }
 
@@ -432,7 +381,7 @@ pub mod runway {
         pub failure: Option<String>,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     pub struct RunwayProvider {
         config: RunwayConfig,
         client: BaseHttpClient,
@@ -440,7 +389,13 @@ pub mod runway {
     }
 
     impl RunwayProvider {
-        pub fn new(config: RunwayConfig) -> Result<Self, ProviderError> {
+        pub fn new(mut config: RunwayConfig) -> Result<Self, ProviderError> {
+            super::config_boundary::validate_media_config(
+                PROVIDER,
+                &mut config.base,
+                super::config_boundary::MediaCredential::Bearer,
+                &["authorization", "x-runway-version"],
+            )?;
             config
                 .validate()
                 .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
@@ -482,7 +437,7 @@ pub mod runway {
                 .send()
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
-            self.parse_task_response(response).await
+            self.parse_task_response(task_id, response).await
         }
 
         pub async fn cancel_task(&self, task_id: &str) -> Result<(), ProviderError> {
@@ -512,12 +467,13 @@ pub mod runway {
             cancellation: &CancellationToken,
         ) -> Result<GenerationOutput, ProviderError> {
             let api_key = self.api_key()?;
+            let expected_id = task_id.to_string();
             self.lifecycle
                 .wait_for_json(
                     self.task_url(task_id)?,
                     self.request_headers(api_key),
                     cancellation,
-                    decode_task_poll,
+                    move |value| decode_task_poll(value, &expected_id),
                 )
                 .await
         }
@@ -561,6 +517,7 @@ pub mod runway {
 
         async fn parse_task_response(
             &self,
+            expected_id: &str,
             response: reqwest::Response,
         ) -> Result<RunwayTask, ProviderError> {
             let (status, body) = self.read_response_body(response).await?;
@@ -577,7 +534,7 @@ pub mod runway {
                     format!("invalid Runway task response: {error}"),
                 )
             })?;
-            decode_task(&value)
+            decode_task(&value, expected_id)
         }
 
         async fn read_response_body(
@@ -645,11 +602,7 @@ pub mod runway {
         }
 
         fn task_url(&self, task_id: &str) -> Result<String, ProviderError> {
-            if task_id.is_empty()
-                || !task_id.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
-                })
-            {
+            if !valid_task_id(task_id) {
                 return Err(ProviderError::invalid_request(
                     PROVIDER,
                     "invalid Runway task ID",
@@ -659,10 +612,29 @@ pub mod runway {
         }
     }
 
-    fn decode_task(value: &Value) -> Result<RunwayTask, ProviderError> {
+    impl std::fmt::Debug for RunwayProvider {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("RunwayProvider").finish_non_exhaustive()
+        }
+    }
+
+    fn valid_task_id(id: &str) -> bool {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    }
+
+    fn decode_task(value: &Value, expected_id: &str) -> Result<RunwayTask, ProviderError> {
         let id = value["id"]
             .as_str()
             .ok_or_else(|| ProviderError::response_parsing(PROVIDER, "Runway task omitted id"))?;
+        if !valid_task_id(id) || id != expected_id {
+            return Err(ProviderError::response_parsing(
+                PROVIDER,
+                "Runway task response contained an invalid or mismatched id",
+            ));
+        }
         let status = match value["status"].as_str() {
             Some("PENDING" | "THROTTLED") => RunwayTaskStatus::Pending,
             Some("RUNNING") => RunwayTaskStatus::Running,
@@ -721,8 +693,8 @@ pub mod runway {
         })
     }
 
-    fn decode_task_poll(value: Value) -> Result<GenerationPoll, ProviderError> {
-        let task = decode_task(&value)?;
+    fn decode_task_poll(value: Value, expected_id: &str) -> Result<GenerationPoll, ProviderError> {
+        let task = decode_task(&value, expected_id)?;
         match task.status {
             RunwayTaskStatus::Pending | RunwayTaskStatus::Running => Ok(GenerationPoll::Pending),
             RunwayTaskStatus::Succeeded => Ok(GenerationPoll::Succeeded(GenerationOutput {

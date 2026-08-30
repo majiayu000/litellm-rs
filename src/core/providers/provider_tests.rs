@@ -391,3 +391,114 @@ async fn credentialed_image_edits_do_not_follow_cross_origin_redirects() {
         "OpenAI-compatible secret was replayed"
     );
 }
+
+#[tokio::test]
+async fn typed_image_edits_reject_successes_without_usable_images() {
+    let invalid_bodies = [
+        r#"{"created":1,"data":[]}"#,
+        r#"{"created":1,"data":[{}]}"#,
+        r#"{"created":1,"data":[{"url":"  ","b64_json":"\t"}]}"#,
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("invalid response listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener address should exist");
+    let server = tokio::spawn(async move {
+        for body in invalid_bodies.into_iter().cycle().take(6) {
+            let (mut socket, _) = listener.accept().await.expect("edit request should arrive");
+            let _request = read_full_request(&mut socket).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("invalid response should write");
+        }
+    });
+
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test".to_string());
+    openai_config.base.api_base = Some(format!("http://{address}/v1"));
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize"),
+    );
+    let mut compatible_config = openai_like::OpenAILikeConfig::with_api_key(
+        format!("http://{address}/v1"),
+        "compatible-placeholder",
+    );
+    compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let compatible = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
+            .await
+            .expect("OpenAI-compatible provider should initialize"),
+    );
+
+    for provider in [&openai, &compatible] {
+        for _ in &invalid_bodies {
+            let error = provider
+                .edit_image(image_edit_request(), RequestContext::default())
+                .await
+                .expect_err("empty image edit success must be rejected");
+            assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+        }
+    }
+    server.await.expect("invalid response server should finish");
+}
+
+#[tokio::test]
+async fn typed_image_edits_reject_invalid_final_headers_before_io() {
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test\nsecret".to_string());
+    openai_config.base.api_base = Some("http://127.0.0.1:1/v1".to_string());
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize before adapter validation"),
+    );
+
+    let mut invalid_name = openai_like::OpenAILikeConfig::with_api_key(
+        "http://127.0.0.1:1/v1",
+        "compatible-placeholder",
+    );
+    invalid_name.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    invalid_name
+        .custom_headers
+        .insert("bad\nname".to_string(), "value".to_string());
+    let invalid_name = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(invalid_name)
+            .await
+            .expect("compatible provider should initialize before adapter validation"),
+    );
+
+    let mut invalid_value = openai_like::OpenAILikeConfig::with_api_key(
+        "http://127.0.0.1:1/v1",
+        "compatible-placeholder",
+    );
+    invalid_value.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    invalid_value
+        .custom_headers
+        .insert("x-route".to_string(), "bad\r\nvalue".to_string());
+    let invalid_value = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(invalid_value)
+            .await
+            .expect("compatible provider should initialize before adapter validation"),
+    );
+
+    for provider in [&openai, &invalid_name, &invalid_value] {
+        let error = provider
+            .edit_image(image_edit_request(), RequestContext::default())
+            .await
+            .expect_err("invalid final headers must fail before network access");
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+    }
+}
