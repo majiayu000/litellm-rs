@@ -14,6 +14,7 @@ use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::model_catalog_authority::{
     CatalogAuthority, CatalogResolution,
 };
+use crate::core::types::model_id::ModelIdRef;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,8 +44,35 @@ impl GatewayIdentityAuthority {
         wire_model: &str,
         mapping: Option<&ModelIdentityMapping>,
     ) -> Result<(), RouterError> {
-        let Some(identity_provider) = identity_provider(provider) else {
-            return Ok(());
+        let (identity_provider, identity_model) = match provider {
+            Provider::OpenAILike(openai_like) if openai_like.config().provider_name == "xai" => {
+                let configured = openai_like.config().get_effective_model(wire_model);
+                let effective = crate::core::providers::openai_like::models::xai_native_wire_model(
+                    "xai",
+                    openai_like.config().model_prefix.is_some(),
+                    configured,
+                );
+                if mapping.is_none()
+                    && !matches!(
+                        self.catalog.resolve_model("xai", &effective),
+                        CatalogResolution::Callable(_)
+                    )
+                {
+                    return Ok(());
+                }
+                ("xai", effective)
+            }
+            Provider::OpenAILike(_)
+                if mapping.is_some() || ModelIdRef::parse(wire_model).provider() == Some("xai") =>
+            {
+                ("openai_compatible", wire_model.to_string())
+            }
+            _ => {
+                let Some(identity_provider) = identity_provider(provider) else {
+                    return Ok(());
+                };
+                (identity_provider, wire_model.to_string())
+            }
         };
         debug_assert!(canonical_identity_provider(identity_provider).is_some());
         let legacy_target = provider
@@ -53,7 +81,7 @@ impl GatewayIdentityAuthority {
         let identity = validate_deployment_identity(
             provider_name,
             identity_provider,
-            wire_model,
+            &identity_model,
             mapping,
             legacy_target.as_deref(),
             &self.catalog,

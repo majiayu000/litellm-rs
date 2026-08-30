@@ -48,21 +48,15 @@ pub(crate) static OPENAI_COMPATIBLE_PROXY_CAPABILITIES: &[ProviderCapability] = 
     ProviderCapability::FunctionCalling,
 ];
 
-/// OpenAI-Like Provider implementation
-///
-/// Connects to any OpenAI-compatible API endpoint.
 #[derive(Debug, Clone)]
 pub struct OpenAILikeProvider {
-    /// Connection pool manager
     pool_manager: Arc<GlobalPoolManager>,
-    /// Provider configuration
     config: OpenAILikeConfig,
-    /// Model registry
     model_registry: &'static OpenAILikeModelRegistry,
-    /// Provider name returned by the LLM provider trait.
     provider_name: String,
-    /// Catalog or instance capability profile, validated against executable methods.
     capabilities: &'static [ProviderCapability],
+    pub(crate) model_identity:
+        Option<crate::core::providers::model_identity::DeploymentProviderBinding>,
 }
 
 impl OpenAILikeProvider {
@@ -179,6 +173,7 @@ impl OpenAILikeProvider {
             model_registry,
             provider_name,
             capabilities,
+            model_identity: None,
         })
     }
 
@@ -213,13 +208,11 @@ impl OpenAILikeProvider {
         Ok(())
     }
 
-    /// Create provider with just an API base URL (no API key required)
     pub async fn with_api_base(api_base: impl Into<String>) -> Result<Self, OpenAILikeError> {
         let config = OpenAILikeConfig::new(api_base).with_skip_api_key(true);
         Self::new(config).await
     }
 
-    /// Create provider with API base and key
     pub async fn with_api_key(
         api_base: impl Into<String>,
         api_key: impl Into<String>,
@@ -228,12 +221,10 @@ impl OpenAILikeProvider {
         Self::new(config).await
     }
 
-    /// Generate headers for API requests
     fn get_request_headers(&self) -> Vec<HeaderPair> {
         build_request_headers(&self.config)
     }
 
-    /// Execute chat completion request
     async fn execute_chat_completion(
         &self,
         request: ChatRequest,
@@ -272,7 +263,6 @@ impl OpenAILikeProvider {
         self.transform_chat_response(response_json)
     }
 
-    /// Execute streaming chat completion
     async fn execute_chat_completion_stream(
         &self,
         request: ChatRequest,
@@ -304,9 +294,25 @@ impl OpenAILikeProvider {
         )))
     }
 
-    /// Transform ChatRequest to OpenAI API format
     fn transform_chat_request(&self, request: ChatRequest) -> Result<Value, OpenAILikeError> {
-        let model = self.config.get_effective_model(&request.model);
+        let model = self
+            .model_identity
+            .as_ref()
+            .map(|binding| binding.identity().wire_model().to_string())
+            .unwrap_or_else(|| {
+                super::models::xai_native_wire_model(
+                    &self.provider_name,
+                    self.config.model_prefix.is_some(),
+                    self.config.get_effective_model(&request.model),
+                )
+            });
+        let xai_model = self
+            .model_identity
+            .as_ref()
+            .filter(|binding| binding.identity().capability_catalog_provider() == Some("xai"))
+            .and_then(|binding| binding.identity().capability_catalog_model())
+            .or_else(|| (self.provider_name == "xai").then_some(model.as_str()));
+        let xai_model = xai_model.map(str::to_string);
 
         let mut openai_request = serde_json::json!({
             "model": model,
@@ -367,7 +373,13 @@ impl OpenAILikeProvider {
                 .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         }
 
-        let reasoning_effort = request.reasoning_effort;
+        let mut extra_params = request.extra_params;
+        let reasoning_effort = super::models::take_xai_reasoning_effort(
+            xai_model.is_some(),
+            request.reasoning_effort,
+            &mut extra_params,
+        )?;
+        let has_reasoning_effort = reasoning_effort.is_some();
 
         let openrouter_thinking_params = if self.config.provider_name == "openrouter" {
             if let Some(thinking_config) = &request.thinking {
@@ -408,11 +420,11 @@ impl OpenAILikeProvider {
         insert_optional_param!(function_call);
 
         if let Some(effort) = reasoning_effort {
-            self.insert_reasoning_effort(&mut openai_request, &model, effort)?;
+            self.insert_reasoning_effort(&mut openai_request, xai_model.as_deref(), effort)?;
         }
 
         if let Some(obj) = openai_request.as_object_mut() {
-            for (key, value) in request.extra_params {
+            for (key, value) in extra_params {
                 obj.entry(key).or_insert(value);
             }
 
@@ -435,6 +447,10 @@ impl OpenAILikeProvider {
             }
         }
 
+        if xai_model.is_some() && has_reasoning_effort {
+            super::models::reject_xai_reasoning_incompatible_params(&openai_request)?;
+        }
+
         crate::core::providers::registry::catalog_policy::filter_request(
             &self.provider_name,
             &mut openai_request,
@@ -446,15 +462,21 @@ impl OpenAILikeProvider {
     fn insert_reasoning_effort(
         &self,
         request: &mut Value,
-        model: &str,
+        xai_model: Option<&str>,
         effort: String,
     ) -> Result<(), OpenAILikeError> {
-        if self.config.provider_name != "xai" {
+        let Some(model) = xai_model else {
             request["reasoning_effort"] = Value::String(effort);
             return Ok(());
+        };
+        if super::models::xai_reasoning_efforts_for_model(model).is_some()
+            && !super::models::xai_accepts_reasoning_effort(model, &effort)
+        {
+            return Err(OpenAILikeError::configuration(
+                PROVIDER_NAME,
+                format!("unsupported reasoning_effort '{effort}' for xAI model {model}"),
+            ));
         }
-
-        Self::reject_xai_reasoning_incompatible_params(request)?;
 
         match super::models::xai_reasoning_param_for_model(model) {
             Some(super::models::XaiReasoningParam::TopLevelReasoningEffort) => {
@@ -472,25 +494,6 @@ impl OpenAILikeProvider {
         }
     }
 
-    fn reject_xai_reasoning_incompatible_params(request: &Value) -> Result<(), OpenAILikeError> {
-        let incompatible_params = ["stop", "presence_penalty", "frequency_penalty"]
-            .into_iter()
-            .filter(|field| request.get(*field).is_some())
-            .collect::<Vec<_>>();
-
-        if incompatible_params.is_empty() {
-            return Ok(());
-        }
-
-        Err(OpenAILikeError::configuration(
-            PROVIDER_NAME,
-            format!(
-                "xAI reasoning_effort is incompatible with {}",
-                incompatible_params.join(", ")
-            ),
-        ))
-    }
-
     fn transform_chat_response(&self, response: Value) -> Result<ChatResponse, OpenAILikeError> {
         let resp: OpenAIChatResponse = serde_json::from_value(response)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
@@ -498,7 +501,6 @@ impl OpenAILikeProvider {
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))
     }
 
-    /// Map HTTP error response to OpenAILikeError
     fn map_error_response(&self, status: u16, body: &str) -> OpenAILikeError {
         if let Some(error) =
             crate::core::providers::registry::catalog_policy::catalog_error_response(
@@ -554,7 +556,6 @@ impl OpenAILikeProvider {
         }
     }
 
-    /// Get model information
     pub fn get_model_info(&self, model_id: &str) -> ModelInfo {
         if let Some(info) = crate::core::providers::registry::catalog_policy::catalog_model_info(
             &self.provider_name,
@@ -563,14 +564,13 @@ impl OpenAILikeProvider {
             return info;
         }
         let mut info = self.model_registry.get_model_info(model_id);
-        if self.provider_name == "amazon_nova" && super::models::is_xai_priced_model(model_id) {
+        if self.provider_name != "xai" && super::models::is_xai_priced_model(model_id) {
             info.input_cost_per_1k_tokens = None;
             info.output_cost_per_1k_tokens = None;
         }
         info
     }
 
-    /// Get the provider configuration
     pub fn config(&self) -> &OpenAILikeConfig {
         &self.config
     }
@@ -657,6 +657,11 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
+        if self.provider_name == "xai" {
+            return self
+                .model_registry
+                .is_known_model(&self.config.get_effective_model(model));
+        }
         crate::core::providers::registry::catalog_policy::catalog_provider_supports_model(
             &self.provider_name,
             model,
@@ -704,10 +709,16 @@ impl LLMProvider for OpenAILikeProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        if self.config.provider_name != "xai" && super::models::is_xai_priced_model(model) {
-            return Ok(0.0);
+        if let Some(result) =
+            crate::core::providers::model_identity::calculate_managed_provider_cost(
+                &crate::core::providers::Provider::OpenAILike(self.clone()),
+                model,
+                input_tokens,
+                output_tokens,
+            )
+        {
+            return result;
         }
-
         let model_info = self.get_model_info(model);
         if self.config.provider_name == "meta_llama"
             && crate::core::providers::registry::catalog_policy::catalog_model_info(

@@ -3,7 +3,10 @@
 //! Dynamic model support - accepts any model name and passes it through
 
 use crate::core::types::{model::ModelInfo, model::ProviderCapability};
+use serde_json::Value;
 use std::collections::HashMap;
+
+use super::error::{OpenAILikeError, PROVIDER_NAME};
 
 const XAI_GROK_43_INPUT_COST_PER_1K: f64 = 0.00125;
 const XAI_GROK_43_OUTPUT_COST_PER_1K: f64 = 0.0025;
@@ -11,6 +14,7 @@ const XAI_GROK_43_CONTEXT_LENGTH: u32 = 1_000_000;
 const XAI_GROK_BUILD_INPUT_COST_PER_1K: f64 = 0.001;
 const XAI_GROK_BUILD_OUTPUT_COST_PER_1K: f64 = 0.002;
 const XAI_GROK_BUILD_CONTEXT_LENGTH: u32 = 256_000;
+const XAI_CURRENT_CONTEXT_LENGTH: u32 = 500_000;
 
 const XAI_GROK_43_MODEL_IDS: &[&str] = &[
     "grok-4.3",
@@ -88,6 +92,10 @@ const XAI_GROK_BUILD_MODEL_IDS: &[&str] = &[
     "grok-code-fast",
     "grok-code-fast-1-0825",
 ];
+const XAI_GROK_45_MODEL_IDS: &[&str] = &["grok-4.5", "grok-4.5-latest", "grok-build-latest"];
+const XAI_GROK_46_MODEL_IDS: &[&str] = &["grok-4.6"];
+const XAI_GROK_45_REASONING_EFFORTS: &[&str] = &["low", "medium", "high"];
+const XAI_GROK_46_REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XaiReasoningParam {
@@ -184,6 +192,8 @@ impl OpenAILikeModelRegistry {
             XAI_GROK_BUILD_INPUT_COST_PER_1K,
             XAI_GROK_BUILD_OUTPUT_COST_PER_1K,
         );
+        registry.register_current_xai_models(XAI_GROK_45_MODEL_IDS);
+        registry.register_current_xai_models(XAI_GROK_46_MODEL_IDS);
         registry
     }
 
@@ -225,6 +235,21 @@ impl OpenAILikeModelRegistry {
         }
     }
 
+    fn register_current_xai_models(&mut self, model_ids: &[&str]) {
+        for model_id in model_ids {
+            self.register_model(OpenAILikeModelConfig {
+                id: (*model_id).to_string(),
+                max_context_length: XAI_CURRENT_CONTEXT_LENGTH,
+                max_output_length: None,
+                supports_streaming: true,
+                supports_tools: true,
+                supports_multimodal: true,
+                input_cost_per_1k: None,
+                output_cost_per_1k: None,
+            });
+        }
+    }
+
     fn known_config_for_model(&self, model_id: &str) -> Option<&OpenAILikeModelConfig> {
         self.known_models.get(model_id).or_else(|| {
             model_id
@@ -254,7 +279,15 @@ impl OpenAILikeModelRegistry {
                 currency: "USD".to_string(),
                 created_at: None,
                 updated_at: None,
-                metadata: HashMap::new(),
+                metadata: xai_reasoning_efforts_for_model(&config.id)
+                    .map(|efforts| {
+                        HashMap::from([
+                            ("supports_structured_outputs".to_string(), Value::Bool(true)),
+                            ("supports_batch".to_string(), Value::Bool(false)),
+                            ("reasoning_efforts".to_string(), serde_json::json!(efforts)),
+                        ])
+                    })
+                    .unwrap_or_default(),
             }
         } else {
             // Return default info for unknown models
@@ -329,12 +362,97 @@ impl OpenAILikeModelRegistry {
 pub fn xai_reasoning_param_for_model(model_id: &str) -> Option<XaiReasoningParam> {
     let model_id = model_id.strip_prefix("xai/").unwrap_or(model_id);
 
-    if is_xai_grok_43_reasoning_effort_model(model_id) {
+    if is_xai_grok_43_reasoning_effort_model(model_id)
+        || xai_reasoning_efforts_for_model(model_id).is_some()
+    {
         Some(XaiReasoningParam::TopLevelReasoningEffort)
     } else if is_xai_grok_420_multi_agent_model(model_id) {
         Some(XaiReasoningParam::NestedReasoningEffort)
     } else {
         None
+    }
+}
+
+pub fn xai_native_wire_model(provider_name: &str, has_prefix: bool, mut model: String) -> String {
+    if provider_name == "xai" && !has_prefix && model.starts_with("xai/") {
+        model.drain(.."xai/".len());
+    }
+    model
+}
+
+pub fn take_xai_reasoning_effort(
+    is_xai_model: bool,
+    typed: Option<String>,
+    extra_params: &mut HashMap<String, Value>,
+) -> Result<Option<String>, OpenAILikeError> {
+    if !is_xai_model {
+        return Ok(typed);
+    }
+    match (typed, extra_params.remove("reasoning_effort")) {
+        (Some(typed), Some(Value::String(extra))) if typed == extra => Ok(Some(typed)),
+        (Some(typed), Some(Value::String(extra))) => Err(OpenAILikeError::configuration(
+            PROVIDER_NAME,
+            format!("conflicting xAI reasoning_effort values: '{typed}' and '{extra}'"),
+        )),
+        (_, Some(value)) if !value.is_string() => Err(OpenAILikeError::configuration(
+            PROVIDER_NAME,
+            "xAI reasoning_effort must be a string",
+        )),
+        (None, Some(Value::String(effort))) => Ok(Some(effort)),
+        (Some(effort), None) => Ok(Some(effort)),
+        (None, None) => Ok(None),
+        _ => unreachable!("non-string values are rejected above"),
+    }
+}
+
+pub fn reject_xai_reasoning_incompatible_params(request: &Value) -> Result<(), OpenAILikeError> {
+    let fields = ["stop", "presence_penalty", "frequency_penalty"]
+        .into_iter()
+        .filter(|field| request.get(*field).is_some())
+        .collect::<Vec<_>>();
+    if fields.is_empty() {
+        return Ok(());
+    }
+    Err(OpenAILikeError::configuration(
+        PROVIDER_NAME,
+        format!(
+            "xAI reasoning_effort is incompatible with {}",
+            fields.join(", ")
+        ),
+    ))
+}
+
+pub fn xai_reasoning_efforts_for_model(model_id: &str) -> Option<&'static [&'static str]> {
+    let model_id = model_id.strip_prefix("xai/").unwrap_or(model_id);
+    if XAI_GROK_45_MODEL_IDS.contains(&model_id) {
+        Some(XAI_GROK_45_REASONING_EFFORTS)
+    } else if XAI_GROK_46_MODEL_IDS.contains(&model_id) {
+        Some(XAI_GROK_46_REASONING_EFFORTS)
+    } else {
+        None
+    }
+}
+
+pub fn xai_accepts_reasoning_effort(model_id: &str, effort: &str) -> bool {
+    xai_reasoning_efforts_for_model(model_id).is_some_and(|allowed| {
+        allowed.contains(&effort)
+            || (effort == "xhigh"
+                && XAI_GROK_45_MODEL_IDS
+                    .contains(&model_id.strip_prefix("xai/").unwrap_or(model_id)))
+    })
+}
+
+pub fn is_xai_current_model(model_id: &str) -> bool {
+    let model_id = model_id.strip_prefix("xai/").unwrap_or(model_id);
+    XAI_GROK_45_MODEL_IDS.contains(&model_id) || XAI_GROK_46_MODEL_IDS.contains(&model_id)
+}
+
+pub fn xai_current_pricing_model<'a>(pricing_provider: &str, model_id: &'a str) -> &'a str {
+    let model_id = model_id.strip_prefix("xai/").unwrap_or(model_id);
+    if pricing_provider == "xai" && model_id == "grok-build-latest" {
+        "grok-4.5"
+    } else {
+        model_id
     }
 }
 
@@ -507,5 +625,36 @@ mod tests {
         assert!(is_xai_priced_model("xai/grok-4.3"));
         assert!(is_xai_priced_model("grok-build-0.1"));
         assert!(!is_xai_priced_model("unknown-grok"));
+    }
+
+    #[test]
+    fn current_xai_catalog_is_exact_and_uses_official_metadata() {
+        let registry = get_openai_like_registry();
+        for model in [
+            "grok-4.5",
+            "grok-4.5-latest",
+            "grok-build-latest",
+            "grok-4.6",
+        ] {
+            let info = registry.get_model_info(model);
+            assert!(registry.is_known_model(model), "{model}");
+            assert_eq!(info.max_context_length, 500_000);
+            assert_eq!(info.max_output_length, None);
+            assert!(info.supports_multimodal && info.supports_tools);
+            assert_eq!(info.metadata["supports_structured_outputs"], true);
+            assert_eq!(info.metadata["supports_batch"], false);
+            assert_eq!(info.input_cost_per_1k_tokens, None);
+            assert_eq!(info.output_cost_per_1k_tokens, None);
+        }
+        for lookalike in [
+            "grok-4.6-latest",
+            "grok-4.6-2026-08-12",
+            "grok-4.60",
+            "grok-4.5-preview",
+            "xaii/grok-4.6",
+        ] {
+            assert!(!registry.is_known_model(lookalike), "{lookalike}");
+            assert_eq!(xai_reasoning_param_for_model(lookalike), None);
+        }
     }
 }
