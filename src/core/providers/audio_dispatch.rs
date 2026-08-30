@@ -529,11 +529,18 @@ impl LLMProvider for ElevenLabsProvider {
         let parsed: ElevenLabsTranscription = response.json().await.map_err(|_| {
             ProviderError::response_parsing("elevenlabs", "invalid transcription response")
         })?;
+        let duration = parsed.words.as_ref().and_then(|words| {
+            words
+                .iter()
+                .map(|word| word.end)
+                .filter(|end| end.is_finite() && *end >= 0.0)
+                .max_by(f64::total_cmp)
+        });
         Ok(TranscriptionResponse {
             text: parsed.text,
             task: Some("transcribe".to_string()),
             language: parsed.language_code.or(request.language),
-            duration: None,
+            duration,
             words: parsed.words.map(|words| {
                 words
                     .into_iter()

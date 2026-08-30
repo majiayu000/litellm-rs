@@ -250,6 +250,7 @@ mod tests {
             .expect("ElevenLabs transcription should succeed");
         assert_eq!(transcript.text, "elevenlabs transcript");
         assert_eq!(transcript.language.as_deref(), Some("en"));
+        assert_eq!(transcript.duration, Some(0.5));
 
         let speech = provider
             .text_to_speech(
