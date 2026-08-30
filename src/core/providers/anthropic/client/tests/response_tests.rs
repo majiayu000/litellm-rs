@@ -1,6 +1,6 @@
 use super::*;
-use crate::core::types::chat::ChatRequest;
-use crate::core::types::thinking::{AnthropicThinkingBlock, AnthropicThinkingContent};
+use crate::core::providers::ChatMessageContinuation;
+use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
 
 // ==================== Chat Response Transformation Tests ====================
 
@@ -32,6 +32,195 @@ fn test_transform_chat_response_text() {
     } else {
         panic!("Expected text content");
     }
+}
+
+#[test]
+fn response_parser_returns_validated_secret_safe_sidecar() {
+    let config = AnthropicConfig::new_test("test-key");
+    let client = AnthropicClient::new(config).unwrap();
+    let response = json!({
+        "id": "msg_123",
+        "model": "claude-opus-5",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "opaque-signature"},
+            {"type": "redacted_thinking", "data": "opaque-redacted"},
+            {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}
+        ],
+        "stop_reason": "tool_use"
+    });
+
+    let result = client
+        .transform_chat_response_with_continuation(response, &std::collections::HashMap::new())
+        .expect("valid continuation response");
+    let extension = &result.choice_continuations()[0];
+    let blocks = extension
+        .anthropic_thinking()
+        .expect("thinking sidecar")
+        .blocks();
+    assert!(matches!(blocks[0], AnthropicThinkingBlock::Thinking { .. }));
+    assert!(matches!(
+        blocks[1],
+        AnthropicThinkingBlock::RedactedThinking { .. }
+    ));
+    let rendered = format!("{result:?}");
+    assert!(!rendered.contains("opaque-signature"));
+    assert!(!rendered.contains("opaque-redacted"));
+
+    let invalid = json!({
+        "id": "msg_bad",
+        "model": "claude-opus-5",
+        "content": [{"type": "thinking", "thinking": "plan"}]
+    });
+    let error = client
+        .transform_chat_response_with_continuation(invalid, &std::collections::HashMap::new())
+        .expect_err("missing signature must fail");
+    assert!(error.to_string().contains("choice 0 block 0"));
+}
+
+#[test]
+fn response_replay_preserves_multiple_thinking_tool_interleavings() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let cases = [
+        vec![
+            json!({"type": "thinking", "thinking": "plan-a", "signature": "sig-a"}),
+            json!({"type": "tool_use", "id": "tool-a", "name": "lookup_a", "input": {"a": 1}}),
+            json!({"type": "redacted_thinking", "data": "redacted-b"}),
+            json!({"type": "tool_use", "id": "tool-b", "name": "lookup_b", "input": {"b": 2}}),
+            json!({"type": "thinking", "thinking": "plan-c", "signature": "sig-c"}),
+        ],
+        vec![
+            json!({"type": "thinking", "thinking": "first", "signature": "sig-first"}),
+            json!({"type": "tool_use", "id": "tool-first", "name": "lookup_first", "input": {}}),
+            json!({"type": "thinking", "thinking": "second", "signature": "sig-second"}),
+            json!({"type": "tool_use", "id": "tool-second", "name": "lookup_second", "input": {}}),
+        ],
+        vec![
+            json!({"type": "thinking", "thinking": "before", "signature": "sig-before"}),
+            json!({"type": "text", "text": "visible 世界"}),
+            json!({"type": "tool_use", "id": "tool-middle", "name": "lookup_middle", "input": {}}),
+            json!({"type": "refusal", "refusal": "refused"}),
+            json!({"type": "redacted_thinking", "data": "redacted-after"}),
+            json!({"type": "text", "text": "tail"}),
+        ],
+    ];
+
+    for original_content in cases {
+        let response = json!({
+            "id": "msg_interleaved",
+            "model": "claude-sonnet-4-20250514",
+            "content": original_content,
+            "stop_reason": "tool_use"
+        });
+        let parsed = client
+            .transform_chat_response_with_continuation(response, &std::collections::HashMap::new())
+            .expect("interleaved response should parse");
+        let (response, extensions) = parsed.into_parts();
+        let serialized_extensions = serde_json::to_value(&extensions).unwrap();
+        let serialized_text = serialized_extensions.to_string();
+        for payload in ["visible 世界", "refused", "tool-middle", "tail"] {
+            assert!(
+                !serialized_text.contains(payload),
+                "ordering metadata must remain index/span-only: {serialized_text}"
+            );
+        }
+        let extensions: Vec<ChatMessageContinuation> =
+            serde_json::from_value(serialized_extensions).unwrap();
+        let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+        request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
+        request.messages.push(response.choices[0].message.clone());
+
+        let replay = client
+            .transform_chat_request_with_extensions(&request, &extensions)
+            .expect("typed continuation should replay");
+        assert_eq!(replay["messages"][0]["content"], json!(original_content));
+    }
+}
+
+#[test]
+fn ordered_continuation_sidecars_are_isolated_per_message() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let originals = [
+        vec![
+            json!({"type": "thinking", "thinking": "a", "signature": "sig-a"}),
+            json!({"type": "text", "text": "first"}),
+            json!({"type": "tool_use", "id": "tool-a", "name": "lookup_a", "input": {}}),
+        ],
+        vec![
+            json!({"type": "tool_use", "id": "tool-b", "name": "lookup_b", "input": {}}),
+            json!({"type": "text", "text": "second"}),
+            json!({"type": "thinking", "thinking": "b", "signature": "sig-b"}),
+        ],
+    ];
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
+    let mut extensions = Vec::new();
+
+    for (index, original) in originals.iter().enumerate() {
+        let parsed = client
+            .transform_chat_response_with_continuation(
+                json!({
+                    "id": format!("msg-{index}"),
+                    "model": "claude-sonnet-4-20250514",
+                    "content": original,
+                    "stop_reason": "tool_use"
+                }),
+                &std::collections::HashMap::new(),
+            )
+            .expect("isolated continuation response should parse");
+        let (response, choice_extensions) = parsed.into_parts();
+        let mut choice_extensions: Vec<ChatMessageContinuation> =
+            serde_json::from_value(serde_json::to_value(choice_extensions).unwrap()).unwrap();
+        request.messages.push(response.choices[0].message.clone());
+        extensions.push(choice_extensions.remove(0));
+    }
+
+    let replay = client
+        .transform_chat_request_with_extensions(&request, &extensions)
+        .expect("each message must use only its own ordering sidecar");
+    assert_eq!(replay["messages"][0]["content"], json!(originals[0]));
+    assert_eq!(replay["messages"][1]["content"], json!(originals[1]));
+}
+
+#[test]
+fn ordered_continuation_metadata_fails_closed_on_span_drift() {
+    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
+    let parsed = client
+        .transform_chat_response_with_continuation(
+            json!({
+                "id": "msg-span",
+                "model": "claude-sonnet-4-20250514",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": "世界"}
+                ]
+            }),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+    let (response, extensions) = parsed.into_parts();
+    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
+    request.messages.push(response.choices[0].message.clone());
+    let serialized = serde_json::to_value(extensions).unwrap();
+
+    let mut invalid_utf8 = serialized.clone();
+    invalid_utf8[0]["anthropic_block_order"][1]["end"] = json!(1);
+    let extensions: Vec<ChatMessageContinuation> = serde_json::from_value(invalid_utf8).unwrap();
+    let error = client
+        .transform_chat_request_with_extensions(&request, &extensions)
+        .expect_err("a visible span cannot split a UTF-8 code point");
+    assert!(error.to_string().contains("valid UTF-8 range"));
+
+    let mut missing_visible = serialized;
+    missing_visible[0]["anthropic_block_order"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let extensions: Vec<ChatMessageContinuation> = serde_json::from_value(missing_visible).unwrap();
+    let error = client
+        .transform_chat_request_with_extensions(&request, &extensions)
+        .expect_err("the order must cover the complete canonical visible payload");
+    assert!(error.to_string().contains("does not cover every supported"));
 }
 
 #[test]
@@ -92,7 +281,7 @@ fn test_anthropic_client_preserves_thinking_blocks() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-3-opus-20240229",
         "content": [
             {
                 "type": "thinking",
@@ -101,10 +290,9 @@ fn test_anthropic_client_preserves_thinking_blocks() {
             },
             {
                 "type": "thinking",
-                "thinking": "Second thought."
-                ,"signature": "sig_456"
+                "thinking": "Second thought.",
+                "signature": "sig_456"
             },
-            {"type": "redacted_thinking", "data": "opaque-data"},
             {"type": "text", "text": "Answer."}
         ],
         "stop_reason": "end_turn"
@@ -119,68 +307,16 @@ fn test_anthropic_client_preserves_thinking_blocks() {
             .message
             .thinking
             .as_ref()
-            .and_then(|thinking| thinking.as_text())
-            .as_deref(),
+            .and_then(|thinking| thinking.as_text()),
         Some("First thought. Second thought.")
     );
-    let content = AnthropicThinkingContent::try_from(vec![
-        AnthropicThinkingBlock::Thinking {
-            thinking: "First thought. ".to_string(),
-            signature: "sig_123".to_string(),
-        },
-        AnthropicThinkingBlock::Thinking {
-            thinking: "Second thought.".to_string(),
-            signature: "sig_456".to_string(),
-        },
-        AnthropicThinkingBlock::RedactedThinking {
-            data: "opaque-data".to_string(),
-        },
-    ])
-    .expect("valid Anthropic thinking history");
     assert_eq!(
         result.choices.first().unwrap().message.thinking.as_ref(),
-        Some(&ThinkingContent::AnthropicBlocks { content })
+        Some(&ThinkingContent::Text {
+            text: "First thought. Second thought.".to_string(),
+            signature: Some("sig_456".to_string()),
+        })
     );
-    assert!(
-        result.choices[0]
-            .message
-            .thinking
-            .as_ref()
-            .is_some_and(ThinkingContent::is_redacted)
-    );
-
-    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
-    request.messages = vec![
-        result.choices[0].message.clone(),
-        ChatMessage {
-            role: MessageRole::User,
-            content: Some(MessageContent::Text("Continue".to_string())),
-            ..Default::default()
-        },
-    ];
-    let replay = client
-        .transform_chat_request(&request)
-        .expect("non-tool thinking responses must remain replayable");
-    assert_eq!(
-        replay["messages"][0]["content"][2],
-        json!({"type":"redacted_thinking","data":"opaque-data"})
-    );
-}
-
-#[test]
-fn anthropic_response_rejects_thinking_without_signature() {
-    let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
-    let response = json!({
-        "id": "msg_missing_signature",
-        "model": "claude-opus-5",
-        "content": [{"type":"thinking","thinking":"unverifiable"}],
-        "stop_reason": "end_turn"
-    });
-
-    let error = client
-        .transform_chat_response(response)
-        .expect_err("thinking signatures are required for lossless replay");
-    assert!(error.to_string().contains("signature"));
 }
 
 #[test]

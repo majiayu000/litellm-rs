@@ -194,7 +194,6 @@ where
                     .map(|t| crate::core::types::thinking::ThinkingDelta {
                         content: Some(t.clone()),
                         signature: None,
-                        redacted_data: None,
                         is_start: None,
                         is_complete: None,
                     });

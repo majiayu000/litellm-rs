@@ -20,7 +20,6 @@ use crate::core::types::{
     content::ContentPart,
     message::{MessageContent, MessageRole},
     responses::ChatResponse,
-    thinking::{AnthropicThinkingBlock, ThinkingContent},
     tools::{Tool, ToolChoice},
 };
 
@@ -179,10 +178,24 @@ impl AnthropicClient {
     ///
     /// Returns an empty Vec when no beta features are needed.
     fn compute_beta_headers(&self, request: &ChatRequest) -> Vec<HeaderPair> {
+        self.compute_beta_headers_with_extensions(request, &[])
+    }
+
+    fn compute_beta_headers_with_extensions(
+        &self,
+        request: &ChatRequest,
+        extensions: &[crate::core::providers::ChatMessageContinuation],
+    ) -> Vec<HeaderPair> {
         let mut features: Vec<String> = Vec::new();
 
         // Extended / interleaved thinking requires the beta header.
-        if request.thinking.as_ref().is_some_and(|t| t.enabled) {
+        if request.thinking.as_ref().is_some_and(|t| t.enabled)
+            || extensions.iter().any(|extension| {
+                extension
+                    .anthropic_thinking()
+                    .is_some_and(|thinking| !thinking.blocks().is_empty())
+            })
+        {
             Self::push_beta_feature(&mut features, "interleaved-thinking-2025-05-14");
         }
 
@@ -428,20 +441,6 @@ impl AnthropicClient {
                 "content": content
             });
 
-            if let Some(thinking) = &message.thinking {
-                if role != "assistant" {
-                    return Err(ProviderError::invalid_request(
-                        "anthropic",
-                        "Anthropic thinking blocks require an assistant message",
-                    ));
-                }
-                let mut anthropic_content =
-                    Self::content_value_to_blocks(&anthropic_message["content"]);
-                let thinking_blocks = Self::thinking_content_to_blocks(thinking)?;
-                anthropic_content.splice(0..0, thinking_blocks);
-                anthropic_message["content"] = json!(anthropic_content);
-            }
-
             // Add tool_call
             if let Some(tool_calls) = &message.tool_calls {
                 let mut anthropic_content =
@@ -657,43 +656,6 @@ impl AnthropicClient {
         } else {
             content.as_array().cloned().unwrap_or_default()
         }
-    }
-
-    fn thinking_content_to_blocks(thinking: &ThinkingContent) -> Result<Vec<Value>, ProviderError> {
-        let blocks = match thinking {
-            ThinkingContent::AnthropicBlocks { content } => content.blocks().to_vec(),
-            ThinkingContent::Text {
-                text,
-                signature: Some(signature),
-            } if !signature.is_empty() => vec![AnthropicThinkingBlock::Thinking {
-                thinking: text.clone(),
-                signature: signature.clone(),
-            }],
-            ThinkingContent::Text { .. } | ThinkingContent::Block { .. } => {
-                return Err(ProviderError::invalid_request(
-                    "anthropic",
-                    "Anthropic thinking history requires a non-empty verification signature",
-                ));
-            }
-            ThinkingContent::Redacted { .. } => {
-                return Err(ProviderError::invalid_request(
-                    "anthropic",
-                    "Anthropic redacted thinking history requires its encrypted data payload",
-                ));
-            }
-        };
-
-        blocks
-            .iter()
-            .map(|block| {
-                serde_json::to_value(block).map_err(|error| {
-                    ProviderError::invalid_request(
-                        "anthropic",
-                        format!("Failed to serialize Anthropic thinking block: {error}"),
-                    )
-                })
-            })
-            .collect()
     }
 
     fn tool_result_content(

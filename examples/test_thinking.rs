@@ -8,9 +8,7 @@ use litellm_rs::core::providers::thinking::{
 };
 use litellm_rs::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use litellm_rs::core::types::context::RequestContext;
-use litellm_rs::core::types::thinking::{
-    AnthropicThinkingBlock, ThinkingConfig, ThinkingContent, ThinkingEffort,
-};
+use litellm_rs::core::types::thinking::{ThinkingConfig, ThinkingContent, ThinkingEffort};
 use litellm_rs::core::types::{
     chat::ChatMessage, chat::ChatRequest, message::MessageContent, message::MessageRole,
 };
@@ -143,6 +141,8 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
             "message.thinking is_some: {}",
             choice.message.thinking.is_some()
         );
+        println!("message.thinking: {:?}", choice.message.thinking);
+
         if let Some(thinking) = &choice.message.thinking {
             println!("\n--- Thinking Content Found! ---");
             match thinking {
@@ -159,7 +159,7 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
                     };
                     println!("Thinking:\n{}", display_text);
                     if let Some(sig) = signature {
-                        println!("Signature: [opaque, {} bytes]", sig.len());
+                        println!("Signature: {}", sig);
                     }
                 }
                 ThinkingContent::Block {
@@ -173,23 +173,6 @@ async fn test_deepseek_r1(provider: &OpenAILikeProvider) -> Result<(), Box<dyn s
                 ThinkingContent::Redacted { token_count } => {
                     println!("Type: Redacted");
                     println!("Token Count: {:?}", token_count);
-                }
-                ThinkingContent::AnthropicBlocks { content } => {
-                    println!("Type: AnthropicBlocks");
-                    for block in content.blocks() {
-                        match block {
-                            AnthropicThinkingBlock::Thinking {
-                                thinking,
-                                signature,
-                            } => {
-                                println!("Thinking:\n{}", thinking);
-                                println!("Signature: [opaque, {} bytes]", signature.len());
-                            }
-                            AnthropicThinkingBlock::RedactedThinking { data } => {
-                                println!("Redacted Data: [redacted, {} bytes]", data.len());
-                            }
-                        }
-                    }
                 }
             }
         } else {

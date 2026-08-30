@@ -143,7 +143,6 @@ mod tests {
             thinking: Some(ThinkingDelta {
                 content: Some("thinking...".to_string()),
                 signature: None,
-                redacted_data: None,
                 is_start: None,
                 is_complete: None,
             }),
@@ -158,7 +157,6 @@ mod tests {
             thinking: Some(ThinkingDelta {
                 content: Some("Let me think...".to_string()),
                 signature: None,
-                redacted_data: None,
                 is_start: None,
                 is_complete: None,
             }),
@@ -448,7 +446,6 @@ mod tests {
             thinking: Some(ThinkingDelta {
                 content: None,
                 signature: None,
-                redacted_data: None,
                 is_start: None,
                 is_complete: None,
             }),

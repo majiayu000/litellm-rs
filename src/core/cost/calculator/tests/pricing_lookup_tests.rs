@@ -433,6 +433,18 @@ fn test_get_cohere_pricing_from_shared_catalog() {
     assert_cost_eq(command_r.input_cost_per_1k_tokens, 0.0005);
     assert_cost_eq(command_r.output_cost_per_1k_tokens, 0.0015);
 
+    let Ok(command_r_08_2024) = get_model_pricing("command-r-08-2024", "cohere") else {
+        panic!("command-r-08-2024 pricing should load from shared pricing data");
+    };
+    assert_cost_eq(command_r_08_2024.input_cost_per_1k_tokens, 0.00015);
+    assert_cost_eq(command_r_08_2024.output_cost_per_1k_tokens, 0.00060);
+
+    let Ok(command_r_plus_08_2024) = get_model_pricing("command-r-plus-08-2024", "cohere") else {
+        panic!("command-r-plus-08-2024 pricing should load from shared pricing data");
+    };
+    assert_cost_eq(command_r_plus_08_2024.input_cost_per_1k_tokens, 0.0025);
+    assert_cost_eq(command_r_plus_08_2024.output_cost_per_1k_tokens, 0.010);
+
     let Ok(embed) = get_model_pricing("embed-english-v3.0", "cohere") else {
         panic!("embed-english-v3.0 pricing should load from shared pricing data");
     };
@@ -455,6 +467,27 @@ fn test_get_cohere_pricing_from_shared_catalog() {
 
     let unpriced = get_model_pricing("command-a-reasoning-08-2025", "cohere");
     assert!(matches!(unpriced, Err(CostError::MissingPricing { .. })));
+}
+
+#[test]
+fn test_shared_catalog_covers_current_official_exact_ids() {
+    for (provider, model, input, output, cache_read) in [
+        ("anthropic", "claude-fable-5", 0.010, 0.050, 0.001),
+        ("anthropic", "claude-opus-5", 0.005, 0.025, 0.0005),
+        ("anthropic", "claude-sonnet-5", 0.002, 0.010, 0.0002),
+        ("gemini", "gemini-3.6-flash", 0.00075, 0.00375, 0.000075),
+        ("gemini", "gemini-3.7-flash", 0.00075, 0.00375, 0.000075),
+        ("xai", "grok-4.5", 0.002, 0.006, 0.0003),
+        ("xai", "grok-4.6", 0.002, 0.006, 0.0005),
+        ("mistral", "mistral-small-4", 0.00015, 0.00060, 0.000015),
+    ] {
+        let Ok(pricing) = get_model_pricing(model, provider) else {
+            panic!("{provider}/{model} pricing should resolve from the shared catalog");
+        };
+        assert_cost_eq(pricing.input_cost_per_1k_tokens, input);
+        assert_cost_eq(pricing.output_cost_per_1k_tokens, output);
+        assert_eq!(pricing.cache_read_input_token_cost, Some(cache_read));
+    }
 }
 
 #[test]

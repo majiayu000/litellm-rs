@@ -364,6 +364,10 @@ mod tests {
                 Some(&serde_json::Value::Bool(true))
             );
             assert_eq!(
+                spec.model_info.metadata.get("thinking_always_on"),
+                Some(&serde_json::Value::Bool(id == "claude-fable-5"))
+            );
+            assert_eq!(
                 spec.model_info
                     .metadata
                     .get("supports_manual_extended_thinking"),

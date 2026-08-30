@@ -81,7 +81,7 @@ fn claude_5_spec(
                     serde_json::Value::Bool(true),
                 ),
                 (
-                    "adaptive_thinking_always_on".to_string(),
+                    "thinking_always_on".to_string(),
                     serde_json::Value::Bool(id == "claude-fable-5"),
                 ),
                 (

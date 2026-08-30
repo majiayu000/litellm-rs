@@ -3,11 +3,17 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::{
+    AnthropicContentBlockOrder, ChatContinuationResponse, ChatMessageContinuation,
+};
+use crate::core::types::anthropic_continuation::{
+    AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+};
 use crate::core::types::{
     chat::ChatMessage,
     message::{MessageContent, MessageRole},
     responses::{ChatChoice, ChatResponse, FinishReason},
-    thinking::{AnthropicThinkingBlock, AnthropicThinkingContent, ThinkingContent},
+    thinking::ThinkingContent,
     tools::{FunctionCall, ToolCall},
 };
 
@@ -40,6 +46,38 @@ impl AnthropicClient {
         response: Value,
         tool_name_map: &HashMap<String, String>,
     ) -> Result<ChatResponse, ProviderError> {
+        let continuation = self
+            .transform_chat_response_with_continuation(response, tool_name_map)?
+            .into_parts();
+        let (mut response, extensions) = continuation;
+        // Preserve the historical single-signature field only for callers of
+        // the legacy response path. The typed continuation wrapper keeps the
+        // opaque signature solely in its secret-safe sidecar.
+        for (choice, extension) in response.choices.iter_mut().zip(&extensions) {
+            let Some(ThinkingContent::Text { signature, .. }) = &mut choice.message.thinking else {
+                continue;
+            };
+            *signature = extension.anthropic_thinking().and_then(|thinking| {
+                thinking
+                    .blocks()
+                    .iter()
+                    .rev()
+                    .find_map(|block| match block {
+                        AnthropicThinkingBlock::Thinking { signature, .. } => {
+                            Some(signature.expose().to_string())
+                        }
+                        AnthropicThinkingBlock::RedactedThinking { .. } => None,
+                    })
+            });
+        }
+        Ok(response)
+    }
+
+    pub(crate) fn transform_chat_response_with_continuation(
+        &self,
+        response: Value,
+        tool_name_map: &HashMap<String, String>,
+    ) -> Result<ChatContinuationResponse, ProviderError> {
         // Extract basic information
         let id = response
             .get("id")
@@ -65,14 +103,20 @@ impl AnthropicClient {
             .ok_or_else(|| anthropic_parse_error("Missing or invalid content array"))?;
 
         let mut message_content = String::new();
-        let mut anthropic_thinking_blocks = Vec::new();
+        let mut continuation_blocks = Vec::new();
         let mut tool_calls = Vec::new();
+        let mut block_order = Vec::new();
 
-        for item in content {
+        for (block_index, item) in content.iter().enumerate() {
             match item.get("type").and_then(|t| t.as_str()) {
                 Some("text") => {
                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                        let start = message_content.len();
                         message_content.push_str(text);
+                        block_order.push(AnthropicContentBlockOrder::Text {
+                            start,
+                            end: message_content.len(),
+                        });
                     }
                 }
                 Some("tool_use") => {
@@ -81,6 +125,7 @@ impl AnthropicClient {
                         item.get("name").and_then(|v| v.as_str()),
                         item.get("input"),
                     ) {
+                        let index = tool_calls.len();
                         tool_calls.push(ToolCall {
                             id: id.to_string(),
                             tool_type: "function".to_string(),
@@ -89,50 +134,80 @@ impl AnthropicClient {
                                 arguments: input.to_string(),
                             },
                         });
+                        block_order.push(AnthropicContentBlockOrder::ToolUse { index });
                     }
                 }
                 Some("thinking") => {
                     let thinking = item
                         .get("thinking")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| anthropic_parse_error("Thinking block missing thinking"))?;
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| {
+                            anthropic_parse_error(format!(
+                                "choice 0 block {block_index} thinking text is missing"
+                            ))
+                        })?;
                     let signature = item
                         .get("signature")
-                        .and_then(Value::as_str)
-                        .filter(|signature| !signature.is_empty())
-                        .ok_or_else(|| anthropic_parse_error("Thinking block missing signature"))?;
-                    anthropic_thinking_blocks.push(AnthropicThinkingBlock::Thinking {
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| {
+                            anthropic_parse_error(format!(
+                                "choice 0 block {block_index} thinking signature is missing"
+                            ))
+                        })?;
+                    let index = continuation_blocks.len();
+                    continuation_blocks.push(AnthropicThinkingBlock::Thinking {
                         thinking: thinking.to_string(),
-                        signature: signature.to_string(),
+                        signature: AnthropicSignature::try_from(signature).map_err(|_| {
+                            anthropic_parse_error(format!(
+                                "choice 0 block {block_index} thinking signature is empty"
+                            ))
+                        })?,
                     });
+                    block_order.push(AnthropicContentBlockOrder::Thinking { index });
                 }
                 Some("redacted_thinking") => {
                     let data = item
                         .get("data")
-                        .and_then(Value::as_str)
-                        .filter(|data| !data.is_empty())
+                        .and_then(|value| value.as_str())
                         .ok_or_else(|| {
-                            anthropic_parse_error("Redacted thinking block missing data")
+                            anthropic_parse_error(format!(
+                                "choice 0 block {block_index} redacted thinking data is missing"
+                            ))
                         })?;
-                    anthropic_thinking_blocks.push(AnthropicThinkingBlock::RedactedThinking {
-                        data: data.to_string(),
+                    let index = continuation_blocks.len();
+                    continuation_blocks.push(AnthropicThinkingBlock::RedactedThinking {
+                        data: AnthropicRedactedData::try_from(data).map_err(|_| {
+                            anthropic_parse_error(format!(
+                                "choice 0 block {block_index} redacted thinking data is empty"
+                            ))
+                        })?,
                     });
+                    block_order.push(AnthropicContentBlockOrder::Thinking { index });
                 }
                 Some("refusal") => {
                     if let Some(refusal) = item.get("refusal").and_then(|r| r.as_str()) {
+                        let start = message_content.len();
                         message_content.push_str(refusal);
+                        block_order.push(AnthropicContentBlockOrder::Refusal {
+                            start,
+                            end: message_content.len(),
+                        });
                     }
                 }
                 _ => {}
             }
         }
 
-        let thinking = if anthropic_thinking_blocks.is_empty() {
-            None
+        let continuation = AnthropicThinkingContent::new(continuation_blocks);
+        let thinking = if let Some(text) = continuation.as_text() {
+            Some(ThinkingContent::Text {
+                text: text.into_owned(),
+                signature: None,
+            })
+        } else if continuation.has_redacted_block() {
+            Some(ThinkingContent::Redacted { token_count: None })
         } else {
-            let content = AnthropicThinkingContent::try_from(anthropic_thinking_blocks)
-                .map_err(|error| anthropic_parse_error(error.to_string()))?;
-            Some(ThinkingContent::AnthropicBlocks { content })
+            None
         };
 
         // Build message
@@ -168,7 +243,7 @@ impl AnthropicClient {
 
         let usage = response.get("usage").map(usage::build_usage);
 
-        Ok(ChatResponse {
+        let response = ChatResponse {
             id,
             object: "chat.completion".to_string(),
             created,
@@ -176,6 +251,14 @@ impl AnthropicClient {
             choices: vec![choice],
             usage,
             system_fingerprint: None,
-        })
+        };
+        let extension = if continuation.blocks().is_empty() {
+            ChatMessageContinuation::new()
+        } else {
+            ChatMessageContinuation::new()
+                .with_anthropic_thinking(continuation)
+                .with_anthropic_block_order(block_order)
+        };
+        ChatContinuationResponse::new(response, vec![extension])
     }
 }

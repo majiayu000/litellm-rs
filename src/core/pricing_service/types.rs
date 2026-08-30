@@ -3,13 +3,15 @@
 pub use crate::core::pricing::LiteLLMModelInfo;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Consolidated pricing data - single lock for all pricing state
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct PricingData {
     /// Model pricing data (model_name -> LiteLLMModelInfo)
     pub models: HashMap<String, LiteLLMModelInfo>,
+    pub exact_by_provider: HashMap<String, HashMap<String, Vec<String>>>,
     /// Last update time
     pub last_updated: SystemTime,
 }
@@ -18,9 +20,19 @@ impl Default for PricingData {
     fn default() -> Self {
         Self {
             models: HashMap::new(),
+            exact_by_provider: HashMap::new(),
             last_updated: SystemTime::UNIX_EPOCH,
         }
     }
+}
+
+/// Clone-cheap immutable view of one atomically published pricing generation.
+///
+/// A request keeps this value for its whole attempt so refreshes cannot change
+/// the rates between reservation and settlement.
+#[derive(Debug, Clone)]
+pub(crate) struct PricingSnapshot {
+    pub(super) data: Arc<PricingData>,
 }
 
 /// Pricing update event
@@ -462,6 +474,7 @@ mod tests {
 
         let data = PricingData {
             models,
+            exact_by_provider: HashMap::new(),
             last_updated: SystemTime::now(),
         };
 

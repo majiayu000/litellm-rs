@@ -160,21 +160,17 @@ pub async fn audio_translations(
                 let total_time_seconds =
                     super::budgeting::estimated_audio_file_seconds(&request.file);
                 let budget_provider = provider.name().to_string();
-                let (pricing_provider, pricing_model) =
-                    super::super::spend::pricing_identity_for_provider(
-                        pricing_service.as_ref(),
-                        &provider,
-                        &selected_model,
-                    );
+                let request_pricing = super::super::spend::request_pricing_for_provider(
+                    &pricing_service,
+                    &provider,
+                    &selected_model,
+                    ProviderCapability::AudioTranslation,
+                )?;
                 request.model = selected_model.clone();
-                let reserve_pricing_service = pricing_service.clone();
-                let settle_pricing_service = pricing_service.clone();
                 let reserve_pricing_config = pricing_config.clone();
                 let settle_pricing_config = pricing_config;
-                let reserve_pricing_provider = pricing_provider.clone();
-                let reserve_pricing_model = pricing_model.clone();
-                let settle_pricing_provider = pricing_provider;
-                let settle_pricing_model = pricing_model;
+                let reserve_request_pricing = request_pricing.clone();
+                let settle_request_pricing = request_pricing;
                 let reserve_usage = usage.clone();
                 let settle_usage = usage;
                 let settle_key_manager = key_manager.clone();
@@ -188,13 +184,11 @@ pub async fn audio_translations(
                     .reserve_call_settle(
                         |budget| {
                             super::budgeting::reserve_audio_provider_budget_with_pricing(
-                                reserve_pricing_service.as_ref(),
+                                &reserve_request_pricing,
                                 &reserve_pricing_config,
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                &reserve_pricing_provider,
-                                &reserve_pricing_model,
                                 Some(total_time_seconds),
                                 &reserve_usage,
                             )
@@ -206,15 +200,13 @@ pub async fn audio_translations(
                             async move {
                                 let tokens_used = u64::from(settle_usage.total_tokens);
                                 super::budgeting::record_audio_spend(
-                                    settle_pricing_service.as_ref(),
+                                    &settle_request_pricing,
                                     &settle_pricing_config,
                                     budget.budget_limits(),
                                     &settle_key_manager,
                                     api_key_id,
                                     budget.provider(),
                                     budget.model(),
-                                    &settle_pricing_provider,
-                                    &settle_pricing_model,
                                     Some(total_time_seconds),
                                     &settle_usage,
                                     budget_reservation,

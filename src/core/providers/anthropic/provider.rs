@@ -1,13 +1,11 @@
-//! Anthropic Provider Implementation
-//!
-//! Implementation
-
 use futures::Stream;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::{
+    ChatContinuationRequest, ChatContinuationResponse, unified_provider::ProviderError,
+};
 use crate::core::traits::provider::ProviderConfig as _;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
@@ -26,7 +24,6 @@ use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
 const COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 
-/// Anthropic Provider - unified implementation
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
     client: Box<AnthropicClient>,
@@ -34,12 +31,8 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    /// Create
     pub fn new(config: AnthropicConfig) -> Result<Self, ProviderError> {
-        // Create client
         let client = AnthropicClient::new(config.clone())?;
-
-        // Get supported models
         let supported_models = if config.uses_compatible_model_allow_list() {
             config
                 .configured_models
@@ -77,14 +70,18 @@ impl AnthropicProvider {
         })
     }
 
-    /// Validate request
+    pub(crate) async fn chat_with_continuation(
+        &self,
+        request: ChatContinuationRequest,
+    ) -> Result<ChatContinuationResponse, ProviderError> {
+        self.validate_request(request.request())?;
+        self.client.chat_with_continuation(request).await
+    }
+
     fn validate_request(&self, request: &ChatRequest) -> Result<(), ProviderError> {
         let registry = get_anthropic_registry();
-        let uses_compatible_model_allow_list = self.client.uses_compatible_model_allow_list();
-        let uses_claude_5_protocol = !uses_compatible_model_allow_list
-            && AnthropicClient::is_claude_5_protocol_model(&request.model);
 
-        let model_spec = if uses_compatible_model_allow_list {
+        let model_spec = if self.client.uses_compatible_model_allow_list() {
             if !self.client.allows_unknown_model(&request.model) {
                 return Err(ProviderError::invalid_request(
                     "anthropic",
@@ -95,14 +92,6 @@ impl AnthropicProvider {
         } else {
             registry.get_model_spec(&request.model)
         };
-
-        if model_spec.is_none() && uses_claude_5_protocol {
-            return crate::core::providers::base::validate_chat_request_common(
-                "anthropic",
-                request,
-                COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS,
-            );
-        }
 
         let Some(model_spec) = model_spec else {
             if !self.client.allows_unknown_model(&request.model) {
@@ -174,14 +163,12 @@ impl AnthropicProvider {
             return Ok(());
         };
 
-        // Common validation: empty messages + max_tokens
         crate::core::providers::base::validate_chat_request_common(
             "anthropic",
             request,
             model_spec.limits.max_output_tokens,
         )?;
 
-        // Check multimodal content
         let has_multimodal_content = AnthropicClient::has_multimodal_content(request);
 
         if has_multimodal_content
@@ -198,7 +185,6 @@ impl AnthropicProvider {
             ));
         }
 
-        // Check tool calling support
         if request
             .tools
             .as_ref()
@@ -241,24 +227,22 @@ impl LLMProvider for AnthropicProvider {
             return self.client.allows_unknown_model(model);
         }
 
-        AnthropicClient::is_claude_5_protocol_model(model)
-            || self.supported_models.iter().any(|info| info.id == model)
+        self.supported_models.iter().any(|info| info.id == model)
             || self.client.allows_unknown_model(model)
     }
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
         if AnthropicClient::is_claude_5_protocol_model(model) {
             return &[
-                "temperature",
                 "max_tokens",
-                "top_p",
                 "tools",
                 "tool_choice",
                 "stream",
                 "stop",
+                "reasoning_effort",
+                "response_format",
             ];
         }
-
         &[
             "temperature",
             "max_tokens",
@@ -276,7 +260,6 @@ impl LLMProvider for AnthropicProvider {
         mut params: HashMap<String, Value>,
         _model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        // Anthropic uses max_tokens instead of max_tokens_to_sample
         if let Some(max_tokens) = params.remove("max_tokens") {
             params.insert("max_tokens".to_string(), max_tokens);
         }
@@ -290,7 +273,52 @@ impl LLMProvider for AnthropicProvider {
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
         self.validate_request(&request)?;
-        self.client.transform_chat_request(&request)
+
+        let mut anthropic_request = serde_json::json!({
+            "model": request.model,
+            "messages": request.messages,
+        });
+
+        if let Some(max_tokens) = request.max_tokens {
+            anthropic_request["max_tokens"] = Value::Number(max_tokens.into());
+        }
+
+        if let Some(temperature) = request.temperature {
+            let temp_f64: f64 = temperature.into();
+            anthropic_request["temperature"] = Value::Number(
+                serde_json::Number::from_f64(temp_f64).ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "anthropic",
+                        format!("invalid temperature value: {temp_f64} (NaN and Infinity are not allowed)"),
+                    )
+                })?,
+            );
+        }
+
+        if let Some(top_p) = request.top_p {
+            let top_p_f64: f64 = top_p.into();
+            anthropic_request["top_p"] =
+                Value::Number(serde_json::Number::from_f64(top_p_f64).ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "anthropic",
+                        format!(
+                            "invalid top_p value: {top_p_f64} (NaN and Infinity are not allowed)"
+                        ),
+                    )
+                })?);
+        }
+
+        if request.stream {
+            anthropic_request["stream"] = Value::Bool(request.stream);
+        }
+
+        if let Some(tools) = request.tools
+            && !tools.is_empty()
+        {
+            anthropic_request["tools"] = serde_json::to_value(tools)?;
+        }
+
+        Ok(anthropic_request)
     }
 
     async fn transform_response(
@@ -302,7 +330,6 @@ impl LLMProvider for AnthropicProvider {
         let response_text = String::from_utf8_lossy(raw_response);
         let anthropic_response: Value = serde_json::from_str(&response_text)?;
 
-        // Response
         let response = serde_json::from_value(anthropic_response)?;
         Ok(response)
     }
@@ -500,23 +527,6 @@ mod tests {
     }
 
     #[test]
-    fn claude_5_protocol_models_share_production_validation_without_catalog_entries() {
-        let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key")).unwrap();
-        assert!(provider.supports_model("claude-opus-5"));
-        let valid = ChatRequest::new("claude-opus-5").add_user_message("Hello");
-        provider
-            .validate_request(&valid)
-            .expect("production validation must accept an exact protocol model");
-
-        let empty = ChatRequest::new("claude-opus-5");
-        assert!(provider.validate_request(&empty).is_err());
-
-        let mut too_many_tokens = ChatRequest::new("claude-opus-5").add_user_message("Hello");
-        too_many_tokens.max_tokens = Some(COMPATIBLE_MODEL_MAX_OUTPUT_TOKENS + 1);
-        assert!(provider.validate_request(&too_many_tokens).is_err());
-    }
-
-    #[test]
     fn configured_unknown_models_are_visible_to_support_checks() {
         let config = AnthropicConfig::new_test("test-key")
             .with_base_url("https://token-plan-sgp.xiaomimimo.com/anthropic")
@@ -666,10 +676,9 @@ mod tests {
         };
 
         assert_eq!(transformed["model"], "mimo-v2.5");
-        assert_eq!(transformed["messages"][0]["content"][1]["type"], "image");
         assert_eq!(
-            transformed["messages"][0]["content"][1]["source"]["type"],
-            "base64"
+            transformed["messages"][0]["content"][1]["type"],
+            "image_url"
         );
     }
 

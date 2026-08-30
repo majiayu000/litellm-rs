@@ -759,15 +759,17 @@ pub fn calculate_cost(model: &str, prompt_tokens: u32, completion_tokens: u32) -
     GLOBAL_PRICING_DB.calculate(model, &usage)
 }
 
-/// Parse LiteLLM pricing JSON into the shared pricing model map.
-///
-/// LiteLLM pricing files can contain documentation/sample keys next to model
-/// entries. Every runtime pricing entry point should apply the same filtering
-/// so gateway cost calculations and the pricing service see the same dataset.
 pub fn parse_litellm_pricing_json(
     content: &str,
 ) -> Result<HashMap<String, LiteLLMModelInfo>, serde_json::Error> {
     let all_data: HashMap<String, serde_json::Value> = serde_json::from_str(content)?;
+    for key in ["_metadata", "fallback_generalizations", "sample_spec"] {
+        if all_data.get(key).is_some_and(|value| !value.is_object()) {
+            return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+                "pricing control block {key:?} must be a JSON object"
+            )));
+        }
+    }
     let models: HashMap<String, LiteLLMModelInfo> = all_data
         .into_iter()
         .filter(|(key, _)| !is_litellm_pricing_metadata_key(key))
@@ -786,9 +788,11 @@ pub fn parse_litellm_pricing_json(
 pub(crate) fn embedded_default_pricing_models() -> serde_json::Result<PricingModelMap> {
     parse_litellm_pricing_json(EMBEDDED_MODEL_PRICES)
 }
-
 pub fn is_litellm_pricing_metadata_key(key: &str) -> bool {
-    key == "sample_spec" || key.starts_with('_') || key.contains("example")
+    matches!(
+        key,
+        "_metadata" | "fallback_generalizations" | "sample_spec"
+    )
 }
 
 #[cfg(test)]

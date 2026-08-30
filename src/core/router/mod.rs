@@ -37,6 +37,7 @@ pub mod execution;
 pub mod fallback;
 mod gateway_aliases;
 pub mod gateway_config;
+mod gateway_identity;
 mod health_probe;
 mod provider_identity;
 pub mod retry_policy;

@@ -7,6 +7,8 @@ use super::{
 };
 use crate::core::types::model::ModelInfo;
 
+const GEMINI_25_CONTEXT_WINDOW: u32 = 1_048_576;
+
 pub(super) fn register(registry: &mut GeminiModelRegistry) {
     // ==================== Gemini 2.5 Series (2025) ====================
 
@@ -18,7 +20,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 id: "gemini-2.5-pro".to_string(),
                 name: "Gemini 2.5 Pro".to_string(),
                 provider: "gemini".to_string(),
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_length: Some(65536),
                 supports_streaming: true,
                 supports_tools: true,
@@ -55,7 +57,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 Some(0.0005),
             ),
             limits: ModelLimits {
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_tokens: 65536,
                 max_images: Some(3000),
                 max_video_seconds: Some(3600),
@@ -74,7 +76,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 id: "gemini-2.5-flash".to_string(),
                 name: "Gemini 2.5 Flash".to_string(),
                 provider: "gemini".to_string(),
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_length: Some(65536),
                 supports_streaming: true,
                 supports_tools: true,
@@ -111,7 +113,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 Some(0.0001),
             ),
             limits: ModelLimits {
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_tokens: 65536,
                 max_images: Some(3000),
                 max_video_seconds: Some(3600),
@@ -130,7 +132,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 id: "gemini-2.5-flash-lite".to_string(),
                 name: "Gemini 2.5 Flash-Lite".to_string(),
                 provider: "gemini".to_string(),
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_length: Some(65536),
                 supports_streaming: true,
                 supports_tools: true,
@@ -158,7 +160,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
             ],
             pricing: pricing_per_million(0.10, 0.40, Some(0.025), Some(0.0001), None, None),
             limits: ModelLimits {
-                max_context_length: 1_000_000,
+                max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_tokens: 65536,
                 max_images: Some(3000),
                 max_video_seconds: None,
