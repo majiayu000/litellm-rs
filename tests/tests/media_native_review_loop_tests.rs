@@ -1,5 +1,140 @@
 use super::*;
 
+async fn truncated_error_responses(
+    responses: Vec<(u16, &'static str)>,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock error listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        for (status, reason) in responses {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let _request = read_http_request(&mut socket).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\ntruncated"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("truncated error response should write");
+        }
+    });
+    (address, server)
+}
+
+fn retry_policy_allows(error: &ProviderError) -> bool {
+    litellm_rs::core::router::retry_policy::RetryPolicy
+        .decide(
+            &litellm_rs::core::router::RouterConfig::default(),
+            error,
+            litellm_rs::core::router::retry_policy::RetryContext::unary(1, 2),
+        )
+        .should_retry
+}
+
+#[tokio::test]
+async fn truncated_native_error_bodies_preserve_nonretryable_statuses() {
+    let (bfl_address, bfl_server) = truncated_error_responses(vec![(400, "Bad Request")]).await;
+    let mut bfl_config = BflConfig::with_api_key("bfl-secret");
+    bfl_config.base.api_base = Some(format!("http://{bfl_address}"));
+    bfl_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let bfl = BflProvider::new(bfl_config).expect("BFL provider should initialize");
+    let bfl_error = bfl
+        .generate_native(
+            BflImageRequest::new("flux-pro-1.1", "a glass city"),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("truncated BFL 400 response should fail");
+    bfl_server.await.expect("BFL server should finish");
+
+    assert!(
+        matches!(bfl_error, ProviderError::InvalidRequest { .. }),
+        "{bfl_error:?}"
+    );
+    assert!(!retry_policy_allows(&bfl_error));
+
+    let (stability_address, stability_server) =
+        truncated_error_responses(vec![(401, "Unauthorized"), (400, "Bad Request")]).await;
+    let mut stability_config = StabilityConfig::with_api_key("stability-secret");
+    stability_config.base.api_base = Some(format!("http://{stability_address}"));
+    stability_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let stability =
+        StabilityProvider::new(stability_config).expect("Stability provider should initialize");
+    let generation_error = stability
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "paint a lighthouse".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: Some("1024x1024".to_string()),
+                quality: None,
+                response_format: Some("png".to_string()),
+                style: None,
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("truncated Stability 401 generation should fail");
+    let edit_error = stability
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "replace the background".to_string(),
+                model: Some("inpaint".to_string()),
+                n: Some(1),
+                size: None,
+                response_format: Some("png".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("truncated Stability 400 edit should fail");
+    stability_server
+        .await
+        .expect("Stability server should finish");
+
+    assert!(
+        matches!(generation_error, ProviderError::Authentication { .. }),
+        "{generation_error:?}"
+    );
+    assert!(!retry_policy_allows(&generation_error));
+    assert!(
+        matches!(edit_error, ProviderError::InvalidRequest { .. }),
+        "{edit_error:?}"
+    );
+    assert!(!retry_policy_allows(&edit_error));
+}
+
+#[tokio::test]
+async fn truncated_native_5xx_error_body_remains_retryable() {
+    let (address, server) = truncated_error_responses(vec![(503, "Service Unavailable")]).await;
+    let mut config = BflConfig::with_api_key("bfl-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = BflProvider::new(config).expect("BFL provider should initialize");
+    let error = provider
+        .generate_native(
+            BflImageRequest::new("flux-pro-1.1", "a glass city"),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("truncated BFL 503 response should fail");
+    server.await.expect("BFL server should finish");
+
+    assert!(
+        matches!(error, ProviderError::ProviderUnavailable { .. }),
+        "{error:?}"
+    );
+    assert!(retry_policy_allows(&error));
+}
+
 #[tokio::test]
 async fn stability_dns_policy_failure_remains_pre_dispatch_configuration_error() {
     let mut config = StabilityConfig::with_api_key("stability-secret");

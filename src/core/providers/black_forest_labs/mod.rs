@@ -213,11 +213,12 @@ impl BflProvider {
         let body = match body {
             Ok(body) => body,
             Err(error) => {
-                let error = self.client.map_preserved_request_error(error);
                 return Err(if status.is_success() {
-                    mark_post_submit_error_non_retryable(error)
+                    mark_post_submit_error_non_retryable(
+                        self.client.map_preserved_request_error(error),
+                    )
                 } else {
-                    error
+                    HttpErrorMapper::map_status_without_body(PROVIDER, status.as_u16())
                 });
             }
         };

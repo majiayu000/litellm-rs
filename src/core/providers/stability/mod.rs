@@ -245,7 +245,12 @@ impl StabilityProvider {
                     self.client.map_preserved_request_error(error),
                 ));
             }
-            Err(error) => return Err(self.client.map_preserved_request_error(error)),
+            Err(_) => {
+                return Err(HttpErrorMapper::map_status_without_body(
+                    PROVIDER,
+                    status.as_u16(),
+                ));
+            }
         };
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
@@ -332,7 +337,12 @@ impl StabilityProvider {
                     self.client.map_preserved_request_error(error),
                 ));
             }
-            Err(error) => return Err(self.client.map_preserved_request_error(error)),
+            Err(_) => {
+                return Err(HttpErrorMapper::map_status_without_body(
+                    PROVIDER,
+                    status.as_u16(),
+                ));
+            }
         };
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));

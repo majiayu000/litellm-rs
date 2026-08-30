@@ -208,6 +208,16 @@ impl HttpErrorMapper {
         }
     }
 
+    /// Map a known error status when its response body could not be read.
+    #[cfg(feature = "providers-extended")]
+    pub(crate) fn map_status_without_body(provider: &'static str, status: u16) -> ProviderError {
+        Self::map_status_code(
+            provider,
+            status,
+            &format!("Provider returned HTTP {status}, but its error body was unavailable"),
+        )
+    }
+
     /// Parse JSON error response.
     pub fn parse_json_error(provider: &'static str, json: &Value) -> ProviderError {
         let message = extract_error_message_from_json(json).unwrap_or("Unknown error");
