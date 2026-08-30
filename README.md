@@ -204,6 +204,8 @@ into the enum, dispatch, registry metadata, and factory.
 | Anthropic (`anthropic`) | always | ✅ | ✅ | – | – | – | Native Anthropic messages API. |
 | Mistral (`mistral`) | always | ✅ | ✅ | passthrough | – | – | Native client. |
 | Cloudflare Workers AI (`cloudflare`) | always | ✅ | – | – | – | – | Native client with account-id auth; streaming and embeddings currently return `NotSupported`. |
+| Deepgram (`deepgram`) | always | – | – | – | – | ✅ | Native speech-to-text and text-to-speech REST transport. |
+| ElevenLabs (`elevenlabs`) | always | – | – | – | – | ✅ | Native speech-to-text and text-to-speech REST transport. |
 | Cohere (`cohere`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native Cohere `/v2/chat` and `/v2/embed`; the concrete provider also exposes a `/v1/rerank` helper. Explicitly unsupported without `providers-extended`. |
 | Voyage (`voyage`) | always | – | – | ✅ | – | – | Uses native Voyage `/v1/embeddings` and the shared HTTP `/v1/rerank` route with exact model capability and pricing identity. |
 | Azure OpenAI (`azure`) | native factory (`providers-extra`); OpenAILike fallback | ✅ | ✅ | ✅ | ✅ | – | Native Azure supports chat, streaming, embeddings, and image generation with `providers-extra`; otherwise the factory path uses OpenAILike chat/stream only. |

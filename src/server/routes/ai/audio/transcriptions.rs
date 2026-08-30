@@ -201,7 +201,10 @@ pub async fn audio_transcriptions(
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                Some(total_time_seconds),
+                                Some(super::budgeting::AudioPricingUnits::Time {
+                                    seconds: total_time_seconds,
+                                    surface: ProviderCapability::AudioTranscription,
+                                }),
                                 &reserve_usage,
                             )
                         },
@@ -210,6 +213,10 @@ pub async fn audio_transcriptions(
                             let (budget_reservation, key_budget_reservation) =
                                 reservations.into_parts();
                             async move {
+                                let settled_time_seconds = response
+                                    .duration
+                                    .filter(|duration| duration.is_finite() && *duration > 0.0)
+                                    .unwrap_or(total_time_seconds);
                                 let tokens_used = u64::from(settle_usage.total_tokens);
                                 super::budgeting::record_audio_spend(
                                     &settle_request_pricing,
@@ -219,7 +226,10 @@ pub async fn audio_transcriptions(
                                     api_key_id,
                                     budget.provider(),
                                     budget.model(),
-                                    Some(total_time_seconds),
+                                    Some(super::budgeting::AudioPricingUnits::Time {
+                                        seconds: settled_time_seconds,
+                                        surface: ProviderCapability::AudioTranscription,
+                                    }),
                                     &settle_usage,
                                     budget_reservation,
                                     key_budget_reservation,

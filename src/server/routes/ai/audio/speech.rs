@@ -103,11 +103,18 @@ pub async fn audio_speech(
                     &selected_model,
                     ProviderCapability::TextToSpeech,
                 )?;
+                let pricing_units = request_pricing.has_character_pricing().then(|| {
+                    super::budgeting::AudioPricingUnits::Characters(
+                        request.input.chars().count() as f64
+                    )
+                });
                 request.model = selected_model.clone();
                 let reserve_pricing_config = pricing_config.clone();
                 let settle_pricing_config = pricing_config;
                 let reserve_request_pricing = request_pricing.clone();
                 let settle_request_pricing = request_pricing;
+                let reserve_pricing_units = pricing_units.clone();
+                let settle_pricing_units = pricing_units;
                 let reserve_usage = usage.clone();
                 let settle_usage = usage;
                 let settle_key_manager = key_manager.clone();
@@ -126,7 +133,7 @@ pub async fn audio_speech(
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                None,
+                                reserve_pricing_units,
                                 &reserve_usage,
                             )
                         },
@@ -144,7 +151,7 @@ pub async fn audio_speech(
                                     api_key_id,
                                     budget.provider(),
                                     budget.model(),
-                                    None,
+                                    settle_pricing_units,
                                     &settle_usage,
                                     budget_reservation,
                                     key_budget_reservation,

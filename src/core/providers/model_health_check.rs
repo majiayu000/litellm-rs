@@ -25,7 +25,9 @@ impl Provider {
             | Provider::Mistral(_)
             | Provider::Cloudflare(_)
             | Provider::Voyage(_)
-            | Provider::OpenAILike(_) => NativeHealthProbeSemantics::Unsupported,
+            | Provider::OpenAILike(_)
+            | Provider::Deepgram(_)
+            | Provider::ElevenLabs(_) => NativeHealthProbeSemantics::Unsupported,
             #[cfg(feature = "providers-extra")]
             Provider::Azure(_) | Provider::AzureAI(_) => NativeHealthProbeSemantics::Unsupported,
             #[cfg(feature = "providers-extended")]
