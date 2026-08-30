@@ -131,6 +131,13 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::Voyage,
+        "voyage",
+        &[],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
         ProviderType::DeepSeek,
         "deepseek",
         &["deep-seek"],
@@ -499,6 +506,7 @@ mod tests {
             ProviderType::Bedrock,
             ProviderType::Mistral,
             ProviderType::Cloudflare,
+            ProviderType::Voyage,
         ]
         .into_iter()
         .chain([

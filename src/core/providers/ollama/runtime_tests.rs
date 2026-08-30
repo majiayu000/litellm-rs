@@ -591,6 +591,7 @@ async fn embeddings_preserve_prompt_token_usage() -> Result<(), Box<dyn std::err
             encoding_format: None,
             dimensions: None,
             task_type: None,
+            truncation: None,
         },
         RequestContext::default(),
     )
@@ -676,6 +677,7 @@ async fn embeddings_from_fixture(
             encoding_format: None,
             dimensions: None,
             task_type: None,
+            truncation: None,
         },
         RequestContext::default(),
     )

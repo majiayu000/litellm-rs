@@ -23,6 +23,7 @@ async fn test_provider_capabilities_embeddings_error_names_real_provider() {
                 encoding_format: None,
                 dimensions: None,
                 task_type: None,
+                truncation: None,
             },
             crate::core::types::context::RequestContext::default(),
         )

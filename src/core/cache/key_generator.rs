@@ -87,6 +87,10 @@ pub fn generate_embedding_key_with_user(
         "schema_version": CACHE_KEY_SCHEMA_VERSION,
         "model": &request.model,
         "input": &request.input,
+        "encoding_format": &request.encoding_format,
+        "dimensions": request.dimensions,
+        "input_type": &request.input_type,
+        "truncation": request.truncation,
         "user_id": user_id,
     });
 
@@ -602,6 +606,10 @@ mod tests {
             model: "text-embedding-ada-002".to_string(),
             input: serde_json::json!("Hello world"),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         let key = generate_embedding_key(&request);
@@ -614,6 +622,10 @@ mod tests {
             model: "text-embedding-ada-002".to_string(),
             input: serde_json::json!(["Hello", "World"]),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         let key = generate_embedding_key(&request);
@@ -626,12 +638,19 @@ mod tests {
             model: "text-embedding-3-small".to_string(),
             input: serde_json::json!("Test input"),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         let key1 = generate_embedding_key(&request);
         let key2 = generate_embedding_key(&request);
+        let mut different_options = request.clone();
+        different_options.truncation = Some(false);
 
         assert_eq!(key1, key2);
+        assert_ne!(key1, generate_embedding_key(&different_options));
     }
 
     #[test]
@@ -640,12 +659,20 @@ mod tests {
             model: "text-embedding-ada-002".to_string(),
             input: serde_json::json!(["Alpha", "Beta"]),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         let request2 = EmbeddingRequest {
             model: "text-embedding-ada-002".to_string(),
             input: serde_json::json!(["Beta", "Alpha"]),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         let key1 = generate_embedding_key(&request1);

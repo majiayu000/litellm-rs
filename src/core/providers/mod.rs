@@ -98,6 +98,7 @@ pub mod replicate;
 pub mod v0;
 #[cfg(feature = "providers-extra")]
 pub mod vertex_ai;
+pub mod voyage;
 // vllm: Tier 1 -> registry/catalog.rs
 // volcengine: Tier 1 -> registry/catalog.rs
 // wandb: Tier 1 -> registry/catalog.rs
@@ -305,6 +306,7 @@ macro_rules! dispatch_provider {
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
+            Provider::Voyage(p) => p.$method($($arg),*),
         }
     };
 
@@ -334,6 +336,7 @@ macro_rules! dispatch_provider {
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::Voyage(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
     };
 
@@ -363,6 +366,7 @@ macro_rules! dispatch_provider {
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::Voyage(p) => LLMProvider::$method(p, $($arg),*),
         }
     };
 
@@ -392,6 +396,7 @@ macro_rules! dispatch_provider {
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
+            Provider::Voyage(p) => LLMProvider::$method(p).await,
         }
     };
 }
@@ -454,6 +459,7 @@ pub enum Provider {
     Replicate(replicate::ReplicateProvider),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
     OpenAILike(openai_like::OpenAILikeProvider),
+    Voyage(voyage::VoyageProvider),
 }
 
 impl Provider {
@@ -592,6 +598,7 @@ impl Provider {
                 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
                 p.name()
             }
+            Provider::Voyage(_) => "voyage",
         }
     }
 
@@ -622,6 +629,7 @@ impl Provider {
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => ProviderType::Replicate,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
+            Provider::Voyage(_) => ProviderType::Voyage,
         }
     }
 

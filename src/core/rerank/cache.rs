@@ -42,6 +42,7 @@ impl RerankCache {
             doc.get_text().hash(&mut hasher);
         }
         request.top_n.hash(&mut hasher);
+        request.truncation.hash(&mut hasher);
         format!("rerank:{:x}", hasher.finish())
     }
 

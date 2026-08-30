@@ -27,6 +27,10 @@ pub struct RerankRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_chunks_per_doc: Option<usize>,
 
+    /// Whether the provider may truncate over-length query/documents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<bool>,
+
     /// Additional provider-specific parameters
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra_params: HashMap<String, serde_json::Value>,
@@ -41,6 +45,7 @@ impl Default for RerankRequest {
             top_n: None,
             return_documents: Some(true),
             max_chunks_per_doc: None,
+            truncation: None,
             extra_params: HashMap::new(),
         }
     }
@@ -199,6 +204,7 @@ mod tests {
             top_n: Some(5),
             return_documents: Some(false),
             max_chunks_per_doc: Some(10),
+            truncation: None,
             extra_params: HashMap::new(),
         };
 
@@ -248,6 +254,7 @@ mod tests {
             top_n: Some(10),
             return_documents: Some(true),
             max_chunks_per_doc: None,
+            truncation: None,
             extra_params: HashMap::new(),
         };
 
@@ -653,6 +660,7 @@ mod tests {
             top_n: Some(2),
             return_documents: Some(true),
             max_chunks_per_doc: None,
+            truncation: None,
             extra_params: HashMap::new(),
         };
 

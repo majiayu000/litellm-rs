@@ -153,6 +153,7 @@ impl EmbeddingRouter {
             encoding_format: options.encoding_format.clone(),
             dimensions: options.dimensions,
             task_type: options.task_type.clone(),
+            truncation: None,
         }
     }
 
