@@ -52,6 +52,42 @@ pub(crate) struct EnterpriseOpenAiSettings {
     pub models: Vec<String>,
 }
 
+pub(crate) fn normalize_enterprise_base_url(
+    provider: &'static str,
+    raw: &str,
+    origin_only: bool,
+) -> Result<String, ProviderError> {
+    let raw = raw.trim();
+    let parsed = url::Url::parse(raw).map_err(|error| {
+        ProviderError::configuration(provider, format!("invalid base URL: {error}"))
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(ProviderError::configuration(
+            provider,
+            "base URL must use HTTP(S) and include a host",
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ProviderError::configuration(
+            provider,
+            "base URL must not contain user information",
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(ProviderError::configuration(
+            provider,
+            "base URL must not contain a query or fragment",
+        ));
+    }
+    if origin_only && parsed.path() != "/" {
+        return Err(ProviderError::configuration(
+            provider,
+            "base URL must be an origin without a path",
+        ));
+    }
+    Ok(raw.trim_end_matches('/').to_string())
+}
+
 impl EnterpriseOpenAiProvider {
     pub(crate) async fn new(
         name: &'static str,

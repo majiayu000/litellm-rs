@@ -3,7 +3,9 @@
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
-use crate::core::providers::enterprise::{EnterpriseOpenAiProvider, EnterpriseOpenAiSettings};
+use crate::core::providers::enterprise::{
+    EnterpriseOpenAiProvider, EnterpriseOpenAiSettings, normalize_enterprise_base_url,
+};
 use crate::core::rerank::{
     RerankDocument, RerankProvider, RerankRequest, RerankResponse, RerankResult,
 };
@@ -98,7 +100,7 @@ pub struct OciConfig {
 impl OciConfig {
     pub fn api_base(&self) -> Result<String, ProviderError> {
         if let Some(base) = &self.base_url {
-            return Ok(base.trim_end_matches('/').to_string());
+            return normalize_enterprise_base_url("oci", base, false);
         }
         let region = self.region.trim();
         if region.is_empty()

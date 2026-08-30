@@ -4,6 +4,7 @@ use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
 use crate::core::providers::bedrock::SigV4Signer;
+use crate::core::providers::enterprise::normalize_enterprise_base_url;
 use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::ChatRequest;
@@ -88,7 +89,7 @@ impl SageMakerConfig {
     }
     pub fn api_base(&self) -> Result<String, ProviderError> {
         if let Some(base) = &self.base_url {
-            return Ok(base.trim_end_matches('/').to_string());
+            return normalize_enterprise_base_url("sagemaker", base, false);
         }
         Self::validate_segment("sagemaker", "region", &self.region)?;
         Ok(format!(
@@ -396,5 +397,22 @@ mod tests {
             })
             .is_err()
         );
+    }
+    #[test]
+    fn custom_endpoint_rejects_userinfo_query_and_fragment() {
+        for endpoint in [
+            "https://user:password@sagemaker.example.com",
+            "https://sagemaker.example.com?tenant=other",
+            "https://sagemaker.example.com#fragment",
+        ] {
+            assert!(
+                SageMakerProvider::new(SageMakerConfig {
+                    base_url: Some(endpoint.to_string()),
+                    ..config()
+                })
+                .is_err(),
+                "custom endpoint must reject {endpoint}"
+            );
+        }
     }
 }

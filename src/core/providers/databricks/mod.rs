@@ -2,7 +2,9 @@
 
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
-use crate::core::providers::enterprise::{EnterpriseOpenAiProvider, EnterpriseOpenAiSettings};
+use crate::core::providers::enterprise::{
+    EnterpriseOpenAiProvider, EnterpriseOpenAiSettings, normalize_enterprise_base_url,
+};
 use serde::{Deserialize, Serialize};
 
 pub type DatabricksProvider = EnterpriseOpenAiProvider;
@@ -37,22 +39,7 @@ impl std::fmt::Debug for DatabricksConfig {
 
 impl DatabricksConfig {
     pub fn api_base(&self) -> Result<String, ProviderError> {
-        let workspace = self.workspace_url.trim_end_matches('/');
-        let parsed = reqwest::Url::parse(workspace).map_err(|error| {
-            ProviderError::configuration("databricks", format!("invalid workspace_url: {error}"))
-        })?;
-        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-            return Err(ProviderError::configuration(
-                "databricks",
-                "workspace_url must be an HTTP(S) origin",
-            ));
-        }
-        if parsed.path() != "/" && !parsed.path().is_empty() {
-            return Err(ProviderError::configuration(
-                "databricks",
-                "workspace_url must not contain a path",
-            ));
-        }
+        let workspace = normalize_enterprise_base_url("databricks", &self.workspace_url, true)?;
         Ok(format!("{workspace}/serving-endpoints"))
     }
 
@@ -110,6 +97,21 @@ mod tests {
             ..config
         };
         assert!(invalid.api_base().is_err());
+        for workspace_url in [
+            "https://user:password@dbc.example.com",
+            "https://dbc.example.com?tenant=other",
+            "https://dbc.example.com#fragment",
+        ] {
+            assert!(
+                DatabricksConfig {
+                    workspace_url: workspace_url.to_string(),
+                    ..invalid.clone()
+                }
+                .api_base()
+                .is_err(),
+                "workspace origin must reject {workspace_url}"
+            );
+        }
     }
 
     #[tokio::test]

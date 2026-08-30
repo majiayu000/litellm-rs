@@ -132,15 +132,25 @@ mod tests {
     }
     #[test]
     fn account_identity_rejects_host_injection() {
-        let config = SnowflakeConfig {
-            account_identifier: "acct/@evil.test".to_string(),
-            api_key: "jwt".to_string(),
-            token_type: SnowflakeTokenType::Oauth,
-            endpoint_access: ProviderEndpointAccess::PublicOnly,
-            timeout: 60,
-            max_retries: 2,
-            models: Vec::new(),
-        };
-        assert!(config.api_base().is_err());
+        for account_identifier in [
+            "acct/@evil.test",
+            "user:password@acct",
+            "acct?tenant=other",
+            "acct#fragment",
+        ] {
+            let config = SnowflakeConfig {
+                account_identifier: account_identifier.to_string(),
+                api_key: "jwt".to_string(),
+                token_type: SnowflakeTokenType::Oauth,
+                endpoint_access: ProviderEndpointAccess::PublicOnly,
+                timeout: 60,
+                max_retries: 2,
+                models: Vec::new(),
+            };
+            assert!(
+                config.api_base().is_err(),
+                "account identity must reject {account_identifier}"
+            );
+        }
     }
 }

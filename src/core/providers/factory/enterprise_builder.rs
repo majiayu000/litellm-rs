@@ -10,6 +10,7 @@ pub(super) async fn build_enterprise_provider(
     let mut object = config.as_object().cloned().ok_or_else(|| {
         ProviderError::configuration("enterprise", "configuration must be an object")
     })?;
+    rename(&mut object, "api_base", "base_url");
     match provider_type {
         ProviderType::Databricks => {
             rename(&mut object, "base_url", "workspace_url");

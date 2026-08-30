@@ -116,6 +116,75 @@ async fn watsonx_requires_explicit_access_token_in_settings() {
 }
 
 #[tokio::test]
+async fn enterprise_api_base_alias_builds_and_top_level_base_url_wins() {
+    let cases = [
+        ("databricks", "databricks-token", serde_json::json!({})),
+        (
+            "oci",
+            "oci-token",
+            serde_json::json!({
+                "region": "us-chicago-1",
+                "api_mode": "open_ai_compatible"
+            }),
+        ),
+        (
+            "watsonx",
+            "",
+            serde_json::json!({
+                "access_token": "iam-access-token",
+                "project_id": "project-id",
+                "region": "us-south"
+            }),
+        ),
+        (
+            "sagemaker",
+            "",
+            serde_json::json!({
+                "aws_access_key_id": "AKIATEST",
+                "aws_secret_access_key": "secret-test",
+                "region": "us-east-1",
+                "endpoint_name": "tenant-chat",
+                "payload_transformer": "open_ai_chat"
+            }),
+        ),
+    ];
+
+    for (provider_type, api_key, settings) in cases {
+        let mut alias_only = crate::config::models::provider::ProviderConfig {
+            name: format!("{provider_type}-alias"),
+            provider_type: provider_type.to_string(),
+            api_key: api_key.to_string(),
+            endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+            settings: serde_json::from_value(settings.clone()).expect("settings object"),
+            ..Default::default()
+        };
+        alias_only.settings.insert(
+            "api_base".to_string(),
+            serde_json::json!("https://enterprise.example.com"),
+        );
+        create_provider(alias_only)
+            .await
+            .unwrap_or_else(|error| panic!("{provider_type} api_base alias should build: {error}"));
+
+        let mut top_level = crate::config::models::provider::ProviderConfig {
+            name: format!("{provider_type}-precedence"),
+            provider_type: provider_type.to_string(),
+            api_key: api_key.to_string(),
+            base_url: Some("https://enterprise.example.com".to_string()),
+            settings: serde_json::from_value(settings).expect("settings object"),
+            ..Default::default()
+        };
+        top_level.settings.insert(
+            "api_base".to_string(),
+            serde_json::json!("https://user:password@ignored.example.com"),
+        );
+        create_provider(top_level).await.unwrap_or_else(|error| {
+            panic!("{provider_type} top-level base_url should win: {error}")
+        });
+    }
+}
+
+#[tokio::test]
 async fn reports_unknown_custom_provider() {
     let config = crate::config::models::provider::ProviderConfig {
         name: "my-custom-provider".to_string(),

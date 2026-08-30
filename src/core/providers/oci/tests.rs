@@ -38,6 +38,38 @@ fn official_endpoints_are_mode_specific_and_region_is_validated() {
     );
 }
 
+#[test]
+fn custom_endpoint_rejects_userinfo_query_and_fragment() {
+    let config = OciConfig {
+        region: "us-chicago-1".to_string(),
+        compartment_id: None,
+        auth: OciAuth::ApiKey {
+            token: "key".to_string(),
+        },
+        api_mode: OciApiMode::OpenAiCompatible,
+        base_url: None,
+        endpoint_access: ProviderEndpointAccess::PublicOnly,
+        timeout: 60,
+        max_retries: 2,
+        models: Vec::new(),
+    };
+    for endpoint in [
+        "https://user:password@oci.example.com/openai/v1",
+        "https://oci.example.com/openai/v1?tenant=other",
+        "https://oci.example.com/openai/v1#fragment",
+    ] {
+        assert!(
+            OciConfig {
+                base_url: Some(endpoint.to_string()),
+                ..config.clone()
+            }
+            .api_base()
+            .is_err(),
+            "custom endpoint must reject {endpoint}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn auth_and_mode_combinations_fail_closed() {
     let config = OciConfig {

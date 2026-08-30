@@ -33,7 +33,7 @@ const STANDARD_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base"];
 const AZURE_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "endpoint", "azure_endpoint"];
 const AZURE_AI_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "endpoint", "azure_ai_endpoint"];
 const VERTEX_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "endpoint"];
-const DATABRICKS_ENDPOINT_KEYS: &[&str] = &["base_url", "workspace_url"];
+const DATABRICKS_ENDPOINT_KEYS: &[&str] = &["base_url", "api_base", "workspace_url"];
 
 pub(crate) fn endpoint_keys_for_selector(selector: &str) -> &'static [&'static str] {
     match selector.parse::<ProviderType>() {

@@ -3,6 +3,7 @@
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+use crate::core::providers::enterprise::normalize_enterprise_base_url;
 use crate::core::rerank::{
     RerankDocument, RerankProvider, RerankRequest, RerankResponse, RerankResult, RerankUsage,
 };
@@ -85,17 +86,19 @@ impl WatsonxConfig {
                 "exactly one of project_id or space_id is required",
             ));
         }
-        if self.api_version.trim().is_empty() {
+        if self.api_version.len() != 10
+            || chrono::NaiveDate::parse_from_str(&self.api_version, "%Y-%m-%d").is_err()
+        {
             return Err(ProviderError::configuration(
                 "watsonx",
-                "api_version is required",
+                "api_version must be a valid YYYY-MM-DD date",
             ));
         }
         Ok(())
     }
     pub fn api_base(&self) -> Result<String, ProviderError> {
         if let Some(base) = &self.base_url {
-            return Ok(base.trim_end_matches('/').to_string());
+            return normalize_enterprise_base_url("watsonx", base, false);
         }
         let region = self.region.trim();
         if region.is_empty()
@@ -167,7 +170,12 @@ impl WatsonxProvider {
         Value::Object(body)
     }
     async fn post(&self, path: &str, body: Value) -> Result<Value, ProviderError> {
-        let url = format!("{}{path}", self.base_url);
+        let mut url =
+            reqwest::Url::parse(&format!("{}{path}", self.base_url)).map_err(|error| {
+                ProviderError::configuration("watsonx", format!("invalid request URL: {error}"))
+            })?;
+        url.query_pairs_mut()
+            .append_pair("version", &self.config.api_version);
         let response = self
             .client
             .post(url)?
@@ -242,10 +250,7 @@ impl LLMProvider for WatsonxProvider {
             })?;
         body.remove("model");
         let mut response = self
-            .post(
-                &format!("/ml/v1/text/chat?version={}", self.config.api_version),
-                self.native_body(model.clone(), body),
-            )
+            .post("/ml/v1/text/chat", self.native_body(model.clone(), body))
             .await?;
         let object = response.as_object_mut().ok_or_else(|| {
             ProviderError::response_parsing("watsonx", "chat response must be an object")
@@ -278,7 +283,7 @@ impl LLMProvider for WatsonxProvider {
         );
         let response = self
             .post(
-                &format!("/ml/v1/text/embeddings?version={}", self.config.api_version),
+                "/ml/v1/text/embeddings",
                 self.native_body(model.clone(), body),
             )
             .await?;
@@ -302,15 +307,12 @@ impl LLMProvider for WatsonxProvider {
                 embedding,
             });
         }
-        let prompt_tokens = response
-            .get("input_token_count")
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok());
+        let prompt_tokens = required_input_token_count(&response)?;
         Ok(EmbeddingResponse {
             object: "list".to_string(),
             data,
             model,
-            usage: prompt_tokens.map(|tokens| Usage::new(tokens, 0)),
+            usage: Some(Usage::new(prompt_tokens, 0)),
             embeddings: None,
         })
     }
@@ -386,7 +388,7 @@ impl RerankProvider for WatsonxRerankProvider {
         let response = self
             .0
             .post(
-                &format!("/ml/v1/text/rerank?version={}", self.0.config.api_version),
+                "/ml/v1/text/rerank",
                 self.0.native_body(model.clone(), body),
             )
             .await
@@ -465,6 +467,7 @@ fn parse_rerank(
             document,
         });
     }
+    let total_tokens = required_input_token_count(&response).map_err(GatewayError::Provider)?;
     Ok(RerankResponse {
         id: response
             .get("id")
@@ -473,16 +476,22 @@ fn parse_rerank(
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         results,
         model,
-        usage: response
-            .get("input_token_count")
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok())
-            .map(|tokens| RerankUsage {
-                total_tokens: Some(tokens),
-                ..Default::default()
-            }),
+        usage: Some(RerankUsage {
+            total_tokens: Some(total_tokens),
+            ..Default::default()
+        }),
         meta: HashMap::new(),
     })
+}
+
+fn required_input_token_count(response: &Value) -> Result<u32, ProviderError> {
+    response
+        .get("input_token_count")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| {
+            ProviderError::response_parsing("watsonx", "response missing a valid input_token_count")
+        })
 }
 
 fn default_api_version() -> String {
@@ -551,6 +560,48 @@ mod tests {
     }
 
     #[test]
+    fn custom_endpoint_and_api_version_reject_url_injection() {
+        let base = WatsonxConfig {
+            access_token: "token".to_string(),
+            project_id: Some("project".to_string()),
+            space_id: None,
+            region: "us-south".to_string(),
+            api_version: default_api_version(),
+            base_url: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
+            timeout: 60,
+            max_retries: 2,
+            models: Vec::new(),
+        };
+        for endpoint in [
+            "https://user:password@watsonx.example.com",
+            "https://watsonx.example.com?tenant=other",
+            "https://watsonx.example.com#fragment",
+        ] {
+            assert!(
+                WatsonxConfig {
+                    base_url: Some(endpoint.to_string()),
+                    ..base.clone()
+                }
+                .api_base()
+                .is_err(),
+                "custom endpoint must reject {endpoint}"
+            );
+        }
+        for version in ["2025-1-01", "2025-02-30", "2025-01-01&other=value"] {
+            assert!(
+                WatsonxConfig {
+                    api_version: version.to_string(),
+                    ..base.clone()
+                }
+                .validate()
+                .is_err(),
+                "api_version must reject {version}"
+            );
+        }
+    }
+
+    #[test]
     fn official_rerank_response_without_id_gets_internal_id() {
         let documents = vec![
             RerankDocument::from("first"),
@@ -611,6 +662,113 @@ mod tests {
             )
             .expect_err("malformed upstream success payload must fail");
             assert_watsonx_rerank_response_parsing(error, expected_message);
+        }
+    }
+
+    #[test]
+    fn missing_or_invalid_rerank_usage_is_a_provider_response_error() {
+        let documents = vec![RerankDocument::from("first")];
+        for input_token_count in [
+            None,
+            Some(serde_json::json!("12")),
+            Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let mut response = serde_json::json!({
+                "results": [{"index": 0, "score": 0.5}]
+            });
+            if let Some(value) = input_token_count {
+                response["input_token_count"] = value;
+            }
+            let error = parse_rerank(
+                "watsonx",
+                "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+                response,
+                &documents,
+                true,
+            )
+            .expect_err("official watsonx usage must be a u32 integer");
+            assert_watsonx_rerank_response_parsing(error, "input_token_count");
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_or_invalid_embedding_usage_is_a_provider_response_error() {
+        use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for input_token_count in [
+            None,
+            Some(serde_json::json!("12")),
+            Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .expect("mock listener should bind");
+            let address = listener.local_addr().expect("listener address");
+            let mut response = serde_json::json!({
+                "results": [{"embedding": [0.25, 0.75]}]
+            });
+            if let Some(value) = input_token_count {
+                response["input_token_count"] = value;
+            }
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("mock request");
+                let mut request = vec![0_u8; 4096];
+                let bytes_read = stream.read(&mut request).await.expect("read request");
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                assert!(
+                    request.starts_with("POST /ml/v1/text/embeddings?version=2024-05-31 HTTP/1.1"),
+                    "watsonx version must be encoded as one query pair: {request}"
+                );
+                let body = response.to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(reply.as_bytes())
+                    .await
+                    .expect("write response");
+            });
+            let provider = WatsonxProvider::new(WatsonxConfig {
+                access_token: "token".to_string(),
+                project_id: Some("project".to_string()),
+                space_id: None,
+                region: "us-south".to_string(),
+                api_version: default_api_version(),
+                base_url: Some(format!("http://{address}")),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                timeout: 5,
+                max_retries: 0,
+                models: Vec::new(),
+            })
+            .expect("mock provider should build");
+            let error = provider
+                .embeddings(
+                    EmbeddingRequest {
+                        model: "slate".to_string(),
+                        input: EmbeddingInput::Text("hello".to_string()),
+                        user: None,
+                        encoding_format: None,
+                        dimensions: None,
+                        task_type: None,
+                        truncation: None,
+                    },
+                    RequestContext::default(),
+                )
+                .await
+                .expect_err("official watsonx usage must be a u32 integer");
+            server.await.expect("mock server should finish");
+            assert!(
+                matches!(
+                    error,
+                    ProviderError::ResponseParsing {
+                        provider: "watsonx",
+                        ref message
+                    } if message.contains("input_token_count")
+                ),
+                "unexpected embedding parsing error: {error:?}"
+            );
         }
     }
 
