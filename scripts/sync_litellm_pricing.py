@@ -53,11 +53,11 @@ GPT_PRO_TIER_FIELDS = (
     "output_cost_per_token_above_272k_tokens",
     "cache_read_input_token_cost_above_272k_tokens",
 )
-GEMINI_BATCH_FIELDS = (
-    "input_cost_per_token_batches",
-    "output_cost_per_token_batches",
-    "cache_read_input_token_cost_batches",
-)
+GEMINI_BATCH_RATES = {
+    "input_cost_per_token_batches": 0.000000375,
+    "output_cost_per_token_batches": 0.000001875,
+    "cache_read_input_token_cost_batches": 0.0000000375,
+}
 GEMINI_PROMO_VALID_THROUGH = date(2026, 12, 31)
 GEMINI_PROMO_MODELS = frozenset(
     (
@@ -70,10 +70,6 @@ GEMINI_PROMO_MODELS = frozenset(
 OFFICIAL_OVERRIDE_REMOVALS = {
     "gpt-5.5-pro": GPT_PRO_TIER_FIELDS,
     "gpt-5.5-pro-2026-04-23": GPT_PRO_TIER_FIELDS,
-    "gemini-3.6-flash": GEMINI_BATCH_FIELDS,
-    "gemini-3.7-flash": GEMINI_BATCH_FIELDS,
-    "gemini/gemini-3.6-flash": GEMINI_BATCH_FIELDS,
-    "gemini/gemini-3.7-flash": GEMINI_BATCH_FIELDS,
 }
 FORBIDDEN_PRICING_FIELDS = OFFICIAL_OVERRIDE_REMOVALS
 
@@ -125,6 +121,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -132,6 +129,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -139,6 +137,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },
@@ -146,6 +145,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.00000075,
         "output_cost_per_token": 0.00000375,
         "cache_read_input_token_cost": 0.000000075,
+        **GEMINI_BATCH_RATES,
         "pricing_valid_through": "2026-12-31",
         "source": GEMINI_SOURCE,
     },

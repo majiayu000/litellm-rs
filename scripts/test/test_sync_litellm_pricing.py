@@ -265,6 +265,9 @@ class SyncPricingTests(unittest.TestCase):
             "input_cost_per_token": 0.0000015,
             "output_cost_per_token": 0.0000075,
             "cache_read_input_token_cost": 0.00000015,
+            "input_cost_per_token_batches": 0.00000075,
+            "output_cost_per_token_batches": 0.00000375,
+            "cache_read_input_token_cost_batches": 0.000000075,
         }
         promotional = {
             "gemini-3.6-flash": {
@@ -292,6 +295,12 @@ class SyncPricingTests(unittest.TestCase):
         self.assertEqual(active["gemini-3.6-flash"], promotional["gemini-3.6-flash"])
         self.assertEqual(expired["gemini-3.6-flash"], source["gemini-3.6-flash"])
         self.assertEqual(preserved["gemini-3.6-flash"], corrected["gemini-3.6-flash"])
+        self.assertEqual(
+            active["gemini-3.6-flash"]["input_cost_per_token_batches"], 0.000000375
+        )
+        self.assertEqual(
+            expired["gemini-3.6-flash"]["input_cost_per_token_batches"], 0.00000075
+        )
 
 
 class PricingSchemaValidationTests(unittest.TestCase):
@@ -842,27 +851,20 @@ class OfficialPricingRegressionTests(unittest.TestCase):
             },
         )
 
-    def test_issue_1212_gemini_promo_exact_ids(self) -> None:
+    def test_issue_1212_and_1223_gemini_promo_exact_ids(self) -> None:
         expected = {
             "input_cost_per_token": 0.00000075,
             "output_cost_per_token": 0.00000375,
             "cache_read_input_token_cost": 0.000000075,
+            "input_cost_per_token_batches": 0.000000375,
+            "output_cost_per_token_batches": 0.000001875,
+            "cache_read_input_token_cost_batches": 0.0000000375,
             "pricing_valid_through": "2026-12-31",
         }
         self.assert_fields("gemini/gemini-3.6-flash", expected | {"litellm_provider": "gemini"})
         self.assert_fields("gemini/gemini-3.7-flash", expected | {"litellm_provider": "gemini"})
         self.assert_fields("gemini-3.6-flash", expected)
         self.assert_fields("gemini-3.7-flash", expected)
-        for model in (
-            "gemini-3.6-flash",
-            "gemini-3.7-flash",
-            "gemini/gemini-3.6-flash",
-            "gemini/gemini-3.7-flash",
-        ):
-            self.assertNotIn("input_cost_per_token_batches", self.catalog[model])
-            self.assertNotIn("output_cost_per_token_batches", self.catalog[model])
-            self.assertNotIn("cache_read_input_token_cost_batches", self.catalog[model])
-
     def test_issue_1213_xai_tiered_exact_ids(self) -> None:
         self.assert_fields(
             "xai/grok-4.5",

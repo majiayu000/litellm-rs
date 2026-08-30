@@ -4,6 +4,7 @@
 //! unified cost calculation for all AI providers.
 
 mod authority;
+mod billing;
 mod cache;
 mod completion;
 mod events;
@@ -27,6 +28,7 @@ pub(super) const REMOTE_LITELLM_PRICING_SOURCE: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
 // Re-export public types
+pub use billing::PricingBillingMode;
 pub use service::PricingService;
 pub(crate) use types::PricingSnapshot;
 pub use types::{

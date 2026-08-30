@@ -1,5 +1,6 @@
 //! Pure token and modality usage-cost calculation for loaded catalog rows.
 
+use super::billing::PricingBillingMode;
 use super::types::{CostType, LiteLLMModelInfo, PricingCostBreakdown, PricingUsage};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use chrono::{DateTime, Utc};
@@ -44,57 +45,40 @@ fn calculate_usage_cost_with_rates(
     usage: &PricingUsage,
     peak_rates: Option<crate::core::pricing::time_of_use::TokenRates>,
 ) -> Result<PricingCostBreakdown> {
-    let (mut input_cost_per_token, mut output_cost_per_token) =
-        super::image_pricing::token_unit_prices(model, model_info, usage)?;
-    if let Some(rates) = peak_rates {
-        input_cost_per_token = rates.input_cost_per_token;
-        output_cost_per_token = rates.output_cost_per_token;
-    }
-
-    let input_cost_per_token = tiered_cost_per_token(
-        model_info,
-        input_cost_per_token,
-        "input_cost_per_token_above_",
-        usage.prompt_tokens,
-    );
-    let output_cost_per_token = tiered_cost_per_token(
-        model_info,
-        output_cost_per_token,
-        "output_cost_per_token_above_",
-        usage.prompt_tokens,
-    );
-    let base_cache_read_cost = peak_rates
-        .map(|rates| rates.cache_read_input_token_cost)
-        .unwrap_or_else(|| {
-            model_info
-                .extra
-                .get("cache_read_input_token_cost")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(input_cost_per_token)
-        });
-    let cache_read_cost_per_token = tiered_cost_per_token(
-        model_info,
-        base_cache_read_cost,
-        "cache_read_input_token_cost_above_",
-        usage.prompt_tokens,
-    );
-    let cache_creation_cost_per_token = tiered_cost_per_token(
-        model_info,
-        model_info
-            .extra
-            .get("cache_creation_input_token_cost")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(input_cost_per_token),
-        "cache_creation_input_token_cost_above_",
-        usage.prompt_tokens,
-    );
     let cache_creation_tokens = usage.cache_creation_token_count();
     let cache_read_tokens = usage.cache_read_token_count();
     let non_cached_tokens = usage.non_cached_prompt_tokens();
-    let input_cost = non_cached_tokens as f64 * input_cost_per_token;
-    let output_cost = usage.completion_tokens as f64 * output_cost_per_token;
-    let cache_cost = cache_creation_tokens as f64 * cache_creation_cost_per_token
-        + cache_read_tokens as f64 * cache_read_cost_per_token;
+    let (input_rate, output_rate, cache_read_rate, cache_creation_rate) = match usage.billing_mode {
+        PricingBillingMode::Batch => {
+            validate_batch_usage(model, usage)?;
+            (
+                required_batch_rate(
+                    model_info,
+                    model,
+                    "input_cost_per_token_batches",
+                    non_cached_tokens,
+                )?,
+                required_batch_rate(
+                    model_info,
+                    model,
+                    "output_cost_per_token_batches",
+                    usage.completion_tokens,
+                )?,
+                required_batch_rate(
+                    model_info,
+                    model,
+                    "cache_read_input_token_cost_batches",
+                    cache_read_tokens,
+                )?,
+                0.0,
+            )
+        }
+        PricingBillingMode::Standard => standard_token_rates(model, model_info, usage, peak_rates)?,
+    };
+    let input_cost = non_cached_tokens as f64 * input_rate;
+    let output_cost = usage.completion_tokens as f64 * output_rate;
+    let cache_cost = cache_creation_tokens as f64 * cache_creation_rate
+        + cache_read_tokens as f64 * cache_read_rate;
     let audio_cost = priced_extra_units(
         model_info,
         model,
@@ -131,6 +115,102 @@ fn calculate_usage_cost_with_rates(
         provider: requested_provider.to_string(),
         cost_type: CostType::TokenBased,
     })
+}
+
+fn standard_token_rates(
+    model: &str,
+    model_info: &LiteLLMModelInfo,
+    usage: &PricingUsage,
+    peak_rates: Option<crate::core::pricing::time_of_use::TokenRates>,
+) -> Result<(f64, f64, f64, f64)> {
+    let (mut input, mut output) =
+        super::image_pricing::token_unit_prices(model, model_info, usage)?;
+    if let Some(rates) = peak_rates {
+        input = rates.input_cost_per_token;
+        output = rates.output_cost_per_token;
+    }
+    input = tiered_cost_per_token(
+        model_info,
+        input,
+        "input_cost_per_token_above_",
+        usage.prompt_tokens,
+    );
+    output = tiered_cost_per_token(
+        model_info,
+        output,
+        "output_cost_per_token_above_",
+        usage.prompt_tokens,
+    );
+    let cache_read = peak_rates
+        .map(|rates| rates.cache_read_input_token_cost)
+        .unwrap_or_else(|| extra_f64_or(model_info, "cache_read_input_token_cost", input));
+    let cache_creation = extra_f64_or(model_info, "cache_creation_input_token_cost", input);
+    Ok((
+        input,
+        output,
+        tiered_cost_per_token(
+            model_info,
+            cache_read,
+            "cache_read_input_token_cost_above_",
+            usage.prompt_tokens,
+        ),
+        tiered_cost_per_token(
+            model_info,
+            cache_creation,
+            "cache_creation_input_token_cost_above_",
+            usage.prompt_tokens,
+        ),
+    ))
+}
+
+fn required_batch_rate(
+    pricing: &LiteLLMModelInfo,
+    model: &str,
+    key: &str,
+    units: u32,
+) -> Result<f64> {
+    if units == 0 {
+        return Ok(0.0);
+    }
+    let rate = pricing
+        .extra
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| {
+            GatewayError::Config(format!("Missing batch pricing for model {model}: {key}"))
+        })?;
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(GatewayError::Config(format!(
+            "Invalid batch pricing for model {model}: {key} ({rate})"
+        )));
+    }
+    Ok(rate)
+}
+
+fn validate_batch_usage(model: &str, usage: &PricingUsage) -> Result<()> {
+    if usage.cache_creation_token_count() > 0 {
+        return Err(GatewayError::Config(format!(
+            "Missing batch cache creation/storage pricing for model {model}: token-hour storage cannot use a token rate"
+        )));
+    }
+    if usage.audio_token_count() > 0
+        || usage.image_tokens.unwrap_or(0) > 0
+        || usage.output_image_count.unwrap_or(0) > 0
+        || usage.reasoning_tokens.unwrap_or(0) > 0
+    {
+        return Err(GatewayError::Config(format!(
+            "Missing modality-specific batch pricing for model {model}"
+        )));
+    }
+    Ok(())
+}
+
+fn extra_f64_or(pricing: &LiteLLMModelInfo, key: &str, fallback: f64) -> f64 {
+    pricing
+        .extra
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(fallback)
 }
 
 fn extra_f64(pricing: &LiteLLMModelInfo, key: &str) -> f64 {

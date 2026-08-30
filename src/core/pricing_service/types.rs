@@ -1,5 +1,6 @@
 //! Type definitions for the pricing service
 
+use super::billing::PricingBillingMode;
 pub use crate::core::pricing::LiteLLMModelInfo;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -35,8 +36,7 @@ pub(crate) struct PricingSnapshot {
     pub(super) data: Arc<PricingData>,
 }
 
-/// Pricing update event
-/// Event for pricing updates
+/// Event for pricing updates.
 #[derive(Debug, Clone)]
 pub struct PricingUpdateEvent {
     /// Type of pricing event that occurred
@@ -86,6 +86,7 @@ pub struct CostResult {
 /// Usage information for authority-backed pricing calculations.
 #[derive(Debug, Clone, Default)]
 pub struct PricingUsage {
+    pub billing_mode: PricingBillingMode,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
@@ -103,6 +104,7 @@ pub struct PricingUsage {
 impl PricingUsage {
     pub fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
         Self {
+            billing_mode: PricingBillingMode::Standard,
             prompt_tokens,
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
@@ -145,6 +147,7 @@ impl From<&crate::core::types::responses::Usage> for PricingUsage {
         let prompt_details = usage.prompt_tokens_details.as_ref();
         let completion_details = usage.completion_tokens_details.as_ref();
         Self {
+            billing_mode: PricingBillingMode::Standard,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
@@ -229,10 +232,6 @@ pub struct CostRange {
     /// Maximum output cost per token
     pub output_max: f64,
 }
-
-// ====================================================================================
-// TESTS
-// ====================================================================================
 
 #[cfg(test)]
 mod tests {
