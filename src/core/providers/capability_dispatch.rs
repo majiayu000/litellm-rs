@@ -45,9 +45,25 @@ impl Provider {
                                         model.model_info.capabilities.contains(capability)
                                     })
                             }
-                            "azure_ai" => provider
-                                .get_model_registry()
-                                .supports_capability(catalog_model, capability),
+                            "azure_ai" => {
+                                provider
+                                    .get_model_registry()
+                                    .supports_capability(catalog_model, capability)
+                                    || provider.model_identity.as_ref().is_some_and(|binding| {
+                                        binding
+                                            .pricing()
+                                            .get_model_info_for_provider("azure_ai", catalog_model)
+                                            .is_some_and(|(_, metadata)| match capability {
+                                                ProviderCapability::ChatCompletion => {
+                                                    metadata.mode == "chat"
+                                                }
+                                                ProviderCapability::Embeddings => {
+                                                    metadata.mode == "embedding"
+                                                }
+                                                _ => false,
+                                            })
+                                    })
+                            }
                             _ => false,
                         }
                 }
@@ -202,6 +218,81 @@ mod tests {
             "customer-phi-deployment",
             &ProviderCapability::Embeddings,
         ));
+    }
+
+    #[cfg(feature = "providers-extra")]
+    #[test]
+    fn mapped_azure_ai_callable_models_use_exact_bound_catalog_metadata() {
+        use crate::core::pricing_service::PricingService;
+        use crate::core::providers::model_identity::{
+            DeploymentProviderBinding, ModelIdentityMapping, validate_deployment_identity,
+        };
+        use crate::core::providers::registry::model_catalog_authority::CatalogAuthority;
+        use crate::core::providers::{
+            Provider, azure_ai::AzureAIConfig, azure_ai::AzureAIProvider,
+        };
+        use crate::core::types::model::ProviderCapability;
+        use std::sync::Arc;
+
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        let catalog = CatalogAuthority::from_embedded().expect("embedded catalog should load");
+
+        let mapped_provider = |wire_model: &str, catalog_model: &str| {
+            let mapping =
+                ModelIdentityMapping::new(Some(format!("azure_ai/{catalog_model}")), None);
+            let identity = validate_deployment_identity(
+                "mapped-azure-ai",
+                "azure_ai",
+                wire_model,
+                Some(&mapping),
+                None,
+                &catalog,
+                &pricing.snapshot(),
+            )
+            .expect("exact Azure AI callable identity should validate");
+            let mut config = AzureAIConfig::new("azure_ai");
+            config.base.api_key = Some("test-key".to_string());
+            config.base.api_base = Some("https://example.ai.azure.com".to_string());
+            let mut provider =
+                AzureAIProvider::new(config).expect("Azure AI provider should build");
+            provider.model_identity = Some(DeploymentProviderBinding::new(
+                identity,
+                Arc::clone(&pricing),
+            ));
+            Provider::AzureAI(provider)
+        };
+
+        let llama = mapped_provider("llama-wire", "Llama-3.3-70B-Instruct");
+        assert!(
+            llama.supports_capability_for_model("llama-wire", &ProviderCapability::ChatCompletion,)
+        );
+        assert!(
+            !llama.supports_capability_for_model("llama-wire", &ProviderCapability::Embeddings,)
+        );
+
+        let cohere = mapped_provider("cohere-wire", "Cohere-embed-v3-multilingual");
+        assert!(
+            cohere.supports_capability_for_model("cohere-wire", &ProviderCapability::Embeddings,)
+        );
+        assert!(
+            !cohere
+                .supports_capability_for_model("cohere-wire", &ProviderCapability::ChatCompletion,)
+        );
+
+        let mut config = AzureAIConfig::new("azure_ai");
+        config.base.api_key = Some("test-key".to_string());
+        config.base.api_base = Some("https://example.ai.azure.com".to_string());
+        let unknown = Provider::AzureAI(
+            AzureAIProvider::new(config).expect("Azure AI provider should build"),
+        );
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::Embeddings,
+        ] {
+            assert!(!unknown.supports_capability_for_model("unknown-wire", &capability));
+        }
     }
 
     #[test]
