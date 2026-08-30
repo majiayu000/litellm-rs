@@ -9,9 +9,13 @@ mod catalog;
 mod contract;
 #[cfg(test)]
 mod cost_tests;
+#[cfg(test)]
+mod current_tests;
+mod pricing_schedule;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
+pub(crate) use pricing_schedule::flash_uses_standard_pricing_at;
 pub use surface::GoogleGeminiApiSurface;
 
 pub use crate::core::cost::types::ModelPricing;
@@ -176,26 +180,12 @@ impl GeminiModelRegistry {
         self.models.values().collect()
     }
 
-    /// List model metadata for a concrete Google API surface.
-    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
-        let mut models = self
-            .models
-            .values()
-            .filter(|spec| surface.includes(spec))
-            .map(|spec| surface.overlay_model_info(spec))
-            .collect::<Vec<_>>();
-        models.sort_by(|left, right| left.id.cmp(&right.id));
-        models
-    }
-
-    /// Check
     pub fn supports_feature(&self, model_id: &str, feature: &ModelFeature) -> bool {
         self.get_model_spec(model_id)
             .map(|spec| spec.features.contains(feature))
             .unwrap_or(false)
     }
 
-    /// Model
     pub fn get_model_family(&self, model_id: &str) -> Option<&GeminiModelFamily> {
         self.get_model_spec(model_id).map(|spec| &spec.family)
     }
@@ -220,7 +210,7 @@ impl GeminiModelRegistry {
     pub fn from_model_name(model_name: &str) -> Option<GeminiModelFamily> {
         let model_lower = model_name.to_lowercase();
 
-        if model_lower.contains("gemini-3.7-flash") {
+        if model_name == "gemini-3.7-flash" {
             Some(GeminiModelFamily::Gemini37Flash)
         } else if model_lower.contains("gemini-3.6-flash") {
             Some(GeminiModelFamily::Gemini36Flash)

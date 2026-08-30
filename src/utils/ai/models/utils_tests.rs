@@ -3,7 +3,7 @@ use super::*;
 use crate::core::providers::gemini::get_gemini_registry;
 use crate::core::providers::openai::get_openai_registry;
 use crate::core::providers::shared::{
-    GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW,
+    GEMINI_15_PRO_CONTEXT_WINDOW, GEMINI_20_FLASH_CONTEXT_WINDOW, GEMINI_31_CONTEXT_WINDOW,
 };
 
 // ==================== get_model_capabilities Tests ====================
@@ -211,6 +211,34 @@ fn test_get_model_capabilities_gemini_20_flash() {
         caps.context_window,
         Some(GEMINI_20_FLASH_CONTEXT_WINDOW as usize)
     );
+}
+
+#[test]
+fn qualified_gemini_37_uses_the_registry_context_window() {
+    for model in [
+        "gemini-3.7-flash",
+        "gemini/gemini-3.7-flash",
+        "google/gemini-3.7-flash",
+        "GOOGLE/gemini-3.7-flash",
+        "vertex_ai/gemini-3.7-flash",
+    ] {
+        let capabilities = ModelUtils::get_model_capabilities(model);
+        assert_eq!(
+            capabilities.context_window,
+            Some(GEMINI_31_CONTEXT_WINDOW as usize),
+            "{model}"
+        );
+    }
+
+    for rejected in [
+        "GEMINI-3.7-FLASH",
+        "wrong/gemini-3.7-flash",
+        "gemini/google/gemini-3.7-flash",
+    ] {
+        let capabilities = ModelUtils::get_model_capabilities(rejected);
+        assert_eq!(capabilities.context_window, None, "{rejected}");
+        assert!(!capabilities.supports_function_calling, "{rejected}");
+    }
 }
 
 #[cfg(feature = "providers-extended")]
@@ -617,12 +645,26 @@ fn test_validate_model_with_provider_valid() {
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "anthropic").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.1-pro-preview", "google").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("gemini-3.7-flash", "google").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("google/gemini-3.7-flash", "google").is_ok());
 }
 
 #[test]
 fn test_validate_model_with_provider_invalid() {
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "anthropic").is_err());
     assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "openai").is_err());
+    for near_match in [
+        "GEMINI-3.7-FLASH",
+        "google/GEMINI-3.7-FLASH",
+        "gemini-3.7-flash-preview",
+        "gemini-3.7-flash-20260813",
+        "gemini-3.7-flash-suffix",
+    ] {
+        assert!(
+            ModelUtils::validate_model_with_provider(near_match, "google").is_err(),
+            "stable Gemini 3.7 validation must reject {near_match}"
+        );
+    }
 }
 
 #[test]
@@ -657,6 +699,7 @@ fn test_get_compatible_models_anthropic() {
 #[test]
 fn test_get_compatible_models_google() {
     let models = ModelUtils::get_compatible_models_for_provider("google");
+    assert!(models.contains(&"gemini-3.7-flash".to_string()));
     assert!(models.contains(&"gemini-3.5-flash".to_string()));
     assert!(models.contains(&"gemini-3.1-flash-lite".to_string()));
     assert!(models.contains(&"gemini-pro".to_string()));
