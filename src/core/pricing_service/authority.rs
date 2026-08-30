@@ -274,7 +274,7 @@ impl PricingSnapshot {
         {
             Ok(breakdown) => Ok(breakdown),
             Err(error) => {
-                if usage.billing_mode == super::billing::PricingBillingMode::Batch {
+                if usage.billing_mode == super::types::PricingBillingMode::Batch {
                     return Err(error);
                 }
                 let Some(text_usage) = text_only_usage_for_modal_settlement(usage) else {

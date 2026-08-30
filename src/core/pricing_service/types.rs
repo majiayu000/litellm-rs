@@ -1,6 +1,5 @@
 //! Type definitions for the pricing service
 
-use super::billing::PricingBillingMode;
 pub use crate::core::pricing::LiteLLMModelInfo;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -83,7 +82,13 @@ pub struct CostResult {
     pub cost_type: CostType,
 }
 
-/// Usage information for authority-backed pricing calculations.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum PricingBillingMode {
+    #[default]
+    Standard,
+    Batch,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PricingUsage {
     pub billing_mode: PricingBillingMode,
@@ -194,7 +199,6 @@ pub struct PricingCostEstimate {
     pub currency: String,
 }
 
-/// Type of cost calculation method
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum CostType {
     /// Cost calculated based on token count
@@ -207,7 +211,6 @@ pub enum CostType {
     Custom,
 }
 
-/// Pricing statistics
 #[derive(Debug, Clone)]
 pub struct PricingStatistics {
     /// Total number of models in the pricing database
