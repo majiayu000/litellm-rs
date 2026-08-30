@@ -7,6 +7,7 @@
 //! reached from any live code path and were removed.
 
 mod api_methods;
+pub(crate) use api_methods::execute_image_edit;
 pub mod client;
 mod client_convenience;
 #[cfg(test)]

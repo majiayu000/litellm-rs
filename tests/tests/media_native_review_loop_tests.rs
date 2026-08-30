@@ -189,6 +189,39 @@ async fn runway_truncated_error_bodies_preserve_status_for_every_operation() {
     assert!(retry_policy_allows(&cancel_error));
 }
 
+#[cfg(feature = "runway-media")]
+#[tokio::test]
+async fn runway_polling_truncated_error_bodies_preserve_known_statuses() {
+    let (address, server) =
+        truncated_error_responses(vec![(400, "Bad Request"), (401, "Unauthorized")]).await;
+    let mut config = RunwayConfig::with_api_key("runway-secret");
+    config.base.api_base = Some(format!("http://{address}/v1"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config.poll_policy = PollPolicy::from_millis(1, 4, 200);
+    let provider = RunwayProvider::new(config).expect("Runway provider should initialize");
+
+    let bad_request = provider
+        .wait_for_task("task-400", &CancellationToken::new())
+        .await
+        .expect_err("truncated polling 400 response should fail");
+    let unauthorized = provider
+        .wait_for_task("task-401", &CancellationToken::new())
+        .await
+        .expect_err("truncated polling 401 response should fail");
+    server.await.expect("Runway polling server should finish");
+
+    assert!(
+        matches!(bad_request, ProviderError::InvalidRequest { .. }),
+        "{bad_request:?}"
+    );
+    assert!(!retry_policy_allows(&bad_request));
+    assert!(
+        matches!(unauthorized, ProviderError::Authentication { .. }),
+        "{unauthorized:?}"
+    );
+    assert!(!retry_policy_allows(&unauthorized));
+}
+
 #[tokio::test]
 async fn stability_dns_policy_failure_remains_pre_dispatch_configuration_error() {
     let mut config = StabilityConfig::with_api_key("stability-secret");

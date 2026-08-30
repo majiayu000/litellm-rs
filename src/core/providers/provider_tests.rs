@@ -1,4 +1,52 @@
 use super::*;
+use crate::core::net::ProviderEndpointAccess;
+use crate::core::types::context::RequestContext;
+use crate::core::types::image::ImageEditRequest;
+use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+async fn read_full_request(socket: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = socket.read(&mut buffer).await.expect("request should read");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&request).into_owned()
+}
+
+fn image_edit_request() -> ImageEditRequest {
+    ImageEditRequest {
+        image: b"source-image".to_vec(),
+        mask: Some(b"mask-image".to_vec()),
+        prompt: "replace the sky".to_string(),
+        model: Some("gpt-image-1".to_string()),
+        n: Some(1),
+        size: Some("1024x1024".to_string()),
+        response_format: Some("b64_json".to_string()),
+        user: Some("test-user".to_string()),
+    }
+}
 
 #[test]
 fn test_provider_enum_is_send_sync() {
@@ -146,4 +194,83 @@ async fn test_provider_supports_capability_for_optional_provider() {
     assert!(provider.supports_capability(&ProviderCapability::ChatCompletionStream));
     assert!(provider.supports_capability(&ProviderCapability::Embeddings));
     assert!(provider.supports_capability(&ProviderCapability::TextToSpeech));
+}
+
+#[tokio::test]
+async fn advertised_openai_image_edit_variants_dispatch_upstream() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("image edit listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener address should exist");
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_server = Arc::clone(&captured);
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("edit request should arrive");
+            let request = read_full_request(&mut socket).await;
+            captured_for_server
+                .lock()
+                .expect("capture lock")
+                .push(request);
+            let body = r#"{"created":1,"data":[{"b64_json":"edited"}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("response should write");
+        }
+    });
+
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test".to_string());
+    openai_config.base.api_base = Some(format!("http://{address}/v1"));
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize"),
+    );
+
+    let mut compatible_config = openai_like::OpenAILikeConfig::with_api_key(
+        format!("http://{address}/v1"),
+        "compatible-secret",
+    );
+    compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let compatible = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
+            .await
+            .expect("OpenAI-compatible provider should initialize"),
+    );
+
+    for provider in [&openai, &compatible] {
+        assert!(provider.supports_capability(&ProviderCapability::ImageEdit));
+        let response = provider
+            .edit_image(image_edit_request(), RequestContext::default())
+            .await
+            .expect("advertised image edit should dispatch upstream");
+        assert_eq!(response.data[0].b64_json.as_deref(), Some("edited"));
+    }
+    server.await.expect("image edit server should finish");
+
+    let captured = captured.lock().expect("capture lock");
+    assert_eq!(captured.len(), 2);
+    for request in captured.iter() {
+        assert!(request.starts_with("POST /v1/images/edits HTTP/1.1"));
+        assert!(request.contains("multipart/form-data; boundary="));
+        assert!(request.contains("name=\"image\""));
+        assert!(request.contains("source-image"));
+        assert!(request.contains("name=\"mask\""));
+        assert!(request.contains("mask-image"));
+        assert!(request.contains("name=\"prompt\""));
+        assert!(request.contains("replace the sky"));
+        assert!(request.contains("name=\"model\""));
+        assert!(request.contains("gpt-image-1"));
+    }
 }

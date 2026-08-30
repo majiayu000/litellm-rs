@@ -170,10 +170,16 @@ impl GenerationLifecycle {
             .await
             .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(_) if !status.is_success() => {
+                return Err(HttpErrorMapper::map_status_without_body(
+                    self.provider,
+                    status.as_u16(),
+                ));
+            }
+            Err(error) => return Err(self.client.map_preserved_request_error(error)),
+        };
         if !status.is_success() {
             return Err(HttpErrorMapper::map_status_code(
                 self.provider,

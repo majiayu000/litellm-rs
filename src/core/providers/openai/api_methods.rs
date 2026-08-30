@@ -19,10 +19,13 @@ use crate::core::audio::types::{
     SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
     TranslationResponse, format_to_content_type,
 };
-use crate::core::providers::base::{BaseHttpClient, HttpMethod, apply_provider_headers};
+use crate::core::providers::base::{
+    BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, HttpMethod, apply_provider_headers,
+};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::types::embedding::EmbeddingRequest;
-use crate::core::types::responses::EmbeddingResponse;
+use crate::core::types::image::ImageEditRequest;
+use crate::core::types::responses::{EmbeddingResponse, ImageGenerationResponse};
 
 use super::client::OpenAIProvider;
 use super::config::OpenAIFeature;
@@ -255,6 +258,60 @@ impl OpenAIProvider {
             content_type,
         })
     }
+}
+
+pub(crate) async fn execute_image_edit(
+    base: BaseConfig,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    request: ImageEditRequest,
+    provider: &'static str,
+) -> Result<ImageGenerationResponse, OpenAIError> {
+    let client = BaseHttpClient::new_for_provider(provider, base)?;
+    let mut form = multipart::Form::new()
+        .part(
+            "image",
+            multipart::Part::bytes(request.image).file_name("image.png"),
+        )
+        .text("prompt", request.prompt)
+        .optional_text("model", request.model)
+        .optional_text("n", request.n.map(|value| value.to_string()))
+        .optional_text("size", request.size)
+        .optional_text("response_format", request.response_format)
+        .optional_text("user", request.user);
+    if let Some(mask) = request.mask {
+        form = form.part("mask", multipart::Part::bytes(mask).file_name("mask.png"));
+    }
+    let response = apply_provider_headers(
+        client.post(format!("{}/images/edits", api_base.trim_end_matches('/')))?,
+        headers,
+    )
+    .multipart(form)
+    .send()
+    .await
+    .map_err(|error| client.map_preserved_request_error(error))?;
+    let status = response.status();
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(_) if !status.is_success() => {
+            return Err(HttpErrorMapper::map_status_code(
+                provider,
+                status.as_u16(),
+                &format!("Provider returned HTTP {status}, but its error body was unavailable"),
+            ));
+        }
+        Err(error) => return Err(client.map_preserved_request_error(error)),
+    };
+    if !status.is_success() {
+        return Err(HttpErrorMapper::map_status_code(
+            provider,
+            status.as_u16(),
+            &String::from_utf8_lossy(&bytes),
+        ));
+    }
+    serde_json::from_slice(&bytes).map_err(|error| {
+        OpenAIError::response_parsing(provider, format!("invalid image edit response: {error}"))
+    })
 }
 
 fn transcription_form(request: TranscriptionRequest) -> multipart::Form {
