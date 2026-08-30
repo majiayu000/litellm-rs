@@ -324,6 +324,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn elevenlabs_accepts_neutral_standard_tts_speed() {
+        let mock = MockAudioServer::start(StatusCode::OK, Duration::ZERO).await;
+        let provider = native_provider(ProviderType::ElevenLabs, &mock.base_url, 5).await;
+
+        let response = provider
+            .text_to_speech(
+                SpeechRequest {
+                    input: "neutral speed".to_string(),
+                    model: "eleven_v3".to_string(),
+                    voice: "voice-original-123".to_string(),
+                    response_format: Some("mp3".to_string()),
+                    speed: Some(1.0),
+                },
+                RequestContext::new(),
+            )
+            .await
+            .expect("neutral ElevenLabs speed should preserve standard TTS semantics");
+
+        assert_eq!(response.audio, b"elevenlabs-audio");
+        assert_eq!(mock.requests().len(), 1);
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn native_audio_custom_v1_base_does_not_duplicate_version_segment() {
+        let mock = MockAudioServer::start(StatusCode::OK, Duration::ZERO).await;
+        let versioned_base = format!("{}/v1", mock.base_url);
+
+        let deepgram = native_provider(ProviderType::Deepgram, &versioned_base, 5).await;
+        deepgram
+            .audio_transcription(transcription_request("nova-3"), RequestContext::new())
+            .await
+            .expect("versioned Deepgram base should succeed");
+
+        let elevenlabs = native_provider(ProviderType::ElevenLabs, &versioned_base, 5).await;
+        elevenlabs
+            .text_to_speech(
+                SpeechRequest {
+                    input: "versioned base".to_string(),
+                    model: "eleven_v3".to_string(),
+                    voice: "voice-original-123".to_string(),
+                    response_format: Some("mp3".to_string()),
+                    speed: None,
+                },
+                RequestContext::new(),
+            )
+            .await
+            .expect("versioned ElevenLabs base should succeed");
+
+        let requests = mock.requests();
+        assert!(requests[0].uri.starts_with("/v1/listen?"));
+        assert!(requests[1].uri.starts_with("/v1/text-to-speech/"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn deepgram_omitted_language_enables_detection() {
         let mock = MockAudioServer::start(StatusCode::OK, Duration::ZERO).await;
         let provider = native_provider(ProviderType::Deepgram, &mock.base_url, 5).await;

@@ -6,6 +6,15 @@ use crate::core::providers::ProviderError;
 
 const ESTIMATED_AUDIO_BYTES_PER_SECOND: usize = 16_000;
 
+#[derive(Clone)]
+pub(super) enum AudioPricingUnits {
+    Time {
+        seconds: f64,
+        surface: crate::core::types::model::ProviderCapability,
+    },
+    Characters(f64),
+}
+
 pub(super) fn speech_usage(input: &str) -> PricingUsage {
     let tokens = estimated_audio_text_tokens(input);
     PricingUsage::new(tokens, tokens)
@@ -32,7 +41,7 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
-    pricing_units: Option<f64>,
+    pricing_units: Option<AudioPricingUnits>,
     usage: &PricingUsage,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     super::super::spend::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
@@ -87,7 +96,7 @@ pub(super) async fn record_audio_spend(
     api_key_id: Option<uuid::Uuid>,
     budget_provider: &str,
     budget_model: &str,
-    pricing_units: Option<f64>,
+    pricing_units: Option<AudioPricingUnits>,
     usage: &PricingUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
@@ -151,15 +160,19 @@ pub(super) async fn record_audio_spend(
 
 fn audio_unit_cost(
     request_pricing: &super::super::spend::RequestPricing,
-    pricing_units: Option<f64>,
+    pricing_units: Option<AudioPricingUnits>,
 ) -> Option<crate::utils::error::gateway_error::Result<crate::core::pricing_service::CostResult>> {
     let units = pricing_units?;
-    if request_pricing.has_time_pricing() {
-        Some(request_pricing.calculate_time(units))
-    } else if request_pricing.has_character_pricing() {
-        Some(request_pricing.calculate_characters(units))
-    } else {
-        None
+    match units {
+        AudioPricingUnits::Time { seconds, surface }
+            if request_pricing.has_time_pricing(&surface) =>
+        {
+            Some(request_pricing.calculate_time(seconds, &surface))
+        }
+        AudioPricingUnits::Characters(characters) if request_pricing.has_character_pricing() => {
+            Some(request_pricing.calculate_characters(characters))
+        }
+        _ => None,
     }
 }
 

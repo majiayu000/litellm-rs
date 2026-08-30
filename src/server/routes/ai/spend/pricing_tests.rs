@@ -1,6 +1,41 @@
 use super::*;
 
 #[cfg(test)]
+mod time_pricing_tests {
+    use super::*;
+
+    #[test]
+    fn whisper_time_pricing_does_not_charge_input_and_output_rates() {
+        let pricing =
+            PricingService::with_embedded_default().expect("embedded pricing should load");
+        let request_pricing = RequestPricing::from_exact(&pricing, "azure", "whisper-1");
+
+        let cost = request_pricing
+            .calculate_time(60.0, &ProviderCapability::AudioTranscription)
+            .expect("Whisper time pricing should resolve");
+
+        assert!((cost.total_cost - 0.006).abs() < f64::EPSILON);
+        assert!((cost.input_cost - 0.006).abs() < f64::EPSILON);
+        assert_eq!(cost.output_cost, 0.0);
+    }
+
+    #[test]
+    fn speech_time_pricing_selects_the_output_rate() {
+        let pricing =
+            PricingService::with_embedded_default().expect("embedded pricing should load");
+        let request_pricing = RequestPricing::from_exact(&pricing, "openai", "gpt-4o-mini-tts");
+
+        let cost = request_pricing
+            .calculate_time(60.0, &ProviderCapability::TextToSpeech)
+            .expect("speech output time pricing should resolve");
+
+        assert!((cost.total_cost - 0.015).abs() < f64::EPSILON);
+        assert_eq!(cost.input_cost, 0.0);
+        assert!((cost.output_cost - 0.015).abs() < f64::EPSILON);
+    }
+}
+
+#[cfg(test)]
 mod mapped_identity_tests {
     use super::*;
     use crate::config::models::provider::ProviderConfig;

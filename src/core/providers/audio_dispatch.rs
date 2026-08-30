@@ -559,7 +559,7 @@ impl LLMProvider for ElevenLabsProvider {
         request: SpeechRequest,
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
-        if request.speed.is_some() {
+        if request.speed.is_some_and(|speed| speed != 1.0) {
             return Err(ProviderError::invalid_request(
                 "elevenlabs",
                 "speed adjustment is not supported by ElevenLabs standard TTS",
@@ -639,12 +639,15 @@ fn native_audio_models(
 }
 
 fn provider_endpoint(base: &str, path: &str, provider: &'static str) -> Result<Url, ProviderError> {
-    Url::parse(&format!(
-        "{}/{}",
-        base.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    ))
-    .map_err(|_| ProviderError::configuration(provider, "invalid provider API base URL"))
+    let base = base.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    let path = if base.ends_with("/v1") {
+        path.strip_prefix("v1/").unwrap_or(path)
+    } else {
+        path
+    };
+    Url::parse(&format!("{}/{}", base, path))
+        .map_err(|_| ProviderError::configuration(provider, "invalid provider API base URL"))
 }
 
 fn audio_content_type(filename: &str) -> &'static str {

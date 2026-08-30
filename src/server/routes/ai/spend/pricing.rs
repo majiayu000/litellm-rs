@@ -147,23 +147,27 @@ impl RequestPricing {
             .calculate_loaded_settlement_cost_for_provider(provider, model, usage)
     }
 
-    pub(in crate::server::routes::ai) fn has_time_pricing(&self) -> bool {
+    pub(in crate::server::routes::ai) fn has_time_pricing(
+        &self,
+        surface: &ProviderCapability,
+    ) -> bool {
+        let Some(direction) = time_pricing_direction(surface) else {
+            return false;
+        };
         self.model_info().is_some_and(|info| {
             info.cost_per_second.is_some()
-                || ["input_cost_per_second", "output_cost_per_second"]
-                    .iter()
-                    .any(|key| {
-                        info.extra
-                            .get(*key)
-                            .and_then(serde_json::Value::as_f64)
-                            .is_some()
-                    })
+                || info
+                    .extra
+                    .get(direction.rate_key())
+                    .and_then(serde_json::Value::as_f64)
+                    .is_some()
         })
     }
 
     pub(in crate::server::routes::ai) fn calculate_time(
         &self,
         total_time_seconds: f64,
+        surface: &ProviderCapability,
     ) -> crate::utils::error::gateway_error::Result<CostResult> {
         let Some((provider, model)) = self.priced_parts() else {
             return Err(self.pricing_error());
@@ -172,19 +176,17 @@ impl RequestPricing {
             .snapshot
             .get_model_info_for_provider(provider, model)
             .ok_or_else(|| self.pricing_error())?;
+        let direction = time_pricing_direction(surface).ok_or_else(|| {
+            crate::utils::error::gateway_error::GatewayError::Config(format!(
+                "time pricing is unavailable for capability '{surface:?}'"
+            ))
+        })?;
         let rate = info
             .cost_per_second
             .or_else(|| {
-                let input = info
-                    .extra
-                    .get("input_cost_per_second")
-                    .and_then(serde_json::Value::as_f64);
-                let output = info
-                    .extra
-                    .get("output_cost_per_second")
-                    .and_then(serde_json::Value::as_f64);
-                (input.is_some() || output.is_some())
-                    .then(|| input.unwrap_or(0.0) + output.unwrap_or(0.0))
+                info.extra
+                    .get(direction.rate_key())
+                    .and_then(serde_json::Value::as_f64)
             })
             .ok_or_else(|| {
                 crate::utils::error::gateway_error::GatewayError::Config(format!(
@@ -192,9 +194,13 @@ impl RequestPricing {
                 ))
             })?;
         let total_cost = total_time_seconds * rate;
+        let (input_cost, output_cost) = match direction {
+            TimePricingDirection::Input => (total_cost, 0.0),
+            TimePricingDirection::Output => (0.0, total_cost),
+        };
         Ok(CostResult {
-            input_cost: 0.0,
-            output_cost: 0.0,
+            input_cost,
+            output_cost,
             total_cost,
             input_tokens: 0,
             output_tokens: 0,
@@ -235,6 +241,31 @@ impl RequestPricing {
             provider: info.litellm_provider,
             cost_type: CostType::CharacterBased,
         })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TimePricingDirection {
+    Input,
+    Output,
+}
+
+impl TimePricingDirection {
+    fn rate_key(self) -> &'static str {
+        match self {
+            Self::Input => "input_cost_per_second",
+            Self::Output => "output_cost_per_second",
+        }
+    }
+}
+
+fn time_pricing_direction(surface: &ProviderCapability) -> Option<TimePricingDirection> {
+    match surface {
+        ProviderCapability::AudioTranscription | ProviderCapability::AudioTranslation => {
+            Some(TimePricingDirection::Input)
+        }
+        ProviderCapability::TextToSpeech => Some(TimePricingDirection::Output),
+        _ => None,
     }
 }
 
