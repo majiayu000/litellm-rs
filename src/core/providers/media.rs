@@ -198,24 +198,45 @@ pub(crate) fn build_image_provider(
 
     match provider_type {
         ProviderType::Stability => {
-            let config = serde_json::from_value(config)
+            let mut typed: stability::StabilityConfig = serde_json::from_value(config.clone())
                 .map_err(|error| ProviderError::configuration("stability", error.to_string()))?;
+            merge_custom_headers(&mut typed.base.headers, &config);
             Ok(Provider::Stability(stability::StabilityProvider::new(
-                config,
+                typed,
             )?))
         }
         ProviderType::BlackForestLabs => {
-            let config = serde_json::from_value(config).map_err(|error| {
-                ProviderError::configuration("black_forest_labs", error.to_string())
-            })?;
+            let mut typed: bfl::BflConfig =
+                serde_json::from_value(config.clone()).map_err(|error| {
+                    ProviderError::configuration("black_forest_labs", error.to_string())
+                })?;
+            merge_custom_headers(&mut typed.base.headers, &config);
             Ok(Provider::BlackForestLabs(Box::new(bfl::BflProvider::new(
-                config,
+                typed,
             )?)))
         }
         _ => Err(ProviderError::configuration(
             "media",
             "unsupported native image provider type",
         )),
+    }
+}
+
+#[cfg(feature = "providers-extended")]
+fn merge_custom_headers(
+    headers: &mut std::collections::HashMap<String, String>,
+    config: &serde_json::Value,
+) {
+    let Some(custom_headers) = config
+        .get("custom_headers")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    for (key, value) in custom_headers {
+        if let Some(value) = value.as_str() {
+            headers.insert(key.clone(), value.to_string());
+        }
     }
 }
 

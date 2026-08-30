@@ -234,10 +234,15 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
-        let bytes = response.bytes().await.map_err(post_header_body_error)?;
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) if status.is_success() => return Err(post_header_body_error(error)),
+            Err(error) => return Err(self.client.map_preserved_request_error(error)),
+        };
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
         }
+        ensure_image_body(&bytes)?;
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
             data: vec![ImageData {
@@ -307,10 +312,15 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
-        let bytes = response.bytes().await.map_err(post_header_body_error)?;
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) if status.is_success() => return Err(post_header_body_error(error)),
+            Err(error) => return Err(self.client.map_preserved_request_error(error)),
+        };
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
         }
+        ensure_image_body(&bytes)?;
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
             data: vec![ImageData {
@@ -329,8 +339,35 @@ fn post_header_body_error(error: reqwest::Error) -> ProviderError {
     )
 }
 
+fn ensure_image_body(body: &[u8]) -> Result<(), ProviderError> {
+    if body.is_empty() {
+        return Err(ProviderError::response_parsing(
+            PROVIDER,
+            "Stability response contained an empty image body",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_post_submit_error(error: &ProviderError) -> bool {
+    matches!(error,
+        ProviderError::Other { provider: PROVIDER, message }
+            if message.starts_with("response body failed after Stability accepted the request:"))
+        || matches!(error,
+            ProviderError::ResponseParsing { provider: PROVIDER, message }
+                if message == "Stability response contained an empty image body")
+}
+
 fn map_error_response(status: u16, body: &[u8]) -> ProviderError {
-    if status == 403 {
+    let is_moderation = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|body| {
+            body.get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|name| name == "content_moderation");
+    if status == 403 && is_moderation {
         ProviderError::content_filtered(
             PROVIDER,
             "request was flagged by Stability content moderation",

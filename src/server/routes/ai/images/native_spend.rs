@@ -31,7 +31,7 @@ where
             let tokens_used = settle(reservations, budget).await;
             Ok((value, tokens_used))
         }
-        Err(error) if is_accepted_bfl_task_error(&error) => {
+        Err(error) if is_accepted_native_task_error(&error) => {
             settle(reservations, budget).await;
             Err(error)
         }
@@ -43,11 +43,12 @@ where
 }
 
 #[cfg(feature = "providers-extended")]
-fn is_accepted_bfl_task_error(error: &ProviderError) -> bool {
+fn is_accepted_native_task_error(error: &ProviderError) -> bool {
     crate::core::providers::bfl::is_post_submit_error(error)
+        || crate::core::providers::stability::is_post_submit_error(error)
 }
 
 #[cfg(not(feature = "providers-extended"))]
-fn is_accepted_bfl_task_error(_error: &ProviderError) -> bool {
+fn is_accepted_native_task_error(_error: &ProviderError) -> bool {
     false
 }

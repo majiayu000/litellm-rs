@@ -196,8 +196,18 @@ impl BflProvider {
         let body = tokio::select! {
             _ = cancellation.cancelled() => return Err(cancelled()),
             body = response.text() => body,
-        }
-        .map_err(|error| self.client.map_preserved_request_error(error))?;
+        };
+        let body = match body {
+            Ok(body) => body,
+            Err(error) => {
+                let error = self.client.map_preserved_request_error(error);
+                return Err(if status.is_success() {
+                    mark_post_submit_error_non_retryable(error)
+                } else {
+                    error
+                });
+            }
+        };
         if !status.is_success() {
             return Err(HttpErrorMapper::map_status_code(
                 PROVIDER,
@@ -214,6 +224,15 @@ impl BflProvider {
         let polling_url = submit["polling_url"].as_str().ok_or_else(|| {
             ProviderError::response_parsing(PROVIDER, "BFL response omitted polling_url")
         })?;
+        validate_polling_origin(
+            self.config
+                .base
+                .api_base
+                .as_deref()
+                .unwrap_or(DEFAULT_API_BASE),
+            polling_url,
+        )
+        .map_err(mark_post_submit_error_non_retryable)?;
         self.lifecycle
             .wait_for_json(polling_url.to_string(), headers, cancellation, decode_poll)
             .await
@@ -332,6 +351,25 @@ impl BflProvider {
             }],
         })
     }
+}
+
+fn validate_polling_origin(api_base: &str, polling_url: &str) -> Result<(), ProviderError> {
+    let api_base = url::Url::parse(api_base).map_err(|error| {
+        ProviderError::response_parsing(PROVIDER, format!("invalid BFL API base: {error}"))
+    })?;
+    let polling_url = url::Url::parse(polling_url).map_err(|error| {
+        ProviderError::response_parsing(PROVIDER, format!("invalid BFL polling_url: {error}"))
+    })?;
+    let same_origin = api_base.scheme() == polling_url.scheme()
+        && api_base.host_str() == polling_url.host_str()
+        && api_base.port_or_known_default() == polling_url.port_or_known_default();
+    if !same_origin {
+        return Err(ProviderError::response_parsing(
+            PROVIDER,
+            "BFL polling_url must use the configured API origin",
+        ));
+    }
+    Ok(())
 }
 
 fn decode_poll(payload: Value) -> Result<GenerationPoll, ProviderError> {

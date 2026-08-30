@@ -207,6 +207,14 @@ async fn proxy_image_multipart_endpoint(
                         if matches!(endpoint, ImageProxyEndpoint::Edits)
                             && native_edit::is_native_image_provider(&selected_provider)
                         {
+                            if let Some(quality) = form_fields.quality.as_deref() {
+                                return Err(ProviderError::invalid_request(
+                                    "image_edit",
+                                    format!(
+                                        "native image editing does not support the quality parameter '{quality}'"
+                                    ),
+                                ));
+                            }
                             let request = native_edit::parse_native_image_edit(
                                 &body,
                                 &content_type,

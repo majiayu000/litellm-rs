@@ -137,6 +137,62 @@ async fn native_image_edit_precedes_wildcard_proxy_router_key() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
+async fn native_image_edit_rejects_explicit_quality_before_upstream_io() {
+    let state = build_route_policy_test_state_with_pricing(
+        vec![image_provider(
+            "stability-native",
+            "stability",
+            "http://127.0.0.1:1",
+            vec!["inpaint".to_string()],
+        )],
+        Some(HashMap::from([(
+            "inpaint".to_string(),
+            flat_image_model_info_for_provider("stability", 0.06),
+        )])),
+    )
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    for quality in ["high", "hd"] {
+        let boundary = format!("litellm-rs-native-quality-{quality}");
+        let mut body = Vec::new();
+        add_text_field(&mut body, &boundary, "model", "inpaint");
+        add_text_field(&mut body, &boundary, "prompt", "make it lighter");
+        add_text_field(&mut body, &boundary, "quality", quality);
+        add_file_field(&mut body, &boundary, "image", "input.png", b"png-bytes");
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/images/edits")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(body)
+                .to_request(),
+        )
+        .await;
+        let status = resp.status();
+        let response_body = test::read_body(resp).await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "quality={quality} reached upstream I/O: {}",
+            String::from_utf8_lossy(&response_body)
+        );
+    }
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
 async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -242,6 +298,79 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
             .is_none(),
         "canonical provider identity must not receive configured deployment spend"
     );
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn accepted_stability_body_failure_settles_configured_provider_budget() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Stability listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("request should arrive");
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let mut request = vec![0_u8; 8192];
+        let _ = socket
+            .read(&mut request)
+            .await
+            .expect("request should read");
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 100\r\nConnection: close\r\n\r\ntruncated",
+            )
+            .await
+            .expect("truncated response should write");
+    });
+    let mut provider = image_provider(
+        "stability-primary",
+        "stability",
+        &format!("http://{address}"),
+        vec!["stable-image-core".to_string()],
+    );
+    provider.max_retries = 0;
+    let state = build_route_policy_test_state_with_pricing(
+        vec![provider],
+        Some(HashMap::from([(
+            "stable-image-core".to_string(),
+            flat_image_model_info_for_provider("stability", 0.06),
+        )])),
+    )
+    .await;
+    state.budget_limits.providers.set_provider_limit(
+        "stability-primary",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let budget_limits = state.budget_limits.clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/generations")
+            .set_json(json!({
+                "model": "stable-image-core",
+                "prompt": "a glass city",
+                "n": 1,
+                "response_format": "png"
+            }))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    server.await.expect("mock server should finish");
+    let configured_spend = budget_limits
+        .providers
+        .get_provider_usage("stability-primary")
+        .map(|usage| usage.current_spend)
+        .unwrap_or_default();
+    assert!((configured_spend - 0.06).abs() < f64::EPSILON);
 }
 
 #[tokio::test]
