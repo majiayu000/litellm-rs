@@ -4,6 +4,16 @@ use crate::core::rerank::{CohereRerankProvider, JinaRerankProvider, RerankProvid
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use std::sync::Arc;
 
+#[cfg(any(feature = "providers-extended", test))]
+fn cohere_rerank_api_base(api_base: &str) -> String {
+    let api_base = api_base.trim_end_matches('/');
+    if api_base.ends_with("/v1") {
+        api_base.to_string()
+    } else {
+        format!("{api_base}/v1")
+    }
+}
+
 impl Provider {
     pub(crate) fn rerank_adapter(&self) -> Result<Arc<dyn RerankProvider>, ProviderError> {
         match self {
@@ -56,7 +66,7 @@ impl Provider {
                 let config = provider.config();
                 CohereRerankProvider::new_with_endpoint(
                     config.api_key.clone(),
-                    format!("{}/v1", config.api_base.trim_end_matches('/')),
+                    cohere_rerank_api_base(&config.api_base),
                     config.endpoint_access,
                     config.timeout_seconds,
                 )
@@ -65,5 +75,22 @@ impl Provider {
             }
             _ => Err(ProviderError::not_supported("provider", "rerank")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cohere_rerank_api_base;
+
+    #[test]
+    fn cohere_rerank_base_has_exactly_one_v1_suffix() {
+        assert_eq!(
+            cohere_rerank_api_base("https://api.cohere.ai"),
+            "https://api.cohere.ai/v1"
+        );
+        assert_eq!(
+            cohere_rerank_api_base("https://api.cohere.ai/v1/"),
+            "https://api.cohere.ai/v1"
+        );
     }
 }

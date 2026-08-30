@@ -421,7 +421,10 @@ fn parse_rerank(
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            GatewayError::Validation(format!("{provider} rerank response missing results"))
+            GatewayError::Provider(ProviderError::response_parsing(
+                provider,
+                "rerank response missing results",
+            ))
         })?;
     let mut results = Vec::with_capacity(raw.len());
     for item in raw {
@@ -430,19 +433,29 @@ fn parse_rerank(
             .and_then(Value::as_u64)
             .and_then(|v| usize::try_from(v).ok())
             .ok_or_else(|| {
-                GatewayError::Validation(format!("{provider} rerank result missing index"))
+                GatewayError::Provider(ProviderError::response_parsing(
+                    provider,
+                    "rerank result missing index",
+                ))
             })?;
         let relevance_score = item
             .get("score")
             .or_else(|| item.get("relevance_score"))
             .and_then(Value::as_f64)
             .ok_or_else(|| {
-                GatewayError::Validation(format!("{provider} rerank result missing score"))
+                GatewayError::Provider(ProviderError::response_parsing(
+                    provider,
+                    "rerank result missing score",
+                ))
             })?;
+        let source_document = documents.get(index).cloned().ok_or_else(|| {
+            GatewayError::Provider(ProviderError::response_parsing(
+                provider,
+                "rerank result index is out of range",
+            ))
+        })?;
         let document = if return_documents {
-            Some(documents.get(index).cloned().ok_or_else(|| {
-                GatewayError::Validation(format!("{provider} rerank result index is out of range"))
-            })?)
+            Some(source_document)
         } else {
             None
         };
@@ -560,5 +573,59 @@ mod tests {
         assert!(!parsed.id.is_empty());
         assert_eq!(parsed.results[0].index, 1);
         assert_eq!(parsed.usage.and_then(|usage| usage.total_tokens), Some(12));
+    }
+
+    fn assert_watsonx_rerank_response_parsing(error: GatewayError, expected_message: &str) {
+        match error {
+            GatewayError::Provider(ProviderError::ResponseParsing { provider, message }) => {
+                assert_eq!(provider, "watsonx");
+                assert!(
+                    message.contains(expected_message),
+                    "unexpected parsing error: {message}"
+                );
+            }
+            other => panic!("expected watsonx response parsing error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_rerank_success_payloads_are_provider_response_errors() {
+        let documents = vec![RerankDocument::from("first")];
+        for (response, expected_message) in [
+            (serde_json::json!({}), "rerank response missing results"),
+            (
+                serde_json::json!({"results": [{"score": 0.5}]}),
+                "rerank result missing index",
+            ),
+            (
+                serde_json::json!({"results": [{"index": 0}]}),
+                "rerank result missing score",
+            ),
+        ] {
+            let error = parse_rerank(
+                "watsonx",
+                "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+                response,
+                &documents,
+                true,
+            )
+            .expect_err("malformed upstream success payload must fail");
+            assert_watsonx_rerank_response_parsing(error, expected_message);
+        }
+    }
+
+    #[test]
+    fn out_of_range_rerank_index_is_a_provider_response_error_without_documents() {
+        let documents = vec![RerankDocument::from("first")];
+        let error = parse_rerank(
+            "watsonx",
+            "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+            serde_json::json!({"results": [{"index": 1, "score": 0.5}]}),
+            &documents,
+            false,
+        )
+        .expect_err("out-of-range upstream index must fail without returned documents");
+
+        assert_watsonx_rerank_response_parsing(error, "rerank result index is out of range");
     }
 }

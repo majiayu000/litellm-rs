@@ -166,3 +166,60 @@ fn official_embedding_usage_is_preserved() {
     assert_eq!(usage.prompt_tokens, 4);
     assert_eq!(usage.total_tokens, 4);
 }
+
+fn assert_oci_rerank_response_parsing(error: GatewayError, expected_message: &str) {
+    match error {
+        GatewayError::Provider(ProviderError::ResponseParsing { provider, message }) => {
+            assert_eq!(provider, "oci");
+            assert!(
+                message.contains(expected_message),
+                "unexpected parsing error: {message}"
+            );
+        }
+        other => panic!("expected OCI response parsing error, got {other:?}"),
+    }
+}
+
+#[test]
+fn malformed_rerank_success_payloads_are_provider_response_errors() {
+    let documents = vec![RerankDocument::from("first")];
+    for (response, expected_message) in [
+        (
+            serde_json::json!({}),
+            "rerank response missing documentRanks",
+        ),
+        (
+            serde_json::json!({
+                "documentRanks": [{"relevanceScore": 0.5}]
+            }),
+            "rerank result missing index",
+        ),
+        (
+            serde_json::json!({
+                "documentRanks": [{"index": 0}]
+            }),
+            "rerank result missing relevanceScore",
+        ),
+    ] {
+        let error =
+            parse_oci_rerank_response("cohere.rerank-v3-5".to_string(), response, &documents, true)
+                .expect_err("malformed upstream success payload must fail");
+        assert_oci_rerank_response_parsing(error, expected_message);
+    }
+}
+
+#[test]
+fn out_of_range_rerank_index_is_a_provider_response_error_without_echo() {
+    let documents = vec![RerankDocument::from("first")];
+    let error = parse_oci_rerank_response(
+        "cohere.rerank-v3-5".to_string(),
+        serde_json::json!({
+            "documentRanks": [{"index": 1, "relevanceScore": 0.5}]
+        }),
+        &documents,
+        false,
+    )
+    .expect_err("out-of-range upstream index must fail even when documents are not echoed");
+
+    assert_oci_rerank_response_parsing(error, "rerank result index is out of range");
+}

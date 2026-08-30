@@ -550,7 +550,10 @@ fn parse_oci_rerank_response(
         .get("documentRanks")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            GatewayError::Validation("OCI rerank response missing documentRanks".to_string())
+            GatewayError::Provider(ProviderError::response_parsing(
+                "oci",
+                "rerank response missing documentRanks",
+            ))
         })?;
     let mut results = Vec::with_capacity(raw.len());
     for item in raw {
@@ -559,18 +562,28 @@ fn parse_oci_rerank_response(
             .and_then(Value::as_u64)
             .and_then(|v| usize::try_from(v).ok())
             .ok_or_else(|| {
-                GatewayError::Validation("OCI rerank result missing index".to_string())
+                GatewayError::Provider(ProviderError::response_parsing(
+                    "oci",
+                    "rerank result missing index",
+                ))
             })?;
         let relevance_score = item
             .get("relevanceScore")
             .and_then(Value::as_f64)
             .ok_or_else(|| {
-                GatewayError::Validation("OCI rerank result missing relevanceScore".to_string())
+                GatewayError::Provider(ProviderError::response_parsing(
+                    "oci",
+                    "rerank result missing relevanceScore",
+                ))
             })?;
+        let source_document = documents.get(index).cloned().ok_or_else(|| {
+            GatewayError::Provider(ProviderError::response_parsing(
+                "oci",
+                "rerank result index is out of range",
+            ))
+        })?;
         let document = if return_documents {
-            Some(documents.get(index).cloned().ok_or_else(|| {
-                GatewayError::Validation("OCI rerank result index is out of range".to_string())
-            })?)
+            Some(source_document)
         } else {
             None
         };
