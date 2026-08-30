@@ -57,6 +57,10 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     internal("base", "shared provider infrastructure"),
     wire("bedrock", "native Provider enum variant"),
+    providers_extended_wire(
+        "black_forest_labs",
+        "ProviderType::BlackForestLabs dispatches to native asynchronous image endpoints",
+    ),
     wire("cloudflare", "native Provider enum variant"),
     providers_extended_wire(
         "cohere",
@@ -99,6 +103,10 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     providers_extended_wire(
         "replicate",
         "ProviderType::Replicate dispatches to native prediction lifecycle paths when providers-extended is enabled",
+    ),
+    providers_extended_wire(
+        "stability",
+        "ProviderType::Stability dispatches to native v2beta image endpoints",
     ),
     internal("thinking", "shared thinking/reasoning support"),
     stub(

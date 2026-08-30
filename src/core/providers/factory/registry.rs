@@ -12,7 +12,7 @@ use crate::core::providers::{
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
 #[cfg(feature = "providers-extended")]
-use crate::core::providers::{cohere, fal_ai, gemini, github_copilot, ollama, replicate};
+use crate::core::providers::{cohere, fal_ai, gemini, github_copilot, media, ollama, replicate};
 #[cfg(feature = "providers-extended")]
 use crate::core::traits::provider::ProviderConfig as _;
 
@@ -252,6 +252,19 @@ impl Provider {
                     ))
                 }
             }
+            ProviderType::Stability | ProviderType::BlackForestLabs => {
+                #[cfg(feature = "providers-extended")]
+                {
+                    media::build_image_provider(provider_type, config)
+                }
+                #[cfg(not(feature = "providers-extended"))]
+                {
+                    Err(ProviderError::not_implemented(
+                        super::provider_diagnostic_name(&provider_type),
+                        "native Stability/BFL image dispatch requires providers-extended",
+                    ))
+                }
+            }
             ProviderType::Ollama => {
                 #[cfg(feature = "providers-extended")]
                 {
@@ -451,6 +464,9 @@ mod tests {
                     (ProviderType::FalAI, Provider::FalAI(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Replicate, Provider::Replicate(_)) => {}
+                    #[cfg(feature = "providers-extended")]
+                    (ProviderType::Stability, Provider::Stability(_))
+                    | (ProviderType::BlackForestLabs, Provider::BlackForestLabs(_)) => {}
                     #[cfg(feature = "providers-extended")]
                     (ProviderType::Ollama, Provider::Ollama(_)) => {}
                     #[cfg(feature = "providers-extended")]

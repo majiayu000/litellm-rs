@@ -1,0 +1,476 @@
+//! Native Black Forest Labs image generation and editing transport.
+
+use std::collections::HashMap;
+use std::pin::Pin;
+
+use base64::Engine as _;
+use futures::Stream;
+use serde_json::{Map, Value, json};
+use tokio_util::sync::CancellationToken;
+
+use crate::core::net::validate_outbound_url_str;
+use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper, header_owned};
+use crate::core::providers::media::{
+    GenerationLifecycle, GenerationOutput, GenerationPoll, PollPolicy,
+};
+use crate::core::providers::{LLMProvider, ProviderError};
+use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
+use crate::core::traits::provider::ProviderConfig;
+use crate::core::types::chat::ChatRequest;
+use crate::core::types::context::RequestContext;
+use crate::core::types::health::HealthStatus;
+use crate::core::types::image::{ImageEditRequest, ImageGenerationRequest};
+use crate::core::types::model::{ModelInfo, ProviderCapability};
+use crate::core::types::responses::{ChatChunk, ChatResponse, ImageData, ImageGenerationResponse};
+
+const PROVIDER: &str = "black_forest_labs";
+const DEFAULT_API_BASE: &str = "https://api.bfl.ai/v1";
+const CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ImageGeneration,
+    ProviderCapability::ImageEdit,
+];
+const MODELS: &[&str] = &[
+    "flux-pro-1.1",
+    "flux-pro-1.1-ultra",
+    "flux-dev",
+    "flux-kontext-pro",
+    "flux-kontext-max",
+    "flux-2-pro",
+    "flux-2-flex",
+    "flux-2-dev",
+];
+
+/// Black Forest Labs provider configuration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BflConfig {
+    #[serde(flatten)]
+    pub base: BaseConfig,
+    #[serde(skip, default)]
+    pub poll_policy: PollPolicy,
+}
+
+impl Default for BflConfig {
+    fn default() -> Self {
+        Self {
+            base: BaseConfig {
+                api_base: Some(DEFAULT_API_BASE.to_string()),
+                ..BaseConfig::default()
+            },
+            poll_policy: PollPolicy::default(),
+        }
+    }
+}
+
+impl BflConfig {
+    pub fn with_api_key(api_key: impl Into<String>) -> Self {
+        let mut config = Self::default();
+        config.base.api_key = Some(api_key.into());
+        config
+    }
+
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        let env = BaseConfig::from_env("bfl");
+        config.base.api_key = env.api_key;
+        config.base.timeout = env.timeout;
+        config.base.max_retries = env.max_retries;
+        if env.api_base.is_some() {
+            config.base.api_base = env.api_base;
+        }
+        config
+    }
+}
+
+impl ProviderConfig for BflConfig {
+    fn validate(&self) -> Result<(), String> {
+        self.base.validate("bfl")
+    }
+
+    fn api_key(&self) -> Option<&str> {
+        self.base.api_key.as_deref()
+    }
+
+    fn api_base(&self) -> Option<&str> {
+        self.base.api_base.as_deref()
+    }
+
+    fn timeout(&self) -> std::time::Duration {
+        self.base.timeout_duration()
+    }
+
+    fn max_retries(&self) -> u32 {
+        self.base.max_retries
+    }
+}
+
+/// Provider-native BFL payload. Parameters are forwarded without renaming.
+#[derive(Debug, Clone)]
+pub struct BflImageRequest {
+    pub model: String,
+    pub parameters: Map<String, Value>,
+}
+
+impl BflImageRequest {
+    pub fn new(model: impl Into<String>, prompt: impl Into<String>) -> Self {
+        let mut parameters = Map::new();
+        parameters.insert("prompt".to_string(), Value::String(prompt.into()));
+        Self {
+            model: model.into(),
+            parameters,
+        }
+    }
+}
+
+/// Native BFL provider.
+#[derive(Debug, Clone)]
+pub struct BflProvider {
+    config: BflConfig,
+    client: BaseHttpClient,
+    lifecycle: GenerationLifecycle,
+    models: Vec<ModelInfo>,
+}
+
+impl BflProvider {
+    pub fn new(config: BflConfig) -> Result<Self, ProviderError> {
+        config
+            .validate()
+            .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
+        Ok(Self {
+            client: BaseHttpClient::new_for_provider(PROVIDER, config.base.clone())?,
+            lifecycle: GenerationLifecycle::new(PROVIDER, config.base.clone(), config.poll_policy)?,
+            config,
+            models: supported_models(),
+        })
+    }
+
+    pub fn from_env() -> Result<Self, ProviderError> {
+        Self::new(BflConfig::from_env())
+    }
+
+    /// Submit and await a provider-native BFL image request.
+    pub async fn generate_native(
+        &self,
+        request: BflImageRequest,
+        cancellation: &CancellationToken,
+    ) -> Result<GenerationOutput, ProviderError> {
+        if !MODELS.contains(&request.model.as_str()) {
+            return Err(ProviderError::model_not_found(PROVIDER, request.model));
+        }
+        self.validate_webhook(&request.parameters).await?;
+        let api_key = self.api_key()?;
+        let url = format!(
+            "{}/{}",
+            self.config
+                .base
+                .api_base
+                .as_deref()
+                .unwrap_or(DEFAULT_API_BASE)
+                .trim_end_matches('/'),
+            request.model
+        );
+        let response = self
+            .client
+            .post(url)?
+            .header("x-key", api_key)
+            .json(&request.parameters)
+            .send()
+            .await
+            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        if !status.is_success() {
+            return Err(HttpErrorMapper::map_status_code(
+                PROVIDER,
+                status.as_u16(),
+                &body,
+            ));
+        }
+        let submit: Value = serde_json::from_str(&body).map_err(|error| {
+            ProviderError::response_parsing(
+                PROVIDER,
+                format!("invalid BFL submit response: {error}"),
+            )
+        })?;
+        let polling_url = submit["polling_url"].as_str().ok_or_else(|| {
+            ProviderError::response_parsing(PROVIDER, "BFL response omitted polling_url")
+        })?;
+        self.lifecycle
+            .wait_for_json(
+                polling_url.to_string(),
+                vec![header_owned("x-key".to_string(), api_key.to_string())],
+                cancellation,
+                decode_poll,
+            )
+            .await
+    }
+
+    async fn validate_webhook(&self, parameters: &Map<String, Value>) -> Result<(), ProviderError> {
+        let Some(webhook_url) = parameters.get("webhook_url").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let webhook_url = webhook_url.to_string();
+        tokio::task::spawn_blocking(move || validate_outbound_url_str(&webhook_url))
+            .await
+            .map_err(|error| ProviderError::configuration(PROVIDER, error.to_string()))?
+            .map(|_| ())
+            .map_err(|error| ProviderError::configuration(PROVIDER, error.to_string()))
+    }
+
+    fn api_key(&self) -> Result<&str, ProviderError> {
+        self.config
+            .base
+            .api_key
+            .as_deref()
+            .ok_or_else(|| ProviderError::authentication(PROVIDER, "API key is required"))
+    }
+
+    async fn unified_generate(
+        &self,
+        request: ImageGenerationRequest,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        if request.n.is_some_and(|count| count != 1) {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "BFL native generation returns exactly one image",
+            ));
+        }
+        if request.quality.is_some() || request.style.is_some() {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "BFL does not accept OpenAI quality or style parameters",
+            ));
+        }
+        if !matches!(request.response_format.as_deref(), None | Some("url")) {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "BFL native results are returned as signed URLs",
+            ));
+        }
+        let model = request.model.as_deref().unwrap_or("flux-pro-1.1");
+        let mut native = BflImageRequest::new(model, request.prompt);
+        if let Some(size) = request.size {
+            let (width, height) = parse_size(&size)?;
+            native.parameters.insert("width".to_string(), json!(width));
+            native
+                .parameters
+                .insert("height".to_string(), json!(height));
+        }
+        self.to_image_response(
+            self.generate_native(native, &CancellationToken::new())
+                .await?,
+        )
+    }
+
+    async fn unified_edit(
+        &self,
+        request: ImageEditRequest,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        if request.n.is_some_and(|count| count != 1) {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "BFL native editing returns exactly one image",
+            ));
+        }
+        if request.mask.is_some() {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "BFL Kontext editing does not accept a mask",
+            ));
+        }
+        if !matches!(request.response_format.as_deref(), None | Some("url")) {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "BFL native results are returned as signed URLs",
+            ));
+        }
+        let model = request.model.as_deref().unwrap_or("flux-kontext-pro");
+        let mut native = BflImageRequest::new(model, request.prompt);
+        native.parameters.insert(
+            "input_image".to_string(),
+            Value::String(base64::engine::general_purpose::STANDARD.encode(request.image)),
+        );
+        self.to_image_response(
+            self.generate_native(native, &CancellationToken::new())
+                .await?,
+        )
+    }
+
+    fn to_image_response(
+        &self,
+        output: GenerationOutput,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        let url = output.urls.into_iter().next().ok_or_else(|| {
+            ProviderError::response_parsing(PROVIDER, "BFL result omitted sample URL")
+        })?;
+        Ok(ImageGenerationResponse {
+            created: chrono::Utc::now().timestamp().unsigned_abs(),
+            data: vec![ImageData {
+                url: Some(url),
+                b64_json: None,
+                revised_prompt: None,
+            }],
+        })
+    }
+}
+
+fn decode_poll(payload: Value) -> Result<GenerationPoll, ProviderError> {
+    match payload["status"].as_str() {
+        Some("Ready") => {
+            let sample = payload["result"]["sample"].as_str().ok_or_else(|| {
+                ProviderError::response_parsing(
+                    PROVIDER,
+                    "BFL Ready response omitted result.sample",
+                )
+            })?;
+            Ok(GenerationPoll::Succeeded(GenerationOutput {
+                urls: vec![sample.to_string()],
+                credits_used: payload["cost"].as_f64(),
+            }))
+        }
+        Some("Error" | "Failed") => Ok(GenerationPoll::Failed(
+            payload["error"]
+                .as_str()
+                .unwrap_or("BFL generation failed")
+                .to_string(),
+        )),
+        Some("Request Moderated") => Ok(GenerationPoll::Failed(
+            "BFL generation was moderated".to_string(),
+        )),
+        Some("Pending" | "Queued" | "Processing" | "Running") => Ok(GenerationPoll::Pending),
+        status => Err(ProviderError::response_parsing(
+            PROVIDER,
+            format!("unknown BFL task status: {status:?}"),
+        )),
+    }
+}
+
+fn parse_size(size: &str) -> Result<(u32, u32), ProviderError> {
+    let (width, height) = size.split_once('x').ok_or_else(|| {
+        ProviderError::invalid_request(PROVIDER, format!("invalid image size '{size}'"))
+    })?;
+    let width = width.parse().map_err(|_| {
+        ProviderError::invalid_request(PROVIDER, format!("invalid image size '{size}'"))
+    })?;
+    let height = height.parse().map_err(|_| {
+        ProviderError::invalid_request(PROVIDER, format!("invalid image size '{size}'"))
+    })?;
+    Ok((width, height))
+}
+
+impl LLMProvider for BflProvider {
+    fn name(&self) -> &'static str {
+        PROVIDER
+    }
+
+    fn error_provider_name(&self) -> &'static str {
+        PROVIDER
+    }
+
+    fn capabilities(&self) -> &'static [ProviderCapability] {
+        CAPABILITIES
+    }
+
+    fn models(&self) -> &[ModelInfo] {
+        &self.models
+    }
+
+    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        &["model", "n", "size", "response_format"]
+    }
+
+    async fn map_openai_params(
+        &self,
+        params: HashMap<String, Value>,
+        _model: &str,
+    ) -> Result<HashMap<String, Value>, ProviderError> {
+        Ok(params)
+    }
+
+    async fn transform_request(
+        &self,
+        _request: ChatRequest,
+        _context: RequestContext,
+    ) -> Result<Value, ProviderError> {
+        Err(ProviderError::not_supported(PROVIDER, "chat_completion"))
+    }
+
+    async fn transform_response(
+        &self,
+        _raw_response: &[u8],
+        _model: &str,
+        _request_id: &str,
+    ) -> Result<ChatResponse, ProviderError> {
+        Err(ProviderError::not_supported(PROVIDER, "chat_completion"))
+    }
+
+    fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
+        Box::new(DefaultErrorMapper)
+    }
+
+    async fn chat_completion(
+        &self,
+        _request: ChatRequest,
+        _context: RequestContext,
+    ) -> Result<ChatResponse, ProviderError> {
+        Err(ProviderError::not_supported(PROVIDER, "chat_completion"))
+    }
+
+    async fn chat_completion_stream(
+        &self,
+        _request: ChatRequest,
+        _context: RequestContext,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
+    {
+        Err(ProviderError::not_supported(PROVIDER, "streaming"))
+    }
+
+    async fn image_generation(
+        &self,
+        request: ImageGenerationRequest,
+        _context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        self.unified_generate(request).await
+    }
+
+    async fn image_edit(
+        &self,
+        request: ImageEditRequest,
+        _context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        self.unified_edit(request).await
+    }
+
+    async fn health_check(&self) -> HealthStatus {
+        HealthStatus::Healthy
+    }
+
+    async fn calculate_cost(
+        &self,
+        _model: &str,
+        _input_tokens: u32,
+        _output_tokens: u32,
+    ) -> Result<f64, ProviderError> {
+        Err(ProviderError::not_supported(
+            PROVIDER,
+            "token pricing is unavailable for per-image/per-credit BFL models",
+        ))
+    }
+}
+
+fn supported_models() -> Vec<ModelInfo> {
+    MODELS
+        .iter()
+        .map(|model| ModelInfo {
+            id: (*model).to_string(),
+            name: (*model).to_string(),
+            provider: PROVIDER.to_string(),
+            max_context_length: 0,
+            supports_multimodal: true,
+            capabilities: CAPABILITIES.to_vec(),
+            ..ModelInfo::default()
+        })
+        .collect()
+}
