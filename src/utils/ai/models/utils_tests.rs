@@ -215,11 +215,18 @@ fn test_get_model_capabilities_gemini_20_flash() {
 
 #[test]
 fn qualified_gemini_37_uses_the_registry_context_window() {
-    let capabilities = ModelUtils::get_model_capabilities("gemini/gemini-3.7-flash");
-    assert_eq!(
-        capabilities.context_window,
-        Some(GEMINI_31_CONTEXT_WINDOW as usize)
-    );
+    for model in [
+        "gemini/gemini-3.7-flash",
+        "google/gemini-3.7-flash",
+        "vertex_ai/gemini-3.7-flash",
+    ] {
+        let capabilities = ModelUtils::get_model_capabilities(model);
+        assert_eq!(
+            capabilities.context_window,
+            Some(GEMINI_31_CONTEXT_WINDOW as usize),
+            "{model}"
+        );
+    }
 }
 
 #[cfg(feature = "providers-extended")]

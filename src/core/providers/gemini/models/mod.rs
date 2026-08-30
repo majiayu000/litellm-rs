@@ -11,9 +11,11 @@ mod contract;
 mod cost_tests;
 #[cfg(test)]
 mod current_tests;
+mod pricing_schedule;
 mod surface;
 
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
+pub(crate) use pricing_schedule::flash_uses_standard_pricing_at;
 pub use surface::GoogleGeminiApiSurface;
 
 pub use crate::core::cost::types::ModelPricing;
@@ -176,18 +178,6 @@ impl GeminiModelRegistry {
 
     pub fn list_models(&self) -> Vec<&ModelSpec> {
         self.models.values().collect()
-    }
-
-    /// List model metadata for a concrete Google API surface.
-    pub fn list_model_infos_for_surface(&self, surface: GoogleGeminiApiSurface) -> Vec<ModelInfo> {
-        let mut models = self
-            .models
-            .values()
-            .filter(|spec| surface.includes(spec))
-            .map(|spec| surface.overlay_model_info(spec))
-            .collect::<Vec<_>>();
-        models.sort_by(|left, right| left.id.cmp(&right.id));
-        models
     }
 
     pub fn supports_feature(&self, model_id: &str, feature: &ModelFeature) -> bool {

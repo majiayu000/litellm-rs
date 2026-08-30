@@ -206,6 +206,26 @@ fn vertex_multimodal_parts_encode_audio_and_pdf_as_inline_data() {
     assert_eq!(wire[1]["inlineData"]["data"], "pdf-base64");
 }
 
+#[test]
+fn vertex_multimodal_parts_emit_canonical_aac_mime_type() {
+    use crate::core::types::content::AudioData;
+
+    let transformer = GeminiTransformer::new();
+    for format in ["aac", "audio/aac", "audio/x-aac"] {
+        let content = MessageContent::Parts(vec![ContentPart::Audio {
+            audio: AudioData {
+                data: "audio-base64".to_string(),
+                format: Some(format.to_string()),
+            },
+        }]);
+        let parts = transformer
+            .message_content_to_parts(&content)
+            .expect("AAC must transform");
+        let wire = serde_json::to_value(parts).expect("parts serialize");
+        assert_eq!(wire[0]["inlineData"]["mimeType"], "audio/aac", "{format}");
+    }
+}
+
 fn weather_tool() -> Tool {
     Tool {
         tool_type: ToolType::Function,

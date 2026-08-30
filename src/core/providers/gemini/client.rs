@@ -37,7 +37,7 @@ use super::streaming::GeminiUsagePolicy;
 
 fn gemini_audio_mime_type(format: Option<&str>) -> Result<&'static str, ProviderError> {
     match format {
-        Some("aac" | "audio/x-aac") => Ok("audio/x-aac"),
+        Some("aac" | "audio/aac" | "audio/x-aac") => Ok("audio/aac"),
         Some("flac" | "audio/flac") => Ok("audio/flac"),
         Some("mp3" | "audio/mp3") => Ok("audio/mp3"),
         Some("m4a" | "audio/m4a") => Ok("audio/m4a"),

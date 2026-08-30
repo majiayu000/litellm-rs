@@ -160,3 +160,32 @@ fn gemini_36_static_catalog_uses_current_promotional_fallback() {
     assert_eq!(spec.pricing.cache_read_input_token_cost, Some(0.000075));
     assert_eq!(spec.pricing.batch_discount, None);
 }
+
+#[test]
+fn gemini_flash_listings_switch_at_the_exact_utc_boundary() {
+    use chrono::{TimeZone, Utc};
+
+    let registry = get_gemini_registry();
+    let before = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let at = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+
+    for surface in [
+        GoogleGeminiApiSurface::DeveloperApi,
+        GoogleGeminiApiSurface::VertexAi,
+    ] {
+        let price_at = |time| {
+            registry
+                .list_model_infos_for_surface_at(surface, time)
+                .into_iter()
+                .find(|model| model.id == "gemini-3.7-flash")
+                .map(|model| {
+                    (
+                        model.input_cost_per_1k_tokens,
+                        model.output_cost_per_1k_tokens,
+                    )
+                })
+        };
+        assert_eq!(price_at(before), Some((Some(0.00075), Some(0.00375))));
+        assert_eq!(price_at(at), Some((Some(0.0015), Some(0.0075))));
+    }
+}

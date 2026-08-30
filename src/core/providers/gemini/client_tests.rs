@@ -142,6 +142,26 @@ fn developer_multimodal_parts_encode_audio_and_pdf_as_inline_data() {
 }
 
 #[test]
+fn developer_multimodal_parts_emit_canonical_aac_mime_type() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    for format in ["aac", "audio/aac", "audio/x-aac"] {
+        let message = ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(vec![ContentPart::Audio {
+                audio: crate::core::types::content::AudioData {
+                    data: "YXVkaW8=".to_string(),
+                    format: Some(format.to_string()),
+                },
+            }])),
+            ..Default::default()
+        };
+
+        let parts = transform_parts(&client, &message);
+        assert_eq!(parts[0]["inlineData"]["mimeType"], "audio/aac", "{format}");
+    }
+}
+
+#[test]
 fn developer_multimodal_parts_reject_unsupported_or_empty_media() {
     let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
     for part in [

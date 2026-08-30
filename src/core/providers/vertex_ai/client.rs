@@ -300,11 +300,12 @@ impl LLMProvider for VertexAIProvider {
         use std::sync::LazyLock;
         fn load_models(
             surface: crate::core::providers::gemini::GoogleGeminiApiSurface,
+            pricing_time: chrono::DateTime<chrono::Utc>,
         ) -> Vec<ModelInfo> {
             let mut models = crate::core::providers::gemini::get_gemini_registry()
-                .list_model_infos_for_surface(surface);
+                .list_model_infos_for_surface_at(surface, pricing_time);
             for model in &mut models {
-                match super::vertex_prices_per_1k(&model.id) {
+                match super::vertex_prices_per_1k_at(&model.id, pricing_time) {
                     Ok((input, output)) => {
                         model.input_cost_per_1k_tokens = input;
                         model.output_cost_per_1k_tokens = output;
@@ -318,18 +319,40 @@ impl LLMProvider for VertexAIProvider {
             }
             models
         }
-        static STABLE_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            load_models(crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi)
-        });
-        static EXPERIMENTAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+        static STABLE_PROMOTIONAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
             load_models(
-                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+                chrono::DateTime::<chrono::Utc>::MIN_UTC,
             )
         });
-        if self.config.enable_experimental {
-            &EXPERIMENTAL_MODELS
-        } else {
-            &STABLE_MODELS
+        static STABLE_STANDARD_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )
+        });
+        static EXPERIMENTAL_PROMOTIONAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+                chrono::DateTime::<chrono::Utc>::MIN_UTC,
+            )
+        });
+        static EXPERIMENTAL_STANDARD_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )
+        });
+        match (
+            self.config.enable_experimental,
+            crate::core::providers::gemini::models::flash_uses_standard_pricing_at(
+                chrono::Utc::now(),
+            ),
+        ) {
+            (true, true) => &EXPERIMENTAL_STANDARD_MODELS,
+            (true, false) => &EXPERIMENTAL_PROMOTIONAL_MODELS,
+            (false, true) => &STABLE_STANDARD_MODELS,
+            (false, false) => &STABLE_PROMOTIONAL_MODELS,
         }
     }
 

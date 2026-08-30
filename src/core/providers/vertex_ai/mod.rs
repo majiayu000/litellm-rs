@@ -61,12 +61,13 @@ pub(crate) fn calculate_vertex_cost(
         .map_err(|error| vertex_pricing_error(model, error))
 }
 
-pub(crate) fn vertex_prices_per_1k(
+pub(crate) fn vertex_prices_per_1k_at(
     model: &str,
+    pricing_time: chrono::DateTime<chrono::Utc>,
 ) -> Result<(Option<f64>, Option<f64>), ProviderError> {
     let (_, pricing) = PricingService::shared_embedded_default()
         .map_err(|error| vertex_pricing_error(model, error))?
-        .get_model_info_for_provider("vertex_ai", model)
+        .get_model_info_for_provider_at("vertex_ai", model, pricing_time)
         .ok_or_else(|| ProviderError::model_not_found("vertex_ai", model))?;
     Ok((
         pricing.input_cost_per_token.map(|price| price * 1_000.0),
