@@ -139,6 +139,12 @@ fn realtime_2x_catalog_entries_match_official_model_cards() {
                 .contains(&ProviderCapability::TextToSpeech)
         );
         assert!(model.features.contains(&OpenAIModelFeature::RealtimeAudio));
+        assert!(
+            model
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::RealtimeApi)
+        );
     }
 }
 

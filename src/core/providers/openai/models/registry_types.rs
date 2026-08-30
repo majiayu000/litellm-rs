@@ -69,6 +69,7 @@ impl OpenAIModelFeature {
             OpenAIModelFeature::AudioOutput => Some(ProviderCapability::TextToSpeech),
             OpenAIModelFeature::ImageEditing => Some(ProviderCapability::ImageEdit),
             OpenAIModelFeature::Moderation => Some(ProviderCapability::Moderation),
+            OpenAIModelFeature::RealtimeAudio => Some(ProviderCapability::RealtimeApi),
             // Features that don't map directly to provider capabilities
             OpenAIModelFeature::SystemMessages
             | OpenAIModelFeature::JsonMode
@@ -78,8 +79,7 @@ impl OpenAIModelFeature {
             | OpenAIModelFeature::RealtimeAudioOutput
             | OpenAIModelFeature::FineTuning
             | OpenAIModelFeature::CodeCompletion
-            | OpenAIModelFeature::LargeContext
-            | OpenAIModelFeature::RealtimeAudio => None,
+            | OpenAIModelFeature::LargeContext => None,
         }
     }
 }

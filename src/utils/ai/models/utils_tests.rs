@@ -96,6 +96,26 @@ fn test_get_model_capabilities_gpt56_matches_registry_shape() {
 }
 
 #[test]
+fn test_get_model_capabilities_realtime2_matches_registry_shape() {
+    for model in [
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "openai/gpt-realtime-2",
+    ] {
+        let caps = ModelUtils::get_model_capabilities(model);
+        assert!(caps.supports_function_calling, "{model}");
+        assert!(caps.supports_parallel_function_calling, "{model}");
+        assert!(caps.supports_tool_choice, "{model}");
+        assert!(caps.supports_system_messages, "{model}");
+        assert!(caps.supports_vision, "{model}");
+        assert!(!caps.supports_streaming, "{model}");
+        assert_eq!(caps.context_window, Some(128_000), "{model}");
+        assert_eq!(caps.max_tokens, Some(32_000), "{model}");
+    }
+}
+
+#[test]
 fn test_get_model_capabilities_gpt35() {
     let caps = ModelUtils::get_model_capabilities("gpt-3.5-turbo");
     assert!(caps.supports_function_calling);

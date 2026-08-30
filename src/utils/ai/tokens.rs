@@ -1,4 +1,4 @@
-use super::models::utils::openai_gpt56_limits;
+use super::models::utils::{openai_gpt56_limits, openai_realtime2_limits};
 use crate::core::pricing_service::PricingService;
 use crate::core::providers::unified_provider::ProviderError;
 use serde::{Deserialize, Serialize};
@@ -257,6 +257,9 @@ impl TokenUtils {
     }
 
     pub fn get_max_tokens_for_model(model: &str) -> Option<usize> {
+        if let Some((context_window, _)) = openai_realtime2_limits(model) {
+            return Some(context_window);
+        }
         if let Some((context_window, _)) = openai_gpt56_limits(model) {
             return Some(context_window);
         }
@@ -298,7 +301,7 @@ impl TokenUtils {
         input_tokens: usize,
         output_tokens: usize,
     ) -> Result<f64, ProviderError> {
-        if openai_gpt56_limits(model).is_some() {
+        if openai_gpt56_limits(model).is_some() || openai_realtime2_limits(model).is_some() {
             let input_tokens = u32::try_from(input_tokens).map_err(|_| {
                 ProviderError::invalid_request("pricing", "input token count exceeds u32")
             })?;
@@ -612,6 +615,22 @@ mod tests {
             TokenUtils::select_tokenizer("azure/gpt-5.6"),
             Ok(TokenizerType::Custom(_))
         ));
+    }
+
+    #[test]
+    fn test_realtime2_limits_and_pricing_are_registry_backed() {
+        for (model, expected_cost) in [
+            ("gpt-realtime-2", 0.016),
+            ("gpt-realtime-2.1", 0.016),
+            ("gpt-realtime-2.1-mini", 0.0018),
+            ("openai/gpt-realtime-2", 0.016),
+        ] {
+            assert_eq!(TokenUtils::get_max_tokens_for_model(model), Some(128_000));
+            assert!(TokenUtils::validate_token_limit(model, 128_001).is_err());
+            let cost = TokenUtils::calculate_cost(model, 1_000, 500)
+                .unwrap_or_else(|error| panic!("{model} cost should calculate: {error}"));
+            assert!((cost - expected_cost).abs() < 1e-12, "{model}: {cost}");
+        }
     }
 
     #[test]

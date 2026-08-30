@@ -1,4 +1,4 @@
-use crate::core::providers::openai::get_openai_registry;
+use crate::core::providers::openai::{get_openai_registry, models::OpenAIModelFeature};
 use crate::core::providers::shared::gemini_context_window;
 use crate::core::providers::unified_provider::ProviderError;
 
@@ -9,13 +9,35 @@ pub struct ModelUtils;
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
         let gpt56_limits = openai_gpt56_limits(model);
+        let realtime2 = realtime2_catalog_id(model)
+            .and_then(|catalog_id| get_openai_registry().get_model_spec(catalog_id));
         let model_lower = model
             .to_lowercase()
             .rsplit_once('/')
             .map(|(_, model)| model.to_string())
             .unwrap_or_else(|| model.to_lowercase());
 
-        if let Some((context_window, max_output)) = gpt56_limits {
+        if let Some(spec) = realtime2 {
+            let supports_tools = spec.model_info.supports_tools;
+            ModelCapabilities {
+                supports_function_calling: supports_tools,
+                supports_parallel_function_calling: supports_tools,
+                supports_tool_choice: supports_tools,
+                supports_response_schema: false,
+                supports_system_messages: spec
+                    .features
+                    .contains(&OpenAIModelFeature::SystemMessages),
+                supports_web_search: false,
+                supports_url_context: false,
+                supports_vision: spec.model_info.supports_multimodal,
+                supports_streaming: spec.model_info.supports_streaming,
+                max_tokens: spec
+                    .model_info
+                    .max_output_length
+                    .map(|limit| limit as usize),
+                context_window: Some(spec.model_info.max_context_length as usize),
+            }
+        } else if let Some((context_window, max_output)) = gpt56_limits {
             ModelCapabilities {
                 supports_function_calling: true,
                 supports_parallel_function_calling: true,
@@ -629,6 +651,16 @@ impl ModelUtils {
 
 pub(crate) fn openai_gpt56_limits(model: &str) -> Option<(usize, usize)> {
     let catalog_id = gpt56_catalog_id(model)?;
+    let model_info = &get_openai_registry().get_model_spec(catalog_id)?.model_info;
+
+    Some((
+        model_info.max_context_length as usize,
+        model_info.max_output_length? as usize,
+    ))
+}
+
+pub(crate) fn openai_realtime2_limits(model: &str) -> Option<(usize, usize)> {
+    let catalog_id = realtime2_catalog_id(model)?;
     let model_info = &get_openai_registry().get_model_spec(catalog_id)?.model_info;
 
     Some((
