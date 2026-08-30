@@ -469,24 +469,25 @@ fn insert_size_parameters(
     parameters: &mut Map<String, Value>,
 ) -> Result<(), ProviderError> {
     let (width, height) = parse_size(size)?;
-    if model == "flux-pro-1.1-ultra" || KONTEXT_MODELS.contains(&model) {
-        let divisor = greatest_common_divisor(width, height);
-        parameters.insert(
-            "aspect_ratio".to_string(),
-            Value::String(format!("{}:{}", width / divisor, height / divisor)),
-        );
+    if model == "flux-pro-1.1-ultra" {
+        return Err(ProviderError::invalid_request(
+            PROVIDER,
+            format!("BFL model '{model}' cannot guarantee exact image size '{size}'"),
+        ));
+    }
+    if KONTEXT_MODELS.contains(&model) {
+        if (width, height) != (1024, 1024) {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                format!("BFL model '{model}' cannot guarantee exact image size '{size}'"),
+            ));
+        }
+        parameters.insert("aspect_ratio".to_string(), Value::String("1:1".to_string()));
     } else {
         parameters.insert("width".to_string(), json!(width));
         parameters.insert("height".to_string(), json!(height));
     }
     Ok(())
-}
-
-fn greatest_common_divisor(mut left: u32, mut right: u32) -> u32 {
-    while right != 0 {
-        (left, right) = (right, left % right);
-    }
-    left
 }
 
 fn cancelled() -> ProviderError {

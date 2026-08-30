@@ -1,5 +1,127 @@
 use super::*;
 
+#[tokio::test]
+async fn stability_rejects_sizes_its_model_cannot_express_before_network_access() {
+    for (model, size) in [
+        ("stable-image-core", "1024x1024"),
+        ("stable-image-ultra", "512x512"),
+        ("sd3.5-large", "1792x1024"),
+    ] {
+        let mut config = StabilityConfig::with_api_key("stability-secret");
+        config.base.api_base = Some("http://127.0.0.1:1".to_string());
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+        let error = provider
+            .image_generation(
+                ImageGenerationRequest {
+                    prompt: "paint a lighthouse".to_string(),
+                    model: Some(model.to_string()),
+                    n: Some(1),
+                    size: Some(size.to_string()),
+                    quality: None,
+                    response_format: Some("png".to_string()),
+                    style: None,
+                    user: None,
+                },
+                RequestContext::default(),
+            )
+            .await
+            .expect_err("inexact Stability size must fail before network access");
+
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains(size));
+    }
+}
+
+#[tokio::test]
+async fn bfl_ratio_only_models_reject_noncanonical_exact_sizes_before_network_access() {
+    for model in ["flux-pro-1.1-ultra", "flux-kontext-pro"] {
+        let mut config = BflConfig::with_api_key("bfl-secret");
+        config.base.api_base = Some("http://127.0.0.1:1".to_string());
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let provider = BflProvider::new(config).expect("BFL provider should initialize");
+
+        let error = provider
+            .image_generation(
+                ImageGenerationRequest {
+                    prompt: "a glass city".to_string(),
+                    model: Some(model.to_string()),
+                    n: Some(1),
+                    size: Some("1024x768".to_string()),
+                    quality: None,
+                    response_format: Some("url".to_string()),
+                    style: None,
+                    user: None,
+                },
+                RequestContext::default(),
+            )
+            .await
+            .expect_err("ratio-only BFL model must reject an exact size");
+
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(error.to_string().contains("1024x768"));
+    }
+}
+
+#[cfg(feature = "runway-media")]
+#[test]
+fn runway_env_uses_official_secret_with_legacy_fallback() {
+    for case in ["secret-only", "both", "legacy-only"] {
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("test executable should exist"),
+        )
+        .args([
+            "--exact",
+            "followup_tests::review_loop_tests::runway_env_precedence_child",
+            "--nocapture",
+        ])
+        .env("RUNWAY_ENV_PRECEDENCE_CHILD", case)
+        .env_remove("RUNWAYML_API_SECRET")
+        .env_remove("RUNWAYML_API_KEY")
+        .envs(match case {
+            "secret-only" => vec![("RUNWAYML_API_SECRET", "official-secret")],
+            "both" => vec![
+                ("RUNWAYML_API_SECRET", "official-secret"),
+                ("RUNWAYML_API_KEY", "legacy-key"),
+            ],
+            "legacy-only" => vec![("RUNWAYML_API_KEY", "legacy-key")],
+            _ => unreachable!(),
+        })
+        .status()
+        .expect("isolated Runway environment test should run");
+
+        assert!(status.success(), "Runway environment case failed: {case}");
+    }
+}
+
+#[cfg(feature = "runway-media")]
+#[test]
+fn runway_env_precedence_child() {
+    let Ok(case) = std::env::var("RUNWAY_ENV_PRECEDENCE_CHILD") else {
+        return;
+    };
+    let expected = if case == "legacy-only" {
+        "legacy-key"
+    } else {
+        "official-secret"
+    };
+
+    let config = RunwayConfig::from_env();
+    assert!(
+        config.base.api_key.as_deref() == Some(expected),
+        "Runway selected the wrong environment credential"
+    );
+    assert!(
+        RunwayConfig::with_api_key("explicit-key")
+            .base
+            .api_key
+            .as_deref()
+            == Some("explicit-key"),
+        "explicit Runway configuration must remain highest precedence"
+    );
+}
+
 #[test]
 fn every_bfl_x_key_client_is_wired_without_redirects() {
     let source = include_str!("../../src/core/providers/black_forest_labs/mod.rs");

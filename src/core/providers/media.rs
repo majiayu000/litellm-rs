@@ -331,7 +331,7 @@ pub mod runway {
         pub fn from_env() -> Self {
             let mut config = Self::default();
             let env = BaseConfig::from_env(PROVIDER);
-            config.base.api_key = env.api_key;
+            config.base.api_key = std::env::var("RUNWAYML_API_SECRET").ok().or(env.api_key);
             config.base.timeout = env.timeout;
             config.base.max_retries = env.max_retries;
             if env.api_base.is_some() {

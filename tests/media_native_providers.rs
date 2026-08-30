@@ -88,7 +88,7 @@ async fn stability_generation_uses_native_multipart_contract() {
         .image_generation(
             ImageGenerationRequest {
                 prompt: "paint a lighthouse".to_string(),
-                model: Some("stable-image-core".to_string()),
+                model: Some("stable-image-ultra".to_string()),
                 n: Some(1),
                 size: Some("1024x1024".to_string()),
                 quality: None,
@@ -106,7 +106,9 @@ async fn stability_generation_uses_native_multipart_contract() {
     assert!(response.data[0].b64_json.is_some());
     let captured_request = captured.lock().expect("capture lock");
     let request = String::from_utf8_lossy(&captured_request);
-    assert!(request.starts_with("POST /v2beta/stable-image/generate/core HTTP/1.1"));
+    assert!(request.starts_with("POST /v2beta/stable-image/generate/ultra HTTP/1.1"));
+    assert!(request.contains("name=\"aspect_ratio\""));
+    assert!(request.contains("1:1"));
     assert!(
         request
             .to_ascii_lowercase()
@@ -443,7 +445,7 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
         .image_generation(
             ImageGenerationRequest {
                 prompt: "a glass city".to_string(),
-                model: Some("flux-pro-1.1-ultra".to_string()),
+                model: Some("flux-pro-1.1".to_string()),
                 n: Some(1),
                 size: Some("1024x768".to_string()),
                 quality: None,
@@ -463,7 +465,7 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
                 prompt: "make the sky green".to_string(),
                 model: Some("flux-kontext-pro".to_string()),
                 n: Some(1),
-                size: None,
+                size: Some("1024x1024".to_string()),
                 response_format: Some("url".to_string()),
                 user: None,
             },
@@ -482,14 +484,14 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
         Some("https://cdn.example/3.png")
     );
     let requests = captured.lock().expect("capture lock");
-    assert!(requests[0].starts_with("POST /flux-pro-1.1-ultra HTTP/1.1"));
+    assert!(requests[0].starts_with("POST /flux-pro-1.1 HTTP/1.1"));
     assert!(requests[0].contains("\"prompt\":\"a glass city\""));
-    assert!(requests[0].contains("\"aspect_ratio\":\"4:3\""));
-    assert!(!requests[0].contains("\"width\":"));
-    assert!(!requests[0].contains("\"height\":"));
+    assert!(requests[0].contains("\"width\":1024"));
+    assert!(requests[0].contains("\"height\":768"));
     assert!(requests[1].starts_with("GET /poll/0 HTTP/1.1"));
     assert!(requests[2].starts_with("POST /flux-kontext-pro HTTP/1.1"));
     assert!(requests[2].contains("\"input_image\":"));
+    assert!(requests[2].contains("\"aspect_ratio\":\"1:1\""));
     assert!(
         requests
             .iter()

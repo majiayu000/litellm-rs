@@ -191,18 +191,13 @@ impl StabilityProvider {
             .text("prompt", request.prompt.clone())
             .text("output_format", output_format.to_string());
         if let Some(size) = request.size.as_deref() {
-            let aspect_ratio = match size {
-                "1024x1024" | "512x512" => "1:1",
-                "1792x1024" | "1280x720" => "16:9",
-                "1024x1792" | "720x1280" => "9:16",
-                _ => {
-                    return Err(ProviderError::invalid_request(
-                        PROVIDER,
-                        format!("unsupported Stability image size '{size}'"),
-                    ));
-                }
-            };
-            form = form.text("aspect_ratio", aspect_ratio.to_string());
+            if size != "1024x1024" || !(model == "stable-image-ultra" || model.starts_with("sd3")) {
+                return Err(ProviderError::invalid_request(
+                    PROVIDER,
+                    format!("Stability model '{model}' cannot guarantee exact image size '{size}'"),
+                ));
+            }
+            form = form.text("aspect_ratio", "1:1".to_string());
         }
         if model.starts_with("sd3") {
             let upstream_model = match model {

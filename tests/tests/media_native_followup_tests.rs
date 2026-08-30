@@ -1,45 +1,12 @@
 use super::*;
 
 #[tokio::test]
-async fn bfl_kontext_edit_preserves_requested_size_as_aspect_ratio() {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("mock BFL listener should bind");
-    let address = listener.local_addr().expect("mock address should exist");
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_for_server = Arc::clone(&captured);
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("submit should arrive");
-        *captured_for_server.lock().expect("capture lock") = read_http_request(&mut socket).await;
-        let body = format!(r#"{{"id":"task-1","polling_url":"http://{address}/poll/task-1"}}"#);
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("submit response should write");
-
-        let (mut socket, _) = listener.accept().await.expect("poll should arrive");
-        let _request = read_http_request(&mut socket).await;
-        let body = r#"{"status":"Ready","result":{"sample":"https://cdn.example/edit.png"}}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("poll response should write");
-    });
-
+async fn bfl_kontext_edit_rejects_noncanonical_exact_size_before_network_access() {
     let mut config = BflConfig::with_api_key("bfl-secret");
-    config.base.api_base = Some(format!("http://{address}"));
+    config.base.api_base = Some("http://127.0.0.1:1".to_string());
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
-    config.poll_policy = PollPolicy::from_millis(1, 4, 200);
     let provider = BflProvider::new(config).expect("BFL provider should initialize");
-    provider
+    let error = provider
         .image_edit(
             ImageEditRequest {
                 image: b"source-image".to_vec(),
@@ -54,13 +21,10 @@ async fn bfl_kontext_edit_preserves_requested_size_as_aspect_ratio() {
             RequestContext::default(),
         )
         .await
-        .expect("BFL edit should finish");
-    server.await.expect("mock server should finish");
+        .expect_err("Kontext must not collapse an exact size to an aspect ratio");
 
-    let request = captured.lock().expect("capture lock");
-    assert!(request.contains("\"aspect_ratio\":\"4:3\""));
-    assert!(!request.contains("\"width\":"));
-    assert!(!request.contains("\"height\":"));
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+    assert!(error.to_string().contains("1024x768"));
 }
 
 #[tokio::test]
