@@ -6,8 +6,13 @@ pub(super) fn build_voyage_provider(
     config: &serde_json::Value,
 ) -> Result<VoyageProvider, ProviderError> {
     let api_key = config_str(config, "api_key")
-        .ok_or_else(|| ProviderError::configuration("voyage", "api_key is required"))?
-        .to_string();
+        .ok_or_else(|| ProviderError::configuration("voyage", "api_key is required"))?;
+    if api_key.trim().is_empty() {
+        return Err(ProviderError::configuration(
+            "voyage",
+            "api_key is required",
+        ));
+    }
     let api_base = config_str(config, "api_base").or_else(|| config_str(config, "base_url"));
     let timeout = config
         .get("timeout")
@@ -35,7 +40,7 @@ pub(super) fn build_voyage_provider(
         .unwrap_or_default();
 
     VoyageProvider::new(
-        api_key,
+        api_key.to_string(),
         api_base,
         config_endpoint_access(config, "voyage")?,
         timeout,

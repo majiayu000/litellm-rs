@@ -1,4 +1,4 @@
-use super::VoyageProvider;
+use super::{VoyageEmbeddingData, VoyageEmbeddingResponse, VoyageProvider, VoyageUsage};
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::health::HealthStatus;
@@ -28,10 +28,56 @@ fn configured_models_keep_exact_retrieval_capabilities() {
 }
 
 #[test]
+fn legacy_voyage_3_models_keep_fixed_dimensions() {
+    let provider =
+        provider(&["voyage-3", "voyage-3-large"]).expect("known embedding models should bind");
+
+    assert!(
+        !provider
+            .get_supported_openai_params("voyage-3")
+            .contains(&"dimensions")
+    );
+    assert!(
+        provider
+            .get_supported_openai_params("voyage-3-large")
+            .contains(&"dimensions")
+    );
+}
+
+#[test]
 fn unknown_configured_model_fails_closed() {
     let error = provider(&["voyage-4-lookalike"]).expect_err("unknown model must fail");
 
     assert!(error.to_string().contains("Unknown Voyage model"));
+}
+
+#[test]
+fn embedding_response_is_ordered_by_index() {
+    let response = VoyageEmbeddingResponse {
+        object: "list".to_string(),
+        data: vec![
+            VoyageEmbeddingData {
+                object: "embedding".to_string(),
+                embedding: vec![1.0],
+                index: 1,
+            },
+            VoyageEmbeddingData {
+                object: "embedding".to_string(),
+                embedding: vec![0.0],
+                index: 0,
+            },
+        ],
+        model: "voyage-4".to_string(),
+        usage: VoyageUsage { total_tokens: 2 },
+    };
+
+    let transformed = VoyageProvider::transform_embedding_response(response, 2)
+        .expect("valid out-of-order embeddings should be normalized");
+
+    assert_eq!(transformed.data[0].index, 0);
+    assert_eq!(transformed.data[0].embedding, vec![0.0]);
+    assert_eq!(transformed.data[1].index, 1);
+    assert_eq!(transformed.data[1].embedding, vec![1.0]);
 }
 
 #[tokio::test]

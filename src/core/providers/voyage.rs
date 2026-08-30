@@ -276,7 +276,7 @@ impl VoyageProvider {
             ));
         }
         let mut indexes = HashSet::with_capacity(response.data.len());
-        let data = response
+        let mut data = response
             .data
             .into_iter()
             .map(|item| {
@@ -293,6 +293,7 @@ impl VoyageProvider {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        data.sort_unstable_by_key(|item| item.index);
         let usage = Usage {
             prompt_tokens: response.usage.total_tokens,
             completion_tokens: 0,
