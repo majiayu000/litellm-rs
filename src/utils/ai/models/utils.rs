@@ -8,13 +8,14 @@ pub struct ModelUtils;
 
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
+        let gpt56_limits = openai_gpt56_limits(model);
         let model_lower = model
             .to_lowercase()
             .rsplit_once('/')
             .map(|(_, model)| model.to_string())
             .unwrap_or_else(|| model.to_lowercase());
 
-        if let Some((context_window, max_output)) = openai_gpt56_limits(&model_lower) {
+        if let Some((context_window, max_output)) = gpt56_limits {
             ModelCapabilities {
                 supports_function_calling: true,
                 supports_parallel_function_calling: true,
@@ -285,6 +286,10 @@ impl ModelUtils {
     }
 
     pub fn get_base_model(model: &str) -> String {
+        if let Some(catalog_id) = gpt56_catalog_id(model) {
+            return catalog_id.to_string();
+        }
+
         let model_lower = model.to_lowercase();
 
         if model_lower.starts_with("gpt-5") {
@@ -452,13 +457,11 @@ impl ModelUtils {
         ];
 
         let model_lower = model.to_lowercase();
-        let model_id = model_lower
-            .rsplit_once('/')
-            .map(|(_, model_id)| model_id)
-            .unwrap_or(&model_lower);
-
-        if model_id.starts_with("gpt-5.6") {
-            return gpt56_catalog_id(model_id).is_some();
+        if model_lower.contains("gpt-5.6") {
+            return gpt56_catalog_id(model).is_some();
+        }
+        if model_lower.contains("gpt-realtime-2") {
+            return realtime2_catalog_id(model).is_some();
         }
 
         for provider in &known_providers {
@@ -509,14 +512,21 @@ impl ModelUtils {
             .strip_prefix(&provider_prefix)
             .unwrap_or(&model_lower);
 
-        let model_matches =
-            if provider.eq_ignore_ascii_case("openai") && model_for_match.starts_with("gpt-5.6") {
-                gpt56_catalog_id(model_for_match).is_some()
+        let model_matches = if provider.eq_ignore_ascii_case("openai") {
+            if model_lower.contains("gpt-5.6") {
+                gpt56_catalog_id(model).is_some()
+            } else if model_lower.contains("gpt-realtime-2") {
+                realtime2_catalog_id(model).is_some()
             } else {
                 compatible_models.iter().any(|compatible_model| {
                     model_for_match.starts_with(&compatible_model.to_lowercase())
                 })
-            };
+            }
+        } else {
+            compatible_models.iter().any(|compatible_model| {
+                model_for_match.starts_with(&compatible_model.to_lowercase())
+            })
+        };
 
         if !model_matches {
             return Err(ProviderError::ModelNotFound {
@@ -539,6 +549,9 @@ impl ModelUtils {
                 "gpt-5.6-terra".to_string(),
                 "gpt-5.6-luna".to_string(),
                 "gpt-5.6-cyber".to_string(),
+                "gpt-realtime-2".to_string(),
+                "gpt-realtime-2.1".to_string(),
+                "gpt-realtime-2.1-mini".to_string(),
                 "gpt-5.5".to_string(),
                 "gpt-5.5-pro".to_string(),
                 "gpt-5.4".to_string(),
@@ -625,40 +638,25 @@ pub(crate) fn openai_gpt56_limits(model: &str) -> Option<(usize, usize)> {
 }
 
 fn gpt56_catalog_id(model: &str) -> Option<&'static str> {
-    let model_lower = model.to_ascii_lowercase();
-    let model_id = model_lower
-        .rsplit_once('/')
-        .map(|(_, model_id)| model_id)
-        .unwrap_or(&model_lower);
-
-    if matches_alias_or_snapshot(model_id, "gpt-5.6-cyber") {
-        Some("gpt-5.6-cyber")
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-terra") {
-        Some("gpt-5.6-terra")
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-luna") {
-        Some("gpt-5.6-luna")
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-sol") {
-        Some("gpt-5.6-sol")
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6") {
-        Some("gpt-5.6")
-    } else {
-        None
+    let model_id = model.strip_prefix("openai/").unwrap_or(model);
+    match model_id {
+        "gpt-5.6" => Some("gpt-5.6"),
+        "gpt-5.6-sol" => Some("gpt-5.6-sol"),
+        "gpt-5.6-terra" => Some("gpt-5.6-terra"),
+        "gpt-5.6-luna" => Some("gpt-5.6-luna"),
+        "gpt-5.6-cyber" => Some("gpt-5.6-cyber"),
+        _ => None,
     }
 }
 
-fn matches_alias_or_snapshot(model_id: &str, alias: &str) -> bool {
-    model_id == alias || model_id.strip_prefix(alias).is_some_and(is_snapshot_suffix)
-}
-
-fn is_snapshot_suffix(suffix: &str) -> bool {
-    let bytes = suffix.as_bytes();
-    bytes.len() == 11
-        && bytes[0] == b'-'
-        && bytes[5] == b'-'
-        && bytes[8] == b'-'
-        && bytes[1..5].iter().all(u8::is_ascii_digit)
-        && bytes[6..8].iter().all(u8::is_ascii_digit)
-        && bytes[9..11].iter().all(u8::is_ascii_digit)
+fn realtime2_catalog_id(model: &str) -> Option<&'static str> {
+    let model_id = model.strip_prefix("openai/").unwrap_or(model);
+    match model_id {
+        "gpt-realtime-2" => Some("gpt-realtime-2"),
+        "gpt-realtime-2.1" => Some("gpt-realtime-2.1"),
+        "gpt-realtime-2.1-mini" => Some("gpt-realtime-2.1-mini"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -47,6 +47,9 @@ MISTRAL_SOURCE = "https://docs.mistral.ai/inference/pricing"
 COHERE_SOURCE = "https://docs.cohere.com/changelog/command-gets-refreshed"
 GEMINI_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
 OPENAI_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.5-pro"
+OPENAI_REALTIME_2_SOURCE = (
+    "https://developers.openai.com/api/docs/models/gpt-realtime-2"
+)
 XAI_SOURCE = "https://docs.x.ai/developers/pricing"
 GPT_PRO_TIER_FIELDS = (
     "input_cost_per_token_above_272k_tokens",
@@ -160,6 +163,11 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "output_cost_per_token": 0.000180,
         "cache_read_input_token_cost": 0.000030,
         "source": OPENAI_SOURCE,
+    },
+    "gpt-realtime-2": {
+        "input_cost_per_token": 0.000004,
+        "output_cost_per_token": 0.000024,
+        "source": OPENAI_REALTIME_2_SOURCE,
     },
     # Both runtime tier consumers use `prompt_tokens > threshold`. The raw
     # 199999 threshold therefore encodes xAI's documented inclusive >=200k

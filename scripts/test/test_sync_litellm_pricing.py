@@ -302,6 +302,25 @@ class SyncPricingTests(unittest.TestCase):
             expired["gemini-3.6-flash"]["input_cost_per_token_batches"], 0.00000075
         )
 
+    def test_realtime_2_official_output_price_overrides_stale_upstream(self) -> None:
+        source = {
+            model: {"litellm_provider": "test"}
+            for model in sync.OFFICIAL_OVERRIDE_PATCHES
+        }
+        source["gpt-realtime-2"] = {
+            "litellm_provider": "openai",
+            "input_cost_per_token": 0.000004,
+            "output_cost_per_token": 0.000016,
+        }
+
+        patched = sync.apply_official_overrides(source, {})
+
+        self.assertEqual(patched["gpt-realtime-2"]["input_cost_per_token"], 0.000004)
+        self.assertEqual(patched["gpt-realtime-2"]["output_cost_per_token"], 0.000024)
+        self.assertEqual(
+            patched["gpt-realtime-2"]["source"], sync.OPENAI_REALTIME_2_SOURCE
+        )
+
 
 class PricingSchemaValidationTests(unittest.TestCase):
     def test_rejects_non_finite_or_negative_costs(self) -> None:

@@ -31,6 +31,8 @@ pub enum OpenAIModelFeature {
     AudioInput,
     /// Audio output support (TTS)
     AudioOutput,
+    /// Audio output over the Realtime transport (not `/audio/speech`)
+    RealtimeAudioOutput,
     /// Image generation (DALL-E)
     ImageGeneration,
     /// Image editing
@@ -73,6 +75,7 @@ impl OpenAIModelFeature {
             | OpenAIModelFeature::ReasoningMode
             | OpenAIModelFeature::VisionSupport
             | OpenAIModelFeature::AudioInput
+            | OpenAIModelFeature::RealtimeAudioOutput
             | OpenAIModelFeature::FineTuning
             | OpenAIModelFeature::CodeCompletion
             | OpenAIModelFeature::LargeContext

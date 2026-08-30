@@ -219,6 +219,18 @@ fn test_get_supported_openai_params_gpt56_family() {
         }
         assert_eq!(params, prefixed);
     }
+
+    for model in [
+        "gpt-5.6-2026-08-01",
+        "gpt-5.6-solstice",
+        "OPENAI/gpt-5.6",
+        "openai/GPT-5.6",
+        "azure/gpt-5.6",
+    ] {
+        let params = provider.get_supported_openai_params(model);
+        assert!(!params.contains(&"tools"), "{model}");
+        assert!(!params.contains(&"reasoning_effort"), "{model}");
+    }
 }
 
 #[test]

@@ -7,8 +7,8 @@
     "source_sha256": "110ba21cebb52cf6bdbb5130f38eaa761762ac78b4af547a9bcd099cd08a7d32",
     "generated_by": "scripts/sync_litellm_pricing.py",
     "upstream_model_count": 3362,
-    "compatibility_overlay_count": 182,
-    "compatibility_overlay_override_count": 70,
+    "compatibility_overlay_count": 183,
+    "compatibility_overlay_override_count": 71,
     "compatibility_overlay_add_count": 112,
     "compatibility_overlay_keys": [
       "MiniMax-M2",
@@ -126,6 +126,7 @@
       "gpt-image-1-mini",
       "gpt-image-1.5",
       "gpt-image-2",
+      "gpt-realtime-2",
       "kimi-k2-thinking",
       "kimi-k2-thinking-turbo",
       "kimi-k2.5",
@@ -28348,7 +28349,7 @@
     "max_tokens": 4096,
     "mode": "realtime",
     "output_cost_per_audio_token": 6.4e-05,
-    "output_cost_per_token": 1.6e-05,
+    "output_cost_per_token": 2.4e-05,
     "supported_endpoints": [
       "/v1/realtime"
     ],
@@ -28366,7 +28367,8 @@
     "supports_function_calling": true,
     "supports_parallel_function_calling": true,
     "supports_system_messages": true,
-    "supports_tool_choice": true
+    "supports_tool_choice": true,
+    "source": "https://developers.openai.com/api/docs/models/gpt-realtime-2"
   },
   "gpt-realtime-2.1": {
     "cache_creation_input_audio_token_cost": 4e-07,

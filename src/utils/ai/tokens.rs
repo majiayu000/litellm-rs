@@ -79,6 +79,14 @@ impl TokenUtils {
     pub fn select_tokenizer(model: &str) -> Result<TokenizerType, ProviderError> {
         let model_lower = model.to_lowercase();
 
+        if model_lower.contains("gpt-5.6") {
+            return Ok(if openai_gpt56_limits(model).is_some() {
+                TokenizerType::OpenAI
+            } else {
+                TokenizerType::Custom(model.to_string())
+            });
+        }
+
         if Self::OPENAI_MODELS
             .iter()
             .any(|&m| model_lower.starts_with(m))
@@ -539,8 +547,7 @@ mod tests {
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
-            "gpt-5.6-2026-08-01",
-            "openai/gpt-5.6-terra-2026-08-01",
+            "openai/gpt-5.6-terra",
         ] {
             assert_eq!(
                 TokenUtils::get_max_tokens_for_model(model),
@@ -550,20 +557,21 @@ mod tests {
             assert!(TokenUtils::validate_token_limit(model, 1_000_000).is_ok());
         }
 
-        for model in ["gpt-5.6-cyber", "openai/gpt-5.6-cyber-2026-08-01"] {
-            assert_eq!(
-                TokenUtils::get_max_tokens_for_model(model),
-                Some(400_000),
-                "{model}"
-            );
-            assert!(TokenUtils::validate_token_limit(model, 400_001).is_err());
-        }
+        assert_eq!(
+            TokenUtils::get_max_tokens_for_model("gpt-5.6-cyber"),
+            Some(400_000)
+        );
+        assert!(TokenUtils::validate_token_limit("gpt-5.6-cyber", 400_001).is_err());
 
         for model in [
             "gpt-5.60",
             "gpt-5.6-foo",
             "gpt-5.6-solstice",
             "gpt-5.6-cybernetic",
+            "gpt-5.6-2026-08-01",
+            "openai/gpt-5.6-cyber-2026-08-01",
+            "OPENAI/gpt-5.6",
+            "openai/GPT-5.6",
         ] {
             assert_eq!(
                 TokenUtils::get_max_tokens_for_model(model),
@@ -571,6 +579,15 @@ mod tests {
                 "{model} must retain the generic GPT-5 limit"
             );
         }
+
+        assert!(matches!(
+            TokenUtils::select_tokenizer("openai/gpt-5.6"),
+            Ok(TokenizerType::OpenAI)
+        ));
+        assert!(matches!(
+            TokenUtils::select_tokenizer("azure/gpt-5.6"),
+            Ok(TokenizerType::Custom(_))
+        ));
     }
 
     #[test]

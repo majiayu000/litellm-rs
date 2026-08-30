@@ -70,7 +70,6 @@ fn test_get_model_capabilities_gpt56_matches_registry_shape() {
         ("gpt-5.6-luna", "gpt-5.6-luna"),
         ("gpt-5.6-cyber", "gpt-5.6-cyber"),
         ("openai/gpt-5.6-terra", "gpt-5.6-terra"),
-        ("gpt-5.6-luna-2026-08-01", "gpt-5.6-luna"),
     ] {
         let spec = registry
             .get_model_spec(catalog_id)
@@ -372,6 +371,23 @@ fn test_get_base_model_gpt55() {
 }
 
 #[test]
+fn test_get_base_model_gpt56_preserves_exact_family() {
+    for model in [
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.6-cyber",
+    ] {
+        assert_eq!(ModelUtils::get_base_model(model), model);
+    }
+    assert_eq!(
+        ModelUtils::get_base_model("openai/gpt-5.6-terra"),
+        "gpt-5.6-terra"
+    );
+}
+
+#[test]
 fn test_get_base_model_gpt35() {
     assert_eq!(
         ModelUtils::get_base_model("gpt-3.5-turbo-0613"),
@@ -468,10 +484,7 @@ fn test_gpt56_validation_is_registry_aligned_and_boundary_safe() {
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.6-cyber",
-        "gpt-5.6-2026-08-01",
-        "gpt-5.6-terra-2026-08-01",
         "openai/gpt-5.6-luna",
-        "openai/gpt-5.6-cyber-2026-08-01",
     ] {
         assert!(ModelUtils::is_valid_model(model), "{model}");
         assert!(
@@ -486,6 +499,41 @@ fn test_gpt56_validation_is_registry_aligned_and_boundary_safe() {
         "gpt-5.6-solstice",
         "gpt-5.6-cybernetic",
         "openai/gpt-5.6-lunatic",
+        "gpt-5.6-2026-08-01",
+        "OPENAI/gpt-5.6",
+        "openai/GPT-5.6",
+        "azure/gpt-5.6",
+    ] {
+        assert!(!ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_err(),
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn test_realtime2_validation_is_exact_and_provider_safe() {
+    for model in [
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "openai/gpt-realtime-2.1",
+    ] {
+        assert!(ModelUtils::is_valid_model(model), "{model}");
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "openai").is_ok(),
+            "{model}"
+        );
+    }
+
+    for model in [
+        "gpt-realtime-2.2",
+        "gpt-realtime-2.1-mini-preview",
+        "gpt-realtime-2-2026-08-01",
+        "OPENAI/gpt-realtime-2",
+        "openai/GPT-REALTIME-2",
+        "azure/gpt-realtime-2",
     ] {
         assert!(!ModelUtils::is_valid_model(model), "{model}");
         assert!(

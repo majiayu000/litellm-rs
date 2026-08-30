@@ -126,7 +126,18 @@ fn realtime_2x_catalog_entries_match_official_model_cards() {
         );
         assert!(model.features.contains(&OpenAIModelFeature::VisionSupport));
         assert!(model.features.contains(&OpenAIModelFeature::AudioInput));
-        assert!(model.features.contains(&OpenAIModelFeature::AudioOutput));
+        assert!(
+            model
+                .features
+                .contains(&OpenAIModelFeature::RealtimeAudioOutput)
+        );
+        assert!(!model.features.contains(&OpenAIModelFeature::AudioOutput));
+        assert!(
+            !model
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::TextToSpeech)
+        );
         assert!(model.features.contains(&OpenAIModelFeature::RealtimeAudio));
     }
 }
@@ -160,15 +171,16 @@ fn realtime_2_reasoning_detection_is_boundary_safe() {
 }
 
 #[test]
-fn gpt56_family_detection_is_boundary_safe() {
+fn gpt56_family_detection_accepts_only_documented_exact_ids() {
     let registry = OpenAIModelRegistry::new();
     let cases = [
         ("gpt-5.6", OpenAIModelFamily::GPT56Sol),
-        ("gpt-5.6-2026-08-01", OpenAIModelFamily::GPT56Sol),
-        ("gpt-5.6-sol-2026-08-01", OpenAIModelFamily::GPT56Sol),
-        ("gpt-5.6-terra-2026-08-01", OpenAIModelFamily::GPT56Terra),
-        ("gpt-5.6-luna-2026-08-01", OpenAIModelFamily::GPT56Luna),
-        ("gpt-5.6-cyber-2026-08-01", OpenAIModelFamily::GPT56Cyber),
+        ("gpt-5.6-sol", OpenAIModelFamily::GPT56Sol),
+        ("gpt-5.6-terra", OpenAIModelFamily::GPT56Terra),
+        ("gpt-5.6-luna", OpenAIModelFamily::GPT56Luna),
+        ("gpt-5.6-cyber", OpenAIModelFamily::GPT56Cyber),
+        ("gpt-5.6-2026-08-01", OpenAIModelFamily::GPT5),
+        ("gpt-5.6-sol-2026-08-01", OpenAIModelFamily::GPT5),
         ("gpt-5.60", OpenAIModelFamily::GPT5),
         ("gpt-5.6-solstice", OpenAIModelFamily::GPT5),
         ("gpt-5.6-cybernetic", OpenAIModelFamily::GPT5),

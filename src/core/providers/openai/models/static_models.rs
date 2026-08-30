@@ -5,11 +5,8 @@
 
 use super::registry_types::OpenAIModelFamily;
 
-#[path = "static_models/current.rs"]
-mod current;
-
 /// Static model entry: (id, name, family, max_context, max_output, input_cost, output_cost)
-pub(super) type StaticModelEntry = (
+type StaticModelEntry = (
     &'static str,
     &'static str,
     OpenAIModelFamily,
@@ -21,7 +18,7 @@ pub(super) type StaticModelEntry = (
 
 /// Return the full list of static OpenAI model definitions.
 pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
-    let mut entries = vec![
+    vec![
         // ==================== GPT-4O Models (2024-2025) ====================
         (
             "gpt-4o",
@@ -739,13 +736,5 @@ pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
             0.03,
             0.03,
         ),
-    ];
-    entries.extend(current::entries());
-    entries
-}
-
-/// Return the manually verified current entries that must not be downgraded by
-/// older embedded pricing metadata.
-pub(super) fn current_model_entries() -> Vec<StaticModelEntry> {
-    current::entries()
+    ]
 }

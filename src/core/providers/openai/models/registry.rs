@@ -12,7 +12,7 @@ use crate::core::types::model::ModelInfo;
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
 };
-use super::static_models::{StaticModelEntry, current_model_entries, static_model_entries};
+use super::static_models::static_model_entries;
 
 /// OpenAI model registry
 #[derive(Debug)]
@@ -48,6 +48,13 @@ impl OpenAIModelRegistry {
         // Load from pricing database
         for model_id in &model_ids {
             if let Some(mut model_info) = pricing_db.to_model_info(model_id, "openai") {
+                if let Some((context_window, max_output)) = current_model_limits(model_id) {
+                    model_info.max_context_length = context_window;
+                    model_info.max_output_length = Some(max_output);
+                }
+                if is_realtime_model_id(model_id) {
+                    model_info.supports_streaming = false;
+                }
                 let features = self.detect_features(&model_info);
 
                 // Convert features to capabilities
@@ -70,11 +77,6 @@ impl OpenAIModelRegistry {
                 );
             }
         }
-
-        // The embedded pricing snapshot can lag newly released model cards.
-        // Reapply the small, manually verified current catalog so stale token
-        // limits or capabilities cannot downgrade these entries.
-        self.add_static_entries(current_model_entries());
     }
 
     /// Detect model features based on model info
@@ -82,16 +84,15 @@ impl OpenAIModelRegistry {
         let mut features = vec![OpenAIModelFeature::SystemMessages];
 
         let model_id = &model_info.id;
+        let is_realtime = is_realtime_model_id(model_id);
 
         if model_info.supports_streaming
+            && !is_realtime
             && !model_id.contains("embedding")
             && !model_id.starts_with("whisper")
         {
             features.push(OpenAIModelFeature::StreamingSupport);
         }
-
-        let is_realtime =
-            model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime");
 
         if model_id.starts_with("gpt-") && !is_realtime {
             features.push(OpenAIModelFeature::ChatCompletion);
@@ -121,9 +122,9 @@ impl OpenAIModelRegistry {
             features.push(OpenAIModelFeature::AudioOutput);
         }
 
-        if model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime") {
+        if is_realtime {
             features.push(OpenAIModelFeature::AudioInput);
-            features.push(OpenAIModelFeature::AudioOutput);
+            features.push(OpenAIModelFeature::RealtimeAudioOutput);
             features.push(OpenAIModelFeature::RealtimeAudio);
         }
 
@@ -309,6 +310,7 @@ impl OpenAIModelRegistry {
             );
 
         config.supports_streaming = model_info.supports_streaming
+            && !is_realtime_model_id(model_id)
             && !model_id.contains("embedding")
             && !model_id.contains("whisper");
 
@@ -317,11 +319,9 @@ impl OpenAIModelRegistry {
 
     /// Add static model definitions as fallback (data from `static_models` module)
     fn add_static_models(&mut self) {
-        self.add_static_entries(static_model_entries());
-    }
-
-    fn add_static_entries(&mut self, entries: Vec<StaticModelEntry>) {
-        for (id, name, family, max_context, max_output, input_cost, output_cost) in entries {
+        for (id, name, family, max_context, max_output, input_cost, output_cost) in
+            static_model_entries()
+        {
             let mut model_info = ModelInfo {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -529,44 +529,33 @@ fn normalize_price_per_1k(cost: f64) -> f64 {
 }
 
 fn gpt56_family(model_id: &str) -> Option<OpenAIModelFamily> {
-    if matches_alias_or_snapshot(model_id, "gpt-5.6-cyber") {
-        Some(OpenAIModelFamily::GPT56Cyber)
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-terra") {
-        Some(OpenAIModelFamily::GPT56Terra)
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-luna") {
-        Some(OpenAIModelFamily::GPT56Luna)
-    } else if matches_alias_or_snapshot(model_id, "gpt-5.6-sol")
-        || matches_alias_or_snapshot(model_id, "gpt-5.6")
-    {
-        Some(OpenAIModelFamily::GPT56Sol)
-    } else {
-        None
+    match model_id {
+        "gpt-5.6" | "gpt-5.6-sol" => Some(OpenAIModelFamily::GPT56Sol),
+        "gpt-5.6-terra" => Some(OpenAIModelFamily::GPT56Terra),
+        "gpt-5.6-luna" => Some(OpenAIModelFamily::GPT56Luna),
+        "gpt-5.6-cyber" => Some(OpenAIModelFamily::GPT56Cyber),
+        _ => None,
     }
 }
 
+fn current_model_limits(model_id: &str) -> Option<(u32, u32)> {
+    match model_id {
+        "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => Some((1_050_000, 128_000)),
+        "gpt-5.6-cyber" => Some((400_000, 128_000)),
+        "gpt-realtime-2" | "gpt-realtime-2.1" | "gpt-realtime-2.1-mini" => Some((128_000, 32_000)),
+        _ => None,
+    }
+}
+
+fn is_realtime_model_id(model_id: &str) -> bool {
+    model_id.starts_with("gpt-4o-realtime") || model_id.starts_with("gpt-realtime")
+}
+
 fn is_realtime_2_reasoning_model(model_id: &str) -> bool {
-    [
-        "gpt-realtime-2.1-mini",
-        "gpt-realtime-2.1",
-        "gpt-realtime-2",
-    ]
-    .iter()
-    .any(|alias| matches_alias_or_snapshot(model_id, alias))
-}
-
-fn matches_alias_or_snapshot(model_id: &str, alias: &str) -> bool {
-    model_id == alias || model_id.strip_prefix(alias).is_some_and(is_snapshot_suffix)
-}
-
-fn is_snapshot_suffix(suffix: &str) -> bool {
-    let bytes = suffix.as_bytes();
-    bytes.len() == 11
-        && bytes[0] == b'-'
-        && bytes[5] == b'-'
-        && bytes[8] == b'-'
-        && bytes[1..5].iter().all(u8::is_ascii_digit)
-        && bytes[6..8].iter().all(u8::is_ascii_digit)
-        && bytes[9..11].iter().all(u8::is_ascii_digit)
+    matches!(
+        model_id,
+        "gpt-realtime-2" | "gpt-realtime-2.1" | "gpt-realtime-2.1-mini"
+    )
 }
 
 #[cfg(test)]
@@ -716,7 +705,10 @@ mod tests {
         );
         assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::VisionSupport));
         assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioInput));
-        assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioOutput));
+        assert!(
+            registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::RealtimeAudioOutput)
+        );
+        assert!(!registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::AudioOutput));
         assert!(registry.supports_feature("gpt-realtime-1.5", &OpenAIModelFeature::RealtimeAudio));
 
         assert!(registry.supports_feature("gpt-audio-1.5", &OpenAIModelFeature::AudioInput));
