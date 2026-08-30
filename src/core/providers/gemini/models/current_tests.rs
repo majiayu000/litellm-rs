@@ -182,10 +182,15 @@ fn gemini_flash_listings_switch_at_the_exact_utc_boundary() {
                     (
                         model.input_cost_per_1k_tokens,
                         model.output_cost_per_1k_tokens,
+                        model.metadata["google_current_cache_storage_cost_per_million_token_hour"]
+                            .as_f64(),
                     )
                 })
         };
-        assert_eq!(price_at(before), Some((Some(0.00075), Some(0.00375))));
-        assert_eq!(price_at(at), Some((Some(0.0015), Some(0.0075))));
+        assert_eq!(
+            price_at(before),
+            Some((Some(0.00075), Some(0.00375), Some(0.5)))
+        );
+        assert_eq!(price_at(at), Some((Some(0.0015), Some(0.0075), Some(1.0))));
     }
 }

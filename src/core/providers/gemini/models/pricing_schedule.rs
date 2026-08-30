@@ -33,6 +33,16 @@ impl GeminiModelRegistry {
                 {
                     info.input_cost_per_1k_tokens = Some(0.0015);
                     info.output_cost_per_1k_tokens = Some(0.0075);
+                    if let Some(standard_cache_storage) = info
+                        .metadata
+                        .get("google_standard_cache_storage_cost_per_million_token_hour")
+                        .cloned()
+                    {
+                        info.metadata.insert(
+                            "google_current_cache_storage_cost_per_million_token_hour".to_string(),
+                            standard_cache_storage,
+                        );
+                    }
                 }
                 info
             })
