@@ -7,9 +7,9 @@
     "source_sha256": "110ba21cebb52cf6bdbb5130f38eaa761762ac78b4af547a9bcd099cd08a7d32",
     "generated_by": "scripts/sync_litellm_pricing.py",
     "upstream_model_count": 3362,
-    "compatibility_overlay_count": 190,
+    "compatibility_overlay_count": 191,
     "compatibility_overlay_override_count": 78,
-    "compatibility_overlay_add_count": 112,
+    "compatibility_overlay_add_count": 113,
     "compatibility_overlay_keys": [
       "MiniMax-M2",
       "MiniMax-M2.1",
@@ -45,6 +45,7 @@
       "command-r-plus-08-2024",
       "command-r7b-12-2024",
       "dall-e-3",
+      "deepgram/aura-2-thalia-en",
       "deepseek-chat",
       "deepseek-coder",
       "deepseek-reasoner",
@@ -202,11 +203,11 @@
       "yi-large",
       "yi-medium"
     ],
-    "total_model_count": 3474,
+    "total_model_count": 3475,
     "catalog_decision_revision": "classification-1241-v1",
-    "catalog_decision_source_sha256": "e03662421df3507e8a5be175f8976b968f0f59d9acc51aa5bc67f7569b168476",
-    "catalog_authority_sha256": "1454b3bc526e00b6cafdc0fcf585a8aebb4c98a045cda5b3cd58b5c7c33df311",
-    "catalog_authority_entry_count": 3474,
+    "catalog_decision_source_sha256": "e65ba6d7b2d1ecbed558f5bef1399fea3ab7b1d89e9d5e62b4e5e0dee32bc4b2",
+    "catalog_authority_sha256": "3bfba92f67d9550a14f930694f1833c8771fbb362efbee8090f9dc07ad79a7d0",
+    "catalog_authority_entry_count": 3475,
     "catalog_authority_enforced_providers": [
       "azure",
       "azure_ai",
@@ -369,7 +370,7 @@
         "unreviewed": 1
       },
       "deepgram": {
-        "callable": 0,
+        "callable": 1,
         "pricing_only": 0,
         "unreviewed": 36
       },
@@ -54483,6 +54484,18 @@
     "supports_streaming": true,
     "supports_system_message": true,
     "pricing_status": "not_public_on_cohere_pricing_page_2026_06_17"
+  },
+  "deepgram/aura-2-thalia-en": {
+    "input_cost_per_character": 3e-05,
+    "litellm_provider": "deepgram",
+    "metadata": {
+      "calculation": "$0.030/1000 characters = $0.00003 per character"
+    },
+    "mode": "audio_speech",
+    "source": "https://deepgram.com/pricing",
+    "supported_endpoints": [
+      "/v1/audio/speech"
+    ]
   },
   "deepseek-coder": {
     "max_tokens": 4096,

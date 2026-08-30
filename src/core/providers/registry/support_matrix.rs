@@ -163,6 +163,16 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         [S, U, U, U, U, U, U, U, U],
         "Workers AI chat only.",
     ),
+    row(
+        "deepgram",
+        [U, U, U, U, U, U, U, U, U],
+        "Native audio routes; this matrix covers chat, embeddings, and images.",
+    ),
+    row(
+        "elevenlabs",
+        [U, U, U, U, U, U, U, U, U],
+        "Native audio routes; this matrix covers chat, embeddings, and images.",
+    ),
     rerank_row(
         "cohere",
         [EXTENDED, EXTENDED, EXTENDED, U, U, U, U, U, U],

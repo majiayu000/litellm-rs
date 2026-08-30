@@ -59,6 +59,8 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     wire("bedrock", "native Provider enum variant"),
     wire("cloudflare", "native Provider enum variant"),
     wire("databricks", "typed Databricks Model Serving runtime"),
+    wire("deepgram", "native audio Provider enum variant"),
+    wire("elevenlabs", "native audio Provider enum variant"),
     providers_extended_wire(
         "cohere",
         "ProviderType::Cohere dispatches to native Cohere API paths when providers-extended is enabled",

@@ -234,6 +234,33 @@ mod tests {
         );
     }
 
+    fn add_test_time_and_token_speech_pricing(
+        state: &litellm_rs::server::state::AppState,
+        model: &str,
+    ) {
+        state.pricing.add_custom_model(
+            model.to_string(),
+            LiteLLMModelInfo {
+                max_tokens: Some(4096),
+                max_input_tokens: Some(4096),
+                max_output_tokens: Some(4096),
+                input_cost_per_token: Some(0.00001),
+                output_cost_per_token: Some(0.00002),
+                input_cost_per_character: None,
+                output_cost_per_character: None,
+                cost_per_second: None,
+                litellm_provider: "openai".to_string(),
+                mode: "audio_speech".to_string(),
+                supports_function_calling: Some(false),
+                supports_vision: Some(false),
+                supports_streaming: Some(false),
+                supports_parallel_function_calling: Some(false),
+                supports_system_message: Some(false),
+                extra: HashMap::from([("output_cost_per_second".to_string(), json!(0.001))]),
+            },
+        );
+    }
+
     fn audio_multipart_body(
         boundary: &str,
         model: &str,
@@ -449,6 +476,46 @@ mod tests {
             .map(|usage| usage.current_spend)
             .unwrap_or_default();
         assert!(spent > 0.0, "successful audio speech must record spend");
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn audio_speech_uses_token_pricing_when_output_duration_is_unknown() {
+        let mock = MockAudioServer::start().await;
+        let state = build_audio_state(&mock.base_url).await;
+        add_test_time_and_token_speech_pricing(&state, "tts-1");
+        state.budget_limits.providers.set_provider_limit(
+            "mock-openai-audio",
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let budget_limits = state.budget_limits.clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/audio/speech")
+            .set_json(json!({
+                "model": "tts-1",
+                "input": "twenty characters!!!",
+                "voice": "alloy"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let spent = budget_limits
+            .providers
+            .get_provider_usage("mock-openai-audio")
+            .map(|usage| usage.current_spend)
+            .unwrap_or_default();
+        assert!(
+            (spent - 0.00015).abs() < f64::EPSILON,
+            "speech without output duration must use the five-token input/output estimate"
+        );
         mock.shutdown().await;
     }
 
