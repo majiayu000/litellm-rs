@@ -219,6 +219,7 @@ fn qualified_gemini_37_uses_the_registry_context_window() {
         "gemini-3.7-flash",
         "gemini/gemini-3.7-flash",
         "google/gemini-3.7-flash",
+        "GOOGLE/gemini-3.7-flash",
         "vertex_ai/gemini-3.7-flash",
     ] {
         let capabilities = ModelUtils::get_model_capabilities(model);

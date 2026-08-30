@@ -238,6 +238,10 @@ impl PricingService {
 }
 
 impl PricingSnapshot {
+    pub(crate) fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
+        self.data.models.get(model).cloned()
+    }
+
     pub(crate) fn get_model_info_for_provider(
         &self,
         provider: &str,
