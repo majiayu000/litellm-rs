@@ -216,6 +216,7 @@ fn test_get_model_capabilities_gemini_20_flash() {
 #[test]
 fn qualified_gemini_37_uses_the_registry_context_window() {
     for model in [
+        "gemini-3.7-flash",
         "gemini/gemini-3.7-flash",
         "google/gemini-3.7-flash",
         "vertex_ai/gemini-3.7-flash",
@@ -226,6 +227,16 @@ fn qualified_gemini_37_uses_the_registry_context_window() {
             Some(GEMINI_31_CONTEXT_WINDOW as usize),
             "{model}"
         );
+    }
+
+    for rejected in [
+        "GEMINI-3.7-FLASH",
+        "wrong/gemini-3.7-flash",
+        "gemini/google/gemini-3.7-flash",
+    ] {
+        let capabilities = ModelUtils::get_model_capabilities(rejected);
+        assert_eq!(capabilities.context_window, None, "{rejected}");
+        assert!(!capabilities.supports_function_calling, "{rejected}");
     }
 }
 

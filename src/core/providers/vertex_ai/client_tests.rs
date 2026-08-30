@@ -552,6 +552,18 @@ async fn vertex_gemini_37_count_tokens_uses_the_google_publisher_endpoint() {
     );
     assert!(!url.contains("/endpoints/"), "unexpected custom URL: {url}");
 
+    let global_provider = VertexAIProvider::new(VertexAIProviderConfig {
+        location: "global".to_string(),
+        ..test_vertex_provider_config()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        global_provider.count_tokens_url("gemini-3.7-flash"),
+        "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/\
+         publishers/google/models/gemini-3.7-flash:countTokens"
+    );
+
     for lookalike in [
         "gemini-3.7-flash-preview",
         "gemini-3.7-flash-20260813",

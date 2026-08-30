@@ -2,9 +2,11 @@
 //!
 //! This module provides HTTP endpoints for managing pricing data
 
+use crate::core::pricing_service::{LiteLLMModelInfo, PricingService};
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::Result;
 use actix_web::{HttpResponse, web};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -127,13 +129,24 @@ pub async fn get_model_pricing(
     let model_name = path.into_inner();
     let pricing_service = &data.pricing;
 
-    match pricing_service.get_model_info(&model_name) {
+    match effective_model_pricing_at(pricing_service, &model_name, Utc::now()) {
         Some(model_info) => Ok(HttpResponse::Ok().json(model_info)),
         None => Ok(HttpResponse::NotFound().json(serde_json::json!({
             "error": "Model not found",
             "model": model_name
         }))),
     }
+}
+
+fn effective_model_pricing_at(
+    pricing_service: &PricingService,
+    model_name: &str,
+    pricing_time: DateTime<Utc>,
+) -> Option<LiteLLMModelInfo> {
+    let raw = pricing_service.get_model_info(model_name)?;
+    pricing_service
+        .get_model_info_for_provider_at(&raw.litellm_provider, model_name, pricing_time)
+        .map(|(_, model_info)| model_info)
 }
 
 /// Calculate cost for a completion
@@ -214,10 +227,11 @@ pub fn configure_pricing_routes(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::pricing_service::LiteLLMModelInfo;
+    use crate::core::pricing_service::{LiteLLMModelInfo, PricingService};
     use crate::server::HttpServer as GatewayHttpServer;
     use actix_web::http::StatusCode;
     use actix_web::{App, test};
+    use chrono::{TimeZone, Utc};
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -254,6 +268,23 @@ mod tests {
             }
         };
         server.state().clone()
+    }
+
+    #[tokio::test]
+    async fn model_pricing_route_resolves_the_effective_rate_at_request_time() {
+        let pricing =
+            PricingService::with_embedded_default().expect("embedded pricing should initialize");
+        let after_promotion = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+
+        let model_info = effective_model_pricing_at(&pricing, "gemini-3.7-flash", after_promotion)
+            .expect("Gemini 3.7 pricing should resolve");
+
+        assert_eq!(model_info.input_cost_per_token, Some(1.5e-6));
+        assert_eq!(model_info.output_cost_per_token, Some(7.5e-6));
+        assert_eq!(
+            model_info.extra["cache_read_input_token_cost"],
+            serde_json::json!(1.5e-7)
+        );
     }
 
     #[tokio::test]

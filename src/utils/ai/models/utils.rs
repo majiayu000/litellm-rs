@@ -8,6 +8,14 @@ pub struct ModelUtils;
 
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
+        let local_lower = model
+            .rsplit_once('/')
+            .map_or(model, |(_, local)| local)
+            .to_ascii_lowercase();
+        if local_lower.starts_with("gemini-3.7") && gemini_context_window(model).is_none() {
+            return ModelCapabilities::default();
+        }
+
         let gpt56_limits = openai_gpt56_limits(model);
         let realtime2 = realtime2_catalog_id(model)
             .and_then(|catalog_id| get_openai_registry().get_model_spec(catalog_id));
