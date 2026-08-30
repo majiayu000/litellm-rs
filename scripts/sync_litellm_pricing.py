@@ -46,11 +46,12 @@ NON_MODEL_KEYS = frozenset(("_metadata", "fallback_generalizations", "sample_spe
 MISTRAL_SOURCE = "https://docs.mistral.ai/inference/pricing"
 COHERE_SOURCE = "https://docs.cohere.com/changelog/command-gets-refreshed"
 GEMINI_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
-OPENAI_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.5-pro"
-OPENAI_REALTIME_2_SOURCE = (
-    "https://developers.openai.com/api/docs/models/gpt-realtime-2"
-)
+OPENAI_MODEL_SOURCE_BASE = "https://developers.openai.com/api/docs/models"
+OPENAI_SOURCE = f"{OPENAI_MODEL_SOURCE_BASE}/gpt-5.5-pro"
+OPENAI_REALTIME_2_SOURCE = f"{OPENAI_MODEL_SOURCE_BASE}/gpt-realtime-2"
 XAI_SOURCE = "https://docs.x.ai/developers/pricing"
+OPENAI_GPT56_LIMITS = {"max_input_tokens": 1_050_000, "max_output_tokens": 128_000, "max_tokens": 128_000}
+OPENAI_REALTIME2_LIMITS = {"max_input_tokens": 128_000, "max_output_tokens": 32_000, "max_tokens": 32_000}
 GPT_PRO_TIER_FIELDS = (
     "input_cost_per_token_above_272k_tokens",
     "output_cost_per_token_above_272k_tokens",
@@ -167,8 +168,24 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
     "gpt-realtime-2": {
         "input_cost_per_token": 0.000004,
         "output_cost_per_token": 0.000024,
+        **OPENAI_REALTIME2_LIMITS,
         "source": OPENAI_REALTIME_2_SOURCE,
     },
+    "gpt-realtime-2.1": {**OPENAI_REALTIME2_LIMITS,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-realtime-2.1"},
+    "gpt-realtime-2.1-mini": {**OPENAI_REALTIME2_LIMITS,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-realtime-2.1-mini"},
+    "gpt-5.6": {**OPENAI_GPT56_LIMITS,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-5.6-sol"},
+    "gpt-5.6-sol": {**OPENAI_GPT56_LIMITS,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-5.6-sol"},
+    "gpt-5.6-terra": {**OPENAI_GPT56_LIMITS,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-5.6-terra"},
+    "gpt-5.6-luna": {**OPENAI_GPT56_LIMITS,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-5.6-luna"},
+    "gpt-5.6-cyber": {**OPENAI_GPT56_LIMITS, "max_input_tokens": 400_000,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/batch", "/v1/responses"],
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/gpt-5.6-cyber"},
     # Both runtime tier consumers use `prompt_tokens > threshold`. The raw
     # 199999 threshold therefore encodes xAI's documented inclusive >=200k
     # boundary; the upstream 200k fields remain for source-schema fidelity.

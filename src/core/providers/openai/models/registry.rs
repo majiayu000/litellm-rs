@@ -48,10 +48,6 @@ impl OpenAIModelRegistry {
         // Load from pricing database
         for model_id in &model_ids {
             if let Some(mut model_info) = pricing_db.to_model_info(model_id, "openai") {
-                if let Some((context_window, max_output)) = current_model_limits(model_id) {
-                    model_info.max_context_length = context_window;
-                    model_info.max_output_length = Some(max_output);
-                }
                 if is_realtime_model_id(model_id) {
                     model_info.supports_streaming = false;
                 }
@@ -534,15 +530,6 @@ fn gpt56_family(model_id: &str) -> Option<OpenAIModelFamily> {
         "gpt-5.6-terra" => Some(OpenAIModelFamily::GPT56Terra),
         "gpt-5.6-luna" => Some(OpenAIModelFamily::GPT56Luna),
         "gpt-5.6-cyber" => Some(OpenAIModelFamily::GPT56Cyber),
-        _ => None,
-    }
-}
-
-fn current_model_limits(model_id: &str) -> Option<(u32, u32)> {
-    match model_id {
-        "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => Some((1_050_000, 128_000)),
-        "gpt-5.6-cyber" => Some((400_000, 128_000)),
-        "gpt-realtime-2" | "gpt-realtime-2.1" | "gpt-realtime-2.1-mini" => Some((128_000, 32_000)),
         _ => None,
     }
 }
