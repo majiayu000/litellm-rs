@@ -10,7 +10,6 @@ pub mod embed;
 pub mod error;
 pub mod image_generation;
 pub mod models;
-mod params;
 #[cfg(test)]
 mod policy_tests;
 pub mod rerank;
@@ -44,6 +43,15 @@ use crate::core::types::{
     responses::{ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse},
 };
 use client::AzureAIClient;
+
+#[rustfmt::skip]
+const CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty"];
+#[rustfmt::skip]
+const CHAT_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stream"];
+#[rustfmt::skip]
+const CHAT_TOOL_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "tools", "tool_choice"];
+#[rustfmt::skip]
+const CHAT_TOOL_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "tools", "tool_choice", "stream"];
 
 /// Main Azure AI provider following unified architecture
 #[derive(Debug, Clone)]
@@ -156,13 +164,54 @@ impl LLMProvider for AzureAIProvider {
     }
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        params::supported_openai_params(
-            self.model_registry,
-            self.model_identity
-                .as_ref()
-                .map(|binding| binding.identity()),
-            model,
-        )
+        let azure_ai_features = |model| {
+            self.model_registry
+                .get_model(model)
+                .filter(|model| {
+                    model
+                        .capabilities
+                        .contains(&ProviderCapability::ChatCompletion)
+                })
+                .map(|model| (model.supports_function_calling, model.supports_streaming))
+        };
+        let features = match self.model_identity.as_ref() {
+            Some(binding) => {
+                let identity = binding.identity();
+                match (
+                    identity.capability_catalog_provider(),
+                    identity.capability_catalog_model(),
+                ) {
+                    (Some("openai"), Some(model)) => {
+                        crate::core::providers::openai::models::get_openai_registry()
+                            .get_model_spec(model)
+                            .filter(|model| {
+                                model
+                                    .model_info
+                                    .capabilities
+                                    .contains(&ProviderCapability::ChatCompletion)
+                            })
+                            .map(|model| {
+                                let capabilities = &model.model_info.capabilities;
+                                (
+                                    capabilities.contains(&ProviderCapability::ToolCalling),
+                                    capabilities
+                                        .contains(&ProviderCapability::ChatCompletionStream),
+                                )
+                            })
+                    }
+                    (Some("azure_ai"), Some(model)) => azure_ai_features(model),
+                    _ => None,
+                }
+            }
+            None => azure_ai_features(model),
+        };
+        match features {
+            Some((false, false)) => CHAT_PARAMS,
+            Some((false, true)) => CHAT_STREAM_PARAMS,
+            Some((true, false)) => CHAT_TOOL_PARAMS,
+            Some((true, true)) => CHAT_TOOL_STREAM_PARAMS,
+            None => &[],
+        }
     }
 
     async fn map_openai_params(
