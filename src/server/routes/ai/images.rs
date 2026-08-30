@@ -13,6 +13,8 @@ use crate::core::models::openai::ImageGenerationRequest;
 use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::base::ProviderRequestBuilder;
 use crate::core::providers::{Provider, ProviderError};
+use crate::core::router::RouterConfig;
+use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
 use crate::core::types::context::RequestContext;
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -345,11 +347,25 @@ async fn proxy_image_multipart_endpoint(
                     message,
                 }));
             }
+            Err(error)
+                if matches!(endpoint, ImageProxyEndpoint::Edits)
+                    && native_edit_candidate
+                    && router_model == requested_model
+                    && is_retryable_image_router_error(&error) =>
+            {
+                last_router_error = Some(error);
+            }
             Err(error) => return Err(error),
         }
     }
 
     Err(last_router_error.unwrap_or_else(missing_image_proxy_provider_error))
+}
+
+fn is_retryable_image_router_error(error: &GatewayError) -> bool {
+    matches!(error, GatewayError::Provider(error) if RetryPolicy
+        .decide(&RouterConfig::default(), error, RetryContext::unary(1, 2))
+        .should_retry)
 }
 
 fn required_image_proxy_model(form_fields: &ImageProxyFormFields) -> Result<&str, GatewayError> {

@@ -57,7 +57,7 @@ async fn stability_generation_uses_native_multipart_contract() {
             }
         }
         *captured_for_server.lock().expect("capture lock") = bytes;
-        let body = b"native-png";
+        let body = b"\x89PNG\r\n\x1a\n";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -159,7 +159,7 @@ async fn stability_edit_uses_native_inpaint_multipart_contract() {
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("edit should arrive");
         *captured_for_server.lock().expect("capture lock") = read_http_request(&mut socket).await;
-        let body = b"edited-png";
+        let body = b"\x89PNG\r\n\x1a\n";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()

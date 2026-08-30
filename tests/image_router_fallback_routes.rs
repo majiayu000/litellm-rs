@@ -112,7 +112,7 @@ mod tests {
         if path.starts_with("/v2beta/") {
             HttpResponse::Ok()
                 .content_type("image/png")
-                .body("native-png")
+                .body(Bytes::from_static(b"\x89PNG\r\n\x1a\n"))
         } else {
             HttpResponse::Ok().json(json!({
                 "created": 1710000000,

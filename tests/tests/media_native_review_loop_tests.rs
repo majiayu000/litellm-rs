@@ -135,6 +135,60 @@ async fn truncated_native_5xx_error_body_remains_retryable() {
     assert!(retry_policy_allows(&error));
 }
 
+#[cfg(feature = "runway-media")]
+#[tokio::test]
+async fn runway_truncated_error_bodies_preserve_status_for_every_operation() {
+    let (address, server) = truncated_error_responses(vec![
+        (400, "Bad Request"),
+        (401, "Unauthorized"),
+        (503, "Service Unavailable"),
+    ])
+    .await;
+    let mut config = RunwayConfig::with_api_key("runway-secret");
+    config.base.api_base = Some(format!("http://{address}/v1"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = RunwayProvider::new(config).expect("Runway provider should initialize");
+
+    let submit_error = provider
+        .submit_text_to_video(
+            litellm_rs::core::providers::runway::RunwayTextToVideoRequest {
+                model: "veo3.1".to_string(),
+                prompt_text: "a glass city".to_string(),
+                ratio: None,
+                duration: None,
+                seed: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .await
+        .expect_err("truncated Runway submit error should fail");
+    let query_error = provider
+        .get_task("task-1")
+        .await
+        .expect_err("truncated Runway query error should fail");
+    let cancel_error = provider
+        .cancel_task("task-1")
+        .await
+        .expect_err("truncated Runway cancel error should fail");
+    server.await.expect("Runway server should finish");
+
+    assert!(
+        matches!(submit_error, ProviderError::InvalidRequest { .. }),
+        "{submit_error:?}"
+    );
+    assert!(!retry_policy_allows(&submit_error));
+    assert!(
+        matches!(query_error, ProviderError::Authentication { .. }),
+        "{query_error:?}"
+    );
+    assert!(!retry_policy_allows(&query_error));
+    assert!(
+        matches!(cancel_error, ProviderError::ProviderUnavailable { .. }),
+        "{cancel_error:?}"
+    );
+    assert!(retry_policy_allows(&cancel_error));
+}
+
 #[tokio::test]
 async fn stability_dns_policy_failure_remains_pre_dispatch_configuration_error() {
     let mut config = StabilityConfig::with_api_key("stability-secret");

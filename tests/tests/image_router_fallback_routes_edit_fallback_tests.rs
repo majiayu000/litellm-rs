@@ -154,6 +154,124 @@ async fn native_image_edit_precedes_wildcard_proxy_router_key() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
+async fn retryable_native_image_edit_failure_continues_to_wildcard_proxy() {
+    let native_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("native listener should bind");
+    let native_address = native_listener
+        .local_addr()
+        .expect("native address should exist");
+    let native_server = tokio::spawn(async move {
+        let mut attempts = 0_u32;
+        while let Ok(Ok((mut socket, _))) =
+            tokio::time::timeout(Duration::from_secs(2), native_listener.accept()).await
+        {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let mut request = vec![0_u8; 8192];
+            let _ = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let body = br#"{"error":"temporarily unavailable"}"#;
+            let response = format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("response headers should write");
+            socket
+                .write_all(body)
+                .await
+                .expect("response body should write");
+            attempts += 1;
+        }
+        attempts
+    });
+    let proxy = MockImageServer::start().await;
+    let mut native = image_provider(
+        "stability-native",
+        "stability",
+        &format!("http://{native_address}"),
+        vec!["inpaint".to_string()],
+    );
+    native.settings.insert(
+        "model_identity_mappings".to_string(),
+        json!({"inpaint": {
+            "capability_catalog_model": "inpaint",
+            "pricing_model": "stability-inpaint"
+        }}),
+    );
+    let state = build_route_policy_test_state_with_pricing(
+        vec![
+            native,
+            image_provider(
+                "wild-proxy",
+                "openai_compatible",
+                &proxy.base_url,
+                Vec::new(),
+            ),
+        ],
+        Some(HashMap::from([
+            (
+                "stability-inpaint".to_string(),
+                flat_image_model_info_for_provider("stability", 0.06),
+            ),
+            (
+                "inpaint".to_string(),
+                flat_image_model_info_for_provider("openai", 0.06),
+            ),
+        ])),
+    )
+    .await;
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.pricing.unpriced_model_policy =
+        litellm_rs::config::models::gateway::UnpricedModelPolicy::AllowUnpriced;
+    runtime_config
+        .gateway
+        .pricing
+        .unpriced_fallback_cost_per_1k_tokens = Some(0.01);
+    state.config.store(runtime_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-native-503-wildcard";
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(image_edit_multipart_body_for_model(boundary, "inpaint", 1))
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let response_body = test::read_body(response).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "wildcard fallback failed: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+    assert_eq!(proxy.paths(), vec!["/v1/images/edits".to_string()]);
+    assert!(
+        native_server.await.expect("native server should finish") > 0,
+        "native deployment should be attempted before wildcard fallback"
+    );
+    proxy.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
 async fn native_image_edit_rejects_explicit_quality_before_upstream_io() {
     let state = build_route_policy_test_state_with_pricing(
         vec![image_provider(

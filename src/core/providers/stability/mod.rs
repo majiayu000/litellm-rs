@@ -164,7 +164,7 @@ impl StabilityProvider {
         &self,
         request: &ImageGenerationRequest,
         model: &str,
-    ) -> Result<Form, ProviderError> {
+    ) -> Result<(Form, &'static str), ProviderError> {
         if request.n.is_some_and(|count| count != 1) {
             return Err(ProviderError::invalid_request(
                 PROVIDER,
@@ -179,7 +179,9 @@ impl StabilityProvider {
         }
         let output_format = match request.response_format.as_deref() {
             None | Some("b64_json") => "png",
-            Some(format @ ("png" | "jpeg" | "webp")) => format,
+            Some("png") => "png",
+            Some("jpeg") => "jpeg",
+            Some("webp") => "webp",
             Some(other) => {
                 return Err(ProviderError::invalid_request(
                     PROVIDER,
@@ -210,7 +212,7 @@ impl StabilityProvider {
             };
             form = form.text("model", upstream_model.to_string());
         }
-        Ok(form)
+        Ok((form, output_format))
     }
 
     async fn execute_generation(
@@ -219,7 +221,7 @@ impl StabilityProvider {
     ) -> Result<ImageGenerationResponse, ProviderError> {
         let model = request.model.as_deref().unwrap_or("stable-image-core");
         let url = self.endpoint_for_model(model)?;
-        let form = self.form_for_request(request, model)?;
+        let (form, output_format) = self.form_for_request(request, model)?;
         let api_key = self
             .config
             .base
@@ -233,11 +235,6 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.map_submit_error(error))?;
         let status = response.status();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) if status.is_success() => {
@@ -255,7 +252,7 @@ impl StabilityProvider {
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
         }
-        ensure_image_body(&bytes, content_type.as_deref())?;
+        ensure_image_body(&bytes, output_format)?;
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
             data: vec![ImageData {
@@ -325,11 +322,6 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.map_submit_error(error))?;
         let status = response.status();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) if status.is_success() => {
@@ -347,7 +339,7 @@ impl StabilityProvider {
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
         }
-        ensure_image_body(&bytes, content_type.as_deref())?;
+        ensure_image_body(&bytes, output_format)?;
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
             data: vec![ImageData {
@@ -379,23 +371,26 @@ fn mark_post_submit_error_non_retryable(error: ProviderError) -> ProviderError {
     )
 }
 
-fn ensure_image_body(body: &[u8], content_type: Option<&str>) -> Result<(), ProviderError> {
+fn ensure_image_body(body: &[u8], expected_format: &str) -> Result<(), ProviderError> {
     if body.is_empty() {
         return Err(ProviderError::response_parsing(
             PROVIDER,
             "Stability response contained an empty image body",
         ));
     }
-    let image_content_type = content_type
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().starts_with("image/"));
-    let image_signature = body.starts_with(b"\x89PNG\r\n\x1a\n")
-        || body.starts_with(b"\xff\xd8\xff")
-        || (body.len() >= 12 && body.starts_with(b"RIFF") && &body[8..12] == b"WEBP");
-    if !image_content_type && !image_signature {
+    let detected_format = if body.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if body.starts_with(b"\xff\xd8\xff") {
+        Some("jpeg")
+    } else if body.len() >= 12 && body.starts_with(b"RIFF") && &body[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    };
+    if detected_format != Some(expected_format) {
         return Err(ProviderError::response_parsing(
             PROVIDER,
-            "Stability response did not contain image content",
+            format!("Stability response did not contain the requested {expected_format} image"),
         ));
     }
     Ok(())

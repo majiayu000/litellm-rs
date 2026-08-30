@@ -464,7 +464,7 @@ async fn native_image_factory_merges_gateway_custom_headers() {
             if request.starts_with("POST /v2beta/") {
                 socket
                     .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\nConnection: close\r\n\r\npng",
+                        b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 8\r\nConnection: close\r\n\r\n\x89PNG\r\n\x1a\n",
                     )
                     .await
                     .expect("Stability response should write");

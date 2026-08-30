@@ -71,6 +71,94 @@ async fn stability_rejects_non_image_success_bodies_for_generation_and_edit() {
     assert!(matches!(edit_error, ProviderError::ResponseParsing { .. }));
 }
 
+#[tokio::test]
+async fn stability_requires_requested_raster_signature_for_success_bodies() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Stability listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        for (content_type, body) in [
+            ("image/png", b"<html>not an image</html>".as_slice()),
+            ("image/svg+xml", b"<svg><script/></svg>".as_slice()),
+            ("image/jpeg", b"\x89PNG\r\n\x1a\n".as_slice()),
+        ] {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let _request = read_http_request(&mut socket).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("response headers should write");
+            socket
+                .write_all(body)
+                .await
+                .expect("response body should write");
+        }
+    });
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+    let html_error = provider
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "paint a lighthouse".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: None,
+                quality: None,
+                response_format: Some("png".to_string()),
+                style: None,
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("HTML mislabeled image/png must be rejected");
+    let svg_error = provider
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "replace the background".to_string(),
+                model: Some("inpaint".to_string()),
+                n: Some(1),
+                size: None,
+                response_format: Some("png".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("SVG success body must be rejected");
+    let mismatch_error = provider
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "paint a lighthouse".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: None,
+                quality: None,
+                response_format: Some("jpeg".to_string()),
+                style: None,
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("PNG signature must not satisfy a JPEG request");
+    server.await.expect("mock server should finish");
+
+    for error in [html_error, svg_error, mismatch_error] {
+        assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+    }
+}
+
 #[test]
 fn credentialed_media_clients_are_all_configured_without_redirects() {
     let stability = include_str!("../../src/core/providers/stability/mod.rs");

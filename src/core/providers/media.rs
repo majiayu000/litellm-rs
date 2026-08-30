@@ -275,6 +275,7 @@ fn merge_custom_headers(
 pub mod runway {
     use std::time::Duration;
 
+    use reqwest::StatusCode;
     use serde::{Deserialize, Serialize};
     use serde_json::{Map, Value};
     use tokio_util::sync::CancellationToken;
@@ -487,11 +488,7 @@ pub mod runway {
                 .send()
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|error| self.client.map_preserved_request_error(error))?;
+            let (status, body) = self.read_response_body(response).await?;
             if status.is_success() {
                 Ok(())
             } else {
@@ -533,11 +530,7 @@ pub mod runway {
                 .send()
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|error| self.client.map_preserved_request_error(error))?;
+            let (status, body) = self.read_response_body(response).await?;
             if !status.is_success() {
                 return Err(HttpErrorMapper::map_status_code(
                     PROVIDER,
@@ -564,11 +557,7 @@ pub mod runway {
             &self,
             response: reqwest::Response,
         ) -> Result<RunwayTask, ProviderError> {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|error| self.client.map_preserved_request_error(error))?;
+            let (status, body) = self.read_response_body(response).await?;
             if !status.is_success() {
                 return Err(HttpErrorMapper::map_status_code(
                     PROVIDER,
@@ -583,6 +572,23 @@ pub mod runway {
                 )
             })?;
             decode_task(&value)
+        }
+
+        async fn read_response_body(
+            &self,
+            response: reqwest::Response,
+        ) -> Result<(StatusCode, String), ProviderError> {
+            let status = response.status();
+            match response.text().await {
+                Ok(body) => Ok((status, body)),
+                Err(error) if status.is_success() => {
+                    Err(self.client.map_preserved_request_error(error))
+                }
+                Err(_) => Err(HttpErrorMapper::map_status_without_body(
+                    PROVIDER,
+                    status.as_u16(),
+                )),
+            }
         }
 
         fn authenticated(
