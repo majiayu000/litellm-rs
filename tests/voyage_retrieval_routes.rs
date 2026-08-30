@@ -260,6 +260,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voyage_rerank_defaults_to_returning_documents() {
+        let mock = MockVoyageServer::start_voyage_mock().await;
+        let state = build_state(voyage_provider(&mock.base_url)).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/rerank")
+                .set_json(json!({
+                    "model": "rerank-2.5",
+                    "query": "best document",
+                    "documents": ["first", "second"]
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body: Value = test::read_body_json(response).await;
+        assert_eq!(response_body["results"][0]["document"], "second");
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].body["return_documents"], true);
+        mock.shutdown_voyage_mock().await;
+    }
+
+    #[tokio::test]
     async fn voyage_rerank_uses_configured_alias_and_records_canonical_spend() {
         let mock = MockVoyageServer::start_voyage_mock().await;
         let mut provider = voyage_provider("");

@@ -109,6 +109,7 @@ impl RerankProvider for VoyageRerankProvider {
         let model = Self::native_model(&request.model).ok_or_else(|| {
             GatewayError::NotFound(format!("Unknown Voyage rerank model '{}'", request.model))
         })?;
+        let return_documents = request.return_documents.unwrap_or(true);
         let body = VoyageRerankRequest {
             model,
             query: &request.query,
@@ -118,7 +119,7 @@ impl RerankProvider for VoyageRerankProvider {
                 .map(RerankDocument::get_text)
                 .collect(),
             top_k: request.top_n,
-            return_documents: request.return_documents,
+            return_documents: Some(return_documents),
             truncation: request.truncation,
         };
         let response = self
@@ -155,10 +156,7 @@ impl RerankProvider for VoyageRerankProvider {
                 Ok(RerankResult {
                     index: result.index,
                     relevance_score: result.relevance_score,
-                    document: request
-                        .return_documents
-                        .unwrap_or(false)
-                        .then(|| request.documents[result.index].clone()),
+                    document: return_documents.then(|| request.documents[result.index].clone()),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
