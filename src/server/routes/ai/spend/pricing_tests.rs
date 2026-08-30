@@ -202,25 +202,55 @@ mod mapped_identity_tests {
 
         let catalog = CatalogAuthority::from_embedded().expect("embedded catalog");
         let pricing = PricingService::new(None);
-        for (transport, target, exact, expected_provider, expected_model) in [
-            ("azure", "openai/gpt-4", true, "openai", "gpt-4"),
-            ("azure_ai", "openai/gpt-4", true, "openai", "gpt-4"),
-            ("azure_ai", "azure_ai/Phi-4", false, "azure_ai", "Phi-4"),
+        for (transport, wire_model, target, exact, expected_provider, expected_model) in [
+            (
+                "openai",
+                "ft:tenant:custom-chat",
+                "gpt-4",
+                true,
+                "openai",
+                "gpt-4",
+            ),
+            (
+                "azure",
+                "wire-deployment",
+                "openai/gpt-4",
+                true,
+                "openai",
+                "gpt-4",
+            ),
+            (
+                "azure_ai",
+                "wire-deployment",
+                "openai/gpt-4",
+                true,
+                "openai",
+                "gpt-4",
+            ),
+            (
+                "azure_ai",
+                "wire-deployment",
+                "azure_ai/Phi-4",
+                false,
+                "azure_ai",
+                "Phi-4",
+            ),
         ] {
             let mapping = ModelIdentityMapping::new(Some(target.to_string()), None);
             let binding = validate_deployment_identity(
                 "selected",
                 transport,
-                "wire-deployment",
+                wire_model,
                 Some(&mapping),
                 None,
                 &catalog,
                 &pricing.snapshot(),
             )
             .expect("typed capability mapping should validate");
-            let token = token_identity_for_binding(&binding, transport, "wire-deployment")
+            let token = token_identity_for_binding(&binding, transport, wire_model)
                 .expect("validated capability must yield a token identity");
 
+            assert_eq!(binding.wire_model(), wire_model);
             assert_eq!(token.provider(), expected_provider);
             assert_eq!(token.model(), expected_model);
             assert_eq!(matches!(token, TokenizerIdentity::ExactOpenAi(_)), exact);

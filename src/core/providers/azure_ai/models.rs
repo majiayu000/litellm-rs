@@ -68,6 +68,24 @@ impl AzureAIModelRegistry {
     /// Default
     fn register_default_models(&mut self) {
         // Chat models
+        // Microsoft lists Phi-4 as an Azure AI Foundry chat-completion model
+        // with 16,384-token input/output limits and no tool calling:
+        // https://learn.microsoft.com/azure/ai-foundry/model-inference/concepts/models
+        self.register_model(AzureAIModelSpec {
+            id: "Phi-4".to_string(),
+            name: "Phi-4".to_string(),
+            provider: "microsoft".to_string(),
+            model_type: AzureAIModelType::Chat,
+            capabilities: vec![ProviderCapability::ChatCompletion],
+            max_input_tokens: 16_384,
+            max_output_tokens: 16_384,
+            supports_streaming: false,
+            supports_function_calling: false,
+            supports_multimodal: false,
+            input_price_per_1k: None,
+            output_price_per_1k: None,
+        });
+
         self.register_model(AzureAIModelSpec {
             id: "gpt-4o".to_string(),
             name: "GPT-4 Omni".to_string(),
@@ -367,21 +385,9 @@ impl AzureAIModelRegistry {
     /// Check
     /// Model
     pub fn supports_capability(&self, model_id: &str, capability: &ProviderCapability) -> bool {
-        if let Some(model) = self.models.get(model_id) {
-            // Known model: use precise capability mapping
-            model.capabilities.contains(capability)
-        } else {
-            // Unknown model: use heuristic validation
-            match capability {
-                ProviderCapability::ChatCompletion => true,
-                ProviderCapability::ChatCompletionStream => true,
-                ProviderCapability::Embeddings => model_id.contains("embed"),
-                ProviderCapability::ImageGeneration => {
-                    model_id.contains("dall-e") || model_id.contains("flux")
-                }
-                _ => false, // Other capabilities remain conservative
-            }
-        }
+        self.models
+            .get(model_id)
+            .is_some_and(|model| model.capabilities.contains(capability))
     }
 
     /// Convert to ModelInfo format
@@ -445,6 +451,24 @@ mod tests {
     }
 
     #[test]
+    fn phi_4_has_exact_provider_native_chat_metadata() {
+        let registry = AzureAIModelRegistry::new();
+        let model = registry
+            .get_model("Phi-4")
+            .expect("official Azure AI Phi-4 identity must be registered exactly");
+
+        assert_eq!(model.provider, "microsoft");
+        assert_eq!(model.model_type, AzureAIModelType::Chat);
+        assert_eq!(model.max_input_tokens, 16_384);
+        assert_eq!(model.max_output_tokens, 16_384);
+        assert!(!model.supports_streaming);
+        assert!(!model.supports_function_calling);
+        assert_eq!(model.capabilities, vec![ProviderCapability::ChatCompletion]);
+        assert!(registry.get_model("phi-4").is_none());
+        assert!(registry.get_model("Phi-4-extra").is_none());
+    }
+
+    #[test]
     fn test_model_capabilities() {
         let registry = AzureAIModelRegistry::new();
         assert!(registry.supports_capability("gpt-4o", &ProviderCapability::ChatCompletion));
@@ -452,6 +476,32 @@ mod tests {
             registry.supports_capability("text-embedding-3-large", &ProviderCapability::Embeddings)
         );
         assert!(!registry.supports_capability("dall-e-3", &ProviderCapability::ChatCompletion));
+    }
+
+    #[test]
+    fn unknown_models_do_not_inherit_capabilities_from_their_names() {
+        let registry = AzureAIModelRegistry::new();
+
+        for (model, capability) in [
+            (
+                "customer-chat-deployment",
+                ProviderCapability::ChatCompletion,
+            ),
+            (
+                "customer-stream-deployment",
+                ProviderCapability::ChatCompletionStream,
+            ),
+            ("customer-embed-deployment", ProviderCapability::Embeddings),
+            (
+                "customer-flux-deployment",
+                ProviderCapability::ImageGeneration,
+            ),
+        ] {
+            assert!(
+                !registry.supports_capability(model, &capability),
+                "unknown model '{model}' must not gain {capability:?} from its name"
+            );
+        }
     }
 
     #[test]

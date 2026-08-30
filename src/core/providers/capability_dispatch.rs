@@ -108,6 +108,56 @@ mod tests {
     use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
     use crate::core::providers::{GeminiNativeRequest, ProviderError};
 
+    #[cfg(feature = "providers-extra")]
+    #[test]
+    fn mapped_phi_4_stays_azure_ai_and_does_not_advertise_tool_calling() {
+        use crate::core::providers::model_identity::{
+            DeploymentProviderBinding, ModelIdentityMapping, validate_deployment_identity,
+        };
+        use crate::core::providers::registry::model_catalog_authority::CatalogAuthority;
+        use crate::core::providers::{
+            Provider, azure_ai::AzureAIConfig, azure_ai::AzureAIProvider,
+        };
+        use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+        use crate::core::types::model::ProviderCapability;
+
+        let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+        let catalog = CatalogAuthority::from_embedded().expect("embedded catalog should load");
+        let mapping = ModelIdentityMapping::new(Some("azure_ai/Phi-4".to_string()), None);
+        let identity = validate_deployment_identity(
+            "native-phi",
+            "azure_ai",
+            "customer-phi-deployment",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        )
+        .expect("exact Azure AI Phi-4 mapping should validate");
+        assert_eq!(identity.wire_model(), "customer-phi-deployment");
+        assert_eq!(identity.capability_catalog_provider(), Some("azure_ai"));
+
+        let mut config = AzureAIConfig::new("azure_ai");
+        config.base.api_key = Some("test-key".to_string());
+        config.base.api_base = Some("https://example.ai.azure.com".to_string());
+        let mut azure_ai = AzureAIProvider::new(config).expect("Azure AI provider should build");
+        azure_ai.model_identity = Some(DeploymentProviderBinding::new(identity, pricing));
+        let params = azure_ai.get_supported_openai_params("customer-phi-deployment");
+        assert!(params.contains(&"temperature"));
+        assert!(!params.contains(&"tools"));
+        assert!(!params.contains(&"tool_choice"));
+        let provider = Provider::AzureAI(azure_ai);
+
+        assert!(provider.supports_capability_for_model(
+            "customer-phi-deployment",
+            &ProviderCapability::ChatCompletion,
+        ));
+        assert!(!provider.supports_capability_for_model(
+            "customer-phi-deployment",
+            &ProviderCapability::Embeddings,
+        ));
+    }
+
     #[test]
     fn gemini_compatibility_name_set_is_closed_and_normalized() {
         for name in ["gemini", "Google-AI", "google_ai_studio"] {

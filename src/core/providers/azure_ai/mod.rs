@@ -10,6 +10,7 @@ pub mod embed;
 pub mod error;
 pub mod image_generation;
 pub mod models;
+mod params;
 #[cfg(test)]
 mod policy_tests;
 pub mod rerank;
@@ -154,43 +155,14 @@ impl LLMProvider for AzureAIProvider {
         !model.trim().is_empty()
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        if let Some(binding) = self.model_identity.as_ref() {
-            let identity = binding.identity();
-            let supports_chat = match (
-                identity.capability_catalog_provider(),
-                identity.capability_catalog_model(),
-            ) {
-                (Some("openai"), Some(model)) => {
-                    crate::core::providers::openai::models::get_openai_registry()
-                        .get_model_spec(model)
-                        .is_some_and(|model| {
-                            model
-                                .model_info
-                                .capabilities
-                                .contains(&ProviderCapability::ChatCompletion)
-                        })
-                }
-                (Some("azure_ai"), Some(model)) => self
-                    .model_registry
-                    .supports_capability(model, &ProviderCapability::ChatCompletion),
-                _ => false,
-            };
-            if !supports_chat {
-                return &[];
-            }
-        }
-        &[
-            "temperature",
-            "max_tokens",
-            "max_completion_tokens",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "tools",
-            "tool_choice",
-            "stream",
-        ]
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        params::supported_openai_params(
+            self.model_registry,
+            self.model_identity
+                .as_ref()
+                .map(|binding| binding.identity()),
+            model,
+        )
     }
 
     async fn map_openai_params(
@@ -542,6 +514,17 @@ mod tests {
         assert!(params.contains(&"tools"));
         assert!(params.contains(&"tool_choice"));
         assert!(params.contains(&"stream"));
+
+        let phi_params = provider.get_supported_openai_params("Phi-4");
+        assert!(phi_params.contains(&"temperature"));
+        assert!(!phi_params.contains(&"tools"));
+        assert!(!phi_params.contains(&"tool_choice"));
+        assert!(!phi_params.contains(&"stream"));
+        assert!(
+            provider
+                .get_supported_openai_params("customer-chat-deployment")
+                .is_empty()
+        );
     }
 
     #[test]

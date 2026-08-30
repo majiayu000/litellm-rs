@@ -410,7 +410,8 @@ async fn pricing_aware_default_openai_publishes_only_callable_catalog_models() {
 }
 
 #[tokio::test]
-async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_service() {
+async fn explicit_fine_tune_mapping_preserves_wire_id_and_uses_exact_openai_metadata() {
+    let wire_model = "ft:tenant:custom-chat";
     let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
     pricing.add_custom_model("runtime-only-price".to_string(), runtime_price("openai"));
     let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
@@ -419,42 +420,52 @@ async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_
     );
 
     let router = Router::from_gateway_config_with_pricing(
-        &[identity_provider_config("wire-deployment", Some(mapping))],
+        &[identity_provider_config(wire_model, Some(mapping))],
         None,
         pricing.clone(),
     )
     .await
     .expect("injected runtime target should validate");
     let deployment = router
-        .get_deployment("identity-openai-wire-deployment")
+        .get_deployment("identity-openai-ft:tenant:custom-chat")
         .expect("deployment should be published");
     let bound = deployment
         .provider
         .runtime_pricing()
         .expect("managed provider should retain injected authority");
     assert!(std::sync::Arc::ptr_eq(&pricing, &bound));
-    assert_eq!(
-        deployment
-            .provider
-            .deployment_model_identity()
-            .and_then(|identity| identity.pricing_model()),
-        Some("runtime-only-price")
-    );
+    let identity = deployment
+        .provider
+        .deployment_model_identity()
+        .expect("configured fine-tune must retain typed identity");
+    assert_eq!(identity.wire_model(), wire_model);
+    assert_eq!(identity.capability_catalog_model(), Some("gpt-4"));
+    assert_eq!(identity.pricing_model(), Some("runtime-only-price"));
+    let model = crate::core::providers::openai::models::get_openai_registry()
+        .get_model_spec(
+            identity
+                .capability_catalog_model()
+                .expect("mapping must provide exact metadata identity"),
+        )
+        .expect("mapped OpenAI metadata must exist");
+    assert_eq!(model.model_info.max_context_length, 8192);
+    assert_eq!(model.model_info.max_output_length, Some(8192));
     assert!(deployment.provider.supports_capability_for_model(
-        "wire-deployment",
+        wire_model,
         &crate::core::types::model::ProviderCapability::ChatCompletion,
     ));
     assert!(!deployment.provider.supports_capability_for_model(
-        "wire-deployment",
+        wire_model,
         &crate::core::types::model::ProviderCapability::Embeddings,
     ));
 }
 
 #[tokio::test]
-async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_selection() {
+async fn unmapped_fine_tune_stays_unprivileged_and_reports_mapping_hint() {
+    let wire_model = "ft:tenant:custom-chat";
     let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
     let router = Router::from_gateway_config_with_pricing(
-        &[identity_provider_config("wire-deployment", None)],
+        &[identity_provider_config(wire_model, None)],
         None,
         pricing,
     )
@@ -462,18 +473,18 @@ async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_sel
     .expect("an exact configured deployment must survive without semantic mappings");
 
     let deployment = router
-        .get_deployment("identity-openai-wire-deployment")
+        .get_deployment("identity-openai-ft:tenant:custom-chat")
         .expect("configured deployment should be published");
     let identity = deployment
         .provider
         .deployment_model_identity()
         .expect("configured deployment should retain a typed identity");
-    assert_eq!(identity.wire_model(), "wire-deployment");
+    assert_eq!(identity.wire_model(), wire_model);
     assert_eq!(identity.capability_catalog_model(), None);
     assert_eq!(identity.pricing_model(), None);
 
     let error = match router.select_deployment_lease_for_capability(
-        "wire-deployment",
+        wire_model,
         &crate::core::types::model::ProviderCapability::ChatCompletion,
     ) {
         Ok(_) => panic!("an unmapped deployment must not gain catalog capabilities"),
@@ -482,7 +493,7 @@ async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_sel
     assert!(
         error
             .to_string()
-            .contains("model_identity_mappings.wire-deployment.capability_catalog_model"),
+            .contains("model_identity_mappings.ft:tenant:custom-chat.capability_catalog_model"),
         "{error}"
     );
 }
