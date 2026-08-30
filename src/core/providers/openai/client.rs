@@ -305,6 +305,19 @@ impl OpenAIProvider {
         &self,
         model_id: &str,
     ) -> Result<crate::core::types::model::ModelInfo, ProviderError> {
+        if let Some(catalog_model) = self.model_identity.as_ref().and_then(|binding| {
+            let identity = binding.identity();
+            (identity.capability_catalog_provider() == Some("openai"))
+                .then(|| identity.capability_catalog_model())
+                .flatten()
+        }) {
+            return self
+                .model_registry
+                .get_model_spec(catalog_model)
+                .map(|spec| spec.model_info.clone())
+                .ok_or_else(|| ProviderError::model_not_found("openai", catalog_model));
+        }
+
         // Return a default ModelInfo for any model
         // Like Python LiteLLM, we don't validate models locally
         use crate::core::types::model::ModelInfo;
