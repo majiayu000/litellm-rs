@@ -2,7 +2,7 @@
 
 use litellm_rs::core::net::ProviderEndpointAccess;
 use litellm_rs::core::providers::base::{BaseConfig, header_static};
-use litellm_rs::core::providers::bfl::{BflConfig, BflProvider};
+use litellm_rs::core::providers::bfl::{BflConfig, BflImageRequest, BflProvider};
 use litellm_rs::core::providers::media::{
     GenerationLifecycle, GenerationOutput, GenerationPoll, PollPolicy,
 };
@@ -85,7 +85,7 @@ async fn stability_generation_uses_native_multipart_contract() {
                 size: Some("1024x1024".to_string()),
                 quality: None,
                 response_format: Some("png".to_string()),
-                style: Some("photographic".to_string()),
+                style: None,
                 user: None,
             },
             RequestContext::default(),
@@ -106,8 +106,34 @@ async fn stability_generation_uses_native_multipart_contract() {
     );
     assert!(request.to_ascii_lowercase().contains("accept: image/*"));
     assert!(request.contains("paint a lighthouse"));
-    assert!(request.contains("photographic"));
     assert!(!request.contains("stability-secret\r\n\r\n"));
+}
+
+#[tokio::test]
+async fn stability_rejects_openai_style_before_network_access() {
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some("http://127.0.0.1:1".to_string());
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+    let error = provider
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "paint a lighthouse".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: None,
+                quality: None,
+                response_format: Some("png".to_string()),
+                style: Some("vivid".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("OpenAI style must not be forwarded as a Stability style preset");
+
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
 }
 
 #[tokio::test]
@@ -143,7 +169,7 @@ async fn stability_edit_uses_native_inpaint_multipart_contract() {
                 image: b"source-image".to_vec(),
                 mask: Some(b"mask-image".to_vec()),
                 prompt: "replace the background".to_string(),
-                model: Some("stable-image-inpaint".to_string()),
+                model: Some("inpaint".to_string()),
                 n: Some(1),
                 size: None,
                 response_format: Some("png".to_string()),
@@ -244,6 +270,47 @@ async fn generation_lifecycle_honors_cancellation_before_polling() {
 }
 
 #[tokio::test]
+async fn generation_lifecycle_preserves_failure_direction() {
+    for (poll, expected_client_error) in [
+        (GenerationPoll::Failed("upstream failed".to_string()), false),
+        (
+            GenerationPoll::Rejected("request rejected".to_string()),
+            true,
+        ),
+    ] {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("mock polling listener should bind");
+        let address = listener.local_addr().expect("mock address should exist");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("poll should arrive");
+            let _request = read_http_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .expect("response should write");
+        });
+        let lifecycle = test_lifecycle(address.to_string());
+        let error = lifecycle
+            .wait_for_json(
+                format!("http://{address}/task"),
+                Vec::new(),
+                &CancellationToken::new(),
+                move |_| Ok(poll.clone()),
+            )
+            .await
+            .expect_err("terminal failure should be returned");
+        server.await.expect("mock server should finish");
+
+        if expected_client_error {
+            assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        } else {
+            assert!(matches!(error, ProviderError::ApiError { status: 502, .. }));
+        }
+    }
+}
+
+#[tokio::test]
 async fn generation_lifecycle_rejects_metadata_polling_url() {
     let lifecycle = GenerationLifecycle::new(
         "test_media",
@@ -319,7 +386,7 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
         .image_generation(
             ImageGenerationRequest {
                 prompt: "a glass city".to_string(),
-                model: Some("flux-pro-1.1".to_string()),
+                model: Some("flux-pro-1.1-ultra".to_string()),
                 n: Some(1),
                 size: Some("1024x768".to_string()),
                 quality: None,
@@ -358,10 +425,11 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
         Some("https://cdn.example/3.png")
     );
     let requests = captured.lock().expect("capture lock");
-    assert!(requests[0].starts_with("POST /flux-pro-1.1 HTTP/1.1"));
+    assert!(requests[0].starts_with("POST /flux-pro-1.1-ultra HTTP/1.1"));
     assert!(requests[0].contains("\"prompt\":\"a glass city\""));
-    assert!(requests[0].contains("\"width\":1024"));
-    assert!(requests[0].contains("\"height\":768"));
+    assert!(requests[0].contains("\"aspect_ratio\":\"4:3\""));
+    assert!(!requests[0].contains("\"width\":"));
+    assert!(!requests[0].contains("\"height\":"));
     assert!(requests[1].starts_with("GET /poll/0 HTTP/1.1"));
     assert!(requests[2].starts_with("POST /flux-kontext-pro HTTP/1.1"));
     assert!(requests[2].contains("\"input_image\":"));
@@ -416,14 +484,10 @@ async fn stability_and_bfl_are_routeable_with_truthful_capabilities_and_pricing(
         !stability
             .supports_capability_for_model("stable-image-core", &ProviderCapability::ImageEdit)
     );
+    assert!(stability.supports_capability_for_model("inpaint", &ProviderCapability::ImageEdit));
     assert!(
-        stability
-            .supports_capability_for_model("stable-image-inpaint", &ProviderCapability::ImageEdit)
+        !stability.supports_capability_for_model("inpaint", &ProviderCapability::ImageGeneration)
     );
-    assert!(!stability.supports_capability_for_model(
-        "stable-image-inpaint",
-        &ProviderCapability::ImageGeneration
-    ));
     assert!(
         !stability
             .supports_capability_for_model("unknown-model", &ProviderCapability::ImageGeneration)
@@ -478,6 +542,66 @@ async fn bfl_edit_rejects_non_kontext_model_before_network_access() {
     assert!(matches!(error, ProviderError::NotSupported { .. }));
 }
 
+#[tokio::test]
+async fn bfl_rejects_invalid_webhook_as_client_input() {
+    let provider = BflProvider::new(BflConfig::with_api_key("bfl-secret"))
+        .expect("BFL provider should initialize");
+    let mut request = BflImageRequest::new("flux-pro-1.1", "a glass city");
+    request.parameters.insert(
+        "webhook_url".to_string(),
+        serde_json::json!("http://169.254.169.254/latest/meta-data"),
+    );
+
+    let error = provider
+        .generate_native(request, &CancellationToken::new())
+        .await
+        .expect_err("metadata webhook must be rejected before submission");
+
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+}
+
+#[tokio::test]
+async fn bfl_cancellation_interrupts_submission() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock BFL listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("submit should arrive");
+        let _request = read_http_request(&mut socket).await;
+        let _ = request_seen_tx.send(());
+        let mut byte = [0_u8; 1];
+        let _ = socket.read(&mut byte).await;
+    });
+
+    let mut config = BflConfig::with_api_key("bfl-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = BflProvider::new(config).expect("BFL provider should initialize");
+    let cancellation = CancellationToken::new();
+    let cancellation_for_request = cancellation.clone();
+    let request = tokio::spawn(async move {
+        provider
+            .generate_native(
+                BflImageRequest::new("flux-pro-1.1", "a glass city"),
+                &cancellation_for_request,
+            )
+            .await
+    });
+    request_seen_rx
+        .await
+        .expect("submission should reach server");
+    cancellation.cancel();
+    let error = request
+        .await
+        .expect("request task should finish")
+        .expect_err("cancellation must interrupt an in-flight submit");
+    server.await.expect("mock server should finish");
+
+    assert!(matches!(error, ProviderError::Cancelled { .. }));
+}
+
 async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -519,7 +643,7 @@ async fn runway_submit_query_cancel_and_wait_use_native_task_contract() {
             r#"{"id":"task-1"}"#,
             r#"{"id":"task-1","status":"SUCCEEDED","output":["https://cdn.example/video.mp4"]}"#,
             "",
-            r#"{"id":"task-1","status":"RUNNING"}"#,
+            r#"{"id":"task-1","status":"THROTTLED"}"#,
             r#"{"id":"task-1","status":"SUCCEEDED","output":["https://cdn.example/video.mp4"]}"#,
         ];
         for (index, body) in responses.into_iter().enumerate() {
@@ -626,4 +750,47 @@ async fn runway_rejects_malformed_succeeded_output() {
 
         assert!(matches!(error, ProviderError::ResponseParsing { .. }));
     }
+}
+
+#[cfg(feature = "runway-media")]
+#[tokio::test]
+async fn runway_rejects_invalid_submit_task_id() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Runway listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("submit should arrive");
+        let _request = read_http_request(&mut socket).await;
+        let body = r#"{"id":"../tasks/other"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("response should write");
+    });
+    let mut config = RunwayConfig::with_api_key("runway-secret");
+    config.base.api_base = Some(format!("http://{address}/v1"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = RunwayProvider::new(config).expect("Runway provider should initialize");
+
+    let error = provider
+        .submit_text_to_video(
+            litellm_rs::core::providers::runway::RunwayTextToVideoRequest {
+                model: "veo3.1".to_string(),
+                prompt_text: "a glass city".to_string(),
+                ratio: None,
+                duration: None,
+                seed: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .await
+        .expect_err("invalid submit task ID must be rejected immediately");
+    server.await.expect("mock server should finish");
+
+    assert!(matches!(error, ProviderError::ResponseParsing { .. }));
 }

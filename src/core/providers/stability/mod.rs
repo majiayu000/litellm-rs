@@ -155,10 +155,10 @@ impl StabilityProvider {
                 "Stability native generation returns exactly one image",
             ));
         }
-        if request.quality.is_some() {
+        if request.quality.is_some() || request.style.is_some() {
             return Err(ProviderError::invalid_request(
                 PROVIDER,
-                "Stability does not accept the OpenAI quality parameter",
+                "Stability does not accept OpenAI quality or style parameters",
             ));
         }
         let output_format = match request.response_format.as_deref() {
@@ -187,9 +187,6 @@ impl StabilityProvider {
                 }
             };
             form = form.text("aspect_ratio", aspect_ratio.to_string());
-        }
-        if let Some(style) = &request.style {
-            form = form.text("style_preset", style.clone());
         }
         if model.starts_with("sd3") {
             let upstream_model = match model {
@@ -255,8 +252,8 @@ impl StabilityProvider {
                 "Stability native editing returns exactly one image",
             ));
         }
-        let model = request.model.as_deref().unwrap_or("stable-image-inpaint");
-        if model != "stable-image-inpaint" {
+        let model = request.model.as_deref().unwrap_or("inpaint");
+        if model != "inpaint" {
             return Err(ProviderError::model_not_found(PROVIDER, model));
         }
         let output_format = match request.response_format.as_deref() {
@@ -341,7 +338,7 @@ impl LLMProvider for StabilityProvider {
     }
 
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        &["model", "n", "size", "response_format", "style"]
+        &["model", "n", "size", "response_format"]
     }
 
     async fn map_openai_params(
@@ -427,10 +424,7 @@ fn supported_models() -> Vec<ModelInfo> {
     GENERATION_MODELS
         .iter()
         .map(|model| model_info(model, GENERATION_CAPABILITIES))
-        .chain(std::iter::once(model_info(
-            "stable-image-inpaint",
-            EDIT_CAPABILITIES,
-        )))
+        .chain(std::iter::once(model_info("inpaint", EDIT_CAPABILITIES)))
         .collect()
 }
 

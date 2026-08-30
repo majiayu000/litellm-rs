@@ -170,14 +170,19 @@ impl BflProvider {
                 .trim_end_matches('/'),
             request.model
         );
-        let response = self
+        if cancellation.is_cancelled() {
+            return Err(cancelled());
+        }
+        let submit = self
             .client
             .post(url)?
             .header("x-key", api_key)
-            .json(&request.parameters)
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+            .json(&request.parameters);
+        let response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(cancelled()),
+            response = submit.send() => response,
+        }
+        .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
         let body = response
             .text()
@@ -216,9 +221,9 @@ impl BflProvider {
         let webhook_url = webhook_url.to_string();
         tokio::task::spawn_blocking(move || validate_outbound_url_str(&webhook_url))
             .await
-            .map_err(|error| ProviderError::configuration(PROVIDER, error.to_string()))?
+            .map_err(|error| ProviderError::api_error(PROVIDER, 500, error.to_string()))?
             .map(|_| ())
-            .map_err(|error| ProviderError::configuration(PROVIDER, error.to_string()))
+            .map_err(|error| ProviderError::invalid_request(PROVIDER, error.to_string()))
     }
 
     fn api_key(&self) -> Result<&str, ProviderError> {
@@ -254,11 +259,7 @@ impl BflProvider {
         let model = request.model.as_deref().unwrap_or("flux-pro-1.1");
         let mut native = BflImageRequest::new(model, request.prompt);
         if let Some(size) = request.size {
-            let (width, height) = parse_size(&size)?;
-            native.parameters.insert("width".to_string(), json!(width));
-            native
-                .parameters
-                .insert("height".to_string(), json!(height));
+            insert_size_parameters(model, &size, &mut native.parameters)?;
         }
         self.to_image_response(
             self.generate_native(native, &CancellationToken::new())
@@ -333,6 +334,18 @@ fn decode_poll(payload: Value) -> Result<GenerationPoll, ProviderError> {
                     "BFL Ready response omitted result.sample",
                 )
             })?;
+            let parsed = url::Url::parse(sample).map_err(|_| {
+                ProviderError::response_parsing(
+                    PROVIDER,
+                    "BFL result.sample must be an HTTP(S) URL",
+                )
+            })?;
+            if sample.is_empty() || !matches!(parsed.scheme(), "http" | "https") {
+                return Err(ProviderError::response_parsing(
+                    PROVIDER,
+                    "BFL result.sample must be an HTTP(S) URL",
+                ));
+            }
             Ok(GenerationPoll::Succeeded(GenerationOutput {
                 urls: vec![sample.to_string()],
                 credits_used: payload["cost"].as_f64(),
@@ -344,7 +357,7 @@ fn decode_poll(payload: Value) -> Result<GenerationPoll, ProviderError> {
                 .unwrap_or("BFL generation failed")
                 .to_string(),
         )),
-        Some("Request Moderated") => Ok(GenerationPoll::Failed(
+        Some("Request Moderated") => Ok(GenerationPoll::Rejected(
             "BFL generation was moderated".to_string(),
         )),
         Some("Pending" | "Queued" | "Processing" | "Running") => Ok(GenerationPoll::Pending),
@@ -365,7 +378,47 @@ fn parse_size(size: &str) -> Result<(u32, u32), ProviderError> {
     let height = height.parse().map_err(|_| {
         ProviderError::invalid_request(PROVIDER, format!("invalid image size '{size}'"))
     })?;
+    if width == 0 || height == 0 {
+        return Err(ProviderError::invalid_request(
+            PROVIDER,
+            format!("invalid image size '{size}'"),
+        ));
+    }
     Ok((width, height))
+}
+
+fn insert_size_parameters(
+    model: &str,
+    size: &str,
+    parameters: &mut Map<String, Value>,
+) -> Result<(), ProviderError> {
+    let (width, height) = parse_size(size)?;
+    if model == "flux-pro-1.1-ultra" || KONTEXT_MODELS.contains(&model) {
+        let divisor = greatest_common_divisor(width, height);
+        parameters.insert(
+            "aspect_ratio".to_string(),
+            Value::String(format!("{}:{}", width / divisor, height / divisor)),
+        );
+    } else {
+        parameters.insert("width".to_string(), json!(width));
+        parameters.insert("height".to_string(), json!(height));
+    }
+    Ok(())
+}
+
+fn greatest_common_divisor(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
+}
+
+fn cancelled() -> ProviderError {
+    ProviderError::cancelled(
+        PROVIDER,
+        "media generation",
+        Some("cancellation requested".to_string()),
+    )
 }
 
 impl LLMProvider for BflProvider {
@@ -485,4 +538,20 @@ fn supported_models() -> Vec<ModelInfo> {
             ..ModelInfo::default()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ready_poll_requires_an_http_result_url() {
+        let error = decode_poll(json!({
+            "status": "Ready",
+            "result": { "sample": "file:///tmp/result.png" }
+        }))
+        .expect_err("non-HTTP output must not escape as a successful result");
+
+        assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+    }
 }

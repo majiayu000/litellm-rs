@@ -25,6 +25,7 @@ pub enum GenerationPoll {
     Pending,
     Succeeded(GenerationOutput),
     Failed(String),
+    Rejected(String),
     Canceled,
 }
 
@@ -133,7 +134,10 @@ impl GenerationLifecycle {
                 }
                 GenerationPoll::Succeeded(output) => return Ok(output),
                 GenerationPoll::Failed(message) => {
-                    return Err(ProviderError::api_error(self.provider, 500, message));
+                    return Err(ProviderError::api_error(self.provider, 502, message));
+                }
+                GenerationPoll::Rejected(message) => {
+                    return Err(ProviderError::invalid_request(self.provider, message));
                 }
                 GenerationPoll::Canceled => return Err(self.cancelled()),
             }
@@ -478,12 +482,19 @@ pub mod runway {
                     &body,
                 ));
             }
-            serde_json::from_str(&body).map_err(|error| {
+            let task: RunwayTaskRef = serde_json::from_str(&body).map_err(|error| {
                 ProviderError::response_parsing(
                     PROVIDER,
                     format!("invalid Runway submit response: {error}"),
                 )
-            })
+            })?;
+            self.task_url(&task.id).map_err(|_| {
+                ProviderError::response_parsing(
+                    PROVIDER,
+                    "Runway submit response contained an invalid task ID",
+                )
+            })?;
+            Ok(task)
         }
 
         async fn parse_task_response(
@@ -557,7 +568,7 @@ pub mod runway {
             .as_str()
             .ok_or_else(|| ProviderError::response_parsing(PROVIDER, "Runway task omitted id"))?;
         let status = match value["status"].as_str() {
-            Some("PENDING") => RunwayTaskStatus::Pending,
+            Some("PENDING" | "THROTTLED") => RunwayTaskStatus::Pending,
             Some("RUNNING") => RunwayTaskStatus::Running,
             Some("SUCCEEDED") => RunwayTaskStatus::Succeeded,
             Some("FAILED") => RunwayTaskStatus::Failed,
