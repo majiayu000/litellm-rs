@@ -43,6 +43,16 @@ fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, Ga
     }
 }
 
+fn validate_embedding_encoding_format(format: Option<&str>) -> Result<(), GatewayError> {
+    if format.is_none_or(|format| format == "float") {
+        Ok(())
+    } else {
+        Err(GatewayError::validation(
+            "Only float embedding responses are supported",
+        ))
+    }
+}
+
 fn json_value_type(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -100,6 +110,7 @@ async fn handle_embedding_internal(
     if request.model.trim().is_empty() {
         return Err(GatewayError::validation("Model is required"));
     }
+    validate_embedding_encoding_format(request.encoding_format.as_deref())?;
     let cached_response =
         super::response_cache::lookup_embedding(state, &request, &context).await?;
     let request_for_cache = request.clone();
@@ -109,9 +120,10 @@ async fn handle_embedding_internal(
         model: requested_model,
         input,
         user: request.user,
-        encoding_format: None,
-        dimensions: None,
-        task_type: None,
+        encoding_format: request.encoding_format,
+        dimensions: request.dimensions,
+        task_type: request.input_type,
+        truncation: request.truncation,
     };
 
     let requested_model = core_request.model.clone();
@@ -304,6 +316,14 @@ async fn handle_embedding_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_base64_embedding_format_before_dispatch() {
+        let error = validate_embedding_encoding_format(Some("base64"))
+            .expect_err("base64 responses are not representable by the response type");
+
+        assert!(matches!(error, GatewayError::Validation(_)));
+    }
 
     #[test]
     fn parse_embedding_input_accepts_string() {

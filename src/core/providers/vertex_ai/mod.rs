@@ -61,12 +61,13 @@ pub(crate) fn calculate_vertex_cost(
         .map_err(|error| vertex_pricing_error(model, error))
 }
 
-pub(crate) fn vertex_prices_per_1k(
+pub(crate) fn vertex_prices_per_1k_at(
     model: &str,
+    pricing_time: chrono::DateTime<chrono::Utc>,
 ) -> Result<(Option<f64>, Option<f64>), ProviderError> {
     let (_, pricing) = PricingService::shared_embedded_default()
         .map_err(|error| vertex_pricing_error(model, error))?
-        .get_model_info_for_provider("vertex_ai", model)
+        .get_model_info_for_provider_at("vertex_ai", model, pricing_time)
         .ok_or_else(|| ProviderError::model_not_found("vertex_ai", model))?;
     Ok((
         pricing.input_cost_per_token.map(|price| price * 1_000.0),
@@ -83,6 +84,25 @@ pub(crate) fn is_vertex_gemini_catalog_model(model: &str, include_experimental: 
     crate::core::providers::gemini::get_gemini_registry()
         .get_model_spec(model)
         .is_some_and(|spec| surface.includes(spec))
+}
+
+/// Exact Vertex Gemini IDs retained by the provider's enum and pricing contract but not exposed as
+/// exact keys by the shared Gemini registry. Keep this list bounded: the legacy parser uses fuzzy
+/// matching for backwards-compatible metadata and must not become transport authorization.
+const EXACT_LEGACY_VERTEX_GEMINI_IDS: &[&str] = &[
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-flash-002",
+];
+
+pub(crate) fn is_exact_legacy_vertex_gemini_model(model: &str) -> bool {
+    EXACT_LEGACY_VERTEX_GEMINI_IDS.contains(&model)
+}
+
+pub(crate) fn is_vertex_gemini_chat_model(model: &str, include_experimental: bool) -> bool {
+    is_vertex_gemini_catalog_model(model, include_experimental)
+        || is_exact_legacy_vertex_gemini_model(model)
 }
 
 fn vertex_pricing_error(model: &str, error: GatewayError) -> ProviderError {

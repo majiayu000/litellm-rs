@@ -8,6 +8,14 @@ pub struct ModelUtils;
 
 impl ModelUtils {
     pub fn get_model_capabilities(model: &str) -> ModelCapabilities {
+        let local_lower = model
+            .rsplit_once('/')
+            .map_or(model, |(_, local)| local)
+            .to_ascii_lowercase();
+        if local_lower.starts_with("gemini-3.7") && gemini_context_window(model).is_none() {
+            return ModelCapabilities::default();
+        }
+
         let gpt56_limits = openai_gpt56_limits(model);
         let realtime2 = realtime2_catalog_id(model)
             .and_then(|catalog_id| get_openai_registry().get_model_spec(catalog_id));
@@ -468,6 +476,7 @@ impl ModelUtils {
             "claude-3",
             "claude-2",
             "gemini",
+            "gemini-3.7-flash",
             "gemini-3.6-flash",
             "gemini-3.5-flash",
             "gemini-3.5-flash-lite",
@@ -533,6 +542,13 @@ impl ModelUtils {
         let model_for_match = model_lower
             .strip_prefix(&provider_prefix)
             .unwrap_or(&model_lower);
+        let model_for_exact_match = model.split_once('/').map_or(model, |(prefix, local)| {
+            if prefix.eq_ignore_ascii_case(provider) {
+                local
+            } else {
+                model
+            }
+        });
 
         let model_matches = if provider.eq_ignore_ascii_case("openai") {
             if model_lower.contains("gpt-5.6") {
@@ -544,6 +560,15 @@ impl ModelUtils {
                     model_for_match.starts_with(&compatible_model.to_lowercase())
                 })
             }
+        } else if provider.eq_ignore_ascii_case("google") {
+            compatible_models.iter().any(|compatible_model| {
+                let compatible_model = compatible_model.to_lowercase();
+                if compatible_model == "gemini-3.7-flash" {
+                    model_for_exact_match == compatible_model
+                } else {
+                    model_for_match.starts_with(&compatible_model)
+                }
+            })
         } else {
             compatible_models.iter().any(|compatible_model| {
                 model_for_match.starts_with(&compatible_model.to_lowercase())
@@ -614,6 +639,7 @@ impl ModelUtils {
                 "claude-instant".to_string(),
             ],
             "google" => vec![
+                "gemini-3.7-flash".to_string(),
                 "gemini-3.6-flash".to_string(),
                 "gemini-3.5-flash-lite".to_string(),
                 "gemini-3.5-flash".to_string(),

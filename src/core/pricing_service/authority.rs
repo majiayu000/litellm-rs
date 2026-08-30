@@ -49,7 +49,18 @@ impl PricingService {
         provider: &str,
         model: &str,
     ) -> Option<(String, LiteLLMModelInfo)> {
-        self.snapshot().get_model_info_for_provider(provider, model)
+        self.get_model_info_for_provider_at(provider, model, Utc::now())
+    }
+
+    /// Resolve provider-scoped pricing at an explicit UTC instant.
+    pub fn get_model_info_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        pricing_time: DateTime<Utc>,
+    ) -> Option<(String, LiteLLMModelInfo)> {
+        self.snapshot()
+            .get_model_info_for_provider_at(provider, model, pricing_time)
     }
 
     /// Calculate a completion cost from already-loaded pricing data.
@@ -94,7 +105,7 @@ impl PricingService {
         pricing_time: DateTime<Utc>,
     ) -> Result<CostResult> {
         let (resolved_model, model_info) = self
-            .get_model_info_for_provider(provider, model)
+            .get_model_info_for_provider_at(provider, model, pricing_time)
             .ok_or_else(|| model_not_found(provider, model))?;
 
         if model_info.cost_per_second.is_some() {
@@ -227,12 +238,34 @@ impl PricingService {
 }
 
 impl PricingSnapshot {
+    pub(crate) fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
+        self.data.models.get(model).cloned()
+    }
+
     pub(crate) fn get_model_info_for_provider(
         &self,
         provider: &str,
         model: &str,
     ) -> Option<(String, LiteLLMModelInfo)> {
-        resolve_model_info_for_provider(&self.data, provider, model)
+        self.get_model_info_for_provider_at(provider, model, Utc::now())
+    }
+
+    pub(crate) fn get_model_info_for_provider_at(
+        &self,
+        provider: &str,
+        model: &str,
+        pricing_time: DateTime<Utc>,
+    ) -> Option<(String, LiteLLMModelInfo)> {
+        let (resolved_model, model_info) =
+            resolve_model_info_for_provider(&self.data, provider, model)?;
+        let effective = super::google::effective_model_info_at(
+            provider,
+            &resolved_model,
+            &model_info,
+            pricing_time,
+        )
+        .into_owned();
+        Some((resolved_model, effective))
     }
 
     pub(crate) fn calculate_loaded_usage_cost_for_provider(
@@ -252,7 +285,7 @@ impl PricingSnapshot {
         pricing_time: DateTime<Utc>,
     ) -> Result<PricingCostBreakdown> {
         let (resolved_model, model_info) = self
-            .get_model_info_for_provider(provider, model)
+            .get_model_info_for_provider_at(provider, model, pricing_time)
             .ok_or_else(|| model_not_found(provider, model))?;
         super::usage_cost::calculate_usage_cost_with_pricing_at(
             provider,
@@ -310,6 +343,8 @@ impl PricingSnapshot {
         let (resolved_model, model_info) = self
             .get_model_info_for_provider(provider, model)
             .ok_or_else(|| model_not_found(provider, model))?;
+        let model_info =
+            super::google::maximum_scheduled_model_info(provider, &resolved_model, &model_info);
         let estimated_output_tokens = max_output_tokens.unwrap_or(100);
         let input_only = PricingUsage::new(input_tokens, 0);
         let full_usage = PricingUsage::new(input_tokens, estimated_output_tokens);

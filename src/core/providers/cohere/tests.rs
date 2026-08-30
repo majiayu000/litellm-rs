@@ -509,6 +509,7 @@ fn test_embedding_request_transformation() {
         dimensions: Some(512),
         user: None,
         task_type: Some("search_document".to_string()),
+        truncation: None,
     };
 
     let body = embed::CohereEmbeddingHandler::transform_request(&request, &config).unwrap();

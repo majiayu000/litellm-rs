@@ -169,6 +169,12 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         EXTENDED,
         "Native provider is behind providers-extended.",
     ),
+    rerank_row(
+        "voyage",
+        [U, U, S, U, U, U, U, U, U],
+        S,
+        "Native Voyage embeddings plus the shared HTTP rerank route.",
+    ),
     row(
         "vertex_ai",
         [EXTRA, EXTRA, EXTRA, EXTRA, U, U, U, U, U],

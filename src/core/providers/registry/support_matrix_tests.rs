@@ -102,6 +102,10 @@ fn enterprise_rerank_routes_are_declared_explicitly() {
         "watsonx",
         ProviderRouteSurface::HttpRerank
     ));
+    assert!(supports_provider_surface(
+        "voyage",
+        ProviderRouteSurface::HttpRerank
+    ));
     assert!(!supports_provider_surface(
         "sagemaker",
         ProviderRouteSurface::HttpRerank

@@ -6,8 +6,9 @@ use crate::core::providers::{ProviderError, ProviderType, registry as provider_r
 pub(super) fn provider_type_supports(provider_type: &ProviderType) -> bool {
     use ProviderType::*;
     match provider_type {
-        OpenAI | OpenAICompatible | Anthropic | Mistral | Cohere | Azure | AzureAI | Bedrock
-        | VertexAI | Gemini | Ollama | Databricks | Snowflake | Oci | Watsonx | SageMaker => true,
+        OpenAI | OpenAICompatible | Anthropic | Mistral | Cohere | Voyage | Azure | AzureAI
+        | Bedrock | VertexAI | Gemini | Ollama | Databricks | Snowflake | Oci | Watsonx
+        | SageMaker => true,
         Cloudflare | FalAI | Replicate | GitHubCopilot => false,
         _ => provider_registry::catalog_definition_for_provider_type(provider_type).is_some(),
     }

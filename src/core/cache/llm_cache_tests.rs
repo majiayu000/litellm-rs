@@ -181,6 +181,10 @@ async fn test_llm_cache_embedding() {
         model: "text-embedding-ada-002".to_string(),
         input: serde_json::json!("Test input"),
         user: None,
+        encoding_format: None,
+        dimensions: None,
+        input_type: None,
+        truncation: None,
     };
 
     let response = EmbeddingResponse {
@@ -214,6 +218,10 @@ async fn test_llm_cache_embedding_hit_reuses_shared_payload() {
         model: "text-embedding-ada-002".to_string(),
         input: serde_json::json!("Test input"),
         user: None,
+        encoding_format: None,
+        dimensions: None,
+        input_type: None,
+        truncation: None,
     };
 
     let response = EmbeddingResponse {

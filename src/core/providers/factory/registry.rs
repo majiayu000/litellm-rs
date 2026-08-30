@@ -41,6 +41,7 @@ use super::fal_ai_builder::build_fal_ai_config_from_factory;
 use super::gemini_builder::build_gemini_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::replicate_builder::build_replicate_config_from_factory;
+use super::voyage_builder::build_voyage_provider;
 
 #[cfg(feature = "providers-extended")]
 fn build_ollama_config_from_factory(
@@ -135,6 +136,7 @@ impl Provider {
                     ))
                 }
             }
+            ProviderType::Voyage => Ok(Provider::Voyage(build_voyage_provider(&config)?)),
             ProviderType::OpenAICompatible => {
                 let oai_like = build_openai_like_config_from_factory(&config)?;
                 let provider = openai_like::OpenAILikeProvider::new_openai_compatible(oai_like)
@@ -453,7 +455,8 @@ mod tests {
                     | (ProviderType::Anthropic, Provider::Anthropic(_))
                     | (ProviderType::Bedrock, Provider::Bedrock(_))
                     | (ProviderType::Mistral, Provider::Mistral(_))
-                    | (ProviderType::Cloudflare, Provider::Cloudflare(_)) => {}
+                    | (ProviderType::Cloudflare, Provider::Cloudflare(_))
+                    | (ProviderType::Voyage, Provider::Voyage(_)) => {}
                     (provider_type, Provider::Enterprise(provider))
                         if provider.provider_type() == *provider_type => {}
                     #[cfg(feature = "providers-extra")]

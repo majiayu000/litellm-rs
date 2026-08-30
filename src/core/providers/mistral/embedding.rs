@@ -132,6 +132,7 @@ mod tests {
             dimensions: None,
             user: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = handler.transform_request(request);
@@ -153,6 +154,7 @@ mod tests {
             dimensions: None,
             user: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = handler.transform_request(request);
@@ -173,6 +175,7 @@ mod tests {
             dimensions: None,
             user: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = handler.transform_request(request);
@@ -193,6 +196,7 @@ mod tests {
             dimensions: None,
             user: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = handler.transform_request(request);
