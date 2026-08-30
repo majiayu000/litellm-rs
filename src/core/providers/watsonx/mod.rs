@@ -3,7 +3,9 @@
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
-use crate::core::providers::enterprise::normalize_enterprise_base_url;
+use crate::core::providers::enterprise::{
+    normalize_enterprise_base_url, validate_request_header_value,
+};
 use crate::core::rerank::{
     RerankDocument, RerankProvider, RerankRequest, RerankResponse, RerankResult, RerankUsage,
 };
@@ -72,6 +74,11 @@ impl WatsonxConfig {
                 "access_token is required",
             ));
         }
+        validate_request_header_value(
+            "watsonx",
+            "access_token",
+            &format!("Bearer {}", self.access_token),
+        )?;
         if self.project_id.as_deref().is_some_and(str::is_empty)
             || self.space_id.as_deref().is_some_and(str::is_empty)
         {
@@ -135,7 +142,7 @@ impl WatsonxProvider {
     pub fn new(config: WatsonxConfig) -> Result<Self, ProviderError> {
         config.validate()?;
         let base_url = config.api_base()?;
-        let client = BaseHttpClient::new_for_provider(
+        let client = BaseHttpClient::new_for_provider_no_redirect(
             "watsonx",
             BaseConfig {
                 api_base: Some(base_url.clone()),
@@ -184,13 +191,7 @@ impl WatsonxProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|error| {
-                if error.is_timeout() {
-                    ProviderError::timeout("watsonx", "request timed out")
-                } else {
-                    ProviderError::network("watsonx", "request failed")
-                }
-            })?;
+            .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
         let bytes = response
             .bytes()

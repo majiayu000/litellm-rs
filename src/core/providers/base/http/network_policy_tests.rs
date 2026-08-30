@@ -1,4 +1,7 @@
 use super::*;
+use crate::core::providers::base::{GlobalPoolManager, header_owned};
+use crate::core::router::RouterConfig;
+use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
 use crate::utils::net::http::{ProviderHttpClient, ProviderHttpClientError};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -111,6 +114,55 @@ async fn public_redirect_modes_preserve_signed_no_follow() -> Result<(), Box<dyn
         assert_eq!(target_reached, expected_target, "redirect status {status}");
         server.await??;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_custom_header_is_non_retryable_configuration_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let url = "http://127.0.0.1:9";
+    let config = BaseConfig {
+        api_base: Some(url.to_string()),
+        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        ..BaseConfig::default()
+    };
+    let client = BaseHttpClient::new_for_provider("test", config.clone())?;
+    let request_error = client
+        .post(url)?
+        .header("x-test", "bad\nvalue")
+        .send()
+        .await
+        .expect_err("malformed header must fail before dispatch");
+    let error = client.map_preserved_request_error(request_error);
+
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(
+        !RetryPolicy
+            .decide(&RouterConfig::default(), &error, RetryContext::unary(1, 2))
+            .should_retry
+    );
+    let streaming_error = GlobalPoolManager::new_for_provider("test", config)?
+        .execute_streaming_request(
+            url,
+            vec![header_owned("x-test".to_string(), "bad\nvalue".to_string())],
+            serde_json::json!({}),
+            "test",
+        )
+        .await
+        .expect_err("malformed streaming header must fail before dispatch");
+    assert!(matches!(
+        streaming_error,
+        ProviderError::Configuration { .. }
+    ));
+    assert!(
+        !RetryPolicy
+            .decide(
+                &RouterConfig::default(),
+                &streaming_error,
+                RetryContext::unary(1, 2),
+            )
+            .should_retry
+    );
     Ok(())
 }
 

@@ -5,6 +5,7 @@ use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
 use crate::core::providers::bedrock::SigV4Signer;
 use crate::core::providers::enterprise::normalize_enterprise_base_url;
+use crate::core::providers::enterprise::validate_request_header_value;
 use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::ChatRequest;
@@ -105,6 +106,20 @@ impl SageMakerConfig {
                 "AWS credentials are required",
             ));
         }
+        validate_request_header_value(
+            "sagemaker",
+            "aws_access_key_id",
+            &format!("Credential={}", self.aws_access_key_id),
+        )?;
+        if let Some(token) = &self.aws_session_token {
+            validate_request_header_value("sagemaker", "aws_session_token", token)?;
+        }
+        if let Some(target) = &self.target_model {
+            validate_request_header_value("sagemaker", "target_model", target)?;
+        }
+        if let Some(variant) = &self.target_variant {
+            validate_request_header_value("sagemaker", "target_variant", variant)?;
+        }
         Self::validate_segment("sagemaker", "endpoint_name", &self.endpoint_name)?;
         if self.target_model.as_deref().is_some_and(str::is_empty)
             || self.target_variant.as_deref().is_some_and(str::is_empty)
@@ -132,7 +147,7 @@ impl SageMakerProvider {
         config.validate()?;
         let base_url = config.api_base()?;
         let url = format!("{base_url}/endpoints/{}/invocations", config.endpoint_name);
-        let client = BaseHttpClient::new_for_provider(
+        let client = BaseHttpClient::new_for_provider_no_redirect(
             "sagemaker",
             BaseConfig {
                 api_base: Some(base_url),
@@ -236,13 +251,10 @@ impl LLMProvider for SageMakerProvider {
         for (key, value) in headers {
             outgoing = outgoing.header(key, value);
         }
-        let response = outgoing.send().await.map_err(|error| {
-            if error.is_timeout() {
-                ProviderError::timeout("sagemaker", "InvokeEndpoint timed out")
-            } else {
-                ProviderError::network("sagemaker", "InvokeEndpoint failed")
-            }
-        })?;
+        let response = outgoing
+            .send()
+            .await
+            .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
         let bytes = response.bytes().await.map_err(|_| {
             ProviderError::network("sagemaker", "failed to read InvokeEndpoint response")

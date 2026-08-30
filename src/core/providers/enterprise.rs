@@ -88,6 +88,20 @@ pub(crate) fn normalize_enterprise_base_url(
     Ok(raw.trim_end_matches('/').to_string())
 }
 
+pub(crate) fn validate_request_header_value(
+    provider: &'static str,
+    field: &str,
+    value: &str,
+) -> Result<(), ProviderError> {
+    reqwest::header::HeaderValue::try_from(value).map_err(|_| {
+        ProviderError::configuration(
+            provider,
+            format!("{field} is not a valid HTTP header value"),
+        )
+    })?;
+    Ok(())
+}
+
 impl EnterpriseOpenAiProvider {
     pub(crate) async fn new(
         name: &'static str,
@@ -100,7 +114,7 @@ impl EnterpriseOpenAiProvider {
         config.base.timeout = settings.timeout;
         config.base.max_retries = settings.max_retries;
         config.custom_headers = settings.headers;
-        let inner = OpenAILikeProvider::new_for_catalog(config, COMPAT_CAPABILITIES)
+        let inner = OpenAILikeProvider::new_for_catalog_no_redirect(config, COMPAT_CAPABILITIES)
             .await
             .map_err(|error| rebrand_error(error, name))?;
         let models = settings

@@ -5,6 +5,7 @@ use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
 use crate::core::providers::enterprise::{
     EnterpriseOpenAiProvider, EnterpriseOpenAiSettings, normalize_enterprise_base_url,
+    validate_request_header_value,
 };
 use crate::core::rerank::{
     RerankDocument, RerankProvider, RerankRequest, RerankResponse, RerankResult,
@@ -83,6 +84,7 @@ impl fmt::Debug for OciAuth {
 pub struct OciConfig {
     pub region: String,
     pub compartment_id: Option<String>,
+    pub project_id: Option<String>,
     pub auth: OciAuth,
     #[serde(default)]
     pub api_mode: OciApiMode,
@@ -128,6 +130,18 @@ impl OciConfig {
             (OciApiMode::OpenAiCompatible, OciAuth::ApiKey { token })
                 if !token.trim().is_empty() =>
             {
+                validate_request_header_value("oci", "api_key", &format!("Bearer {token}"))?;
+                let project = self
+                    .project_id
+                    .as_deref()
+                    .filter(|value| value.starts_with("ocid1.generativeaiproject."))
+                    .ok_or_else(|| {
+                        ProviderError::configuration(
+                            "oci",
+                            "project_id must be an OCI Generative AI project OCID for /openai/v1",
+                        )
+                    })?;
+                validate_request_header_value("oci", "project_id", project)?;
                 Ok(OciProvider::Compatible(
                     EnterpriseOpenAiProvider::new(
                         "oci",
@@ -138,7 +152,10 @@ impl OciConfig {
                             endpoint_access: self.endpoint_access,
                             timeout: self.timeout,
                             max_retries: self.max_retries,
-                            headers: Default::default(),
+                            headers: HashMap::from([(
+                                "openai-project".to_string(),
+                                project.to_string(),
+                            )]),
                             models: self.models.clone(),
                         },
                     )
@@ -343,7 +360,7 @@ impl OciNativeProvider {
         }
         let signing_key = oci_iam_signing_key(&config.auth)?;
         let base_url = config.api_base()?;
-        let client = BaseHttpClient::new_for_provider(
+        let client = BaseHttpClient::new_for_provider_no_redirect(
             "oci",
             BaseConfig {
                 api_base: Some(base_url.clone()),
@@ -391,13 +408,10 @@ impl OciNativeProvider {
         for (key, value) in headers {
             request = request.header(key, value);
         }
-        let response = request.send().await.map_err(|error| {
-            if error.is_timeout() {
-                ProviderError::timeout("oci", "request timed out")
-            } else {
-                ProviderError::network("oci", "request failed")
-            }
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
         let bytes = response
             .bytes()
@@ -621,7 +635,12 @@ fn oci_iam_signing_key(auth: &OciAuth) -> Result<OciIamSigningKey, ProviderError
         ("tenancy_ocid", tenancy_ocid.as_str(), "ocid1.tenancy."),
         ("user_ocid", user_ocid.as_str(), "ocid1.user."),
     ] {
-        if !value.trim().starts_with(prefix) {
+        if value.trim() != value
+            || !value.starts_with(prefix)
+            || value.contains('"')
+            || value.contains('\\')
+            || validate_request_header_value("oci", field, value).is_err()
+        {
             return Err(ProviderError::configuration(
                 "oci",
                 format!("{field} must be a valid OCI OCID"),
@@ -632,6 +651,16 @@ fn oci_iam_signing_key(auth: &OciAuth) -> Result<OciIamSigningKey, ProviderError
         return Err(ProviderError::configuration(
             "oci",
             "fingerprint cannot be empty",
+        ));
+    }
+    if fingerprint.trim() != fingerprint
+        || fingerprint.contains('"')
+        || fingerprint.contains('\\')
+        || validate_request_header_value("oci", "fingerprint", fingerprint).is_err()
+    {
+        return Err(ProviderError::configuration(
+            "oci",
+            "fingerprint contains invalid characters",
         ));
     }
     let key =
@@ -664,10 +693,14 @@ fn oci_iam_headers(
     let parsed = reqwest::Url::parse(url).map_err(|error| {
         ProviderError::configuration("oci", format!("invalid endpoint: {error}"))
     })?;
-    let mut host = parsed
-        .host_str()
+    let mut host = match parsed
+        .host()
         .ok_or_else(|| ProviderError::configuration("oci", "endpoint is missing a host"))?
-        .to_string();
+    {
+        url::Host::Domain(domain) => domain.to_string(),
+        url::Host::Ipv4(address) => address.to_string(),
+        url::Host::Ipv6(address) => format!("[{address}]"),
+    };
     if let Some(port) = parsed.port() {
         host.push_str(&format!(":{port}"));
     }

@@ -4,6 +4,7 @@ use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
 use crate::core::providers::enterprise::{
     EnterpriseOpenAiProvider, EnterpriseOpenAiSettings, normalize_enterprise_base_url,
+    validate_request_header_value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,11 @@ impl DatabricksConfig {
                 "api_key is required",
             ));
         }
+        validate_request_header_value(
+            "databricks",
+            "api_key",
+            &format!("Bearer {}", self.api_key),
+        )?;
         EnterpriseOpenAiProvider::new(
             "databricks",
             EnterpriseOpenAiSettings {

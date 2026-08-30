@@ -295,10 +295,24 @@ impl GlobalPoolManager {
         })
     }
 
-    /// Get a shared instance of the global pool manager
-    ///
-    /// This is the most efficient way to get a pool manager as it reuses
-    /// the global singleton without any additional allocations.
+    pub(crate) fn new_for_provider_no_redirect(
+        provider: &'static str,
+        config: BaseConfig,
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
+            pool: Arc::new(ConnectionPool::new()?),
+            policy: Some(ProviderPool {
+                provider,
+                ordinary: BaseHttpClient::new_for_provider_no_redirect(provider, config.clone())?,
+                streaming: BaseHttpClient::new_for_provider_streaming_no_redirect(
+                    provider, config,
+                )?,
+                streaming_header_timeout: Duration::from_secs(STREAMING_HEADER_TIMEOUT_SECS),
+            }),
+        })
+    }
+
+    /// Get a shared instance backed by the global client.
     pub fn shared() -> Self {
         // Use the global client directly
         Self {
@@ -337,7 +351,7 @@ impl GlobalPoolManager {
             return request_builder
                 .send()
                 .await
-                .map_err(|error| ProviderError::network(policy.provider, error.to_string()));
+                .map_err(|error| policy.ordinary.map_preserved_request_error(error));
         }
 
         let client = self.pool.client();
@@ -412,12 +426,9 @@ impl GlobalPoolManager {
             let response = tokio::time::timeout(timeout, request.send())
                 .await
                 .map_err(|_| {
-                    StreamingRequestError::HeaderTimeout { timeout }
-                        .into_provider_error(policy.provider)
+                    ProviderError::timeout(policy.provider, "Provider response header timeout")
                 })?;
-            return response.map_err(|error| {
-                StreamingRequestError::Request(error).into_provider_error(policy.provider)
-            });
+            return response.map_err(|error| policy.streaming.map_preserved_request_error(error));
         }
 
         let request = apply_headers(streaming_unbounded_client().post(url).json(&body), headers);

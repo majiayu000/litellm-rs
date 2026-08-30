@@ -31,6 +31,7 @@ pub(super) async fn build_enterprise_provider(
             Ok(EnterpriseProvider::Snowflake(config.build().await?))
         }
         ProviderType::Oci => {
+            rename(&mut object, "project", "project_id");
             if let Some(api_key) = object.remove("api_key") {
                 object
                     .entry("auth".to_string())
@@ -91,7 +92,7 @@ pub(super) fn minimal_test_config(provider_type: &ProviderType) -> Option<serde_
             serde_json::json!({"account_identifier":"org-account","api_key":"test","token_type":"OAUTH","timeout":30,"max_retries":2})
         }
         ProviderType::Oci => {
-            serde_json::json!({"region":"us-chicago-1","compartment_id":null,"auth":{"type":"api_key","token":"test"},"api_mode":"open_ai_compatible","base_url":null,"timeout":30,"max_retries":2})
+            serde_json::json!({"region":"us-chicago-1","compartment_id":null,"project_id":"ocid1.generativeaiproject.oc1.us-chicago-1.test","auth":{"type":"api_key","token":"test"},"api_mode":"open_ai_compatible","base_url":null,"timeout":30,"max_retries":2})
         }
         ProviderType::Watsonx => {
             serde_json::json!({"access_token":"test","project_id":"project","space_id":null,"region":"us-south","timeout":30,"max_retries":2})

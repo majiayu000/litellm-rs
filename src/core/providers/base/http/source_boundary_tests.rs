@@ -671,8 +671,17 @@ fn provider_runtime_http_boundary_has_no_unapproved_bypass() {
     assert!(compact_base.contains("BaseRedirectMode::Policy=>ProviderHttpClient::new"));
     assert!(compact_base.contains("BaseRedirectMode::Disabled=>ProviderHttpClient::no_redirect"));
     assert!(compact_base.contains("BaseRedirectMode::Streaming=>ProviderHttpClient::streaming"));
+    assert!(compact_base.contains("BaseRedirectMode::StreamingDisabled=>{ProviderHttpClient::streaming_no_redirect"));
     assert!(!include_str!("../../../../utils/net/http.rs").contains("get_ssrf_safe_no_redirect_client_with_timeout_fallible"));
     assert_eq!(include_str!("../../bedrock/client.rs").matches("new_for_provider_no_redirect").count(), 3);
+    for source in [
+        include_str!("../../oci/mod.rs"),
+        include_str!("../../sagemaker/mod.rs"),
+        include_str!("../../watsonx/mod.rs"),
+    ] {
+        assert!(source.contains("new_for_provider_no_redirect"));
+    }
+    assert!(include_str!("../../enterprise.rs").contains("new_for_catalog_no_redirect"));
 }
 
 #[test]

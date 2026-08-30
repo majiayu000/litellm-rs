@@ -2,6 +2,8 @@ use super::create_provider;
 use crate::config::Validate;
 use crate::core::providers::Provider;
 use crate::core::providers::ProviderError;
+use crate::core::router::RouterConfig;
+use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
 
 #[tokio::test]
 async fn sagemaker_standard_provider_config_validates_and_builds() {
@@ -61,6 +63,7 @@ async fn oci_standard_provider_config_validates_and_builds() {
         name: "oci".to_string(),
         provider_type: "oci".to_string(),
         api_key: "oci-compatible-token".to_string(),
+        project: Some("ocid1.generativeaiproject.oc1.us-chicago-1.test".to_string()),
         settings: serde_json::from_value(serde_json::json!({
             "region": "us-chicago-1",
             "api_mode": "open_ai_compatible"
@@ -124,7 +127,8 @@ async fn enterprise_api_base_alias_builds_and_top_level_base_url_wins() {
             "oci-token",
             serde_json::json!({
                 "region": "us-chicago-1",
-                "api_mode": "open_ai_compatible"
+                "api_mode": "open_ai_compatible",
+                "project_id": "ocid1.generativeaiproject.oc1.us-chicago-1.test"
             }),
         ),
         (
@@ -205,6 +209,79 @@ async fn reports_unknown_custom_provider() {
         error.to_string().contains("my-custom-provider"),
         "Expected custom provider name in error, got {error}"
     );
+}
+
+#[tokio::test]
+async fn enterprise_request_header_values_fail_during_construction() {
+    let cases = [
+        crate::config::models::provider::ProviderConfig {
+            name: "databricks".to_string(),
+            provider_type: "databricks".to_string(),
+            api_key: "bad\ntoken".to_string(),
+            base_url: Some("https://dbc.example.com".to_string()),
+            ..Default::default()
+        },
+        crate::config::models::provider::ProviderConfig {
+            name: "snowflake".to_string(),
+            provider_type: "snowflake".to_string(),
+            api_key: "bad\ntoken".to_string(),
+            organization: Some("org-account".to_string()),
+            settings: serde_json::from_value(serde_json::json!({"token_type":"OAUTH"}))
+                .expect("settings object"),
+            ..Default::default()
+        },
+        crate::config::models::provider::ProviderConfig {
+            name: "oci".to_string(),
+            provider_type: "oci".to_string(),
+            api_key: "bad\ntoken".to_string(),
+            project: Some("ocid1.generativeaiproject.oc1.us-chicago-1.test".to_string()),
+            settings: serde_json::from_value(serde_json::json!({
+                "region":"us-chicago-1", "api_mode":"open_ai_compatible"
+            }))
+            .expect("settings object"),
+            ..Default::default()
+        },
+        crate::config::models::provider::ProviderConfig {
+            name: "watsonx".to_string(),
+            provider_type: "watsonx".to_string(),
+            project: Some("project".to_string()),
+            settings: serde_json::from_value(serde_json::json!({
+                "access_token":"bad\ntoken", "region":"us-south"
+            }))
+            .expect("settings object"),
+            ..Default::default()
+        },
+        crate::config::models::provider::ProviderConfig {
+            name: "sagemaker".to_string(),
+            provider_type: "sagemaker".to_string(),
+            settings: serde_json::from_value(serde_json::json!({
+                "aws_access_key_id":"bad\naccess-key",
+                "aws_secret_access_key":"secret",
+                "region":"us-east-1",
+                "endpoint_name":"tenant-chat",
+                "payload_transformer":"open_ai_chat"
+            }))
+            .expect("settings object"),
+            ..Default::default()
+        },
+    ];
+
+    for config in cases {
+        let provider = config.provider_type.clone();
+        let error = create_provider(config)
+            .await
+            .expect_err("malformed request header must fail before provider publication");
+        assert!(
+            matches!(error, ProviderError::Configuration { .. }),
+            "{provider} returned the wrong category: {error}"
+        );
+        assert!(
+            !RetryPolicy
+                .decide(&RouterConfig::default(), &error, RetryContext::unary(1, 2))
+                .should_retry,
+            "{provider} config error was retryable"
+        );
+    }
 }
 
 #[cfg(feature = "providers-extended")]

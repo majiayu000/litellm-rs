@@ -27,6 +27,7 @@ enum BaseRedirectMode {
     Policy,
     Disabled,
     Streaming,
+    StreamingDisabled,
 }
 
 impl BaseHttpClient {
@@ -59,6 +60,13 @@ impl BaseHttpClient {
         Self::build(provider, config, BaseRedirectMode::Streaming)
     }
 
+    pub(crate) fn new_for_provider_streaming_no_redirect(
+        provider: &'static str,
+        config: BaseConfig,
+    ) -> Result<Self, ProviderError> {
+        Self::build(provider, config, BaseRedirectMode::StreamingDisabled)
+    }
+
     fn build(
         provider: &'static str,
         config: BaseConfig,
@@ -88,6 +96,9 @@ impl BaseHttpClient {
             BaseRedirectMode::Policy => ProviderHttpClient::new(policy, timeout),
             BaseRedirectMode::Disabled => ProviderHttpClient::no_redirect(policy, timeout),
             BaseRedirectMode::Streaming => ProviderHttpClient::streaming(policy),
+            BaseRedirectMode::StreamingDisabled => {
+                ProviderHttpClient::streaming_no_redirect(policy)
+            }
         };
         let client = client_result.map_err(|error| {
             ProviderError::initialization(
@@ -130,6 +141,8 @@ impl BaseHttpClient {
     pub(crate) fn map_preserved_request_error(&self, error: reqwest::Error) -> ProviderError {
         if ProviderHttpClient::request_error_is_endpoint_policy(&error) {
             ProviderError::configuration(self.provider, ENDPOINT_POLICY_ERROR_MESSAGE)
+        } else if error.is_builder() {
+            ProviderError::configuration(self.provider, "provider request could not be constructed")
         } else if error.is_timeout() {
             ProviderError::timeout(self.provider, "Provider request timed out")
         } else {

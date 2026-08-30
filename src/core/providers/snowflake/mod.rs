@@ -2,7 +2,9 @@
 
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::ProviderError;
-use crate::core::providers::enterprise::{EnterpriseOpenAiProvider, EnterpriseOpenAiSettings};
+use crate::core::providers::enterprise::{
+    EnterpriseOpenAiProvider, EnterpriseOpenAiSettings, validate_request_header_value,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -81,6 +83,7 @@ impl SnowflakeConfig {
                 "api_key is required",
             ));
         }
+        validate_request_header_value("snowflake", "api_key", &format!("Bearer {}", self.api_key))?;
         let mut headers = HashMap::new();
         headers.insert(
             "X-Snowflake-Authorization-Token-Type".to_string(),
