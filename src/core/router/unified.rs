@@ -553,10 +553,13 @@ impl Router {
                 continue;
             }
 
-            if deployment.supports_capability(capability) {
+            if deployment
+                .provider
+                .supports_capability_for_model(&deployment.model, capability)
+            {
                 return Some(CapabilityDeployment {
                     deployment_id: id.clone(),
-                    provider: deployment.provider_for_request(),
+                    provider: deployment.provider.clone(),
                     model: deployment.model.clone(),
                 });
             }

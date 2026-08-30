@@ -29,9 +29,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::core::providers::model_identity::{
-    DeploymentModelIdentity, ModelIdentity, ModelIdentityProvider, resolve_model_identity,
-};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -56,47 +53,11 @@ pub struct AzureAIProvider {
     image_handler: AzureAIImageHandler,
     rerank_handler: AzureAIRerankHandler,
     model_registry: &'static AzureAIModelRegistry,
-    deployment_identity: Option<DeploymentModelIdentity>,
+    pub(crate) model_identity:
+        Option<crate::core::providers::model_identity::DeploymentProviderBinding>,
 }
 
 impl AzureAIProvider {
-    fn resolve_identity<'a>(&'a self, model: &'a str) -> ModelIdentity<'a> {
-        let configured = self
-            .deployment_identity
-            .as_ref()
-            .filter(|identity| identity.wire_model() == model)
-            .map(DeploymentModelIdentity::as_ref);
-        resolve_model_identity(
-            ModelIdentityProvider::AzureAI,
-            model,
-            configured,
-            self.model_registry,
-        )
-    }
-
-    fn require_callable(&self, model: &str) -> Result<(), ProviderError> {
-        match self.resolve_identity(model) {
-            ModelIdentity::CatalogCallable { .. }
-            | ModelIdentity::ConfiguredDeployment {
-                capability_catalog_model: Some(_),
-                ..
-            } => Ok(()),
-            ModelIdentity::ConfiguredDeployment {
-                capability_catalog_model: None,
-                ..
-            } => Err(ProviderError::not_supported(
-                "azure_ai",
-                format!(
-                    "deployment '{model}' requires an explicit capability_catalog_model mapping"
-                ),
-            )),
-            ModelIdentity::PricingOnly { .. } => Err(ProviderError::not_supported(
-                "azure_ai",
-                format!("pricing-only identity '{model}' is not callable"),
-            )),
-            ModelIdentity::Invalid { .. } => Err(ProviderError::model_not_found("azure_ai", model)),
-        }
-    }
     /// Create new Azure AI provider
     pub fn new(config: AzureAIConfig) -> Result<Self, ProviderError> {
         let client = AzureAIClient::new(config)?;
@@ -117,21 +78,13 @@ impl AzureAIProvider {
             image_handler,
             rerank_handler,
             model_registry,
-            deployment_identity: None,
+            model_identity: None,
         })
     }
 
     /// Get Azure AI configuration
     pub fn get_config(&self) -> &AzureAIConfig {
         self.client.get_config()
-    }
-
-    pub(crate) fn bind_deployment_identity(&mut self, identity: DeploymentModelIdentity) {
-        self.deployment_identity = Some(identity);
-    }
-
-    pub(crate) fn model_identity<'a>(&'a self, model: &'a str) -> ModelIdentity<'a> {
-        self.resolve_identity(model)
     }
 
     /// Create from environment variables
@@ -198,23 +151,34 @@ impl LLMProvider for AzureAIProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
-        matches!(
-            self.resolve_identity(model),
-            ModelIdentity::CatalogCallable { .. }
-                | ModelIdentity::ConfiguredDeployment {
-                    capability_catalog_model: Some(_),
-                    ..
-                }
-        )
+        !model.trim().is_empty()
     }
 
-    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        if self
-            .resolve_identity(model)
-            .capability_catalog_model()
-            .is_none()
-        {
-            return &[];
+    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        if let Some(binding) = self.model_identity.as_ref() {
+            let identity = binding.identity();
+            let supports_chat = match (
+                identity.capability_catalog_provider(),
+                identity.capability_catalog_model(),
+            ) {
+                (Some("openai"), Some(model)) => {
+                    crate::core::providers::openai::models::get_openai_registry()
+                        .get_model_spec(model)
+                        .is_some_and(|model| {
+                            model
+                                .model_info
+                                .capabilities
+                                .contains(&ProviderCapability::ChatCompletion)
+                        })
+                }
+                (Some("azure_ai"), Some(model)) => self
+                    .model_registry
+                    .supports_capability(model, &ProviderCapability::ChatCompletion),
+                _ => false,
+            };
+            if !supports_chat {
+                return &[];
+            }
         }
         &[
             "temperature",
@@ -232,9 +196,9 @@ impl LLMProvider for AzureAIProvider {
     async fn map_openai_params(
         &self,
         params: HashMap<String, Value>,
-        model: &str,
+        _model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        self.require_callable(model)?;
+        // Azure AI generally uses the same parameters as OpenAI
         Ok(params)
     }
 
@@ -243,7 +207,6 @@ impl LLMProvider for AzureAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
-        self.require_callable(&request.model)?;
         // Transform ChatRequest to Azure AI API format
         AzureAIChatUtils::transform_request(&request)
     }
@@ -270,7 +233,6 @@ impl LLMProvider for AzureAIProvider {
         request: ChatRequest,
         context: RequestContext,
     ) -> Result<ChatResponse, ProviderError> {
-        self.require_callable(&request.model)?;
         self.chat_handler
             .create_chat_completion(request, context)
             .await
@@ -282,7 +244,6 @@ impl LLMProvider for AzureAIProvider {
         context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
-        self.require_callable(&request.model)?;
         let stream = self
             .chat_handler
             .create_chat_completion_stream(request, context)
@@ -295,7 +256,6 @@ impl LLMProvider for AzureAIProvider {
         request: EmbeddingRequest,
         context: RequestContext,
     ) -> Result<EmbeddingResponse, ProviderError> {
-        self.require_callable(&request.model)?;
         self.embedding_handler.embedding(request, context).await
     }
 
@@ -335,18 +295,18 @@ impl LLMProvider for AzureAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        if let Some(model_spec) = self.model_registry.get_model(model) {
-            let input_cost =
-                model_spec.input_price_per_1k.unwrap_or(0.0) * (input_tokens as f64 / 1000.0);
-            let output_cost =
-                model_spec.output_price_per_1k.unwrap_or(0.0) * (output_tokens as f64 / 1000.0);
-            Ok(input_cost + output_cost)
-        } else {
-            Err(ProviderError::model_not_found(
-                "azure_ai",
-                "Model not found for cost calculation",
+        crate::core::providers::model_identity::calculate_managed_provider_cost(
+            &crate::core::providers::Provider::AzureAI(self.clone()),
+            model,
+            input_tokens,
+            output_tokens,
+        )
+        .unwrap_or_else(|| {
+            Err(ProviderError::configuration(
+                "pricing",
+                "Azure AI pricing authority dispatch is unavailable",
             ))
-        }
+        })
     }
 }
 
@@ -500,20 +460,14 @@ mod tests {
     }
 
     #[test]
-    fn test_supports_only_catalog_or_exact_configured_deployment_names() {
+    fn test_supports_dynamic_deployment_names() {
         let config = create_test_config();
-        let mut provider = match AzureAIProvider::new(config) {
+        let provider = match AzureAIProvider::new(config) {
             Ok(provider) => provider,
             Err(error) => panic!("provider should be created: {error}"),
         };
-        provider.bind_deployment_identity(DeploymentModelIdentity::new(
-            "customer-gpt4o-prod",
-            Some("gpt-4o".to_string()),
-            None,
-        ));
 
         assert!(provider.supports_model("customer-gpt4o-prod"));
-        assert!(!provider.supports_model("customer-gpt4o-prod-suffix"));
         assert!(!provider.supports_model("   "));
     }
 
@@ -588,6 +542,40 @@ mod tests {
         assert!(params.contains(&"tools"));
         assert!(params.contains(&"tool_choice"));
         assert!(params.contains(&"stream"));
+    }
+
+    #[test]
+    fn mapped_rerank_deployment_exposes_no_chat_parameters() {
+        let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+        let catalog = crate::core::providers::registry::model_catalog_authority::CatalogAuthority::from_embedded()
+            .expect("embedded catalog should load");
+        let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+            Some("azure_ai/cohere-rerank-v3.5".to_string()),
+            None,
+        );
+        let identity = crate::core::providers::model_identity::validate_deployment_identity(
+            "review-azure-ai",
+            "azure_ai",
+            "wire-rerank",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        )
+        .expect("Azure AI rerank capability identity should validate");
+        let mut provider = AzureAIProvider::new(create_test_config())
+            .expect("Azure AI provider should be created");
+        provider.model_identity = Some(
+            crate::core::providers::model_identity::DeploymentProviderBinding::new(
+                identity, pricing,
+            ),
+        );
+
+        assert!(
+            provider
+                .get_supported_openai_params("wire-rerank")
+                .is_empty()
+        );
     }
 
     // ==================== Map OpenAI Params Tests ====================

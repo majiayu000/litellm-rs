@@ -7,7 +7,7 @@
 /// IDs, but it is not validated or normalized. Some provider-native IDs, such
 /// as `BAAI/bge-m3`, also contain `/`; consumers must use their own context to
 /// decide whether the first segment is a provider qualifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModelIdRef<'a> {
     raw: &'a str,
     provider: Option<&'a str>,

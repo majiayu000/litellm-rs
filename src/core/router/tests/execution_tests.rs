@@ -359,11 +359,9 @@ async fn build_same_provider_budget_fallback_router(num_retries: u32) -> Router 
     let router = Router::new(config);
     let mut primary = create_test_deployment("same-provider-expensive", "shared").await;
     primary.model = "gpt-expensive".to_string();
-    primary = primary.with_model_identity(Some("gpt-4".to_string()), None);
     primary.config.priority = 0;
     let mut fallback = create_test_deployment("same-provider-cheap", "shared").await;
     fallback.model = "gpt-cheap".to_string();
-    fallback = fallback.with_model_identity(Some("gpt-4".to_string()), None);
     fallback.config.priority = 10;
     router.add_deployment(primary);
     router.add_deployment(fallback);

@@ -21,8 +21,6 @@
 
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
-use crate::core::providers::model_identity::{DeploymentModelIdentity, ModelIdentity};
-use crate::core::types::model::ProviderCapability;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
 use parking_lot::RwLock;
 use std::fmt;
@@ -526,58 +524,6 @@ impl Deployment {
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
-    }
-
-    /// Attach validated semantic identities while preserving the exact wire model.
-    pub fn with_model_identity(
-        mut self,
-        capability_catalog_model: Option<String>,
-        pricing_model: Option<String>,
-    ) -> Self {
-        let should_bind = capability_catalog_model.is_some()
-            || pricing_model.is_some()
-            || matches!(
-                self.provider.resolve_exact_model_identity(&self.model),
-                ModelIdentity::Invalid { .. }
-            );
-        if should_bind {
-            self.provider
-                .bind_deployment_identity(DeploymentModelIdentity::new(
-                    self.model.clone(),
-                    capability_catalog_model,
-                    pricing_model,
-                ));
-        }
-        self
-    }
-
-    /// Build an owned provider clone bound to this selected deployment.
-    pub fn provider_for_request(&self) -> Provider {
-        self.provider.clone()
-    }
-
-    /// Resolve model-specific capability from this deployment's identity.
-    pub fn supports_capability(&self, capability: &ProviderCapability) -> bool {
-        self.provider_for_request()
-            .supports_capability_for_deployment(&self.model, capability)
-    }
-
-    pub fn requires_capability_mapping(&self) -> bool {
-        let managed_provider = match self.provider {
-            Provider::OpenAI(_) => true,
-            #[cfg(feature = "providers-extra")]
-            Provider::Azure(_) | Provider::AzureAI(_) => true,
-            _ => false,
-        };
-        managed_provider
-            && matches!(
-                self.provider_for_request()
-                    .resolve_model_identity(&self.model),
-                ModelIdentity::ConfiguredDeployment {
-                    capability_catalog_model: None,
-                    ..
-                }
-            )
     }
 
     /// Check if deployment is healthy

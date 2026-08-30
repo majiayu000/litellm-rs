@@ -57,6 +57,8 @@ fn vertex_pricing_alias(model: &str) -> Option<&'static str> {
         "meta/llama-4-maverick-17b-128e-instruct" => {
             Some("vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas")
         }
+        "ai21/jamba-1.5-large" => Some("vertex_ai/jamba-1.5-large"),
+        "mistral/mistral-large-2411" => Some("vertex_ai/mistral-large-2411"),
         "mistral/mistral-nemo" => Some("vertex_ai/mistral-nemo@latest"),
         _ => None,
     }

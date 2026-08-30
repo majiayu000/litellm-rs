@@ -13,6 +13,11 @@ use crate::core::types::responses::{
 };
 use crate::core::types::thinking::ThinkingDelta;
 
+#[path = "anthropic_state.rs"]
+mod state;
+
+use state::{ActiveContentBlock, AnthropicThinkingStreamState, DeltaDisposition};
+
 /// Anthropic SSE Transformer
 ///
 /// Handles Anthropic's event-based SSE format with message_start, content_block_delta,
@@ -22,6 +27,7 @@ pub struct AnthropicTransformer {
     model: String,
     tool_name_map: HashMap<String, String>,
     message_id: Mutex<Option<String>>,
+    thinking_state: Mutex<AnthropicThinkingStreamState>,
 }
 
 impl Clone for AnthropicTransformer {
@@ -30,6 +36,7 @@ impl Clone for AnthropicTransformer {
             model: self.model.clone(),
             tool_name_map: self.tool_name_map.clone(),
             message_id: Mutex::new(None),
+            thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
         }
     }
 }
@@ -40,6 +47,7 @@ impl AnthropicTransformer {
             model: model.into(),
             tool_name_map: HashMap::new(),
             message_id: Mutex::new(None),
+            thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
         }
     }
 
@@ -80,6 +88,32 @@ impl AnthropicTransformer {
             Err(poisoned) => poisoned.into_inner(),
         };
         *guard = None;
+    }
+
+    fn with_thinking_state<T>(
+        &self,
+        operation: impl FnOnce(&mut AnthropicThinkingStreamState) -> Result<T, ProviderError>,
+    ) -> Result<T, ProviderError> {
+        let mut state = match self.thinking_state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        operation(&mut state)
+    }
+
+    fn required_index(json: &Value, event: &str) -> Result<u32, ProviderError> {
+        let index = json.get("index").and_then(Value::as_u64).ok_or_else(|| {
+            ProviderError::response_parsing(
+                "anthropic",
+                format!("No content index in Anthropic {event}"),
+            )
+        })?;
+        u32::try_from(index).map_err(|_| {
+            ProviderError::response_parsing(
+                "anthropic",
+                format!("Anthropic {event} content index {index} exceeds u32"),
+            )
+        })
     }
 
     fn parse_anthropic_finish_reason(reason: &str) -> FinishReason {
@@ -148,6 +182,7 @@ impl SSETransformer for AnthropicTransformer {
 
         match event_type {
             "message_start" => {
+                self.with_thinking_state(AnthropicThinkingStreamState::begin_message)?;
                 let message_id = json
                     .get("message")
                     .and_then(|m| m.get("id"))
@@ -179,7 +214,7 @@ impl SSETransformer for AnthropicTransformer {
                 }))
             }
             "content_block_start" => {
-                let index = json.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let index = Self::required_index(&json, "content block start")?;
                 let content_block = json.get("content_block").ok_or_else(|| {
                     ProviderError::response_parsing(
                         "anthropic",
@@ -190,9 +225,11 @@ impl SSETransformer for AnthropicTransformer {
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-
                 match block_type {
                     "tool_use" => {
+                        self.with_thinking_state(|state| {
+                            state.begin_content(index, ActiveContentBlock::ToolUse)
+                        })?;
                         let id = content_block
                             .get("id")
                             .and_then(|v| v.as_str())
@@ -224,13 +261,44 @@ impl SSETransformer for AnthropicTransformer {
 
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
-                    "thinking" | "redacted_thinking" => {
+                    "thinking" => {
+                        let index = Self::required_index(&json, "thinking block start")?;
+                        let thinking = content_block
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let signature = content_block
+                            .get("signature")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        self.with_thinking_state(|state| {
+                            state.begin_thinking(index, thinking, signature)
+                        })?;
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta::start());
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
-                    "text" => Ok(None),
+                    "redacted_thinking" => {
+                        let index = Self::required_index(&json, "redacted thinking block start")?;
+                        let data = content_block
+                            .get("data")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        self.with_thinking_state(|state| state.begin_redacted(index, data))?;
+                        let mut delta = Self::empty_delta();
+                        delta.thinking = Some(ThinkingDelta::start());
+                        Ok(Some(self.chunk_with_choice(created, delta, None, None)))
+                    }
+                    "text" => {
+                        self.with_thinking_state(|state| {
+                            state.begin_content(index, ActiveContentBlock::Text)
+                        })?;
+                        Ok(None)
+                    }
                     _ => {
+                        self.with_thinking_state(|state| {
+                            state.begin_content(index, ActiveContentBlock::Ignored)
+                        })?;
                         warn!(
                             provider = "anthropic",
                             block_type, "Ignoring unknown Anthropic content block start"
@@ -240,7 +308,7 @@ impl SSETransformer for AnthropicTransformer {
                 }
             }
             "content_block_delta" => {
-                let index = json.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let index = Self::required_index(&json, "content block delta")?;
                 let delta_json = json.get("delta").ok_or_else(|| {
                     ProviderError::response_parsing(
                         "anthropic",
@@ -251,6 +319,11 @@ impl SSETransformer for AnthropicTransformer {
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                let disposition =
+                    self.with_thinking_state(|state| state.validate_delta_kind(index, delta_type))?;
+                if disposition == DeltaDisposition::Ignore {
+                    return Ok(None);
+                }
 
                 match delta_type {
                     "text_delta" => {
@@ -279,11 +352,21 @@ impl SSETransformer for AnthropicTransformer {
                         }]);
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
                     }
+                    "citations_delta" => {
+                        delta_json.get("citation").ok_or_else(|| {
+                            ProviderError::response_parsing(
+                                "anthropic",
+                                "No citation in Anthropic citations_delta",
+                            )
+                        })?;
+                        Ok(None)
+                    }
                     "thinking_delta" => {
                         let thinking = delta_json
                             .get("thinking")
                             .and_then(|value| value.as_str())
                             .unwrap_or("");
+                        self.with_thinking_state(|state| state.append_thinking(index, thinking))?;
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta::new(thinking));
                         Ok(Some(self.chunk_with_choice(created, delta, None, None)))
@@ -293,6 +376,7 @@ impl SSETransformer for AnthropicTransformer {
                             .get("signature")
                             .and_then(|value| value.as_str())
                             .unwrap_or("");
+                        self.with_thinking_state(|state| state.append_signature(index, signature))?;
                         let mut delta = Self::empty_delta();
                         delta.thinking = Some(ThinkingDelta {
                             signature: Some(signature.to_string()),
@@ -315,6 +399,13 @@ impl SSETransformer for AnthropicTransformer {
                     .and_then(|d| d.get("stop_reason"))
                     .and_then(|r| r.as_str())
                     .map(Self::parse_anthropic_finish_reason);
+                if finish_reason.is_some() {
+                    self.with_thinking_state(AnthropicThinkingStreamState::begin_pending_stop)?;
+                } else {
+                    self.with_thinking_state(|state| {
+                        state.ensure_message_open(0, "message_delta")
+                    })?;
+                }
 
                 let usage = json.get("usage").map(|u| {
                     let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -357,6 +448,7 @@ impl SSETransformer for AnthropicTransformer {
                 )))
             }
             "message_stop" => {
+                self.with_thinking_state(AnthropicThinkingStreamState::end_message)?;
                 let message_id = self.current_message_id();
                 self.clear_message_id();
                 Ok(Some(ChatChunk {
@@ -383,7 +475,17 @@ impl SSETransformer for AnthropicTransformer {
                     msg.to_string(),
                 ))
             }
-            "content_block_stop" | "ping" => Ok(None),
+            "content_block_stop" => {
+                let index = Self::required_index(&json, "content block stop")?;
+                if self.with_thinking_state(|state| state.complete(index))? {
+                    let mut delta = Self::empty_delta();
+                    delta.thinking = Some(ThinkingDelta::complete());
+                    Ok(Some(self.chunk_with_choice(created, delta, None, None)))
+                } else {
+                    Ok(None)
+                }
+            }
+            "ping" => Ok(None),
             _ => {
                 warn!(
                     provider = "anthropic",
@@ -393,34 +495,39 @@ impl SSETransformer for AnthropicTransformer {
             }
         }
     }
+
+    fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
+        self.with_thinking_state(|state| state.ensure_stream_complete())?;
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn chunk_from_event(t: &AnthropicTransformer, event: Value) -> ChatChunk {
-        match t.transform_chunk(&event.to_string()) {
+    fn chunk_from_event(transformer: &AnthropicTransformer, event: Value) -> ChatChunk {
+        match transformer.transform_chunk(&event.to_string()) {
             Ok(Some(chunk)) => chunk,
             Ok(None) => panic!("expected Anthropic SSE event to produce a chunk"),
-            Err(error) => panic!("unexpected Anthropic SSE error: {}", error),
+            Err(error) => panic!("unexpected Anthropic SSE error: {error}"),
         }
     }
 
     #[test]
     fn test_message_delta_extracts_cache_tokens() {
-        let t = AnthropicTransformer::new("claude-3-5-sonnet");
-        let event = serde_json::json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {
-                "input_tokens": 12,
-                "output_tokens": 50,
-                "cache_creation_input_tokens": 1000,
-                "cache_read_input_tokens": 2000
-            }
-        });
-        let chunk = t.transform_chunk(&event.to_string()).unwrap().unwrap();
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        let chunk = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"},
+                "usage":{
+                    "input_tokens":12, "output_tokens":50,
+                    "cache_creation_input_tokens":1000,
+                    "cache_read_input_tokens":2000
+                }
+            }),
+        );
         let usage = chunk.usage.as_ref().expect("usage must be present");
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.completion_tokens, 50);
@@ -435,121 +542,123 @@ mod tests {
 
     #[test]
     fn test_message_delta_no_cache_tokens_yields_none_details() {
-        let t = AnthropicTransformer::new("claude-3-5-sonnet");
-        let event = serde_json::json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {"input_tokens": 12, "output_tokens": 50}
-        });
-        let chunk = t.transform_chunk(&event.to_string()).unwrap().unwrap();
-        let usage = chunk.usage.as_ref().unwrap();
-        assert!(usage.prompt_tokens_details.is_none());
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        let chunk = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type":"message_delta", "delta":{"stop_reason":"end_turn"},
+                "usage":{"input_tokens":12,"output_tokens":50}
+            }),
+        );
+        assert!(
+            chunk
+                .usage
+                .as_ref()
+                .expect("usage must be present")
+                .prompt_tokens_details
+                .is_none()
+        );
     }
 
     #[test]
     fn test_chunks_after_message_start_keep_message_id() {
-        let t = AnthropicTransformer::new("claude-3-5-sonnet");
-        let start = serde_json::json!({
-            "type": "message_start",
-            "message": {"id": "msg_123"}
-        });
-        let chunk = chunk_from_event(&t, start);
-        assert_eq!(chunk.id, "msg_123");
-
-        let delta = serde_json::json!({
-            "type": "content_block_delta",
-            "delta": {"type": "text_delta", "text": "hello"}
-        });
-        let chunk = chunk_from_event(&t, delta);
-        assert_eq!(chunk.id, "msg_123");
-
-        let message_delta = serde_json::json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"}
-        });
-        let chunk = chunk_from_event(&t, message_delta);
-        assert_eq!(chunk.id, "msg_123");
-
-        let stop = serde_json::json!({"type": "message_stop"});
-        let chunk = chunk_from_event(&t, stop);
-        assert_eq!(chunk.id, "msg_123");
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        assert_eq!(
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({"type":"message_start","message":{"id":"msg_123"}})
+            )
+            .id,
+            "msg_123"
+        );
+        transformer
+            .transform_chunk(
+                &serde_json::json!({
+                    "type":"content_block_start", "index":0,
+                    "content_block":{"type":"text","text":""}
+                })
+                .to_string(),
+            )
+            .expect("text start must be valid");
+        assert_eq!(
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({
+                    "type":"content_block_delta", "index":0,
+                    "delta":{"type":"text_delta","text":"hello"}
+                })
+            )
+            .id,
+            "msg_123"
+        );
+        transformer
+            .transform_chunk(
+                &serde_json::json!({"type":"content_block_stop","index":0}).to_string(),
+            )
+            .expect("text stop must be valid");
+        assert_eq!(
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}})
+            )
+            .id,
+            "msg_123"
+        );
+        assert_eq!(
+            chunk_from_event(&transformer, serde_json::json!({"type":"message_stop"})).id,
+            "msg_123"
+        );
     }
 
     #[test]
     fn test_cloned_transformers_keep_independent_message_ids() {
-        let base = AnthropicTransformer::new("claude-3-5-sonnet");
-        let stream_a = base.clone();
-        let stream_b = base.clone();
-
-        let chunk = chunk_from_event(
-            &stream_a,
-            serde_json::json!({
-                "type": "message_start",
-                "message": {"id": "msg_a"}
-            }),
+        let stream_a = AnthropicTransformer::new("claude-3-5-sonnet");
+        let stream_b = stream_a.clone();
+        assert_eq!(
+            chunk_from_event(
+                &stream_a,
+                serde_json::json!({"type":"message_start","message":{"id":"msg_a"}})
+            )
+            .id,
+            "msg_a"
         );
-        assert_eq!(chunk.id, "msg_a");
-
-        let chunk = chunk_from_event(
-            &stream_b,
-            serde_json::json!({
-                "type": "message_start",
-                "message": {"id": "msg_b"}
-            }),
+        assert_eq!(
+            chunk_from_event(
+                &stream_b,
+                serde_json::json!({"type":"message_start","message":{"id":"msg_b"}})
+            )
+            .id,
+            "msg_b"
         );
-        assert_eq!(chunk.id, "msg_b");
-
-        let chunk = chunk_from_event(
-            &stream_a,
-            serde_json::json!({
-                "type": "content_block_delta",
-                "delta": {"type": "text_delta", "text": "hello"}
-            }),
-        );
-        assert_eq!(chunk.id, "msg_a");
-
-        let chunk = chunk_from_event(&stream_b, serde_json::json!({"type": "message_stop"}));
-        assert_eq!(chunk.id, "msg_b");
-
-        let chunk = chunk_from_event(
-            &stream_a,
-            serde_json::json!({
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn"}
-            }),
-        );
-        assert_eq!(chunk.id, "msg_a");
     }
 
     #[test]
-    fn issue_761_stream_restores_original_tool_names()
-    -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-        let t =
-            AnthropicTransformer::new("claude-3-5-sonnet").with_tool_name_map(HashMap::from([(
-                "weather_lookup".to_string(),
-                "weather.lookup".to_string(),
-            )]));
-        let event = serde_json::json!({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {
-                "type": "tool_use",
-                "id": "toolu_123",
-                "name": "weather_lookup",
-                "input": {}
-            }
-        });
-
-        let chunk = t.transform_chunk(&event.to_string())?;
+    fn issue_761_stream_restores_original_tool_names() -> Result<(), crate::ProviderError> {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet").with_tool_name_map(
+            HashMap::from([("weather_lookup".to_string(), "weather.lookup".to_string())]),
+        );
+        let chunk = transformer.transform_chunk(
+            &serde_json::json!({
+                "type":"content_block_start", "index":0,
+                "content_block":{
+                    "type":"tool_use", "id":"toolu_123",
+                    "name":"weather_lookup", "input":{}
+                }
+            })
+            .to_string(),
+        )?;
         let name = chunk
             .as_ref()
             .and_then(|chunk| chunk.choices.first())
             .and_then(|choice| choice.delta.tool_calls.as_ref())
-            .and_then(|tool_calls| tool_calls.first())
-            .and_then(|tool_call| tool_call.function.as_ref())
+            .and_then(|calls| calls.first())
+            .and_then(|call| call.function.as_ref())
             .and_then(|function| function.name.as_deref());
-
         assert_eq!(name, Some("weather.lookup"));
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "anthropic_lifecycle_tests.rs"]
+mod lifecycle_tests;

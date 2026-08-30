@@ -69,24 +69,6 @@ impl AzureAIModelRegistry {
     fn register_default_models(&mut self) {
         // Chat models
         self.register_model(AzureAIModelSpec {
-            id: "Phi-4".to_string(),
-            name: "Phi-4".to_string(),
-            provider: "microsoft".to_string(),
-            model_type: AzureAIModelType::Chat,
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-            ],
-            max_input_tokens: 16_384,
-            max_output_tokens: 16_384,
-            supports_streaming: true,
-            supports_function_calling: false,
-            supports_multimodal: false,
-            input_price_per_1k: None,
-            output_price_per_1k: None,
-        });
-
-        self.register_model(AzureAIModelSpec {
             id: "gpt-4o".to_string(),
             name: "GPT-4 Omni".to_string(),
             provider: "openai".to_string(),
@@ -460,24 +442,6 @@ mod tests {
         let model = registry.get_model("gpt-4o");
         assert!(model.is_some());
         assert_eq!(model.unwrap().provider, "openai");
-    }
-
-    #[test]
-    fn phi_4_is_an_exact_public_chat_catalog_entry() {
-        let registry = AzureAIModelRegistry::new();
-        let model = registry
-            .get_model("Phi-4")
-            .expect("Phi-4 must be registered");
-        assert_eq!(model.provider, "microsoft");
-        assert_eq!(model.max_input_tokens, 16_384);
-        assert_eq!(model.max_output_tokens, 16_384);
-        assert!(
-            model
-                .capabilities
-                .contains(&ProviderCapability::ChatCompletion)
-        );
-        assert!(registry.get_model("phi-4").is_none());
-        assert!(registry.get_model("Phi-4-extra").is_none());
     }
 
     #[test]

@@ -17,11 +17,11 @@ impl ProviderConfigBuilder {
             base_url: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
             models: Vec::new(),
+            model_identity_mappings: std::collections::HashMap::new(),
             max_requests_per_minute: None,
             timeout: None,
             enabled: true,
             weight: None,
-            model_identity_mappings: std::collections::HashMap::new(),
         }
     }
 
@@ -68,14 +68,14 @@ impl ProviderConfigBuilder {
         self
     }
 
-    /// Attach exact capability and pricing identities to a configured deployment.
+    /// Bind a configured wire/deployment model to exact capability and pricing identities.
     pub fn model_identity_mapping(
         mut self,
-        wire_model: impl Into<String>,
+        deployment: impl Into<String>,
         mapping: crate::core::providers::model_identity::ModelIdentityMapping,
     ) -> Self {
         self.model_identity_mappings
-            .insert(wire_model.into(), mapping);
+            .insert(deployment.into(), mapping);
         self
     }
 
@@ -126,11 +126,8 @@ impl ProviderConfigBuilder {
         if !self.model_identity_mappings.is_empty() {
             settings.insert(
                 crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
-                serde_json::to_value(self.model_identity_mappings).map_err(|error| {
-                    GatewayError::Config(format!(
-                        "failed to serialize provider model identity mappings: {error}"
-                    ))
-                })?,
+                serde_json::to_value(self.model_identity_mappings)
+                    .map_err(|error| GatewayError::Config(error.to_string()))?,
             );
         }
         Ok(ProviderConfig {
@@ -180,6 +177,7 @@ mod tests {
         assert!(builder.base_url.is_none());
         assert_eq!(builder.endpoint_access, ProviderEndpointAccess::PublicOnly);
         assert!(builder.models.is_empty());
+        assert!(builder.model_identity_mappings.is_empty());
         assert!(builder.max_requests_per_minute.is_none());
         assert!(builder.timeout.is_none());
         assert!(builder.enabled);
@@ -249,34 +247,31 @@ mod tests {
     }
 
     #[test]
-    fn model_identity_mapping_builder_uses_typed_round_trip_schema() {
-        use crate::core::providers::model_identity::{
-            MODEL_IDENTITY_MAPPINGS_KEY, ModelIdentityMapping,
-        };
-
+    fn model_identity_mapping_serializes_typed_settings() {
         let config = ProviderConfigBuilder::new()
             .name("azure-prod")
             .unwrap()
             .provider_type("azure")
             .unwrap()
-            .add_model("chat-west")
+            .add_model("deployment-a")
             .model_identity_mapping(
-                "chat-west",
-                ModelIdentityMapping::new(
+                "deployment-a",
+                crate::core::providers::model_identity::ModelIdentityMapping::new(
                     Some("gpt-4".to_string()),
-                    Some("azure/eu/gpt-4o-2024-08-06".to_string()),
+                    None,
                 ),
             )
             .build()
             .unwrap();
-        let mappings: std::collections::HashMap<String, ModelIdentityMapping> =
-            serde_json::from_value(config.settings[MODEL_IDENTITY_MAPPINGS_KEY].clone()).unwrap();
         assert_eq!(
-            mappings["chat-west"],
-            ModelIdentityMapping::new(
-                Some("gpt-4".to_string()),
-                Some("azure/eu/gpt-4o-2024-08-06".to_string())
-            )
+            config.settings[crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY]["deployment-a"]
+                ["capability_catalog_model"],
+            "gpt-4"
+        );
+        assert!(
+            config.settings[crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY]
+                ["deployment-a"]["pricing_model"]
+                .is_null()
         );
     }
 

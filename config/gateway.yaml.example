@@ -53,6 +53,14 @@ providers:
       recovery_timeout: 60
       endpoint: null
       expected_codes: [200]
+    # Exact catalog model IDs need no mapping. Custom OpenAI/Azure/AzureAI
+    # deployment names must bind wire, callable, and pricing identities explicitly:
+    # settings:
+    #   model_identity_mappings:
+    #     my-deployment:
+    #       capability_catalog_model: gpt-4o
+    #       pricing_model: gpt-4o
+    # Set pricing_model: null deliberately to apply the configured unpriced policy.
     settings: {}
     models:
       - "gpt-4o"
@@ -72,21 +80,6 @@ providers:
       - "gpt-4.1-mini"
     tags: ["fallback", "production"]
     enabled: true
-
-  # Custom OpenAI/Azure/Azure AI deployment names need explicit semantic
-  # identities. The wire model remains "customer-chat"; capability and pricing
-  # lookups use only the exact values below. Omit pricing_model deliberately to
-  # keep a deployment subject to the configured unpriced-model policy.
-  # - name: "azure-custom"
-  #   provider_type: "azure"
-  #   api_key: "${AZURE_OPENAI_API_KEY}"
-  #   base_url: "${AZURE_OPENAI_ENDPOINT}"
-  #   models: ["customer-chat"]
-  #   settings:
-  #     model_identity_mappings:
-  #       customer-chat:
-  #         capability_catalog_model: "gpt-4o"
-  #         pricing_model: "azure/global-standard/gpt-4o-2024-08-06"
 
   - name: "anthropic-backup"
     provider_type: "anthropic"

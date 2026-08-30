@@ -11,7 +11,9 @@
 
 use super::router_tests::create_test_deployment;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
-use crate::core::router::deployment::{Deployment, DeploymentConfig, HealthStatus};
+use crate::core::router::deployment::{
+    Deployment, DeploymentConfig, DeploymentState, HealthStatus,
+};
 use crate::core::router::strategy_impl::{
     RoutingContext, build_routing_contexts, weighted_random_from_context,
 };

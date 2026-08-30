@@ -25,90 +25,6 @@ fn test_transform_chat_request_basic() {
 }
 
 #[test]
-fn model_identity_controls_production_chat_transform() {
-    let provider = create_test_provider();
-    for model in [
-        "1024-x-1024/dall-e-2",
-        "openai/fake-gpt-5",
-        "openai/openai/gpt-4",
-        "anthropic/gpt-4",
-        "unknown/a/b",
-        "custom-deployment",
-        "custom deployment",
-    ] {
-        let request = ChatRequest {
-            model: model.to_string(),
-            messages: vec![],
-            ..Default::default()
-        };
-        assert!(
-            provider.transform_chat_request(request).is_err(),
-            "{model} must fail closed"
-        );
-    }
-
-    let qualified = provider
-        .transform_chat_request(ChatRequest {
-            model: "openai/gpt-4".to_string(),
-            messages: vec![],
-            ..Default::default()
-        })
-        .expect("qualified exact catalog model should be callable");
-    assert_eq!(qualified["model"], "openai/gpt-4");
-}
-
-#[test]
-fn exact_configured_deployment_is_callable_without_name_guessing() {
-    let mut provider = create_test_provider();
-    provider
-        .config
-        .model_mappings
-        .insert("custom-deployment".to_string(), "gpt-4".to_string());
-    let transformed = provider
-        .transform_chat_request(ChatRequest {
-            model: "custom-deployment".to_string(),
-            messages: vec![],
-            ..Default::default()
-        })
-        .expect("exact configured deployment should resolve");
-    assert_eq!(transformed["model"], "gpt-4");
-    assert!(
-        provider
-            .transform_chat_request(ChatRequest {
-                model: "custom-deployment-suffix".to_string(),
-                messages: vec![],
-                ..Default::default()
-            })
-            .is_err()
-    );
-}
-
-#[tokio::test]
-async fn embedding_rejects_invalid_identity_before_transport() {
-    use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
-
-    let provider = create_test_provider();
-    for model in ["fake-gpt-5", "1024-x-1024/dall-e-2", "unknown/a/b"] {
-        let error = provider
-            .embeddings(EmbeddingRequest {
-                model: model.to_string(),
-                input: EmbeddingInput::Text("hello".to_string()),
-                user: None,
-                encoding_format: None,
-                dimensions: None,
-                task_type: None,
-            })
-            .await
-            .expect_err("invalid identity must fail before an HTTP request");
-        assert!(matches!(
-            error,
-            crate::core::providers::ProviderError::ModelNotFound { .. }
-                | crate::core::providers::ProviderError::NotSupported { .. }
-        ));
-    }
-}
-
-#[test]
 fn test_transform_chat_request_with_temperature() {
     let provider = create_test_provider();
 
@@ -306,16 +222,6 @@ async fn test_map_openai_params_passthrough() {
     let mapped = result.unwrap();
     // OpenAI params should pass through unchanged
     assert_eq!(mapped, params);
-
-    for model in ["fake-gpt-5", "1024-x-1024/dall-e-2", "openai/openai/gpt-4"] {
-        assert!(
-            provider
-                .map_openai_params(HashMap::new(), model)
-                .await
-                .is_err(),
-            "{model} params must fail closed"
-        );
-    }
 }
 
 // ==================== Cost Calculation Tests ====================

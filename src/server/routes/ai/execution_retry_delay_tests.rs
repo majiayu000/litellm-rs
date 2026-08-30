@@ -48,7 +48,6 @@ async fn build_selected_retry_schedule_router() -> UnifiedRouter {
             "gpt-4o-mini".to_string(),
             "shared-model".to_string(),
         )
-        .with_model_identity(Some("gpt-4".to_string()), None)
         .with_config(DeploymentConfig {
             retry_schedule: Some(RetrySchedule {
                 base_delay_ms: 1,
@@ -154,7 +153,6 @@ async fn build_same_provider_budget_fallback_router(num_retries: u32) -> Unified
             "gpt-expensive".to_string(),
             "shared-model".to_string(),
         )
-        .with_model_identity(Some("gpt-4".to_string()), None)
         .with_config(DeploymentConfig {
             priority: 0,
             ..Default::default()
@@ -167,7 +165,6 @@ async fn build_same_provider_budget_fallback_router(num_retries: u32) -> Unified
             "gpt-cheap".to_string(),
             "shared-model".to_string(),
         )
-        .with_model_identity(Some("gpt-4".to_string()), None)
         .with_config(DeploymentConfig {
             priority: 10,
             ..Default::default()

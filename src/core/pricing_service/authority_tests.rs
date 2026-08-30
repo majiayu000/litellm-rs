@@ -151,6 +151,22 @@ fn google_authority_is_case_insensitive_but_not_suffix_fuzzy() {
 }
 
 #[test]
+fn provider_scoped_casefold_exact_precedes_google_explicit_alias() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+    let mut custom = test_model_info("vertex_ai");
+    custom.input_cost_per_token = Some(0.123);
+    service.add_custom_model("Gemini-1.5-Pro-001".to_string(), custom);
+
+    let (resolved, info) = service
+        .get_model_info_for_provider("vertex_ai", "GEMINI-1.5-PRO-001")
+        .expect("provider-scoped casefold exact row should resolve");
+
+    assert_eq!(resolved, "Gemini-1.5-Pro-001");
+    assert_eq!(info.input_cost_per_token, Some(0.123));
+}
+
+#[test]
 fn provider_aware_authority_resolves_loaded_openai_like_model_without_prefix() {
     let service = PricingService::new(None);
     service.add_custom_model(
@@ -191,6 +207,41 @@ fn provider_aware_authority_resolves_xai_openai_like_prefix() {
     assert_eq!(cost.model, "xai/grok-4.3");
     assert_eq!(cost.provider, "openai_like");
     assert!((cost.total_cost - 0.0025).abs() < f64::EPSILON);
+}
+
+#[test]
+fn openai_like_raw_exact_native_slash_precedes_selector_routing() {
+    let service = PricingService::new(None);
+    let mut custom = test_model_info("openai_like");
+    custom.input_cost_per_token = Some(0.456);
+    service.add_custom_model("xai/review-future".to_string(), custom);
+
+    let (resolved, info) = service
+        .get_model_info_for_provider("openai_like", "xai/review-future")
+        .expect("raw exact OpenAI-like slash row should resolve before xAI routing");
+
+    assert_eq!(resolved, "xai/review-future");
+    assert_eq!(info.input_cost_per_token, Some(0.456));
+}
+
+#[test]
+fn openai_like_selector_aliases_route_after_raw_exact_miss() {
+    let service = PricingService::with_embedded_default()
+        .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
+
+    assert!(
+        service
+            .get_model_info_for_provider("openai_like", "google_vertex/gemini-1.5-pro")
+            .is_some()
+    );
+    assert!(
+        service
+            .get_model_info_for_provider(
+                "openai_like",
+                "aws_bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            )
+            .is_some()
+    );
 }
 
 #[cfg(feature = "providers-extended")]
@@ -354,6 +405,30 @@ fn provider_scoped_authority_resolves_vertex_publishers_but_not_unknown_suffixes
         "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas"
     );
     assert_eq!(info.litellm_provider, "vertex_ai-llama_models");
+    for (wire_model, expected_pricing_model, expected_provider) in [
+        (
+            "ai21/jamba-1.5-large",
+            "vertex_ai/jamba-1.5-large",
+            "vertex_ai-ai21_models",
+        ),
+        (
+            "mistral/mistral-large-2411",
+            "vertex_ai/mistral-large-2411",
+            "vertex_ai-mistral_models",
+        ),
+    ] {
+        let (resolved, info) = service
+            .get_model_info_for_provider("vertex_ai", wire_model)
+            .unwrap_or_else(|| panic!("{wire_model} should use an exact Vertex pricing alias"));
+        assert_eq!(resolved, expected_pricing_model);
+        assert_eq!(info.litellm_provider, expected_provider);
+        assert!(
+            service
+                .get_model_info_for_provider("vertex_ai", &format!("{wire_model}-unknown"))
+                .is_none(),
+            "{wire_model} lookalike must fail closed"
+        );
+    }
     assert!(
         service
             .get_model_info_for_provider("vertex_ai", "gemini-1.5-pro-9999")

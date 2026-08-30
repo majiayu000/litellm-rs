@@ -173,7 +173,7 @@ where
         };
 
         let selected_deployment_id = deployment_lease.clone_deployment_id();
-        let provider = deployment_lease.deployment().provider_for_request();
+        let provider = deployment_lease.deployment().provider.clone();
         let selected_model = deployment_lease.deployment().model.clone();
 
         match operation.clone()(provider, selected_model, selected_deployment_id).await {
@@ -370,7 +370,7 @@ where
         };
         let deployment = deployment_lease.clone_deployment();
         let selected_deployment_id = deployment_lease.clone_deployment_id();
-        let provider = deployment.provider_for_request();
+        let provider = deployment.provider.clone();
         let selected_model = deployment.model.clone();
 
         match operation.clone()(provider, selected_model, selected_deployment_id).await {

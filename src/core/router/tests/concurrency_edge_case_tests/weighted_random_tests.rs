@@ -1,5 +1,4 @@
 use super::*;
-use crate::core::router::DeploymentState;
 
 // ====================================================================================
 // 3. Weighted random statistical distribution verification
