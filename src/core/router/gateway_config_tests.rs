@@ -451,6 +451,43 @@ async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_
 }
 
 #[tokio::test]
+async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_selection() {
+    let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+    let router = Router::from_gateway_config_with_pricing(
+        &[identity_provider_config("wire-deployment", None)],
+        None,
+        pricing,
+    )
+    .await
+    .expect("an exact configured deployment must survive without semantic mappings");
+
+    let deployment = router
+        .get_deployment("identity-openai-wire-deployment")
+        .expect("configured deployment should be published");
+    let identity = deployment
+        .provider
+        .deployment_model_identity()
+        .expect("configured deployment should retain a typed identity");
+    assert_eq!(identity.wire_model(), "wire-deployment");
+    assert_eq!(identity.capability_catalog_model(), None);
+    assert_eq!(identity.pricing_model(), None);
+
+    let error = match router.select_deployment_lease_for_capability(
+        "wire-deployment",
+        &crate::core::types::model::ProviderCapability::ChatCompletion,
+    ) {
+        Ok(_) => panic!("an unmapped deployment must not gain catalog capabilities"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("model_identity_mappings.wire-deployment.capability_catalog_model"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn pricing_only_mapping_never_grants_provider_capability() {
     let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
     pricing.add_custom_model("runtime-only-price".to_string(), runtime_price("openai"));
