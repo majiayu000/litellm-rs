@@ -7,6 +7,7 @@ use crate::core::types::responses::{FinishReason, PromptTokensDetails, Usage};
 use crate::core::types::thinking::ThinkingUsage;
 use crate::core::types::{message::MessageContent, message::MessageRole};
 
+#[path = "gemini_shared.rs"]
 mod gemini;
 pub use gemini::*;
 
