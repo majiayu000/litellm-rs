@@ -9,7 +9,7 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::super::budgeted::ApiKeyBudgetPolicy;
-use super::multipart::{extract_file_field, extract_text_field};
+use super::multipart::{extract_file_field, extract_file_fields, extract_text_field};
 
 #[cfg(feature = "providers-extended")]
 pub(super) fn is_native_image_provider(provider: &Provider) -> bool {
@@ -109,7 +109,14 @@ pub(super) fn parse_native_image_edit(
     content_type: &str,
     model: &str,
 ) -> Result<ImageEditRequest, GatewayError> {
-    let image = extract_file_field(body, content_type, "image")
+    let mut images = extract_file_fields(body, content_type, "image").unwrap_or_default();
+    if images.len() > 1 {
+        return Err(GatewayError::validation(
+            "native image editing accepts exactly one image",
+        ));
+    }
+    let image = images
+        .pop()
         .filter(|image| !image.is_empty())
         .ok_or_else(|| GatewayError::validation("image is required"))?;
     let prompt = extract_text_field(body, content_type, "prompt")

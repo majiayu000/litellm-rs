@@ -33,16 +33,27 @@ pub(super) fn extract_file_field(
     content_type: &str,
     field_name: &str,
 ) -> Option<Vec<u8>> {
+    extract_file_fields(body, content_type, field_name)?
+        .into_iter()
+        .next()
+}
+
+pub(super) fn extract_file_fields(
+    body: &Bytes,
+    content_type: &str,
+    field_name: &str,
+) -> Option<Vec<Vec<u8>>> {
     let boundary = boundary(content_type)?;
     let marker = format!("--{boundary}");
     let next_marker = format!("\r\n{marker}");
     let bytes = body.as_ref();
     let mut boundary_offset = find_bytes(bytes, marker.as_bytes())?;
+    let mut fields = Vec::new();
 
     loop {
         let after_boundary = boundary_offset + marker.len();
         if bytes.get(after_boundary..after_boundary + 2) == Some(b"--") {
-            return None;
+            return Some(fields);
         }
         if bytes.get(after_boundary..after_boundary + 2) != Some(b"\r\n") {
             return None;
@@ -54,7 +65,7 @@ pub(super) fn extract_file_field(
         let value_end = find_bytes(&bytes[value_start..], next_marker.as_bytes())? + value_start;
         let headers = std::str::from_utf8(&bytes[headers_start..headers_end]).ok()?;
         if part_has_field_name(headers, field_name) {
-            return Some(bytes[value_start..value_end].to_vec());
+            fields.push(bytes[value_start..value_end].to_vec());
         }
         boundary_offset = value_end + 2;
     }

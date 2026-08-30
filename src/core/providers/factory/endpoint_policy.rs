@@ -14,6 +14,38 @@ pub(super) fn provider_type_supports(provider_type: &ProviderType) -> bool {
     }
 }
 
+pub(super) fn merge_factory_endpoint_and_settings(
+    factory: &mut serde_json::Map<String, serde_json::Value>,
+    provider_type: &ProviderType,
+    base_url: Option<&str>,
+    configured_endpoint: Option<&str>,
+    settings: &std::collections::HashMap<String, serde_json::Value>,
+) {
+    let native_image_provider = matches!(
+        provider_type,
+        ProviderType::Stability | ProviderType::BlackForestLabs
+    );
+    let endpoint = if native_image_provider {
+        configured_endpoint
+    } else {
+        base_url
+    };
+    if let Some(endpoint) = endpoint {
+        let key = if native_image_provider {
+            "api_base"
+        } else {
+            "base_url"
+        };
+        factory.insert(key.to_string(), endpoint.into());
+    }
+    for (key, value) in settings {
+        if native_image_provider && matches!(key.as_str(), "base_url" | "api_base") {
+            continue;
+        }
+        factory.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+}
+
 pub(crate) fn selector_supports_endpoint_access(selector: &str) -> bool {
     catalog_definition_for_supported_selector(selector).is_some()
         || selector

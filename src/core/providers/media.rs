@@ -205,10 +205,11 @@ fn next_delay(current: Duration, maximum: Duration) -> Duration {
 #[cfg(feature = "providers-extended")]
 pub(crate) fn build_image_provider(
     provider_type: crate::core::providers::ProviderType,
-    config: serde_json::Value,
+    mut config: serde_json::Value,
 ) -> Result<crate::core::providers::Provider, ProviderError> {
     use crate::core::providers::{Provider, ProviderType, bfl, stability};
 
+    normalize_native_image_endpoint(&mut config);
     match provider_type {
         ProviderType::Stability => {
             let mut typed: stability::StabilityConfig = serde_json::from_value(config.clone())
@@ -233,6 +234,22 @@ pub(crate) fn build_image_provider(
             "unsupported native image provider type",
         )),
     }
+}
+
+#[cfg(feature = "providers-extended")]
+fn normalize_native_image_endpoint(config: &mut serde_json::Value) {
+    let Some(config) = config.as_object_mut() else {
+        return;
+    };
+    let endpoint = config
+        .get("base_url")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| config.get("api_base").and_then(serde_json::Value::as_str))
+        .map(str::to_string);
+    if let Some(endpoint) = endpoint {
+        config.insert("api_base".to_string(), endpoint.into());
+    }
+    config.remove("base_url");
 }
 
 #[cfg(feature = "providers-extended")]

@@ -204,6 +204,59 @@ async fn native_image_edit_rejects_explicit_quality_before_upstream_io() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
+async fn native_image_edit_rejects_multiple_images_before_upstream_io() {
+    let state = build_route_policy_test_state_with_pricing(
+        vec![image_provider(
+            "stability-native",
+            "stability",
+            "http://127.0.0.1:1",
+            vec!["inpaint".to_string()],
+        )],
+        Some(HashMap::from([(
+            "inpaint".to_string(),
+            flat_image_model_info_for_provider("stability", 0.06),
+        )])),
+    )
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-native-multiple-images";
+    let mut body = Vec::new();
+    add_text_field(&mut body, boundary, "model", "inpaint");
+    add_text_field(&mut body, boundary, "prompt", "make it lighter");
+    add_file_field(&mut body, boundary, "image", "first.png", b"first-image");
+    add_file_field(&mut body, boundary, "image", "second.png", b"second-image");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    let status = resp.status();
+    let response_body = test::read_body(resp).await;
+
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "multiple images reached upstream I/O: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
 async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await

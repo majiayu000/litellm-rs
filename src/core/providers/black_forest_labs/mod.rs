@@ -137,7 +137,7 @@ impl BflProvider {
             .validate()
             .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
         Ok(Self {
-            client: BaseHttpClient::new_for_provider(PROVIDER, config.base.clone())?,
+            client: BaseHttpClient::new_for_provider_no_redirect(PROVIDER, config.base.clone())?,
             lifecycle: GenerationLifecycle::new_no_redirect(
                 PROVIDER,
                 config.base.clone(),
