@@ -285,32 +285,8 @@ impl StabilityProvider {
         &self,
         request: ImageEditRequest,
     ) -> Result<ImageGenerationResponse, ProviderError> {
-        if request.n.is_some_and(|count| count != 1) {
-            return Err(ProviderError::invalid_request(
-                PROVIDER,
-                "Stability native editing returns exactly one image",
-            ));
-        }
-        if request.size.is_some() {
-            return Err(ProviderError::invalid_request(
-                PROVIDER,
-                "Stability native editing does not support the OpenAI size parameter",
-            ));
-        }
         let model = request.model.as_deref().unwrap_or("inpaint");
-        if model != "inpaint" {
-            return Err(ProviderError::model_not_found(PROVIDER, model));
-        }
-        let output_format = match request.response_format.as_deref() {
-            None | Some("b64_json" | "png") => "png",
-            Some(format @ ("jpeg" | "webp")) => format,
-            Some(other) => {
-                return Err(ProviderError::invalid_request(
-                    PROVIDER,
-                    format!("unsupported Stability output format '{other}'"),
-                ));
-            }
-        };
+        let output_format = self.validate_image_edit_request(&request, model)?;
         let mut form = Form::new()
             .part("image", Part::bytes(request.image).file_name("image.png"))
             .text("prompt", request.prompt)
@@ -366,6 +342,40 @@ impl StabilityProvider {
                 revised_prompt: None,
             }],
         })
+    }
+
+    pub(crate) fn validate_image_edit_request(
+        &self,
+        request: &ImageEditRequest,
+        model: &str,
+    ) -> Result<&'static str, ProviderError> {
+        if request.n.is_some_and(|count| count != 1) {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "Stability native editing returns exactly one image",
+            ));
+        }
+        if request.size.is_some() {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "Stability native editing does not support the OpenAI size parameter",
+            ));
+        }
+        if model != "inpaint" {
+            return Err(ProviderError::model_not_found(PROVIDER, model));
+        }
+        let output_format = match request.response_format.as_deref() {
+            None | Some("b64_json" | "png") => "png",
+            Some("jpeg") => "jpeg",
+            Some("webp") => "webp",
+            Some(other) => {
+                return Err(ProviderError::invalid_request(
+                    PROVIDER,
+                    format!("unsupported Stability output format '{other}'"),
+                ));
+            }
+        };
+        Ok(output_format)
     }
 
     fn map_submit_error(&self, error: reqwest::Error) -> ProviderError {

@@ -328,6 +328,27 @@ impl BflProvider {
         &self,
         request: ImageEditRequest,
     ) -> Result<ImageGenerationResponse, ProviderError> {
+        let model = request.model.as_deref().unwrap_or("flux-kontext-pro");
+        self.validate_image_edit_request(&request, model)?;
+        let mut native = BflImageRequest::new(model, request.prompt);
+        if let Some(size) = request.size {
+            insert_size_parameters(model, &size, &mut native.parameters)?;
+        }
+        native.parameters.insert(
+            "input_image".to_string(),
+            Value::String(base64::engine::general_purpose::STANDARD.encode(request.image)),
+        );
+        self.to_image_response(
+            self.generate_native(native, &CancellationToken::new())
+                .await?,
+        )
+    }
+
+    pub(crate) fn validate_image_edit_request(
+        &self,
+        request: &ImageEditRequest,
+        model: &str,
+    ) -> Result<(), ProviderError> {
         if request.n.is_some_and(|count| count != 1) {
             return Err(ProviderError::invalid_request(
                 PROVIDER,
@@ -346,25 +367,16 @@ impl BflProvider {
                 "BFL native results are returned as signed URLs",
             ));
         }
-        let model = request.model.as_deref().unwrap_or("flux-kontext-pro");
         if !KONTEXT_MODELS.contains(&model) {
             return Err(ProviderError::not_supported(
                 PROVIDER,
                 format!("image_edit for model '{model}'"),
             ));
         }
-        let mut native = BflImageRequest::new(model, request.prompt);
-        if let Some(size) = request.size {
-            insert_size_parameters(model, &size, &mut native.parameters)?;
+        if let Some(size) = request.size.as_deref() {
+            insert_size_parameters(model, size, &mut Map::new())?;
         }
-        native.parameters.insert(
-            "input_image".to_string(),
-            Value::String(base64::engine::general_purpose::STANDARD.encode(request.image)),
-        );
-        self.to_image_response(
-            self.generate_native(native, &CancellationToken::new())
-                .await?,
-        )
+        Ok(())
     }
 
     fn to_image_response(

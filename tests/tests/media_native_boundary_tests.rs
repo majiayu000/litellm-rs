@@ -95,6 +95,32 @@ fn native_media_debug_redacts_credentials_and_custom_headers() {
 }
 
 #[test]
+fn generation_lifecycle_debug_redacts_transport_configuration() {
+    let mut base = BaseConfig {
+        api_key: Some("lifecycle-api-key-sentinel".to_string()),
+        api_base: Some("https://poll.example.test/v1".to_string()),
+        ..BaseConfig::default()
+    };
+    base.headers.insert(
+        "x-lifecycle-secret".to_string(),
+        "lifecycle-header-sentinel".to_string(),
+    );
+    let lifecycle = GenerationLifecycle::new_no_redirect(
+        "lifecycle-debug-provider",
+        base,
+        PollPolicy::from_millis(5, 20, 100),
+    )
+    .expect("lifecycle should initialize");
+
+    let debug = format!("{lifecycle:?}");
+    assert!(debug.contains("GenerationLifecycle"));
+    assert!(debug.contains("lifecycle-debug-provider"));
+    assert!(debug.contains("PollPolicy"));
+    assert!(!debug.contains("lifecycle-api-key-sentinel"));
+    assert!(!debug.contains("lifecycle-header-sentinel"));
+}
+
+#[test]
 fn native_media_rejects_structurally_unsafe_custom_endpoints() {
     for endpoint in [
         "https://user:pass@example.com/v1",

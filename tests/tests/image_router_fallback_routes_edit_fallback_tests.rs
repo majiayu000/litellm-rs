@@ -230,6 +230,85 @@ async fn quality_image_edit_skips_native_and_uses_wildcard_proxy() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
+async fn masked_bfl_edit_selects_exact_compatible_deployment_without_native_io() {
+    let native = MockImageServer::start().await;
+    let proxy = MockImageServer::start().await;
+    let native_base = native.base_url.trim_end_matches("/v1");
+    let state = build_route_policy_test_state_with_pricing(
+        vec![
+            image_provider(
+                "bfl-native",
+                "black_forest_labs",
+                native_base,
+                vec!["flux-kontext-pro".to_string()],
+            ),
+            image_provider(
+                "exact-proxy",
+                "openai_compatible",
+                &proxy.base_url,
+                vec!["flux-kontext-pro".to_string()],
+            ),
+        ],
+        Some(HashMap::from([(
+            "flux-kontext-pro".to_string(),
+            flat_image_model_info_for_provider("black_forest_labs", 0.06),
+        )])),
+    )
+    .await;
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.pricing.unpriced_model_policy =
+        litellm_rs::config::models::gateway::UnpricedModelPolicy::AllowUnpriced;
+    runtime_config
+        .gateway
+        .pricing
+        .unpriced_fallback_cost_per_1k_tokens = Some(0.01);
+    state.config.store(runtime_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-bfl-mask-exact-compatible";
+    let mut body = Vec::new();
+    add_text_field(&mut body, boundary, "model", "flux-kontext-pro");
+    add_text_field(&mut body, boundary, "prompt", "replace the sky");
+    add_file_field(&mut body, boundary, "image", "input.png", b"png-bytes");
+    add_file_field(&mut body, boundary, "mask", "mask.png", b"mask-bytes");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let response_body = test::read_body(response).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "exact compatible edit failed: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+    assert!(
+        native.paths().is_empty(),
+        "incompatible BFL must not receive I/O"
+    );
+    assert_eq!(proxy.paths(), vec!["/v1/images/edits".to_string()]);
+    native.stop().await;
+    proxy.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
 async fn native_image_edit_rejects_duplicate_masks_before_provider_io() {
     let native = MockImageServer::start().await;
     let native_base = native.base_url.trim_end_matches("/v1");

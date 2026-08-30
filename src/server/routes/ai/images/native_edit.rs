@@ -19,9 +19,41 @@ pub(super) fn is_native_image_provider(provider: &Provider) -> bool {
     )
 }
 
+#[cfg(feature = "providers-extended")]
+pub(super) fn deployment_supports_request(
+    provider: &Provider,
+    selected_model: &str,
+    request: Option<&Result<ImageEditRequest, ProviderError>>,
+) -> bool {
+    if !is_native_image_provider(provider) {
+        return true;
+    }
+    let Some(Ok(request)) = request else {
+        return false;
+    };
+    match provider {
+        Provider::Stability(provider) => provider
+            .validate_image_edit_request(request, selected_model)
+            .is_ok(),
+        Provider::BlackForestLabs(provider) => provider
+            .validate_image_edit_request(request, selected_model)
+            .is_ok(),
+        _ => true,
+    }
+}
+
 #[cfg(not(feature = "providers-extended"))]
 pub(super) fn is_native_image_provider(_provider: &Provider) -> bool {
     false
+}
+
+#[cfg(not(feature = "providers-extended"))]
+pub(super) fn deployment_supports_request(
+    _provider: &Provider,
+    _selected_model: &str,
+    _request: Option<&Result<ImageEditRequest, ProviderError>>,
+) -> bool {
+    true
 }
 
 pub(super) async fn execute_selected_native_image_edit(

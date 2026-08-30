@@ -73,11 +73,21 @@ impl Default for PollPolicy {
 }
 
 /// Cancellable, timeout-bounded polling lifecycle shared by BFL and Runway.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GenerationLifecycle {
     provider: &'static str,
     client: BaseHttpClient,
     policy: PollPolicy,
+}
+
+impl std::fmt::Debug for GenerationLifecycle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GenerationLifecycle")
+            .field("provider", &self.provider)
+            .field("policy", &self.policy)
+            .finish()
+    }
 }
 
 impl GenerationLifecycle {

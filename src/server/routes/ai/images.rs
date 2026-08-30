@@ -28,7 +28,7 @@ use reqwest::Url;
 use reqwest::header::{HeaderName, HeaderValue};
 use tracing::{error, info};
 
-use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
+use super::budgeted::ApiKeyBudgetPolicy;
 use super::context::handle_ai_request;
 use super::route_http::RouteHttpClient;
 use super::{openai_errors, provider_config};
@@ -41,8 +41,6 @@ use routing::{
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
 const MAX_IMAGE_MULTIPART_BYTES: usize = 64 * 1024 * 1024;
-const NATIVE_EDIT_QUALITY_UNSUPPORTED: &str =
-    "native image editing does not support the quality parameter";
 #[derive(Debug, Clone, Copy)]
 enum ImageProxyEndpoint {
     Edits,
@@ -168,6 +166,17 @@ async fn proxy_image_multipart_endpoint(
             false
         }
     };
+    let native_edit_request = matches!(endpoint, ImageProxyEndpoint::Edits).then(|| {
+        std::sync::Arc::new(if form_fields.quality.is_some() {
+            Err(ProviderError::invalid_request(
+                "image_edit",
+                "native image editing does not support the quality parameter",
+            ))
+        } else {
+            native_edit::parse_native_image_edit(&body, &content_type, requested_model)
+                .map_err(image_proxy_gateway_error_to_provider_error)
+        })
+    });
     let budgeted = state.budgeted.clone();
     let pricing_service = budgeted.pricing();
     let budget_limits = budgeted.budget_limits();
@@ -183,10 +192,19 @@ async fn proxy_image_multipart_endpoint(
 
     let mut last_router_error = None;
     for router_model in router_models {
-        let result = run_unary(
+        let native_edit_request_for_selection = native_edit_request.clone();
+        let native_edit_request_for_operation = native_edit_request.clone();
+        let result = super::execution::execute_with_selected_deployment_matching(
             &state.unified_router,
             &router_model,
             endpoint.capability(),
+            move |deployment| {
+                native_edit::deployment_supports_request(
+                    &deployment.provider,
+                    &deployment.model,
+                    native_edit_request_for_selection.as_deref(),
+                )
+            },
             {
                 let budgeted = budgeted.clone();
                 let budget_limits = budget_limits.clone();
@@ -197,6 +215,7 @@ async fn proxy_image_multipart_endpoint(
                 let content_type = content_type.clone();
                 let form_fields = form_fields.clone();
                 let context = context.clone();
+                let native_edit_request = native_edit_request_for_operation.clone();
                 move |selected_provider, selected_model, deployment_id| {
                     let budgeted = budgeted.clone();
                     let budget_limits = budget_limits.clone();
@@ -207,22 +226,17 @@ async fn proxy_image_multipart_endpoint(
                     let content_type = content_type.clone();
                     let form_fields = form_fields.clone();
                     let context = context.clone();
+                    let native_edit_request = native_edit_request.clone();
                     async move {
                         if matches!(endpoint, ImageProxyEndpoint::Edits)
                             && native_edit::is_native_image_provider(&selected_provider)
                         {
-                            if let Some(quality) = form_fields.quality.as_deref() {
-                                return Err(ProviderError::invalid_request(
-                                    "image_edit",
-                                    format!("{NATIVE_EDIT_QUALITY_UNSUPPORTED} '{quality}'"),
-                                ));
-                            }
-                            let request = native_edit::parse_native_image_edit(
-                                &body,
-                                &content_type,
-                                requested_model,
-                            )
-                            .map_err(image_proxy_gateway_error_to_provider_error)?;
+                            let request = native_edit_request
+                                .as_deref()
+                                .ok_or_else(|| {
+                                    ProviderError::not_supported("image_edit", "native image edit")
+                                })?
+                                .clone()?;
                             let budget_provider = state
                                 .unified_router
                                 .configured_provider_name(&deployment_id)
@@ -352,7 +366,7 @@ async fn proxy_image_multipart_endpoint(
                     && native_edit_candidate
                     && router_model == requested_model
                     && (is_retryable_image_router_error(&error)
-                        || is_native_quality_unsupported(&error)) =>
+                        || is_request_compatibility_selection_error(&error)) =>
             {
                 last_router_error = Some(error);
             }
@@ -363,13 +377,13 @@ async fn proxy_image_multipart_endpoint(
     Err(last_router_error.unwrap_or_else(missing_image_proxy_provider_error))
 }
 
-fn is_native_quality_unsupported(error: &GatewayError) -> bool {
+fn is_request_compatibility_selection_error(error: &GatewayError) -> bool {
     matches!(
         error,
         GatewayError::Provider(ProviderError::InvalidRequest {
-            provider: "image_edit",
-            message,
-        }) if message.starts_with(NATIVE_EDIT_QUALITY_UNSUPPORTED)
+            provider: "router",
+            ..
+        })
     )
 }
 
