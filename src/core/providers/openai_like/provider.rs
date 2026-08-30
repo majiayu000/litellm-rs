@@ -1,5 +1,4 @@
 //! OpenAI-Like Provider Implementation
-//! Main provider implementation for any OpenAI-compatible API endpoint
 use futures::Stream;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -684,12 +683,14 @@ impl LLMProvider for OpenAILikeProvider {
     {
         self.execute_chat_completion_stream(request).await
     }
-
     async fn image_edit(
         &self,
-        request: ImageEditRequest,
+        mut request: ImageEditRequest,
         _context: RequestContext,
     ) -> Result<ImageGenerationResponse, ProviderError> {
+        request.model = request
+            .model
+            .map(|model| self.config.get_effective_model(&model));
         crate::core::providers::openai::execute_image_edit(
             self.config.base.clone(),
             &self.config.get_api_base(),

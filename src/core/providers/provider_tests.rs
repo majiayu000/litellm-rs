@@ -3,6 +3,7 @@ use crate::core::net::ProviderEndpointAccess;
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageEditRequest;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -46,6 +47,53 @@ fn image_edit_request() -> ImageEditRequest {
         response_format: Some("b64_json".to_string()),
         user: Some("test-user".to_string()),
     }
+}
+
+async fn redirecting_image_edit_server(
+    status: u16,
+    reason: &'static str,
+) -> (String, tokio::task::JoinHandle<Option<String>>) {
+    let source = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("redirect source should bind");
+    let source_address = source.local_addr().expect("source address should exist");
+    let sink = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("redirect sink should bind");
+    let sink_address = sink.local_addr().expect("sink address should exist");
+    let server = tokio::spawn(async move {
+        let (mut source_socket, _) = source.accept().await.expect("edit request should arrive");
+        let _request = read_full_request(&mut source_socket).await;
+        source_socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status} {reason}\r\nLocation: http://{sink_address}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("redirect should write");
+
+        let Ok(Ok((mut sink_socket, _))) =
+            tokio::time::timeout(Duration::from_millis(250), sink.accept()).await
+        else {
+            return None;
+        };
+        let request = read_full_request(&mut sink_socket).await;
+        let body = r#"{"created":1,"data":[]}"#;
+        sink_socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("sink response should write");
+        Some(request)
+    });
+    (format!("http://{source_address}/v1"), server)
 }
 
 #[test]
@@ -241,7 +289,8 @@ async fn advertised_openai_image_edit_variants_dispatch_upstream() {
     let mut compatible_config = openai_like::OpenAILikeConfig::with_api_key(
         format!("http://{address}/v1"),
         "compatible-secret",
-    );
+    )
+    .with_model_prefix("custom/");
     compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     let compatible = Provider::OpenAILike(
         openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
@@ -251,8 +300,10 @@ async fn advertised_openai_image_edit_variants_dispatch_upstream() {
 
     for provider in [&openai, &compatible] {
         assert!(provider.supports_capability(&ProviderCapability::ImageEdit));
+        let mut request = image_edit_request();
+        request.model = Some("custom/gpt-image-1".to_string());
         let response = provider
-            .edit_image(image_edit_request(), RequestContext::default())
+            .edit_image(request, RequestContext::default())
             .await
             .expect("advertised image edit should dispatch upstream");
         assert_eq!(response.data[0].b64_json.as_deref(), Some("edited"));
@@ -271,6 +322,72 @@ async fn advertised_openai_image_edit_variants_dispatch_upstream() {
         assert!(request.contains("name=\"prompt\""));
         assert!(request.contains("replace the sky"));
         assert!(request.contains("name=\"model\""));
-        assert!(request.contains("gpt-image-1"));
     }
+    assert!(captured[0].contains("custom/gpt-image-1"));
+    assert!(captured[1].contains("gpt-image-1"));
+    assert!(!captured[1].contains("custom/gpt-image-1"));
+}
+
+#[tokio::test]
+async fn credentialed_image_edits_do_not_follow_cross_origin_redirects() {
+    let (openai_base, openai_server) =
+        redirecting_image_edit_server(307, "Temporary Redirect").await;
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test".to_string());
+    openai_config.base.api_base = Some(openai_base);
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    openai_config.base.headers.insert(
+        "x-proxy-secret".to_string(),
+        "openai-placeholder".to_string(),
+    );
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize"),
+    );
+    let openai_result = openai
+        .edit_image(image_edit_request(), RequestContext::default())
+        .await;
+    let openai_sink_request = openai_server.await.expect("redirect server should finish");
+
+    let (compatible_base, compatible_server) =
+        redirecting_image_edit_server(308, "Permanent Redirect").await;
+    let mut compatible_config =
+        openai_like::OpenAILikeConfig::with_api_key(compatible_base, "compatible-placeholder");
+    compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    compatible_config.custom_headers.insert(
+        "x-proxy-secret".to_string(),
+        "compatible-placeholder".to_string(),
+    );
+    let compatible = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
+            .await
+            .expect("OpenAI-compatible provider should initialize"),
+    );
+    let compatible_result = compatible
+        .edit_image(image_edit_request(), RequestContext::default())
+        .await;
+    let compatible_sink_request = compatible_server
+        .await
+        .expect("redirect server should finish");
+
+    assert!(
+        matches!(
+            openai_result,
+            Err(ProviderError::ApiError { status: 307, .. })
+        ),
+        "{openai_result:?}"
+    );
+    assert!(openai_sink_request.is_none(), "OpenAI secret was replayed");
+    assert!(
+        matches!(
+            compatible_result,
+            Err(ProviderError::ApiError { status: 308, .. })
+        ),
+        "{compatible_result:?}"
+    );
+    assert!(
+        compatible_sink_request.is_none(),
+        "OpenAI-compatible secret was replayed"
+    );
 }

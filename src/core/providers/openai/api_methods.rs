@@ -267,7 +267,7 @@ pub(crate) async fn execute_image_edit(
     request: ImageEditRequest,
     provider: &'static str,
 ) -> Result<ImageGenerationResponse, OpenAIError> {
-    let client = BaseHttpClient::new_for_provider(provider, base)?;
+    let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
     let mut form = multipart::Form::new()
         .part(
             "image",
@@ -399,6 +399,20 @@ mod tests {
     use super::super::config::OpenAIConfig;
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
+
+    #[test]
+    fn credentialed_image_edit_client_explicitly_disables_redirects() {
+        let source = include_str!("api_methods.rs");
+        let image_edit = source
+            .split_once("pub(crate) async fn execute_image_edit")
+            .expect("image edit adapter should exist")
+            .1
+            .split_once("fn transcription_form")
+            .expect("image edit adapter should end before transcription helpers")
+            .0;
+
+        assert!(image_edit.contains("BaseHttpClient::new_for_provider_no_redirect"));
+    }
 
     #[tokio::test]
     async fn public_multipart_loopback_fails_before_connect() {
