@@ -170,9 +170,32 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
-        let no_matching_candidate_error = RouterError::UnsupportedCapability {
-            model: model_name.to_string(),
-            capability: format!("{capability:?}"),
+        let resolved_name = snapshot.resolve_model_name(model_name);
+        let candidates = snapshot
+            .model_index
+            .get(&resolved_name)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| snapshot.deployments.get(id));
+        let (candidate_count, missing_mapping_count) =
+            candidates.fold((0usize, 0usize), |(count, missing), deployment| {
+                let missing_mapping = deployment
+                    .provider
+                    .deployment_model_identity()
+                    .is_some_and(|identity| identity.capability_catalog_model().is_none());
+                (count + 1, missing + usize::from(missing_mapping))
+            });
+        let no_matching_candidate_error = if candidate_count > 0
+            && candidate_count == missing_mapping_count
+        {
+            RouterError::InvalidConfiguration(format!(
+                "model '{model_name}' requires settings.model_identity_mappings.{resolved_name}.capability_catalog_model before capability routing"
+            ))
+        } else {
+            RouterError::UnsupportedCapability {
+                model: model_name.to_string(),
+                capability: format!("{capability:?}"),
+            }
         };
 
         self.select_deployment_matching(

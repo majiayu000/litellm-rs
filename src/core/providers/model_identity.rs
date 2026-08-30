@@ -187,13 +187,6 @@ pub enum ModelIdentityValidationError {
         value: String,
         reason: &'static str,
     },
-    #[error(
-        "provider '{provider}' deployment '{deployment}' requires settings.{MODEL_IDENTITY_MAPPINGS_KEY} with an exact callable identity"
-    )]
-    UnmappedDeployment {
-        provider: String,
-        deployment: String,
-    },
 }
 
 /// Validate one deployment using the maintained catalog and the injected
@@ -322,10 +315,7 @@ pub(crate) fn validate_deployment_identity(
             wire_model,
             "unreviewed catalog identity is not callable",
         )),
-        CatalogResolution::Unknown => Err(ModelIdentityValidationError::UnmappedDeployment {
-            provider: provider_name.to_string(),
-            deployment: wire_model.to_string(),
-        }),
+        CatalogResolution::Unknown => Ok(DeploymentModelIdentity::new(wire_model, None, None)),
     }
 }
 
