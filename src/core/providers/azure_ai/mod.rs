@@ -45,15 +45,15 @@ use crate::core::types::{
 use client::AzureAIClient;
 
 #[rustfmt::skip]
-const CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty"];
+const CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop"];
 #[rustfmt::skip]
-const PHI_4_CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"];
+const PHI_4_CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop"];
 #[rustfmt::skip]
-const CHAT_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stream"];
+const CHAT_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "stream"];
 #[rustfmt::skip]
-const CHAT_TOOL_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "tools", "tool_choice"];
+const CHAT_TOOL_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "tools", "tool_choice"];
 #[rustfmt::skip]
-const CHAT_TOOL_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "tools", "tool_choice", "stream"];
+const CHAT_TOOL_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "tools", "tool_choice", "stream"];
 
 /// Main Azure AI provider following unified architecture
 #[derive(Debug, Clone)]
@@ -154,6 +154,35 @@ impl AzureAIProvider {
         }
         Ok(())
     }
+
+    fn ensure_chat_request_params_supported(
+        &self,
+        request: &ChatRequest,
+        streaming: bool,
+    ) -> Result<(), ProviderError> {
+        let params = [
+            request.temperature.as_ref().map(|_| "temperature"),
+            request.max_tokens.as_ref().map(|_| "max_tokens"),
+            request
+                .max_completion_tokens
+                .as_ref()
+                .map(|_| "max_completion_tokens"),
+            request.top_p.as_ref().map(|_| "top_p"),
+            request
+                .frequency_penalty
+                .as_ref()
+                .map(|_| "frequency_penalty"),
+            request
+                .presence_penalty
+                .as_ref()
+                .map(|_| "presence_penalty"),
+            request.stop.as_ref().map(|_| "stop"),
+            (request.stream || streaming).then_some("stream"),
+            request.tools.as_ref().map(|_| "tools"),
+            request.tool_choice.as_ref().map(|_| "tool_choice"),
+        ];
+        self.ensure_params_supported(&request.model, params.into_iter().flatten())
+    }
 }
 
 impl LLMProvider for AzureAIProvider {
@@ -221,7 +250,21 @@ impl LLMProvider for AzureAIProvider {
                                 )
                             })
                     }
-                    (Some("azure_ai"), Some(model_id)) => azure_ai_features(model_id),
+                    (Some("azure_ai"), Some(model_id)) => {
+                        azure_ai_features(model_id).or_else(|| {
+                            binding
+                                .pricing()
+                                .get_model_info_for_provider("azure_ai", model_id)
+                                .filter(|(_, metadata)| metadata.mode == "chat")
+                                .map(|(_, metadata)| {
+                                    (
+                                        metadata.supports_function_calling.unwrap_or(false),
+                                        metadata.supports_streaming.unwrap_or(false),
+                                        false,
+                                    )
+                                })
+                        })
+                    }
                     _ => None,
                 }
             }
@@ -251,16 +294,7 @@ impl LLMProvider for AzureAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
-        let params = [
-            request.tools.as_ref().map(|_| "tools"),
-            request.tool_choice.as_ref().map(|_| "tool_choice"),
-            request.stream.then_some("stream"),
-            request
-                .max_completion_tokens
-                .as_ref()
-                .map(|_| "max_completion_tokens"),
-        ];
-        self.ensure_params_supported(&request.model, params.into_iter().flatten())?;
+        self.ensure_chat_request_params_supported(&request, false)?;
         // Transform ChatRequest to Azure AI API format
         AzureAIChatUtils::transform_request(&request)
     }
@@ -287,6 +321,7 @@ impl LLMProvider for AzureAIProvider {
         request: ChatRequest,
         context: RequestContext,
     ) -> Result<ChatResponse, ProviderError> {
+        self.ensure_chat_request_params_supported(&request, false)?;
         self.chat_handler
             .create_chat_completion(request, context)
             .await
@@ -298,6 +333,7 @@ impl LLMProvider for AzureAIProvider {
         context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
+        self.ensure_chat_request_params_supported(&request, true)?;
         let stream = self
             .chat_handler
             .create_chat_completion_stream(request, context)

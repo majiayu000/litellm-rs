@@ -66,6 +66,7 @@ fn supported_parameters_follow_exact_model_capabilities() {
         "top_p",
         "frequency_penalty",
         "presence_penalty",
+        "stop",
         "tools",
         "tool_choice",
         "stream",
@@ -75,6 +76,7 @@ fn supported_parameters_follow_exact_model_capabilities() {
 
     let phi_params = provider.get_supported_openai_params("Phi-4");
     assert!(phi_params.contains(&"temperature"));
+    assert!(phi_params.contains(&"stop"));
     assert!(!phi_params.contains(&"tools"));
     assert!(!phi_params.contains(&"tool_choice"));
     assert!(!phi_params.contains(&"stream"));
@@ -83,6 +85,46 @@ fn supported_parameters_follow_exact_model_capabilities() {
             .get_supported_openai_params("customer-chat-deployment")
             .is_empty()
     );
+}
+
+#[test]
+fn pricing_backed_chat_identity_exposes_catalog_parameters() {
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default()
+            .expect("embedded pricing should load"),
+    );
+    let catalog =
+        crate::core::providers::registry::model_catalog_authority::CatalogAuthority::from_embedded(
+        )
+        .expect("embedded catalog should load");
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some("azure_ai/Llama-3.3-70B-Instruct".to_string()),
+        None,
+    );
+    let identity = crate::core::providers::model_identity::validate_deployment_identity(
+        "review-azure-ai",
+        "azure_ai",
+        "wire-llama",
+        Some(&mapping),
+        None,
+        &catalog,
+        &pricing.snapshot(),
+    )
+    .expect("Azure AI chat capability identity should validate");
+    let mut provider = AzureAIProvider::new(policy_config(
+        "http://127.0.0.1:18080",
+        ProviderEndpointAccess::PrivateNetwork,
+    ))
+    .expect("Azure AI provider should be created");
+    provider.model_identity = Some(
+        crate::core::providers::model_identity::DeploymentProviderBinding::new(identity, pricing),
+    );
+
+    let params = provider.get_supported_openai_params("wire-llama");
+    assert!(params.contains(&"temperature"));
+    assert!(params.contains(&"stop"));
+    assert!(params.contains(&"tools"));
+    assert!(params.contains(&"tool_choice"));
 }
 
 #[tokio::test]
@@ -261,4 +303,49 @@ async fn phi_4_rejects_unsupported_params_at_map_and_transform_boundaries() {
             .expect_err("unsupported typed parameter must fail before serialization");
         assert!(error.to_string().contains(field), "{error}");
     }
+}
+
+#[tokio::test]
+async fn phi_4_rejects_unsupported_params_on_live_chat_paths() {
+    let provider = AzureAIProvider::new(policy_config(
+        "http://127.0.0.1:18080",
+        ProviderEndpointAccess::PrivateNetwork,
+    ))
+    .expect("Phi-4 policy provider should build");
+    let tool = Tool {
+        tool_type: ToolType::Function,
+        function: FunctionDefinition {
+            name: "lookup".to_string(),
+            description: None,
+            parameters: None,
+        },
+    };
+
+    let error = provider
+        .chat_completion(
+            ChatRequest {
+                model: "Phi-4".to_string(),
+                tools: Some(vec![tool]),
+                ..Default::default()
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("live chat must reject unsupported tools before sending");
+    assert!(error.to_string().contains("tools"), "{error}");
+
+    let error = match provider
+        .chat_completion_stream(
+            ChatRequest {
+                model: "Phi-4".to_string(),
+                ..Default::default()
+            },
+            RequestContext::default(),
+        )
+        .await
+    {
+        Ok(_) => panic!("live streaming must reject a non-streaming model before sending"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("stream"), "{error}");
 }
