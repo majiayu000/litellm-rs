@@ -25,6 +25,19 @@ const CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ImageGeneration,
     ProviderCapability::ImageEdit,
 ];
+const GENERATION_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::ImageGeneration];
+const EDIT_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
+const GENERATION_MODELS: &[&str] = &[
+    "stable-image-core",
+    "stable-image-ultra",
+    "sd3",
+    "sd3-large",
+    "sd3-large-turbo",
+    "sd3-medium",
+    "sd3.5-large",
+    "sd3.5-large-turbo",
+    "sd3.5-medium",
+];
 
 /// Stability AI provider configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -394,7 +407,7 @@ impl LLMProvider for StabilityProvider {
     }
 
     async fn health_check(&self) -> HealthStatus {
-        HealthStatus::Healthy
+        HealthStatus::Unknown
     }
 
     async fn calculate_cost(
@@ -411,27 +424,24 @@ impl LLMProvider for StabilityProvider {
 }
 
 fn supported_models() -> Vec<ModelInfo> {
-    [
-        "stable-image-core",
-        "stable-image-ultra",
-        "sd3",
-        "sd3-large",
-        "sd3-large-turbo",
-        "sd3-medium",
-        "sd3.5-large",
-        "sd3.5-large-turbo",
-        "sd3.5-medium",
-        "stable-image-inpaint",
-    ]
-    .into_iter()
-    .map(|model| ModelInfo {
+    GENERATION_MODELS
+        .iter()
+        .map(|model| model_info(model, GENERATION_CAPABILITIES))
+        .chain(std::iter::once(model_info(
+            "stable-image-inpaint",
+            EDIT_CAPABILITIES,
+        )))
+        .collect()
+}
+
+fn model_info(model: &str, capabilities: &[ProviderCapability]) -> ModelInfo {
+    ModelInfo {
         id: model.to_string(),
         name: model.to_string(),
         provider: PROVIDER.to_string(),
         max_context_length: 0,
         supports_multimodal: true,
-        capabilities: CAPABILITIES.to_vec(),
+        capabilities: capabilities.to_vec(),
         ..ModelInfo::default()
-    })
-    .collect()
+    }
 }

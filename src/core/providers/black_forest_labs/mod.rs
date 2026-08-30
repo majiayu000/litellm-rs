@@ -29,6 +29,8 @@ const CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ImageGeneration,
     ProviderCapability::ImageEdit,
 ];
+const GENERATION_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::ImageGeneration];
+const KONTEXT_MODELS: &[&str] = &["flux-kontext-pro", "flux-kontext-max"];
 const MODELS: &[&str] = &[
     "flux-pro-1.1",
     "flux-pro-1.1-ultra",
@@ -287,6 +289,12 @@ impl BflProvider {
             ));
         }
         let model = request.model.as_deref().unwrap_or("flux-kontext-pro");
+        if !KONTEXT_MODELS.contains(&model) {
+            return Err(ProviderError::not_supported(
+                PROVIDER,
+                format!("image_edit for model '{model}'"),
+            ));
+        }
         let mut native = BflImageRequest::new(model, request.prompt);
         native.parameters.insert(
             "input_image".to_string(),
@@ -444,7 +452,7 @@ impl LLMProvider for BflProvider {
     }
 
     async fn health_check(&self) -> HealthStatus {
-        HealthStatus::Healthy
+        HealthStatus::Unknown
     }
 
     async fn calculate_cost(
@@ -469,7 +477,11 @@ fn supported_models() -> Vec<ModelInfo> {
             provider: PROVIDER.to_string(),
             max_context_length: 0,
             supports_multimodal: true,
-            capabilities: CAPABILITIES.to_vec(),
+            capabilities: if KONTEXT_MODELS.contains(model) {
+                CAPABILITIES.to_vec()
+            } else {
+                GENERATION_CAPABILITIES.to_vec()
+            },
             ..ModelInfo::default()
         })
         .collect()

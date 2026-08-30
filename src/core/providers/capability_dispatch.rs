@@ -74,6 +74,16 @@ impl Provider {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
             }
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(provider) => LLMProvider::models(provider)
+                .iter()
+                .find(|model_info| model_info.id == model)
+                .is_some_and(|model_info| model_info.capabilities.contains(capability)),
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(provider) => LLMProvider::models(provider.as_ref())
+                .iter()
+                .find(|model_info| model_info.id == model)
+                .is_some_and(|model_info| model_info.capabilities.contains(capability)),
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }

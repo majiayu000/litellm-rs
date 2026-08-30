@@ -10,7 +10,9 @@ use litellm_rs::core::providers::stability::{StabilityConfig, StabilityProvider}
 use litellm_rs::core::providers::unified_provider::ProviderError;
 use litellm_rs::core::providers::{LLMProvider, Provider, ProviderType};
 use litellm_rs::core::types::context::RequestContext;
+use litellm_rs::core::types::health::HealthStatus;
 use litellm_rs::core::types::image::{ImageEditRequest, ImageGenerationRequest};
+use litellm_rs::core::types::model::ProviderCapability;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -404,6 +406,41 @@ async fn stability_and_bfl_are_routeable_with_truthful_capabilities_and_pricing(
     assert!(
         bfl.supports_capability(&litellm_rs::core::types::model::ProviderCapability::ImageEdit)
     );
+    assert!(
+        stability.supports_capability_for_model(
+            "stable-image-core",
+            &ProviderCapability::ImageGeneration
+        )
+    );
+    assert!(
+        !stability
+            .supports_capability_for_model("stable-image-core", &ProviderCapability::ImageEdit)
+    );
+    assert!(
+        stability
+            .supports_capability_for_model("stable-image-inpaint", &ProviderCapability::ImageEdit)
+    );
+    assert!(!stability.supports_capability_for_model(
+        "stable-image-inpaint",
+        &ProviderCapability::ImageGeneration
+    ));
+    assert!(
+        !stability
+            .supports_capability_for_model("unknown-model", &ProviderCapability::ImageGeneration)
+    );
+    assert!(
+        bfl.supports_capability_for_model("flux-kontext-pro", &ProviderCapability::ImageGeneration)
+    );
+    assert!(bfl.supports_capability_for_model("flux-kontext-pro", &ProviderCapability::ImageEdit));
+    assert!(
+        bfl.supports_capability_for_model("flux-pro-1.1", &ProviderCapability::ImageGeneration)
+    );
+    assert!(!bfl.supports_capability_for_model("flux-pro-1.1", &ProviderCapability::ImageEdit));
+    assert!(
+        !bfl.supports_capability_for_model("unknown-model", &ProviderCapability::ImageGeneration)
+    );
+    assert_eq!(stability.health_check().await, HealthStatus::Unknown);
+    assert_eq!(bfl.health_check().await, HealthStatus::Unknown);
     assert!(matches!(
         stability.calculate_cost("stable-image-core", 10, 20).await,
         Err(ProviderError::NotSupported { .. })
@@ -412,6 +449,33 @@ async fn stability_and_bfl_are_routeable_with_truthful_capabilities_and_pricing(
         bfl.calculate_cost("flux-pro-1.1", 10, 20).await,
         Err(ProviderError::NotSupported { .. })
     ));
+}
+
+#[tokio::test]
+async fn bfl_edit_rejects_non_kontext_model_before_network_access() {
+    let mut config = BflConfig::with_api_key("bfl-secret");
+    config.base.api_base = Some("http://127.0.0.1:1".to_string());
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = BflProvider::new(config).expect("BFL provider should initialize");
+
+    let error = provider
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "edit this image".to_string(),
+                model: Some("flux-pro-1.1".to_string()),
+                n: Some(1),
+                size: None,
+                response_format: Some("url".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("non-Kontext models must fail before any network request");
+
+    assert!(matches!(error, ProviderError::NotSupported { .. }));
 }
 
 async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
@@ -522,4 +586,44 @@ async fn runway_submit_query_cancel_and_wait_use_native_task_contract() {
     assert!(requests[0].contains("authorization: Bearer runway-secret"));
     assert!(requests[0].contains("x-runway-version: 2024-11-06"));
     assert!(requests[0].contains("\"promptImage\":\"https://images.example/source.png\""));
+}
+
+#[cfg(feature = "runway-media")]
+#[tokio::test]
+async fn runway_rejects_malformed_succeeded_output() {
+    for body in [
+        r#"{"id":"task-1","status":"SUCCEEDED","output":[]}"#,
+        r#"{"id":"task-1","status":"SUCCEEDED","output":["https://cdn.example/video.mp4",7]}"#,
+        r#"{"id":"task-1","status":"SUCCEEDED","output":["not-a-url"]}"#,
+    ] {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("mock Runway listener should bind");
+        let address = listener.local_addr().expect("mock address should exist");
+        let body = body.to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let _request = read_http_request(&mut socket).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        });
+
+        let mut config = RunwayConfig::with_api_key("runway-secret");
+        config.base.api_base = Some(format!("http://{address}/v1"));
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let provider = RunwayProvider::new(config).expect("Runway provider should initialize");
+        let error = provider
+            .get_task("task-1")
+            .await
+            .expect_err("malformed successful output must remain an error");
+        server.await.expect("mock Runway server should finish");
+
+        assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+    }
 }

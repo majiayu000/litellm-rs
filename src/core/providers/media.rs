@@ -253,7 +253,11 @@ pub mod runway {
                     api_base: Some(DEFAULT_API_BASE.to_string()),
                     ..BaseConfig::default()
                 },
-                poll_policy: PollPolicy::default(),
+                poll_policy: PollPolicy::new(
+                    Duration::from_secs(5),
+                    Duration::from_secs(20),
+                    Duration::from_secs(600),
+                ),
             }
         }
     }
@@ -565,15 +569,47 @@ pub mod runway {
                 ));
             }
         };
+        let output = if status == RunwayTaskStatus::Succeeded {
+            let values = value["output"]
+                .as_array()
+                .filter(|values| !values.is_empty())
+                .ok_or_else(|| {
+                    ProviderError::response_parsing(
+                        PROVIDER,
+                        "Runway succeeded task requires non-empty output",
+                    )
+                })?;
+            values
+                .iter()
+                .map(|item| {
+                    let output = item.as_str().ok_or_else(|| {
+                        ProviderError::response_parsing(
+                            PROVIDER,
+                            "Runway succeeded task output must contain only URLs",
+                        )
+                    })?;
+                    let parsed = url::Url::parse(output).map_err(|_| {
+                        ProviderError::response_parsing(
+                            PROVIDER,
+                            "Runway succeeded task output contained an invalid URL",
+                        )
+                    })?;
+                    if !matches!(parsed.scheme(), "http" | "https") {
+                        return Err(ProviderError::response_parsing(
+                            PROVIDER,
+                            "Runway succeeded task output contained an invalid URL",
+                        ));
+                    }
+                    Ok(output.to_string())
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?
+        } else {
+            Vec::new()
+        };
         Ok(RunwayTask {
             id: id.to_string(),
             status,
-            output: value["output"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect(),
+            output,
             failure: value["failure"].as_str().map(str::to_string),
         })
     }
@@ -592,5 +628,20 @@ pub mod runway {
             )),
             RunwayTaskStatus::Canceled => Ok(GenerationPoll::Canceled),
         }
+    }
+}
+
+#[cfg(all(test, feature = "runway-media"))]
+mod tests {
+    use std::time::Duration;
+
+    use super::runway::RunwayConfig;
+
+    #[test]
+    fn runway_default_polling_respects_official_interval() {
+        let policy = RunwayConfig::default().poll_policy;
+
+        assert!(policy.initial_delay >= Duration::from_secs(5));
+        assert!(policy.max_delay >= policy.initial_delay);
     }
 }
