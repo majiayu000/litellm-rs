@@ -117,6 +117,7 @@ pub use provider_type::ProviderType;
 pub mod factory;
 pub use factory::{create_provider, is_provider_selector_supported};
 // Registry and unified provider
+mod chat_continuation;
 pub mod contextual_error;
 pub mod failure;
 pub mod provider_error_conversions;
@@ -135,6 +136,10 @@ use crate::core::types::{
     chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest,
 };
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
+pub(crate) use chat_continuation::{
+    AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
+    ChatMessageContinuation,
+};
 pub use contextual_error::ContextualError;
 pub use failure::{ProviderFailureFacts, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
@@ -641,6 +646,27 @@ impl Provider {
     ) -> Result<ChatResponse, ProviderError> {
         use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
         dispatch_provider!(async_err, self, chat_completion, request, context)
+    }
+
+    pub(crate) async fn chat_completion_with_continuation(
+        &self,
+        envelope: ChatContinuationRequest,
+        context: RequestContext,
+        opt_in: bool,
+    ) -> Result<ChatContinuationResponse, ProviderError> {
+        if !opt_in && !envelope.has_continuation() {
+            let (request, _) = envelope.into_parts();
+            let response = self.chat_completion(request, context).await?;
+            let extensions = vec![ChatMessageContinuation::new(); response.choices.len()];
+            return ChatContinuationResponse::new(response, extensions);
+        }
+        match self {
+            Provider::Anthropic(provider) => provider.chat_with_continuation(envelope).await,
+            _ => Err(ProviderError::not_supported(
+                "router",
+                "Anthropic continuation is only supported by the Anthropic provider",
+            )),
+        }
     }
 
     /// Execute health check

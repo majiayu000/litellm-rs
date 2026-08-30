@@ -9,6 +9,153 @@ use crate::core::types::responses::{
 use crate::core::types::thinking::{ThinkingDelta, ThinkingUsage};
 
 #[test]
+fn guardrail_input_projection_includes_only_visible_continuation_thinking() {
+    use crate::core::providers::ChatMessageContinuation;
+    use crate::core::types::anthropic_continuation::{
+        AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    };
+
+    let request = ChatCompletionRequest {
+        messages: vec![ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Text("answer".to_string())),
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: None,
+        }],
+        ..Default::default()
+    };
+    let continuation = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "visible input phrase".to_string(),
+                signature: AnthropicSignature::try_from("opaque signature").unwrap(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: AnthropicRedactedData::try_from("opaque redacted payload").unwrap(),
+            },
+        ]),
+    );
+
+    let projected =
+        guardrail_request_with_continuation(&request, std::slice::from_ref(&continuation))
+            .expect("valid assistant continuation should project");
+    let MessageContent::Text(content) = projected.messages[0].content.as_ref().unwrap() else {
+        panic!("projection should remain text");
+    };
+    assert!(content.contains("answer"));
+    assert!(content.contains("visible input phrase"));
+    assert!(!content.contains("opaque signature"));
+    assert!(!content.contains("opaque redacted payload"));
+
+    assert!(guardrail_request_with_continuation(&request, &[]).is_err());
+    let mut wrong_role = request;
+    wrong_role.messages[0].role = MessageRole::User;
+    assert!(guardrail_request_with_continuation(&wrong_role, &[continuation]).is_err());
+}
+
+#[test]
+fn guardrail_projection_includes_visible_thinking_without_opaque_continuation_data() {
+    use crate::core::providers::ChatMessageContinuation;
+    use crate::core::types::anthropic_continuation::{
+        AnthropicRedactedData, AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    };
+
+    let response = ChatCompletionResponse {
+        id: "chatcmpl-test".to_string(),
+        object: "chat.completion".to_string(),
+        created: 0,
+        model: "claude-opus-4-8".to_string(),
+        system_fingerprint: None,
+        choices: vec![ChatChoice {
+            index: 0,
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Text("answer".to_string())),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            },
+            logprobs: None,
+            finish_reason: Some("stop".to_string()),
+        }],
+        usage: None,
+    };
+    let continuation = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "visible guardrail phrase".to_string(),
+                signature: AnthropicSignature::try_from("opaque signature").unwrap(),
+            },
+            AnthropicThinkingBlock::RedactedThinking {
+                data: AnthropicRedactedData::try_from("opaque redacted payload").unwrap(),
+            },
+        ]),
+    );
+
+    let projected = guardrail_response_with_continuation(&response, &[continuation])
+        .expect("matching response continuation must project");
+    let MessageContent::Text(content) = projected.choices[0]
+        .message
+        .content
+        .as_ref()
+        .expect("projected content")
+    else {
+        panic!("projection should remain text");
+    };
+    assert!(content.contains("answer"));
+    assert!(content.contains("visible guardrail phrase"));
+    assert!(!content.contains("opaque signature"));
+    assert!(!content.contains("opaque redacted payload"));
+}
+
+#[test]
+fn typed_continuation_fails_closed_only_for_enabled_budget_scopes() {
+    use crate::core::budget::{
+        ModelLimitConfig, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits,
+    };
+
+    let budgets = UnifiedBudgetLimits::new();
+    assert!(!continuation_budget_enabled(
+        &budgets,
+        "anthropic",
+        "claude-opus-5",
+        false,
+    ));
+    budgets.providers.set_provider_limit(
+        "anthropic",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    assert!(continuation_budget_enabled(
+        &budgets,
+        "anthropic",
+        "claude-opus-5",
+        false,
+    ));
+    assert!(continuation_budget_enabled(
+        &UnifiedBudgetLimits::new(),
+        "anthropic",
+        "claude-opus-5",
+        true,
+    ));
+    let model_budgets = UnifiedBudgetLimits::new();
+    model_budgets.models.set_model_limit(
+        "claude-opus-5",
+        ModelLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    assert!(continuation_budget_enabled(
+        &model_budgets,
+        "anthropic",
+        "claude-opus-5",
+        false,
+    ));
+}
+
+#[test]
 fn test_convert_finish_reason() {
     assert_eq!(
         convert_finish_reason(types::responses::FinishReason::Stop),
