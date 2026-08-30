@@ -236,8 +236,13 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_p
     request: impl Into<ChatCompletionBudgetRequest<'a>>,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     let request = request.into();
+    let token_identity = if pricing_provider == "openai" {
+        TokenizerIdentity::exact_openai(pricing_model)
+    } else {
+        TokenizerIdentity::approximate(pricing_provider, pricing_model)
+    };
     let prompt_tokens = estimate_chat_prompt_tokens(
-        pricing_model,
+        &token_identity,
         request.messages,
         request.tools,
         request.functions,
@@ -321,7 +326,7 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request
 
 #[cfg(test)]
 pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
-    model: &str,
+    identity: &TokenizerIdentity,
     messages: &[ChatMessage],
     tools: Option<&[Tool]>,
     functions: Option<&[Function]>,
@@ -329,21 +334,21 @@ pub(in crate::server::routes::ai) fn estimate_chat_prompt_tokens(
     response_format: Option<&ResponseFormat>,
 ) -> u32 {
     let counter = TokenCounter::new();
-    let message_tokens = counter.count_chat_tokens(model, messages).map_or_else(
+    let message_tokens = counter.count_chat_tokens(identity, messages).map_or_else(
         |_| fallback_message_tokens(messages),
         |value| value.input_tokens,
     );
     let multimodal_tokens = conservative_multimodal_prompt_extra(messages);
-    let tool_tokens = serialized_prompt_tokens_auto(&counter, model, tools, |value| {
+    let tool_tokens = serialized_prompt_tokens_auto(&counter, identity, tools, |value| {
         value.len().saturating_mul(256)
     });
-    let function_tokens = serialized_prompt_tokens_auto(&counter, model, functions, |value| {
+    let function_tokens = serialized_prompt_tokens_auto(&counter, identity, functions, |value| {
         value.len().saturating_mul(256)
     });
     let function_call_tokens =
-        serialized_prompt_tokens_auto(&counter, model, function_call, |_| 64);
+        serialized_prompt_tokens_auto(&counter, identity, function_call, |_| 64);
     let response_format_tokens =
-        serialized_prompt_tokens_auto(&counter, model, response_format, |_| 128);
+        serialized_prompt_tokens_auto(&counter, identity, response_format, |_| 128);
 
     message_tokens
         .saturating_add(multimodal_tokens)
@@ -362,7 +367,7 @@ pub(in crate::server::routes::ai) fn try_estimate_chat_prompt_tokens(
     response_format: Option<&ResponseFormat>,
 ) -> GatewayResult<u32> {
     let counter = TokenCounter::new();
-    let message_estimate = counter.count_chat_tokens_for_identity(identity, messages)?;
+    let message_estimate = counter.count_chat_tokens(identity, messages)?;
     observe_approximate_estimate(identity, "messages", &message_estimate);
     let message_tokens = message_estimate.input_tokens;
     let multimodal_tokens = conservative_multimodal_prompt_extra(messages);
@@ -392,13 +397,18 @@ fn reservation_output_tokens(
     choice_count: u32,
 ) -> Option<u32> {
     let counter = TokenCounter::new();
+    let identity = if provider == "openai" {
+        TokenizerIdentity::exact_openai(model)
+    } else {
+        TokenizerIdentity::approximate(provider, model)
+    };
     let choice_count = choice_count.max(1);
     let output_tokens = if let Some(requested) = requested_max_output_tokens {
         Some(requested)
     } else {
         catalog_max_output_tokens_with_pricing(pricing_service, provider, model).or_else(|| {
             counter
-                .estimate_output_tokens(None, prompt_tokens, model)
+                .estimate_output_tokens(None, prompt_tokens, &identity)
                 .ok()
         })
     };
@@ -539,7 +549,7 @@ fn encoded_media_tokens(data: &str) -> u32 {
 #[cfg(test)]
 fn serialized_prompt_tokens_auto<T, F>(
     counter: &TokenCounter,
-    model: &str,
+    identity: &TokenizerIdentity,
     value: Option<&T>,
     fallback_units: F,
 ) -> u32
@@ -553,10 +563,12 @@ where
     let Ok(json) = serde_json::to_string(value) else {
         return u32::try_from(fallback_units(value)).unwrap_or(u32::MAX);
     };
-    counter.count_completion_tokens(model, &json).map_or_else(
-        |_| u32::try_from(json.chars().count().div_ceil(4)).unwrap_or(u32::MAX),
-        |estimate| estimate.input_tokens,
-    )
+    counter
+        .count_completion_tokens(identity, &json)
+        .map_or_else(
+            |_| u32::try_from(json.chars().count().div_ceil(4)).unwrap_or(u32::MAX),
+            |estimate| estimate.input_tokens,
+        )
 }
 
 #[cfg(test)]
@@ -589,7 +601,7 @@ where
     };
     let json = serde_json::to_string(value)
         .map_err(|error| GatewayError::Config(format!("failed to serialize {input}: {error}")))?;
-    let estimate = counter.count_completion_tokens_for_identity(identity, &json)?;
+    let estimate = counter.count_completion_tokens(identity, &json)?;
     observe_approximate_estimate(identity, input, &estimate);
     Ok(estimate.input_tokens)
 }

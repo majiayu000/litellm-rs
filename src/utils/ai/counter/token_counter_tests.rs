@@ -1,5 +1,9 @@
 use super::*;
 
+fn exact(model: &str) -> TokenizerIdentity {
+    TokenizerIdentity::exact_openai(model)
+}
+
 // ==================== TokenCounter Creation Tests ====================
 
 #[test]
@@ -101,12 +105,12 @@ fn test_extract_model_family_claude() {
 }
 
 #[test]
-fn test_extract_model_family_with_provider_prefix() {
+fn test_extract_model_family_does_not_strip_provider_prefix() {
     let counter = TokenCounter::new();
-    assert_eq!(counter.extract_model_family("openai/gpt-4"), "gpt-4");
+    assert_eq!(counter.extract_model_family("openai/gpt-4"), "default");
     assert_eq!(
         counter.extract_model_family("anthropic/claude-3-opus"),
-        "claude-3"
+        "default"
     );
 }
 
@@ -159,7 +163,7 @@ fn test_estimate_text_tokens_unicode() {
 #[test]
 fn test_count_completion_tokens_basic() {
     let counter = TokenCounter::new();
-    let result = counter.count_completion_tokens("gpt-4", "Hello, world!");
+    let result = counter.count_completion_tokens(&exact("gpt-4"), "Hello, world!");
     assert!(result.is_ok());
     let estimate = result.unwrap();
     assert!(estimate.input_tokens > 0);
@@ -169,7 +173,7 @@ fn test_count_completion_tokens_basic() {
 #[test]
 fn test_count_completion_tokens_empty() {
     let counter = TokenCounter::new();
-    let result = counter.count_completion_tokens("gpt-4", "");
+    let result = counter.count_completion_tokens(&exact("gpt-4"), "");
     assert!(result.is_ok());
     let estimate = result.unwrap();
     assert_eq!(estimate.input_tokens, 0);
@@ -180,7 +184,7 @@ fn test_count_completion_tokens_empty() {
 fn test_count_completion_tokens_long_text() {
     let counter = TokenCounter::new();
     let long_text = "word ".repeat(1000);
-    let result = counter.count_completion_tokens("gpt-4", &long_text);
+    let result = counter.count_completion_tokens(&exact("gpt-4"), &long_text);
     assert!(result.is_ok());
     let estimate = result.unwrap();
     assert!(estimate.input_tokens > 100);
@@ -189,7 +193,7 @@ fn test_count_completion_tokens_long_text() {
 #[test]
 fn test_count_completion_tokens_confidence() {
     let counter = TokenCounter::new();
-    let result = counter.count_completion_tokens("gpt-4", "test");
+    let result = counter.count_completion_tokens(&exact("gpt-4"), "test");
     assert!(result.is_ok());
     let estimate = result.unwrap();
     assert!(estimate.confidence > 0.0);
@@ -201,7 +205,7 @@ fn test_count_completion_tokens_confidence() {
 #[test]
 fn test_token_estimate_structure() {
     let counter = TokenCounter::new();
-    let result = counter.count_completion_tokens("gpt-4", "Hello");
+    let result = counter.count_completion_tokens(&exact("gpt-4"), "Hello");
     assert!(result.is_ok());
     let estimate = result.unwrap();
 
@@ -216,7 +220,7 @@ fn test_token_estimate_structure() {
 fn test_count_embedding_tokens_single() {
     let counter = TokenCounter::new();
     let input = vec!["Hello, world!".to_string()];
-    let result = counter.count_embedding_tokens("gpt-4", &input);
+    let result = counter.count_embedding_tokens(&exact("gpt-4"), &input);
     assert!(result.is_ok());
     let estimate = result.unwrap();
     assert!(estimate.input_tokens > 0);
@@ -232,7 +236,7 @@ fn test_count_embedding_tokens_multiple() {
         "Second text".to_string(),
         "Third text".to_string(),
     ];
-    let result = counter.count_embedding_tokens("gpt-4", &input);
+    let result = counter.count_embedding_tokens(&exact("gpt-4"), &input);
     assert!(result.is_ok());
     let estimate = result.unwrap();
     assert!(estimate.input_tokens > 0);
@@ -242,7 +246,7 @@ fn test_count_embedding_tokens_multiple() {
 fn test_count_embedding_tokens_empty() {
     let counter = TokenCounter::new();
     let input: Vec<String> = vec![];
-    let result = counter.count_embedding_tokens("gpt-4", &input);
+    let result = counter.count_embedding_tokens(&exact("gpt-4"), &input);
     assert!(result.is_ok());
 }
 
@@ -251,7 +255,7 @@ fn test_count_embedding_tokens_empty() {
 #[test]
 fn test_estimate_output_tokens_with_max() {
     let counter = TokenCounter::new();
-    let result = counter.estimate_output_tokens(Some(100), 50, "gpt-4");
+    let result = counter.estimate_output_tokens(Some(100), 50, &exact("gpt-4"));
     assert!(result.is_ok());
     let output = result.unwrap();
     assert_eq!(output, 100);
@@ -260,7 +264,7 @@ fn test_estimate_output_tokens_with_max() {
 #[test]
 fn test_estimate_output_tokens_without_max() {
     let counter = TokenCounter::new();
-    let result = counter.estimate_output_tokens(None, 100, "gpt-4");
+    let result = counter.estimate_output_tokens(None, 100, &exact("gpt-4"));
     assert!(result.is_ok());
     let output = result.unwrap();
     // Should be ~25% of remaining context
@@ -271,7 +275,7 @@ fn test_estimate_output_tokens_without_max() {
 fn test_estimate_output_tokens_capped_by_context() {
     let counter = TokenCounter::new();
     // Request more tokens than available
-    let result = counter.estimate_output_tokens(Some(1_000_000), 0, "gpt-4");
+    let result = counter.estimate_output_tokens(Some(1_000_000), 0, &exact("gpt-4"));
     assert!(result.is_ok());
     let output = result.unwrap();
     // Should be capped at model's max context
@@ -283,7 +287,7 @@ fn test_estimate_output_tokens_capped_by_context() {
 #[test]
 fn test_check_context_window_fits() {
     let counter = TokenCounter::new();
-    let result = counter.check_context_window("gpt-4", 1000, Some(1000));
+    let result = counter.check_context_window(&exact("gpt-4"), 1000, Some(1000));
     assert!(result.is_ok());
     assert!(result.unwrap());
 }
@@ -292,7 +296,7 @@ fn test_check_context_window_fits() {
 fn test_check_context_window_exceeds() {
     let counter = TokenCounter::new();
     // Try to use more tokens than the context window
-    let result = counter.check_context_window("gpt-4", 100_000, Some(100_000));
+    let result = counter.check_context_window(&exact("gpt-4"), 100_000, Some(100_000));
     assert!(result.is_ok());
     // Verify the function returns a boolean (regardless of value)
     let _fits = result.unwrap();
@@ -301,7 +305,7 @@ fn test_check_context_window_exceeds() {
 #[test]
 fn test_check_context_window_no_output() {
     let counter = TokenCounter::new();
-    let result = counter.check_context_window("gpt-4", 1000, None);
+    let result = counter.check_context_window(&exact("gpt-4"), 1000, None);
     assert!(result.is_ok());
     assert!(result.unwrap());
 }
