@@ -65,6 +65,9 @@ impl Provider {
                                                 ProviderCapability::Embeddings => {
                                                     metadata.mode == "embedding"
                                                 }
+                                                ProviderCapability::ImageGeneration => {
+                                                    metadata.mode == "image_generation"
+                                                }
                                                 _ => false,
                                             })
                                     })
@@ -300,6 +303,14 @@ mod tests {
         assert!(
             !cohere
                 .supports_capability_for_model("cohere-wire", &ProviderCapability::ChatCompletion,)
+        );
+
+        let mai = mapped_provider("mai-wire", "MAI-Image-2.5");
+        assert!(
+            mai.supports_capability_for_model("mai-wire", &ProviderCapability::ImageGeneration,)
+        );
+        assert!(
+            !mai.supports_capability_for_model("mai-wire", &ProviderCapability::ChatCompletion,)
         );
 
         let mut config = AzureAIConfig::new("azure_ai");
