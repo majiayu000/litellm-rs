@@ -5,12 +5,71 @@ use serde_json::{Value, json};
 use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::chat::ChatRequest;
+use crate::core::providers::{
+    AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
+    ChatMessageContinuation,
+};
+use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
+use crate::core::types::chat::{ChatMessage, ChatRequest};
+use crate::core::types::content::ContentPart;
+use crate::core::types::message::{MessageContent, MessageRole};
+use crate::core::types::thinking::ThinkingEffort;
 
 use super::AnthropicClient;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AnthropicEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Claude5Model {
+    Fable,
+    Opus,
+    Sonnet,
+}
+
+impl AnthropicEffort {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl From<ThinkingEffort> for AnthropicEffort {
+    fn from(value: ThinkingEffort) -> Self {
+        match value {
+            ThinkingEffort::Low => Self::Low,
+            ThinkingEffort::Medium => Self::Medium,
+            ThinkingEffort::High => Self::High,
+        }
+    }
+}
+
 impl AnthropicClient {
-    pub(super) fn transform_chat_request(
+    pub(crate) async fn chat_with_continuation(
+        &self,
+        envelope: ChatContinuationRequest,
+    ) -> Result<ChatContinuationResponse, ProviderError> {
+        let (request, extensions) = envelope.into_parts();
+        let tool_name_map = self.anthropic_tool_name_map_for_request(&request)?;
+        let body = self.transform_chat_request_with_extensions(&request, &extensions)?;
+        let mut headers = self.get_request_headers();
+        headers.extend(self.compute_beta_headers_with_extensions(&request, &extensions));
+        let response = self.send_request("/v1/messages", body, headers).await?;
+        self.transform_chat_response_with_continuation(response, &tool_name_map)
+    }
+
+    pub(crate) fn transform_chat_request(
         &self,
         request: &ChatRequest,
     ) -> Result<Value, ProviderError> {
@@ -24,19 +83,33 @@ impl AnthropicClient {
         }
 
         let registry = get_anthropic_registry();
-
         let model_spec = if self.config.uses_compatible_model_allow_list() {
             None
         } else {
             registry.get_model_spec(&request.model)
         };
-        if model_spec.is_none() && !self.config.allows_unknown_model(&request.model) {
+        let claude_5 = !self.config.uses_compatible_model_allow_list()
+            && Self::claude_5_model(&request.model).is_some();
+        if model_spec.is_none() && !claude_5 && !self.config.allows_unknown_model(&request.model) {
             return Err(anthropic_api_error(
                 400,
                 format!("Unsupported model: {}", request.model),
             ));
         }
+        if claude_5 {
+            Self::validate_claude_5_legacy_functions(request)?;
+            Self::validate_claude_5_request_shape(request)?;
+        } else if request.reasoning_effort.is_some() {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support reasoning_effort; exact Claude 5 models are required",
+                    request.model
+                ),
+            ));
+        }
         if model_spec.is_none()
+            && !claude_5
             && (request
                 .tools
                 .as_ref()
@@ -53,7 +126,8 @@ impl AnthropicClient {
                 ),
             ));
         }
-        if model_spec.is_none() && Self::has_unsupported_unknown_model_content(request) {
+        if model_spec.is_none() && !claude_5 && Self::has_unsupported_unknown_model_content(request)
+        {
             return Err(ProviderError::not_supported(
                 "anthropic",
                 format!(
@@ -63,6 +137,7 @@ impl AnthropicClient {
             ));
         }
         if model_spec.is_none()
+            && !claude_5
             && Self::has_image_content(request)
             && !self.config.allows_unknown_model_image_input(&request.model)
         {
@@ -75,9 +150,6 @@ impl AnthropicClient {
             ));
         }
 
-        // The Messages API only returns a single candidate; any n other than 1
-        // (including 0) cannot be honored, so reject it instead of silently
-        // returning the wrong number of choices.
         if let Some(n) = request.n
             && n != 1
         {
@@ -87,7 +159,6 @@ impl AnthropicClient {
             ));
         }
 
-        // Warn once about OpenAI-style parameters Anthropic has no equivalent for.
         let mut ignored_params = Vec::new();
         if request.frequency_penalty.is_some() {
             ignored_params.push("frequency_penalty");
@@ -124,7 +195,6 @@ impl AnthropicClient {
             anthropic_request["system"] = json!(system);
         }
 
-        // Add optional parameters
         if let Some(temperature) = request.temperature {
             anthropic_request["temperature"] = json!(temperature);
         }
@@ -148,11 +218,10 @@ impl AnthropicClient {
             anthropic_request["stop_sequences"] = json!(stop);
         }
 
-        // Add tool support
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {
-            let Some(model_spec) = model_spec else {
+            if model_spec.is_none() && !claude_5 {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!(
@@ -160,8 +229,8 @@ impl AnthropicClient {
                         request.model
                     ),
                 ));
-            };
-            if !model_spec.features.contains(&ModelFeature::ToolCalling) {
+            }
+            if model_spec.is_some_and(|spec| !spec.features.contains(&ModelFeature::ToolCalling)) {
                 return Err(ProviderError::not_supported(
                     "anthropic",
                     format!("Model {} does not support tool calling", request.model),
@@ -176,8 +245,16 @@ impl AnthropicClient {
             }
         }
 
-        // Add thinking configuration
-        if let Some(thinking) = &request.thinking
+        // Add thinking configuration. Claude 5 reasoning_effort and typed
+        // thinking are normalized here so Chat and Responses share one rule.
+        if claude_5 {
+            if let Some((thinking, effort)) = Self::claude_5_thinking_config(request)? {
+                anthropic_request["thinking"] = thinking;
+                if let Some(effort) = effort {
+                    anthropic_request["output_config"]["effort"] = json!(effort.as_str());
+                }
+            }
+        } else if let Some(thinking) = &request.thinking
             && thinking.enabled
         {
             let Some(model_spec) = model_spec else {
@@ -208,19 +285,19 @@ impl AnthropicClient {
             });
         }
 
-        // Structured outputs: pass json_schema response_format to Anthropic.
         if let Some(rf) = &request.response_format
             && rf.format_type == "json_schema"
             && let Some(schema) = &rf.json_schema
         {
-            anthropic_request["response_format"] = json!({
-                "type": "json_schema",
-                "json_schema": schema
-            });
+            if claude_5 {
+                anthropic_request["output_config"]["format"] =
+                    json!({"type": "json_schema", "schema": schema});
+            } else {
+                anthropic_request["response_format"] =
+                    json!({"type": "json_schema", "json_schema": schema});
+            }
         }
 
-        // Anthropic built-in (server-side) tools passed via extra_params.
-        // These are appended after any user-defined function tools.
         if let Some(arr) = request
             .extra_params
             .get("anthropic_tools")
@@ -237,5 +314,478 @@ impl AnthropicClient {
         }
 
         Ok(anthropic_request)
+    }
+
+    pub(crate) fn transform_chat_request_with_extensions(
+        &self,
+        request: &ChatRequest,
+        extensions: &[ChatMessageContinuation],
+    ) -> Result<Value, ProviderError> {
+        if request.messages.len() != extensions.len() {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "message extension length mismatch",
+            ));
+        }
+        let mut transformed = self.transform_chat_request(request)?;
+        Self::enable_legacy_continuation_thinking(request, extensions, &mut transformed)?;
+        let messages = transformed["messages"].as_array_mut().ok_or_else(|| {
+            anthropic_api_error(500, "Anthropic request messages must be an array")
+        })?;
+        let mut wire_index = 0;
+        for (message, extension) in request.messages.iter().zip(extensions) {
+            extension
+                .validate()
+                .map_err(|message| ProviderError::invalid_request("anthropic", message))?;
+            if matches!(message.role, MessageRole::System | MessageRole::Developer) {
+                if !extension.is_empty() {
+                    return Err(ProviderError::invalid_request(
+                        "anthropic",
+                        "Anthropic continuation is only valid on assistant messages",
+                    ));
+                }
+                continue;
+            }
+            let wire_message = messages.get_mut(wire_index).ok_or_else(|| {
+                anthropic_api_error(500, "Anthropic message extension index drift")
+            })?;
+            wire_index += 1;
+            let Some(thinking) = extension.anthropic_thinking() else {
+                continue;
+            };
+            if message.role != MessageRole::Assistant {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "Anthropic continuation is only valid on assistant messages",
+                ));
+            }
+            let wire_content = wire_message
+                .get_mut("content")
+                .ok_or_else(|| anthropic_api_error(500, "Anthropic message content is missing"))?;
+            let mut content = match std::mem::take(wire_content) {
+                Value::Array(blocks) => blocks,
+                Value::String(text) if text.is_empty() => Vec::new(),
+                Value::String(text) => vec![json!({"type": "text", "text": text})],
+                Value::Null => Vec::new(),
+                _ => {
+                    return Err(anthropic_api_error(
+                        500,
+                        "Anthropic message content must be text or an array",
+                    ));
+                }
+            };
+            if let Some(order) = extension.anthropic_block_order() {
+                content = Self::replay_ordered_continuation(content, thinking.blocks(), order)?;
+            } else {
+                content.splice(
+                    0..0,
+                    thinking.blocks().iter().map(Self::thinking_block_to_value),
+                );
+            }
+            *wire_content = Value::Array(content);
+        }
+        if !self.config.uses_compatible_model_allow_list()
+            && Self::is_claude_5_protocol_model(&request.model)
+            && messages.last().is_some_and(|message| {
+                message["role"] == "assistant"
+                    && message["content"]
+                        .as_array()
+                        .is_some_and(|blocks| !blocks.is_empty())
+            })
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support assistant prefill", request.model),
+            ));
+        }
+        Ok(transformed)
+    }
+
+    fn enable_legacy_continuation_thinking(
+        request: &ChatRequest,
+        extensions: &[ChatMessageContinuation],
+        transformed: &mut Value,
+    ) -> Result<(), ProviderError> {
+        let has_signed_continuation = extensions.iter().any(|extension| {
+            extension
+                .anthropic_thinking()
+                .is_some_and(|thinking| !thinking.blocks().is_empty())
+        });
+        if !has_signed_continuation || transformed.get("thinking").is_some() {
+            return Ok(());
+        }
+        if request
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| !thinking.enabled)
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Anthropic signed continuation requires thinking to be enabled",
+            ));
+        }
+
+        let registry = get_anthropic_registry();
+        let Some(model_spec) = registry.get_model_spec(&request.model) else {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} cannot replay Anthropic thinking continuation",
+                    request.model
+                ),
+            ));
+        };
+        if !model_spec.features.contains(&ModelFeature::ThinkingMode) {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!("Model {} does not support thinking", request.model),
+            ));
+        }
+
+        let budget = 10_000_u32;
+        let current_max = request.max_tokens.unwrap_or(4096);
+        if current_max <= budget {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic signed continuation requires max_tokens greater than the {budget}-token thinking budget"
+                ),
+            ));
+        }
+        transformed["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": budget
+        });
+        Ok(())
+    }
+
+    fn thinking_block_to_value(block: &AnthropicThinkingBlock) -> Value {
+        match block {
+            AnthropicThinkingBlock::Thinking {
+                thinking,
+                signature,
+            } => json!({
+                "type": "thinking",
+                "thinking": thinking,
+                "signature": signature.expose(),
+            }),
+            AnthropicThinkingBlock::RedactedThinking { data } => json!({
+                "type": "redacted_thinking",
+                "data": data.expose(),
+            }),
+        }
+    }
+
+    fn replay_ordered_continuation(
+        content: Vec<Value>,
+        thinking: &[AnthropicThinkingBlock],
+        order: &[AnthropicContentBlockOrder],
+    ) -> Result<Vec<Value>, ProviderError> {
+        let mut visible_text = String::new();
+        let mut tool_blocks = Vec::new();
+        for block in content {
+            match block.get("type").and_then(Value::as_str) {
+                Some("tool_use") => tool_blocks.push(Some(block)),
+                Some("text") => {
+                    let text = block.get("text").and_then(Value::as_str).ok_or_else(|| {
+                        ProviderError::invalid_request(
+                            "anthropic",
+                            "Anthropic continuation text block has no text",
+                        )
+                    })?;
+                    visible_text.push_str(text);
+                }
+                other => {
+                    return Err(ProviderError::invalid_request(
+                        "anthropic",
+                        format!(
+                            "Anthropic ordered continuation cannot replay content block {other:?}"
+                        ),
+                    ));
+                }
+            }
+        }
+        let mut seen_thinking = vec![false; thinking.len()];
+        let mut visible_cursor = 0;
+        let mut replay = Vec::with_capacity(order.len());
+
+        for marker in order {
+            match *marker {
+                AnthropicContentBlockOrder::Thinking { index } => {
+                    let Some(block) = thinking.get(index) else {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!(
+                                "Anthropic continuation references missing thinking block {index}"
+                            ),
+                        ));
+                    };
+                    if std::mem::replace(&mut seen_thinking[index], true) {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!("Anthropic continuation repeats thinking block {index}"),
+                        ));
+                    }
+                    replay.push(Self::thinking_block_to_value(block));
+                }
+                AnthropicContentBlockOrder::Text { start, end } => {
+                    replay.push(Self::ordered_visible_block(
+                        "text",
+                        "text",
+                        &visible_text,
+                        &mut visible_cursor,
+                        start,
+                        end,
+                    )?);
+                }
+                AnthropicContentBlockOrder::Refusal { start, end } => {
+                    replay.push(Self::ordered_visible_block(
+                        "refusal",
+                        "refusal",
+                        &visible_text,
+                        &mut visible_cursor,
+                        start,
+                        end,
+                    )?);
+                }
+                AnthropicContentBlockOrder::ToolUse { index } => {
+                    let Some(block) = tool_blocks.get_mut(index).and_then(Option::take) else {
+                        return Err(ProviderError::invalid_request(
+                            "anthropic",
+                            format!(
+                                "Anthropic continuation references missing or repeated tool-use block {index}"
+                            ),
+                        ));
+                    };
+                    replay.push(block);
+                }
+            }
+        }
+        if seen_thinking.iter().any(|seen| !seen)
+            || tool_blocks.iter().any(Option::is_some)
+            || visible_cursor != visible_text.len()
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Anthropic continuation block order does not cover every supported content block",
+            ));
+        }
+        Ok(replay)
+    }
+
+    fn ordered_visible_block(
+        block_type: &str,
+        value_key: &str,
+        visible_text: &str,
+        cursor: &mut usize,
+        start: usize,
+        end: usize,
+    ) -> Result<Value, ProviderError> {
+        if start != *cursor || end < start {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic continuation {block_type} span {start}..{end} does not follow visible offset {}",
+                    *cursor
+                ),
+            ));
+        }
+        let text = visible_text.get(start..end).ok_or_else(|| {
+            ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Anthropic continuation {block_type} span {start}..{end} is not a valid UTF-8 range"
+                ),
+            )
+        })?;
+        *cursor = end;
+        let mut block = serde_json::Map::with_capacity(2);
+        block.insert("type".to_string(), Value::String(block_type.to_string()));
+        block.insert(value_key.to_string(), Value::String(text.to_string()));
+        Ok(Value::Object(block))
+    }
+
+    pub(crate) fn is_claude_5_protocol_model(model: &str) -> bool {
+        Self::claude_5_model(model).is_some()
+    }
+
+    fn claude_5_model(model: &str) -> Option<Claude5Model> {
+        match model {
+            "claude-fable-5" => Some(Claude5Model::Fable),
+            "claude-opus-5" => Some(Claude5Model::Opus),
+            "claude-sonnet-5" => Some(Claude5Model::Sonnet),
+            _ => None,
+        }
+    }
+
+    fn validate_claude_5_request_shape(request: &ChatRequest) -> Result<(), ProviderError> {
+        let unsupported = if request.temperature.is_some_and(|value| value != 1.0) {
+            Some("temperature")
+        } else if request
+            .top_p
+            .is_some_and(|value| !value.is_finite() || !(0.99..=1.0).contains(&value))
+        {
+            Some("top_p")
+        } else if request.extra_params.contains_key("top_k") {
+            Some("top_k")
+        } else {
+            None
+        };
+        if let Some(parameter) = unsupported {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Model {} does not support non-default {parameter}",
+                    request.model
+                ),
+            ));
+        }
+        if Self::has_trailing_assistant_prefill(request) {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!("Model {} does not support assistant prefill", request.model),
+            ));
+        }
+        Ok(())
+    }
+
+    fn has_trailing_assistant_prefill(request: &ChatRequest) -> bool {
+        request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                !matches!(message.role, MessageRole::System | MessageRole::Developer)
+                    && Self::message_has_payload(message)
+            })
+            .is_some_and(|message| message.role == MessageRole::Assistant)
+    }
+
+    fn message_has_payload(message: &ChatMessage) -> bool {
+        let content = match message.content.as_ref() {
+            Some(MessageContent::Text(text)) => !text.trim().is_empty(),
+            Some(MessageContent::Parts(parts)) => parts.iter().any(|part| match part {
+                ContentPart::Text { text } => !text.trim().is_empty(),
+                _ => true,
+            }),
+            None => false,
+        };
+        content
+            || message.audio.is_some()
+            || message.thinking.is_some()
+            || message.function_call.is_some()
+            || message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty())
+    }
+
+    pub(super) fn validate_claude_5_legacy_functions(
+        request: &ChatRequest,
+    ) -> Result<(), ProviderError> {
+        if request
+            .functions
+            .as_ref()
+            .is_some_and(|functions| !functions.is_empty())
+            || request.function_call.is_some()
+            || request
+                .messages
+                .iter()
+                .any(|message| message.function_call.is_some())
+        {
+            return Err(ProviderError::not_supported(
+                "anthropic",
+                format!(
+                    "Model {} does not support legacy functions/function_call; use tools/tool_choice",
+                    request.model
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn claude_5_thinking_config(
+        request: &ChatRequest,
+    ) -> Result<Option<(Value, Option<AnthropicEffort>)>, ProviderError> {
+        let model = Self::claude_5_model(&request.model).ok_or_else(|| {
+            ProviderError::not_supported(
+                "anthropic",
+                format!("Model {} is not an exact Claude 5 model", request.model),
+            )
+        })?;
+        let requested_effort = request
+            .reasoning_effort
+            .as_deref()
+            .map(Self::parse_reasoning_effort)
+            .transpose()?;
+        let Some(thinking) = request.thinking.as_ref() else {
+            return Ok(Some(match requested_effort {
+                Some(effort) => (
+                    json!({"type": "adaptive", "display": "summarized"}),
+                    Some(effort),
+                ),
+                None => (json!({"type": "adaptive"}), None),
+            }));
+        };
+        if thinking.budget_tokens.is_some() {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                "Claude 5 adaptive thinking does not support budget_tokens",
+            ));
+        }
+        let typed_effort = thinking.effort.map(AnthropicEffort::from);
+        if let (Some(typed), Some(requested)) = (typed_effort, requested_effort)
+            && typed != requested
+        {
+            return Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Conflicting thinking effort values: thinking.effort={}, reasoning_effort={}",
+                    typed.as_str(),
+                    requested.as_str()
+                ),
+            ));
+        }
+        let effort = typed_effort.or(requested_effort);
+        if !thinking.enabled {
+            if model == Claude5Model::Fable {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "claude-fable-5 cannot disable thinking",
+                ));
+            }
+            if model == Claude5Model::Opus
+                && matches!(effort, Some(AnthropicEffort::XHigh | AnthropicEffort::Max))
+            {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "claude-opus-5 cannot disable thinking at xhigh or max effort",
+                ));
+            }
+            return Ok(Some((json!({"type": "disabled"}), effort)));
+        }
+        Ok(Some((
+            json!({
+                "type": "adaptive",
+                "display": if thinking.include_thinking { "summarized" } else { "omitted" }
+            }),
+            effort,
+        )))
+    }
+
+    fn parse_reasoning_effort(value: &str) -> Result<AnthropicEffort, ProviderError> {
+        match value {
+            "low" => Ok(AnthropicEffort::Low),
+            "medium" => Ok(AnthropicEffort::Medium),
+            "high" => Ok(AnthropicEffort::High),
+            "xhigh" => Ok(AnthropicEffort::XHigh),
+            "max" => Ok(AnthropicEffort::Max),
+            other => Err(ProviderError::invalid_request(
+                "anthropic",
+                format!(
+                    "Unsupported reasoning_effort '{other}'; expected low, medium, high, xhigh, or max"
+                ),
+            )),
+        }
     }
 }
