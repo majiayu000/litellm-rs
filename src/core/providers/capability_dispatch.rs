@@ -57,6 +57,11 @@ impl Provider {
                                                 ProviderCapability::ChatCompletion => {
                                                     metadata.mode == "chat"
                                                 }
+                                                ProviderCapability::ChatCompletionStream => {
+                                                    metadata.mode == "chat"
+                                                        && metadata.supports_streaming
+                                                            != Some(false)
+                                                }
                                                 ProviderCapability::Embeddings => {
                                                     metadata.mode == "embedding"
                                                 }
@@ -280,6 +285,10 @@ mod tests {
         assert!(
             llama.supports_capability_for_model("llama-wire", &ProviderCapability::ChatCompletion,)
         );
+        assert!(llama.supports_capability_for_model(
+            "llama-wire",
+            &ProviderCapability::ChatCompletionStream,
+        ));
         assert!(
             !llama.supports_capability_for_model("llama-wire", &ProviderCapability::Embeddings,)
         );

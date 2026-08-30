@@ -259,7 +259,7 @@ impl LLMProvider for AzureAIProvider {
                                 .map(|(_, metadata)| {
                                     (
                                         metadata.supports_function_calling.unwrap_or(false),
-                                        metadata.supports_streaming.unwrap_or(false),
+                                        metadata.supports_streaming.unwrap_or(true),
                                         false,
                                     )
                                 })

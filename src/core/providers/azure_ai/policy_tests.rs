@@ -125,6 +125,7 @@ fn pricing_backed_chat_identity_exposes_catalog_parameters() {
     assert!(params.contains(&"stop"));
     assert!(params.contains(&"tools"));
     assert!(params.contains(&"tool_choice"));
+    assert!(params.contains(&"stream"));
 }
 
 #[tokio::test]
