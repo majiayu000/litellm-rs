@@ -1,7 +1,9 @@
 use super::{
     DEFAULT_CATALOG_RUNTIME_PROVIDERS, PROVIDER_CATALOG, ProviderRouteSurface, canonical_selector,
-    provider_type_registry, selector_has_matrix_entry, supports_provider_surface,
+    provider_type_registry, selector_has_matrix_entry, support_state_for_surface,
+    supports_provider_surface,
 };
+use crate::core::providers::registry::{AuthType, get_definition};
 
 #[test]
 fn support_matrix_covers_registry_and_catalog_selectors() {
@@ -101,4 +103,71 @@ fn selector_aliases_resolve_to_canonical_matrix_entries() {
     assert_eq!(canonical_selector("aiml-api"), "aiml_api");
     assert_eq!(canonical_selector("zhipuai"), "zhipu");
     assert_eq!(canonical_selector("zai"), "zai");
+}
+
+#[test]
+fn missing_text_provider_selectors_are_exact_http_only_catalog_routes() {
+    let cases = [
+        (
+            "ai21",
+            "https://api.ai21.com/studio/v1",
+            "AI21_API_KEY",
+            &["ai21_chat", "ai21-chat"][..],
+        ),
+        (
+            "huggingface",
+            "https://router.huggingface.co/v1",
+            "HF_TOKEN",
+            &["hugging_face", "hugging-face"][..],
+        ),
+        (
+            "baseten",
+            "https://inference.baseten.co/v1",
+            "BASETEN_API_KEY",
+            &[][..],
+        ),
+    ];
+
+    for (canonical, endpoint, env, aliases) in cases {
+        let definition = get_definition(canonical).expect("catalog definition should exist");
+        assert_eq!(definition.base_url, endpoint);
+        assert_eq!(definition.auth_env_var, env);
+        assert_eq!(definition.auth_type, AuthType::Bearer);
+        assert!(definition.alternate_auth_env_vars.is_empty());
+        assert!(!definition.skip_api_key);
+        assert_eq!(definition.model_prefix, None);
+        assert!(supports_provider_surface(
+            canonical,
+            ProviderRouteSurface::HttpChat
+        ));
+        assert!(supports_provider_surface(
+            canonical,
+            ProviderRouteSurface::HttpChatStream
+        ));
+        for unsupported in [
+            ProviderRouteSurface::HttpEmbeddings,
+            ProviderRouteSurface::HttpImageGeneration,
+            ProviderRouteSurface::SdkChat,
+            ProviderRouteSurface::SdkChatStream,
+            ProviderRouteSurface::SdkEmbeddings,
+            ProviderRouteSurface::CompletionChat,
+            ProviderRouteSurface::CompletionChatStream,
+        ] {
+            assert!(!supports_provider_surface(canonical, unsupported));
+        }
+        for alias in aliases {
+            assert_eq!(canonical_selector(alias), canonical);
+            assert_eq!(
+                support_state_for_surface(alias, ProviderRouteSurface::HttpChat),
+                support_state_for_surface(canonical, ProviderRouteSurface::HttpChat)
+            );
+        }
+    }
+
+    for wrong in ["ai-21", "huggingface_inference", "base-ten", "unknown"] {
+        assert!(
+            !selector_has_matrix_entry(wrong),
+            "{wrong} must fail closed"
+        );
+    }
 }

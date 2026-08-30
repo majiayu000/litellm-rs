@@ -9,7 +9,8 @@ mod matrix {
         "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
         "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
         "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "PERPLEXITY_API_KEY", "GITHUB_TOKEN",
+        "PERPLEXITY_API_KEY", "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
+        "BASETEN_API_KEY",
     ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";
@@ -154,6 +155,9 @@ mod matrix {
         Case { name: "catalog-blank", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","")], selected: None, shadowed: &[] },
         Case { name: "catalog-alias-pplx", selector: "pplx", top: "", settings: &[], env: &[("PERPLEXITY_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-baseten-env", selector: "baseten", top: "", settings: &[], env: &[("BASETEN_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "cf-settings", selector: "cf", top: "top", settings: &[("api_token","settings")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("settings"), shadowed: &["top","env"] },
         Case { name: "cf-top", selector: "cloudflare", top: "top", settings: &[("api_token"," ")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("top"), shadowed: &["env"] },
         Case { name: "cf-env", selector: "workers-ai", top: " ", settings: &[("api_token","")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("env"), shadowed: &[] },
