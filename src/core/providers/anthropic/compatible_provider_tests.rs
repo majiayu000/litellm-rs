@@ -5,7 +5,7 @@ use crate::core::types::{
     context::RequestContext,
     message::{MessageContent, MessageRole},
     thinking::{ThinkingConfig, ThinkingContent},
-    tools::FunctionCall,
+    tools::{FunctionCall, FunctionDefinition, Tool, ToolChoice, ToolType},
 };
 
 fn compatible_provider() -> AnthropicProvider {
@@ -35,6 +35,32 @@ async fn public_transform_uses_native_anthropic_serialization() {
     assert_eq!(transformed["messages"].as_array().map(Vec::len), Some(1));
     assert_eq!(transformed["thinking"]["type"], "enabled");
     assert_eq!(transformed["thinking"]["budget_tokens"], 1_024);
+}
+
+#[tokio::test]
+async fn public_transform_allows_forced_tools_with_adaptive_thinking() {
+    let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
+        .unwrap_or_else(|err| panic!("provider should build: {err}"));
+    let mut request = ChatRequest::new("claude-opus-5").add_user_message("Use lookup");
+    request.reasoning_effort = Some("high".to_string());
+    request.tools = Some(vec![Tool {
+        tool_type: ToolType::Function,
+        function: FunctionDefinition {
+            name: "lookup".to_string(),
+            description: None,
+            parameters: Some(serde_json::json!({"type": "object"})),
+        },
+    }]);
+    request.tool_choice = Some(ToolChoice::String("required".to_string()));
+
+    let transformed = provider
+        .transform_request(request, RequestContext::new())
+        .await
+        .unwrap_or_else(|err| panic!("adaptive thinking should allow forced tools: {err}"));
+
+    assert_eq!(transformed["thinking"]["type"], "adaptive");
+    assert_eq!(transformed["output_config"]["effort"], "high");
+    assert_eq!(transformed["tool_choice"]["type"], "any");
 }
 
 #[tokio::test]
