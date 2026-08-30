@@ -3,6 +3,7 @@ use crate::core::budget::{ProviderLimitConfig, ResetPeriod};
 use crate::core::cost::calculator::estimate_cost;
 use crate::core::models::openai::requests::ChatCompletionRequest;
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent, MessageRole};
+use crate::utils::ai::counter::token_counter::TokenizerIdentity;
 
 fn reserve_with_provider_limit(
     provider: &str,
@@ -19,7 +20,13 @@ fn reserve_with_provider_limit(
         tool_call_id: None,
         audio: None,
     }];
-    let prompt_tokens = estimate_chat_prompt_tokens(model, &messages, None, None, None, None);
+    let token_identity = if provider == "openai" {
+        TokenizerIdentity::exact_openai(model)
+    } else {
+        TokenizerIdentity::approximate(provider, model)
+    };
+    let prompt_tokens =
+        estimate_chat_prompt_tokens(&token_identity, &messages, None, None, None, None);
     let estimate = estimate_cost(model, provider, prompt_tokens, Some(max_output_tokens)).unwrap();
     budget.providers.set_provider_limit(
         provider,
@@ -74,8 +81,14 @@ fn openai_chat_reservation_uses_exact_tiktoken_prompt_count() {
         tool_call_id: None,
         audio: None,
     }];
-    let prompt_tokens =
-        estimate_chat_prompt_tokens("gpt-3.5-turbo", &messages, None, None, None, None);
+    let prompt_tokens = estimate_chat_prompt_tokens(
+        &TokenizerIdentity::exact_openai("gpt-3.5-turbo"),
+        &messages,
+        None,
+        None,
+        None,
+        None,
+    );
     assert_eq!(prompt_tokens, 13);
 
     let expected = estimate_cost("gpt-3.5-turbo", "openai", prompt_tokens, Some(10))
@@ -124,7 +137,14 @@ fn chat_prompt_estimate_accounts_for_serialized_tool_parts() {
         audio: None,
     }];
 
-    let prompt_tokens = estimate_chat_prompt_tokens("gpt-4o", &messages, None, None, None, None);
+    let prompt_tokens = estimate_chat_prompt_tokens(
+        &TokenizerIdentity::exact_openai("gpt-4o"),
+        &messages,
+        None,
+        None,
+        None,
+        None,
+    );
 
     assert!(
         prompt_tokens > 1_800,

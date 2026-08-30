@@ -549,7 +549,7 @@ pub(in crate::server::routes::ai) fn estimate_embedding_input_tokens(
 ) -> crate::utils::error::gateway_error::Result<u32> {
     let counter = TokenCounter::new();
     input.iter().try_fold(0u32, |total, text| {
-        let estimate = counter.count_completion_tokens_for_identity(identity, text)?;
+        let estimate = counter.count_completion_tokens(identity, text)?;
         if estimate.is_approximate {
             tracing::warn!(
                 token_provider = identity.provider(),

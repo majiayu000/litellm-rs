@@ -9,6 +9,7 @@ use crate::core::models::openai::{
     ResponseFormat,
 };
 use crate::core::types::responses::Usage;
+use crate::utils::ai::counter::token_counter::TokenizerIdentity;
 
 fn usage(prompt: u32, completion: u32) -> Usage {
     Usage {
@@ -31,6 +32,28 @@ fn user_message(content: &str) -> ChatMessage {
         tool_call_id: None,
         audio: None,
     }
+}
+
+fn exact_prompt_tokens(model: &str, messages: &[ChatMessage]) -> u32 {
+    estimate_chat_prompt_tokens(
+        &TokenizerIdentity::exact_openai(model),
+        messages,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+fn approximate_prompt_tokens(provider: &str, model: &str, messages: &[ChatMessage]) -> u32 {
+    estimate_chat_prompt_tokens(
+        &TokenizerIdentity::approximate(provider, model),
+        messages,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 fn chat_request(model: &str, messages: Vec<ChatMessage>) -> ChatCompletionRequest {
@@ -178,7 +201,7 @@ fn chat_reservation_without_max_tokens_uses_conservative_output_bound() {
         ModelLimitConfig::new(1000.0, ResetPeriod::Monthly),
     );
     let messages = vec![user_message("hello")];
-    let prompt_tokens = estimate_chat_prompt_tokens("gpt-4o", &messages, None, None, None, None);
+    let prompt_tokens = exact_prompt_tokens("gpt-4o", &messages);
     let default_estimate = estimate_cost("gpt-4o", "openai", prompt_tokens, Some(100))
         .unwrap()
         .max_cost;
@@ -201,7 +224,7 @@ fn chat_reservation_without_max_tokens_uses_catalog_output_limit() {
         ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
     );
     let messages = vec![user_message(&"x".repeat(40_000))];
-    let prompt_tokens = estimate_chat_prompt_tokens("gpt-4o", &messages, None, None, None, None);
+    let prompt_tokens = exact_prompt_tokens("gpt-4o", &messages);
     let input_only = estimate_cost("gpt-4o", "openai", prompt_tokens, Some(0))
         .unwrap()
         .max_cost;
@@ -224,7 +247,7 @@ fn chat_reservation_with_explicit_max_tokens_reserves_requested_output() {
         ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
     );
     let messages = vec![user_message(&"x".repeat(40_000))];
-    let prompt_tokens = estimate_chat_prompt_tokens("gpt-4o", &messages, None, None, None, None);
+    let prompt_tokens = exact_prompt_tokens("gpt-4o", &messages);
     let input_only = estimate_cost("gpt-4o", "openai", prompt_tokens, Some(0))
         .unwrap()
         .max_cost;
@@ -397,7 +420,7 @@ fn chat_reservation_uses_conservative_multimodal_prompt_floor() {
         audio: None,
     }];
 
-    let prompt_tokens = estimate_chat_prompt_tokens("gpt-4o", &messages, None, None, None, None);
+    let prompt_tokens = approximate_prompt_tokens("openai", "gpt-4o", &messages);
     assert!(prompt_tokens >= IMAGE_HIGH_DETAIL_PROMPT_TOKENS);
 }
 
@@ -419,7 +442,7 @@ fn chat_reservation_uses_encoded_audio_prompt_floor() {
         audio: None,
     }];
 
-    let prompt_tokens = estimate_chat_prompt_tokens("gpt-4o", &messages, None, None, None, None);
+    let prompt_tokens = exact_prompt_tokens("gpt-4o", &messages);
     assert!(prompt_tokens >= 2_000);
 }
 
@@ -470,8 +493,7 @@ fn gemini_max_completion_tokens_only_uses_catalog_output_bound() {
         ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly),
     );
     let messages = vec![user_message("hello")];
-    let prompt_tokens =
-        estimate_chat_prompt_tokens("gemini-3.1-flash-lite", &messages, None, None, None, None);
+    let prompt_tokens = approximate_prompt_tokens("gemini", "gemini-3.1-flash-lite", &messages);
     let ten_output_tokens =
         estimate_cost("gemini-3.1-flash-lite", "gemini", prompt_tokens, Some(10))
             .unwrap()
@@ -492,8 +514,7 @@ fn gemini_max_completion_tokens_only_uses_catalog_output_bound() {
 fn cohere_max_completion_tokens_reserves_provider_effective_output() {
     let budget = UnifiedBudgetLimits::new();
     let messages = vec![user_message("hello")];
-    let prompt_tokens =
-        estimate_chat_prompt_tokens("command-r-plus", &messages, None, None, None, None);
+    let prompt_tokens = approximate_prompt_tokens("cohere", "command-r-plus", &messages);
     let ten_output_tokens = estimate_cost("command-r-plus", "cohere", prompt_tokens, Some(10))
         .unwrap()
         .max_cost;

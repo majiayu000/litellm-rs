@@ -13,32 +13,33 @@ pub struct TokenCounter {
     model_configs: HashMap<String, ModelTokenConfig>,
 }
 
+/// Explicit tokenizer contract selected for a provider attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TokenizerIdentity {
+pub enum TokenizerIdentity {
     ExactOpenAi(String),
     Approximate { provider: String, model: String },
 }
 
 impl TokenizerIdentity {
-    pub(crate) fn exact_openai(model: impl Into<String>) -> Self {
+    pub fn exact_openai(model: impl Into<String>) -> Self {
         Self::ExactOpenAi(model.into())
     }
 
-    pub(crate) fn approximate(provider: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn approximate(provider: impl Into<String>, model: impl Into<String>) -> Self {
         Self::Approximate {
             provider: provider.into(),
             model: model.into(),
         }
     }
 
-    pub(crate) fn provider(&self) -> &str {
+    pub fn provider(&self) -> &str {
         match self {
             Self::ExactOpenAi(_) => "openai",
             Self::Approximate { provider, .. } => provider,
         }
     }
 
-    pub(crate) fn model(&self) -> &str {
+    pub fn model(&self) -> &str {
         match self {
             Self::ExactOpenAi(model) | Self::Approximate { model, .. } => model,
         }
@@ -64,61 +65,36 @@ impl TokenCounter {
         }
     }
 
-    pub(crate) fn count_completion_tokens_for_identity(
+    /// Count tokens in a completion request using an explicit tokenizer contract.
+    pub fn count_completion_tokens(
         &self,
         identity: &TokenizerIdentity,
         prompt: &str,
     ) -> Result<TokenEstimate> {
         match identity {
             TokenizerIdentity::ExactOpenAi(_) => {
-                self.count_completion_tokens(identity.tokenizer_model()?, prompt)
+                self.exact_completion_tokens(identity.tokenizer_model()?, prompt)
             }
-            TokenizerIdentity::Approximate { model, .. } => {
-                self.approximate_completion_tokens(model, prompt)
-            }
+            TokenizerIdentity::Approximate { .. } => self.approximate_completion_tokens(prompt),
         }
     }
 
-    pub(crate) fn count_chat_tokens_for_identity(
+    /// Count tokens in chat messages using an explicit tokenizer contract.
+    pub fn count_chat_tokens(
         &self,
         identity: &TokenizerIdentity,
         messages: &[ChatMessage],
     ) -> Result<TokenEstimate> {
         match identity {
             TokenizerIdentity::ExactOpenAi(_) => {
-                self.count_chat_tokens(identity.tokenizer_model()?, messages)
+                self.exact_chat_token_estimate(identity.tokenizer_model()?, messages)
             }
-            TokenizerIdentity::Approximate { model, .. } => {
-                self.approximate_chat_tokens(model, messages)
-            }
+            TokenizerIdentity::Approximate { .. } => self.approximate_chat_tokens(messages),
         }
     }
 
-    /// Count tokens in a chat completion request
-    pub fn count_chat_tokens(
-        &self,
-        model: &str,
-        messages: &[ChatMessage],
-    ) -> Result<TokenEstimate> {
-        if let Some(total_tokens) = self.exact_chat_tokens(model, messages)? {
-            return Ok(TokenEstimate {
-                input_tokens: total_tokens,
-                output_tokens: None,
-                total_tokens,
-                is_approximate: false,
-                confidence: 1.0,
-            });
-        }
-
-        self.approximate_chat_tokens(model, messages)
-    }
-
-    fn approximate_chat_tokens(
-        &self,
-        model: &str,
-        messages: &[ChatMessage],
-    ) -> Result<TokenEstimate> {
-        let config = self.get_model_config(model)?;
+    fn approximate_chat_tokens(&self, messages: &[ChatMessage]) -> Result<TokenEstimate> {
+        let config = self.approximate_model_config()?;
         let mut total_tokens = config.request_overhead;
 
         for message in messages {
@@ -231,23 +207,19 @@ impl TokenCounter {
         (estimated_tokens as f64 * 1.1).ceil() as u32
     }
 
-    /// Count tokens in completion request
-    pub fn count_completion_tokens(&self, model: &str, prompt: &str) -> Result<TokenEstimate> {
-        if let Some(input_tokens) = exact_text_tokens(model, prompt)? {
-            return Ok(TokenEstimate {
-                input_tokens,
-                output_tokens: None,
-                total_tokens: input_tokens,
-                is_approximate: false,
-                confidence: 1.0,
-            });
-        }
-
-        self.approximate_completion_tokens(model, prompt)
+    fn exact_completion_tokens(&self, model: &str, prompt: &str) -> Result<TokenEstimate> {
+        let input_tokens = exact_text_tokens(model, prompt)?;
+        Ok(TokenEstimate {
+            input_tokens,
+            output_tokens: None,
+            total_tokens: input_tokens,
+            is_approximate: false,
+            confidence: 1.0,
+        })
     }
 
-    fn approximate_completion_tokens(&self, model: &str, prompt: &str) -> Result<TokenEstimate> {
-        let config = self.get_model_config(model)?;
+    fn approximate_completion_tokens(&self, prompt: &str) -> Result<TokenEstimate> {
+        let config = self.approximate_model_config()?;
         let input_tokens = config.request_overhead + self.estimate_text_tokens(config, prompt);
 
         Ok(TokenEstimate {
@@ -260,13 +232,19 @@ impl TokenCounter {
     }
 
     /// Count tokens in embedding request
-    pub fn count_embedding_tokens(&self, model: &str, input: &[String]) -> Result<TokenEstimate> {
-        let exact_counts = input
-            .iter()
-            .map(|text| exact_text_tokens(model, text))
-            .collect::<Result<Vec<_>>>()?;
-        if exact_counts.iter().all(Option::is_some) {
-            let total_tokens = exact_counts.into_iter().flatten().sum();
+    pub fn count_embedding_tokens(
+        &self,
+        identity: &TokenizerIdentity,
+        input: &[String],
+    ) -> Result<TokenEstimate> {
+        if let TokenizerIdentity::ExactOpenAi(_) = identity {
+            let model = identity.tokenizer_model()?;
+            let total_tokens = input
+                .iter()
+                .map(|text| exact_text_tokens(model, text))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .sum();
             return Ok(TokenEstimate {
                 input_tokens: total_tokens,
                 output_tokens: None,
@@ -276,7 +254,7 @@ impl TokenCounter {
             });
         }
 
-        let config = self.get_model_config(model)?;
+        let config = self.approximate_model_config()?;
         let mut total_tokens = config.request_overhead;
 
         for text in input {
@@ -297,9 +275,9 @@ impl TokenCounter {
         &self,
         max_tokens: Option<u32>,
         input_tokens: u32,
-        model: &str,
+        identity: &TokenizerIdentity,
     ) -> Result<u32> {
-        let config = self.get_model_config(model)?;
+        let config = self.config_for_identity(identity)?;
 
         if let Some(max) = max_tokens {
             // Use the specified max_tokens, but cap at model's context window
@@ -315,11 +293,11 @@ impl TokenCounter {
     /// Check if request fits within context window
     pub fn check_context_window(
         &self,
-        model: &str,
+        identity: &TokenizerIdentity,
         input_tokens: u32,
         max_output_tokens: Option<u32>,
     ) -> Result<bool> {
-        let config = self.get_model_config(model)?;
+        let config = self.config_for_identity(identity)?;
         let output_tokens = max_output_tokens.unwrap_or(0);
         let total_tokens = input_tokens + output_tokens;
 
@@ -345,15 +323,21 @@ impl TokenCounter {
         })
     }
 
+    fn approximate_model_config(&self) -> Result<&ModelTokenConfig> {
+        self.model_configs
+            .get("default")
+            .ok_or_else(|| GatewayError::Config("No default token config found".to_string()))
+    }
+
+    fn config_for_identity(&self, identity: &TokenizerIdentity) -> Result<&ModelTokenConfig> {
+        match identity {
+            TokenizerIdentity::ExactOpenAi(_) => self.get_model_config(identity.tokenizer_model()?),
+            TokenizerIdentity::Approximate { .. } => self.approximate_model_config(),
+        }
+    }
+
     /// Extract model family from model name
     pub(super) fn extract_model_family(&self, model: &str) -> String {
-        // Remove provider prefix if present
-        let model = if let Some(pos) = model.find('/') {
-            &model[pos + 1..]
-        } else {
-            model
-        };
-
         // Extract family name
         if model.starts_with("gpt-4") {
             "gpt-4".to_string()
@@ -378,21 +362,21 @@ impl TokenCounter {
         self.model_configs.keys().cloned().collect()
     }
 
-    fn exact_chat_tokens(&self, model: &str, messages: &[ChatMessage]) -> Result<Option<u32>> {
+    fn exact_chat_tokens(&self, model: &str, messages: &[ChatMessage]) -> Result<u32> {
         let mut tiktoken_messages = Vec::with_capacity(messages.len());
         for message in messages {
             if message.tool_call_id.is_some() {
-                return Ok(None);
+                return Err(unsupported_exact_chat_input(model));
             }
             if message
                 .tool_calls
                 .as_ref()
                 .is_some_and(|calls| !calls.is_empty())
             {
-                return Ok(None);
+                return Err(unsupported_exact_chat_input(model));
             }
             let Some(content) = plain_text_message_content(message) else {
-                return Ok(None);
+                return Err(unsupported_exact_chat_input(model));
             };
             tiktoken_messages.push(ChatCompletionRequestMessage {
                 role: ToString::to_string(&message.role),
@@ -417,10 +401,28 @@ impl TokenCounter {
                 refusal: None,
             });
         }
-        match num_tokens_from_messages(tokenizer_model_name(model), &tiktoken_messages) {
-            Ok(tokens) => Ok(Some(usize_to_u32(tokens)?)),
-            Err(_) => Ok(None),
-        }
+        num_tokens_from_messages(model, &tiktoken_messages)
+            .map_err(|_| {
+                GatewayError::Config(format!(
+                    "tokenizer unavailable for exact identity 'openai/{model}'"
+                ))
+            })
+            .and_then(usize_to_u32)
+    }
+
+    fn exact_chat_token_estimate(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+    ) -> Result<TokenEstimate> {
+        let total_tokens = self.exact_chat_tokens(model, messages)?;
+        Ok(TokenEstimate {
+            input_tokens: total_tokens,
+            output_tokens: None,
+            total_tokens,
+            is_approximate: false,
+            confidence: 1.0,
+        })
     }
 }
 
@@ -430,15 +432,18 @@ impl Default for TokenCounter {
     }
 }
 
-fn exact_text_tokens(model: &str, text: &str) -> Result<Option<u32>> {
-    match exact_bpe_for_model(model) {
-        Ok(bpe) => Ok(Some(usize_to_u32(bpe.count_with_special_tokens(text))?)),
-        Err(_) => Ok(None),
-    }
+fn exact_text_tokens(model: &str, text: &str) -> Result<u32> {
+    exact_bpe_for_model(model)
+        .map_err(|_| {
+            GatewayError::Config(format!(
+                "tokenizer unavailable for exact identity 'openai/{model}'"
+            ))
+        })
+        .and_then(|bpe| usize_to_u32(bpe.count_with_special_tokens(text)))
 }
 
 fn exact_bpe_for_model(model: &str) -> std::result::Result<&'static tiktoken_rs::CoreBPE, ()> {
-    bpe_for_model(tokenizer_model_name(model)).map_err(|_| ())
+    bpe_for_model(model).map_err(|_| ())
 }
 
 fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
@@ -449,11 +454,10 @@ fn plain_text_message_content(message: &ChatMessage) -> Option<Option<String>> {
     }
 }
 
-fn tokenizer_model_name(model: &str) -> &str {
-    model
-        .rsplit_once('/')
-        .map(|(_, model)| model)
-        .unwrap_or(model)
+fn unsupported_exact_chat_input(model: &str) -> GatewayError {
+    GatewayError::Config(format!(
+        "exact tokenizer for 'openai/{model}' does not support this chat message shape"
+    ))
 }
 
 fn usize_to_u32(value: usize) -> Result<u32> {
