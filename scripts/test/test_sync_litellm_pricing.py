@@ -302,6 +302,34 @@ class SyncPricingTests(unittest.TestCase):
             expired["gemini-3.6-flash"]["input_cost_per_token_batches"], 0.00000075
         )
 
+    def test_current_openai_model_cards_override_stale_limits_and_price(self) -> None:
+        source = {
+            model: {"litellm_provider": "test"}
+            for model in sync.OFFICIAL_OVERRIDE_PATCHES
+        }
+        source["gpt-realtime-2"] = {
+            "litellm_provider": "openai",
+            "input_cost_per_token": 0.000004,
+            "output_cost_per_token": 0.000016,
+        }
+
+        patched = sync.apply_official_overrides(source, {})
+
+        self.assertEqual(patched["gpt-realtime-2"]["input_cost_per_token"], 0.000004)
+        self.assertEqual(patched["gpt-realtime-2"]["output_cost_per_token"], 0.000024)
+        self.assertEqual(
+            patched["gpt-realtime-2"]["source"], sync.OPENAI_REALTIME_2_SOURCE
+        )
+        for model in ["gpt-realtime-2", "gpt-realtime-2.1", "gpt-realtime-2.1-mini"]:
+            self.assertEqual(patched[model]["max_input_tokens"], 128_000)
+            self.assertEqual(patched[model]["max_output_tokens"], 32_000)
+            self.assertEqual(patched[model]["max_tokens"], 32_000)
+        for model in ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]:
+            self.assertEqual(patched[model]["max_input_tokens"], 1_050_000)
+            self.assertEqual(patched[model]["max_output_tokens"], 128_000)
+        self.assertEqual(patched["gpt-5.6-cyber"]["max_input_tokens"], 400_000)
+        self.assertIn("/v1/batch", patched["gpt-5.6-cyber"]["supported_endpoints"])
+
 
 class PricingSchemaValidationTests(unittest.TestCase):
     def test_rejects_non_finite_or_negative_costs(self) -> None:
