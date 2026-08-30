@@ -273,7 +273,11 @@ impl LLMProvider for AnthropicProvider {
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
         self.validate_request(&request)?;
-        self.client.transform_chat_request(&request)
+        let mut transformed = self.client.transform_chat_request(&request)?;
+        if request.stream {
+            transformed["stream"] = Value::Bool(true);
+        }
+        Ok(transformed)
     }
 
     async fn transform_response(

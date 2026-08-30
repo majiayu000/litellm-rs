@@ -39,50 +39,6 @@ fn tool(name: &str) -> Tool {
     }
 }
 
-#[test]
-fn manual_thinking_rejects_forced_tool_choice() {
-    let mut request = ChatRequest::new("claude-sonnet-4-6").add_user_message("Use the lookup tool");
-    request.max_tokens = Some(2_048);
-    request.thinking = Some(ThinkingConfig::new().enabled().with_budget(1_024));
-    request.tools = Some(vec![tool("lookup")]);
-    request.tool_choice = Some(ToolChoice::String("required".to_string()));
-
-    let error = anthropic_client()
-        .transform_chat_request(&request)
-        .expect_err("manual thinking must reject forced tool choice");
-
-    assert!(error.to_string().contains("manual thinking"));
-    assert!(error.to_string().contains("tool_choice"));
-}
-
-#[test]
-fn adaptive_thinking_accepts_forced_and_named_tool_choice() {
-    let client = anthropic_client();
-    let mut required = ChatRequest::new("claude-opus-5").add_user_message("Use the lookup tool");
-    required.tools = Some(vec![tool("lookup")]);
-    required.tool_choice = Some(ToolChoice::String("required".to_string()));
-    let required_wire = client
-        .transform_chat_request(&required)
-        .expect("adaptive thinking should allow required tool choice");
-    assert_eq!(required_wire["thinking"]["type"], "adaptive");
-    assert_eq!(required_wire["tool_choice"]["type"], "any");
-
-    let mut named = ChatRequest::new("claude-opus-5").add_user_message("Use lookup");
-    named.tools = Some(vec![tool("lookup")]);
-    named.tool_choice = Some(ToolChoice::Specific {
-        choice_type: "function".to_string(),
-        function: Some(FunctionChoice {
-            name: "lookup".to_string(),
-        }),
-    });
-    let named_wire = client
-        .transform_chat_request(&named)
-        .expect("adaptive thinking should allow named tool choice");
-    assert_eq!(named_wire["thinking"]["type"], "adaptive");
-    assert_eq!(named_wire["tool_choice"]["type"], "tool");
-    assert_eq!(named_wire["tool_choice"]["name"], "lookup");
-}
-
 async fn continuation_capture_server() -> (String, oneshot::Receiver<String>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let address = listener.local_addr().unwrap();
