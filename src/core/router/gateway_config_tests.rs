@@ -441,15 +441,22 @@ async fn explicit_fine_tune_mapping_preserves_wire_id_and_uses_exact_openai_meta
     assert_eq!(identity.wire_model(), wire_model);
     assert_eq!(identity.capability_catalog_model(), Some("gpt-4"));
     assert_eq!(identity.pricing_model(), Some("runtime-only-price"));
-    let model = crate::core::providers::openai::models::get_openai_registry()
-        .get_model_spec(
-            identity
-                .capability_catalog_model()
-                .expect("mapping must provide exact metadata identity"),
-        )
-        .expect("mapped OpenAI metadata must exist");
-    assert_eq!(model.model_info.max_context_length, 8192);
-    assert_eq!(model.model_info.max_output_length, Some(8192));
+    let crate::core::providers::Provider::OpenAI(provider) = &deployment.provider else {
+        panic!("fine-tune deployment must use the OpenAI provider");
+    };
+    let model = provider
+        .get_model_info(wire_model)
+        .expect("bound fine-tune metadata must resolve");
+    assert_eq!(model.id, "gpt-4");
+    assert_eq!(model.max_context_length, 8192);
+    assert_eq!(model.max_output_length, Some(8192));
+    assert_eq!(
+        provider
+            .get_model_context_window(wire_model)
+            .expect("bound fine-tune context must resolve"),
+        8192
+    );
+    assert_eq!(crate::utils::ModelUtils::get_base_model(&model.id), "gpt-4");
     assert!(deployment.provider.supports_capability_for_model(
         wire_model,
         &crate::core::types::model::ProviderCapability::ChatCompletion,

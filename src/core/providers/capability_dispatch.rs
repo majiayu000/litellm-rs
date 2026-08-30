@@ -62,6 +62,13 @@ impl Provider {
                     LLMProvider::supports_capability(provider, capability)
                 }
             }
+            #[cfg(feature = "providers-extra")]
+            Provider::AzureAI(provider) => {
+                LLMProvider::supports_capability(provider, capability)
+                    && provider
+                        .get_model_registry()
+                        .supports_capability(model, capability)
+            }
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }
@@ -107,6 +114,45 @@ mod tests {
     use crate::core::net::ProviderEndpointAccess;
     use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
     use crate::core::providers::{GeminiNativeRequest, ProviderError};
+
+    #[cfg(feature = "providers-extra")]
+    #[test]
+    fn unbound_azure_ai_dispatch_uses_exact_model_registry() {
+        use crate::core::providers::{
+            Provider, azure_ai::AzureAIConfig, azure_ai::AzureAIProvider,
+        };
+        use crate::core::types::model::ProviderCapability;
+
+        let mut config = AzureAIConfig::new("azure_ai");
+        config.base.api_key = Some("test-key".to_string());
+        config.base.api_base = Some("https://example.ai.azure.com".to_string());
+        let provider = Provider::AzureAI(
+            AzureAIProvider::new(config).expect("Azure AI provider should build"),
+        );
+
+        assert!(
+            provider.supports_capability_for_model("Phi-4", &ProviderCapability::ChatCompletion,)
+        );
+        assert!(provider.supports_capability_for_model(
+            "text-embedding-3-large",
+            &ProviderCapability::Embeddings,
+        ));
+        assert!(
+            provider
+                .supports_capability_for_model("dall-e-3", &ProviderCapability::ImageGeneration,)
+        );
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::Embeddings,
+            ProviderCapability::ImageGeneration,
+        ] {
+            assert!(
+                !provider.supports_capability_for_model("customer-unknown", &capability),
+                "unknown model inherited {capability:?}"
+            );
+        }
+    }
 
     #[cfg(feature = "providers-extra")]
     #[test]

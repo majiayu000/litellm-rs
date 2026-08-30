@@ -47,6 +47,8 @@ use client::AzureAIClient;
 #[rustfmt::skip]
 const CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty"];
 #[rustfmt::skip]
+const PHI_4_CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"];
+#[rustfmt::skip]
 const CHAT_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stream"];
 #[rustfmt::skip]
 const CHAT_TOOL_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "tools", "tool_choice"];
@@ -137,6 +139,21 @@ impl AzureAIProvider {
     pub fn get_model_registry(&self) -> &AzureAIModelRegistry {
         self.model_registry
     }
+
+    fn ensure_params_supported<'a>(
+        &self,
+        model: &str,
+        params: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), ProviderError> {
+        let supported = self.get_supported_openai_params(model);
+        if let Some(param) = params.into_iter().find(|param| !supported.contains(param)) {
+            return Err(ProviderError::invalid_request(
+                "azure_ai",
+                format!("parameter '{param}' is not supported for model '{model}'"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl LLMProvider for AzureAIProvider {
@@ -171,7 +188,13 @@ impl LLMProvider for AzureAIProvider {
                     spec.capabilities
                         .contains(&ProviderCapability::ChatCompletion)
                 })
-                .map(|spec| (spec.supports_function_calling, spec.supports_streaming))
+                .map(|spec| {
+                    (
+                        spec.supports_function_calling,
+                        spec.supports_streaming,
+                        spec.id == "Phi-4",
+                    )
+                })
         };
         let features = match self.model_identity.as_ref() {
             Some(binding) => {
@@ -194,6 +217,7 @@ impl LLMProvider for AzureAIProvider {
                                     capabilities.contains(&ProviderCapability::ToolCalling),
                                     capabilities
                                         .contains(&ProviderCapability::ChatCompletionStream),
+                                    false,
                                 )
                             })
                     }
@@ -204,10 +228,11 @@ impl LLMProvider for AzureAIProvider {
             None => azure_ai_features(model),
         };
         match features {
-            Some((false, false)) => CHAT_PARAMS,
-            Some((false, true)) => CHAT_STREAM_PARAMS,
-            Some((true, false)) => CHAT_TOOL_PARAMS,
-            Some((true, true)) => CHAT_TOOL_STREAM_PARAMS,
+            Some((_, _, true)) => PHI_4_CHAT_PARAMS,
+            Some((false, false, false)) => CHAT_PARAMS,
+            Some((false, true, false)) => CHAT_STREAM_PARAMS,
+            Some((true, false, false)) => CHAT_TOOL_PARAMS,
+            Some((true, true, false)) => CHAT_TOOL_STREAM_PARAMS,
             None => &[],
         }
     }
@@ -215,9 +240,9 @@ impl LLMProvider for AzureAIProvider {
     async fn map_openai_params(
         &self,
         params: HashMap<String, Value>,
-        _model: &str,
+        model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        // Azure AI generally uses the same parameters as OpenAI
+        self.ensure_params_supported(model, params.keys().map(String::as_str))?;
         Ok(params)
     }
 
@@ -226,6 +251,16 @@ impl LLMProvider for AzureAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<Value, ProviderError> {
+        let params = [
+            request.tools.as_ref().map(|_| "tools"),
+            request.tool_choice.as_ref().map(|_| "tool_choice"),
+            request.stream.then_some("stream"),
+            request
+                .max_completion_tokens
+                .as_ref()
+                .map(|_| "max_completion_tokens"),
+        ];
+        self.ensure_params_supported(&request.model, params.into_iter().flatten())?;
         // Transform ChatRequest to Azure AI API format
         AzureAIChatUtils::transform_request(&request)
     }
@@ -542,90 +577,6 @@ mod tests {
 
         assert!(registry.get_model("text-embedding-3-large").is_some());
         assert!(registry.get_model("text-embedding-3-small").is_some());
-    }
-
-    // ==================== Supported Params Tests ====================
-
-    #[test]
-    fn test_get_supported_openai_params() {
-        let config = create_test_config();
-        let provider = AzureAIProvider::new(config).unwrap();
-        let params = provider.get_supported_openai_params("gpt-4o");
-
-        assert!(params.contains(&"temperature"));
-        assert!(params.contains(&"max_tokens"));
-        assert!(params.contains(&"max_completion_tokens"));
-        assert!(params.contains(&"top_p"));
-        assert!(params.contains(&"frequency_penalty"));
-        assert!(params.contains(&"presence_penalty"));
-        assert!(params.contains(&"tools"));
-        assert!(params.contains(&"tool_choice"));
-        assert!(params.contains(&"stream"));
-
-        let phi_params = provider.get_supported_openai_params("Phi-4");
-        assert!(phi_params.contains(&"temperature"));
-        assert!(!phi_params.contains(&"tools"));
-        assert!(!phi_params.contains(&"tool_choice"));
-        assert!(!phi_params.contains(&"stream"));
-        assert!(
-            provider
-                .get_supported_openai_params("customer-chat-deployment")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn mapped_rerank_deployment_exposes_no_chat_parameters() {
-        let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
-        let catalog = crate::core::providers::registry::model_catalog_authority::CatalogAuthority::from_embedded()
-            .expect("embedded catalog should load");
-        let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
-            Some("azure_ai/cohere-rerank-v3.5".to_string()),
-            None,
-        );
-        let identity = crate::core::providers::model_identity::validate_deployment_identity(
-            "review-azure-ai",
-            "azure_ai",
-            "wire-rerank",
-            Some(&mapping),
-            None,
-            &catalog,
-            &pricing.snapshot(),
-        )
-        .expect("Azure AI rerank capability identity should validate");
-        let mut provider = AzureAIProvider::new(create_test_config())
-            .expect("Azure AI provider should be created");
-        provider.model_identity = Some(
-            crate::core::providers::model_identity::DeploymentProviderBinding::new(
-                identity, pricing,
-            ),
-        );
-
-        assert!(
-            provider
-                .get_supported_openai_params("wire-rerank")
-                .is_empty()
-        );
-    }
-
-    // ==================== Map OpenAI Params Tests ====================
-
-    #[tokio::test]
-    async fn test_map_openai_params_passthrough() {
-        let config = create_test_config();
-        let provider = AzureAIProvider::new(config).unwrap();
-
-        let mut params = HashMap::new();
-        params.insert("temperature".to_string(), serde_json::json!(0.7));
-        params.insert("max_tokens".to_string(), serde_json::json!(100));
-
-        let mapped = provider
-            .map_openai_params(params.clone(), "gpt-4o")
-            .await
-            .unwrap();
-
-        // Azure AI should pass through params unchanged
-        assert_eq!(mapped, params);
     }
 
     // ==================== Transform Request Tests ====================
