@@ -638,6 +638,18 @@
       "location": "https://docs.x.ai/developers/model-capabilities/text/reasoning",
       "reviewed_on": "2026-08-30",
       "revision": "classification-1234-v1"
+    },
+    "evidence-107": {
+      "kind": "official_deepgram_tts_model_contract",
+      "location": "https://developers.deepgram.com/docs/text-to-speech",
+      "reviewed_on": "2026-08-30",
+      "revision": "classification-1225-v1"
+    },
+    "evidence-108": {
+      "kind": "official_deepgram_tts_pricing",
+      "location": "https://deepgram.com/pricing",
+      "reviewed_on": "2026-08-30",
+      "revision": "classification-1225-v1"
     }
   },
   "provider_aliases": {
@@ -9896,6 +9908,29 @@
       "evidence_sources": [
         "evidence-001"
       ]
+    },
+    {
+      "provider": "deepgram",
+      "pricing_key": "deepgram/aura-2-thalia-en",
+      "decision": "callable",
+      "evidence_sources": [
+        "evidence-107",
+        "evidence-108"
+      ],
+      "catalog_model_id": "aura-2-thalia-en",
+      "endpoints": [
+        "text_to_speech"
+      ],
+      "capabilities": [
+        "text_to_speech"
+      ],
+      "supported_parameters": [
+        "input",
+        "model",
+        "response_format",
+        "speed"
+      ],
+      "aliases": []
     },
     {
       "provider": "deepgram",

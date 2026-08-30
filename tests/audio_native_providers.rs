@@ -245,12 +245,15 @@ mod tests {
         let provider = native_provider(ProviderType::ElevenLabs, &mock.base_url, 5).await;
 
         let transcript = provider
-            .audio_transcription(transcription_request("scribe_v2"), RequestContext::new())
+            .audio_transcription(
+                transcription_request("scribe_v1_experimental"),
+                RequestContext::new(),
+            )
             .await
             .expect("ElevenLabs transcription should succeed");
         assert_eq!(transcript.text, "elevenlabs transcript");
         assert_eq!(transcript.language.as_deref(), Some("en"));
-        assert_eq!(transcript.duration, Some(0.5));
+        assert_eq!(transcript.duration, None);
 
         let speech = provider
             .text_to_speech(
@@ -259,7 +262,7 @@ mod tests {
                     model: "eleven_v3".to_string(),
                     voice: "voice-original-123".to_string(),
                     response_format: Some("mp3_22050_32".to_string()),
-                    speed: Some(0.9),
+                    speed: None,
                 },
                 RequestContext::new(),
             )
@@ -277,7 +280,7 @@ mod tests {
         );
         let multipart = String::from_utf8_lossy(&requests[0].body);
         assert!(multipart.contains("name=\"model_id\""));
-        assert!(multipart.contains("scribe_v2"));
+        assert!(multipart.contains("scribe_v1_experimental"));
         assert!(multipart.contains("filename=\"sample.wav\""));
         assert!(multipart.contains("name=\"language_code\""));
         assert!(multipart.contains("name=\"temperature\""));
@@ -289,7 +292,59 @@ mod tests {
             .expect("ElevenLabs speech request should be JSON");
         assert_eq!(tts_body["text"], "ElevenLabs says hello");
         assert_eq!(tts_body["model_id"], "eleven_v3");
-        assert_eq!(tts_body["voice_settings"]["speed"], 0.9);
+        assert!(tts_body.get("voice_settings").is_none());
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn elevenlabs_rejects_standard_tts_speed_before_upstream_io() {
+        let mock = MockAudioServer::start(StatusCode::OK, Duration::ZERO).await;
+        let provider = native_provider(ProviderType::ElevenLabs, &mock.base_url, 5).await;
+
+        let result = provider
+            .text_to_speech(
+                SpeechRequest {
+                    input: "unsupported speed".to_string(),
+                    model: "eleven_v3".to_string(),
+                    voice: "voice-original-123".to_string(),
+                    response_format: Some("mp3".to_string()),
+                    speed: Some(0.9),
+                },
+                RequestContext::new(),
+            )
+            .await;
+        let error = match result {
+            Ok(_) => panic!("ElevenLabs standard TTS speed must fail before I/O"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(mock.requests().is_empty());
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn deepgram_omitted_language_enables_detection() {
+        let mock = MockAudioServer::start(StatusCode::OK, Duration::ZERO).await;
+        let provider = native_provider(ProviderType::Deepgram, &mock.base_url, 5).await;
+        let mut request = transcription_request("nova-3");
+        request.language = None;
+
+        provider
+            .audio_transcription(request, RequestContext::new())
+            .await
+            .expect("Deepgram automatic language detection should succeed");
+
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        let request_url = url::Url::parse(&format!("http://mock{}", requests[0].uri))
+            .expect("captured Deepgram URI should parse");
+        let query = request_url.query_pairs().collect::<HashMap<_, _>>();
+        assert_eq!(
+            query.get("detect_language").map(|value| value.as_ref()),
+            Some("true")
+        );
+        assert!(!query.contains_key("language"));
         mock.shutdown().await;
     }
 
@@ -315,7 +370,7 @@ mod tests {
             MockAudioServer::start(StatusCode::UNPROCESSABLE_ENTITY, Duration::ZERO).await;
         let elevenlabs = native_provider(ProviderType::ElevenLabs, &invalid.base_url, 5).await;
         let error = elevenlabs
-            .audio_transcription(transcription_request("scribe_v2"), RequestContext::new())
+            .audio_transcription(transcription_request("scribe_v1"), RequestContext::new())
             .await
             .expect_err("ElevenLabs 422 should fail");
         assert!(matches!(error, ProviderError::InvalidRequest { .. }));
@@ -324,7 +379,7 @@ mod tests {
         let slow = MockAudioServer::start(StatusCode::OK, Duration::from_millis(1_200)).await;
         let elevenlabs = native_provider(ProviderType::ElevenLabs, &slow.base_url, 1).await;
         let error = elevenlabs
-            .audio_transcription(transcription_request("scribe_v2"), RequestContext::new())
+            .audio_transcription(transcription_request("scribe_v1"), RequestContext::new())
             .await
             .expect_err("configured timeout should fail");
         assert!(matches!(error, ProviderError::Timeout { .. }));
@@ -339,6 +394,14 @@ mod tests {
             deepgram
                 .supports_capability_for_model("nova-3", &ProviderCapability::AudioTranscription)
         );
+        assert!(deepgram.supports_capability_for_model(
+            "nova-3-general",
+            &ProviderCapability::AudioTranscription
+        ));
+        assert!(deepgram.supports_capability_for_model(
+            "nova-3-medical",
+            &ProviderCapability::AudioTranscription
+        ));
         assert!(
             !deepgram.supports_capability_for_model("nova-3", &ProviderCapability::TextToSpeech)
         );
@@ -359,21 +422,43 @@ mod tests {
         assert!(matches!(error, ProviderError::NotSupported { .. }));
 
         let elevenlabs = native_provider(ProviderType::ElevenLabs, &mock.base_url, 5).await;
+        assert!(elevenlabs.supports_capability_for_model(
+            "scribe_v1_experimental",
+            &ProviderCapability::AudioTranscription
+        ));
         assert!(
-            elevenlabs.supports_capability_for_model(
+            !elevenlabs.supports_capability_for_model(
                 "scribe_v2",
                 &ProviderCapability::AudioTranscription
             )
         );
         assert!(
             !elevenlabs
-                .supports_capability_for_model("scribe_v2", &ProviderCapability::TextToSpeech)
+                .supports_capability_for_model("scribe_v1", &ProviderCapability::TextToSpeech)
         );
         assert!(
             elevenlabs
                 .supports_capability_for_model("eleven_v3", &ProviderCapability::TextToSpeech)
         );
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn native_audio_factory_rejects_unsupported_max_retries() {
+        for provider_type in [ProviderType::Deepgram, ProviderType::ElevenLabs] {
+            let error = Provider::from_config_async(
+                provider_type,
+                json!({
+                    "api_key": "native-audio-secret",
+                    "max_retries": 2
+                }),
+            )
+            .await
+            .expect_err("native audio max_retries must not be accepted while it is unused");
+
+            assert!(matches!(error, ProviderError::Configuration { .. }));
+            assert!(error.to_string().contains("max_retries"));
+        }
     }
 
     async fn gateway_state(base_url: &str) -> litellm_rs::server::state::AppState {
@@ -390,7 +475,7 @@ mod tests {
                 "deepgram",
                 "deepgram-secret",
                 base_url,
-                vec!["nova-3".to_string()],
+                vec!["nova-3-general".to_string(), "aura-2-thalia-en".to_string()],
             ),
             provider_fixtures::mock_provider_config(
                 "elevenlabs-audio",
@@ -432,7 +517,7 @@ mod tests {
                 "content-type",
                 format!("multipart/form-data; boundary={boundary}"),
             ))
-            .set_payload(audio_multipart(boundary, "nova-3"))
+            .set_payload(audio_multipart(boundary, "nova-3-general"))
             .to_request();
         let response = test::call_service(&app, request).await;
         let status = response.status();
@@ -460,9 +545,30 @@ mod tests {
             b"elevenlabs-audio"
         );
 
+        let request = test::TestRequest::post()
+            .uri("/v1/audio/speech")
+            .set_json(json!({
+                "model": "aura-2-thalia-en",
+                "input": "priced Deepgram route",
+                "voice": "ignored-by-deepgram",
+                "response_format": "wav"
+            }))
+            .to_request();
+        let response = test::call_service(&app, request).await;
+        let status = response.status();
+        let body = test::read_body(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "Deepgram TTS route response: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(body.as_ref(), b"deepgram-audio");
+
         let requests = mock.requests();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert!(requests[0].uri.starts_with("/v1/listen?"));
+        assert!(requests[0].uri.contains("model=nova-3-general"));
         assert_eq!(
             requests[0].headers.get("authorization").map(String::as_str),
             Some("Token deepgram-secret")
@@ -476,6 +582,7 @@ mod tests {
                 .uri
                 .starts_with("/v1/text-to-speech/route-voice-id")
         );
+        assert!(requests[2].uri.contains("model=aura-2-thalia-en"));
         mock.shutdown().await;
     }
 }

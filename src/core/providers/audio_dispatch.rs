@@ -129,6 +129,16 @@ impl DeepgramProvider {
                         "audio_second",
                     ),
                     (
+                        "nova-3-general",
+                        ProviderCapability::AudioTranscription,
+                        "audio_second",
+                    ),
+                    (
+                        "nova-3-medical",
+                        ProviderCapability::AudioTranscription,
+                        "audio_second",
+                    ),
+                    (
                         "aura-2-thalia-en",
                         ProviderCapability::TextToSpeech,
                         "character",
@@ -213,6 +223,8 @@ impl LLMProvider for DeepgramProvider {
             query.append_pair("model", &request.model);
             if let Some(language) = request.language.as_deref() {
                 query.append_pair("language", language);
+            } else {
+                query.append_pair("detect_language", "true");
             }
         }
         let response = self
@@ -353,13 +365,6 @@ struct ElevenLabsWord {
 struct ElevenLabsSpeech<'a> {
     text: &'a str,
     model_id: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    voice_settings: Option<ElevenLabsVoiceSettings>,
-}
-
-#[derive(serde::Serialize)]
-struct ElevenLabsVoiceSettings {
-    speed: f32,
 }
 
 impl ElevenLabsProvider {
@@ -386,7 +391,7 @@ impl ElevenLabsProvider {
                         "audio_second",
                     ),
                     (
-                        "scribe_v2",
+                        "scribe_v1_experimental",
                         ProviderCapability::AudioTranscription,
                         "audio_second",
                     ),
@@ -529,18 +534,11 @@ impl LLMProvider for ElevenLabsProvider {
         let parsed: ElevenLabsTranscription = response.json().await.map_err(|_| {
             ProviderError::response_parsing("elevenlabs", "invalid transcription response")
         })?;
-        let duration = parsed.words.as_ref().and_then(|words| {
-            words
-                .iter()
-                .map(|word| word.end)
-                .filter(|end| end.is_finite() && *end >= 0.0)
-                .max_by(f64::total_cmp)
-        });
         Ok(TranscriptionResponse {
             text: parsed.text,
             task: Some("transcribe".to_string()),
             language: parsed.language_code.or(request.language),
-            duration,
+            duration: None,
             words: parsed.words.map(|words| {
                 words
                     .into_iter()
@@ -561,6 +559,12 @@ impl LLMProvider for ElevenLabsProvider {
         request: SpeechRequest,
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
+        if request.speed.is_some() {
+            return Err(ProviderError::invalid_request(
+                "elevenlabs",
+                "speed adjustment is not supported by ElevenLabs standard TTS",
+            ));
+        }
         let requested_format = request.response_format.as_deref().unwrap_or("mp3");
         let output_format = match requested_format {
             "mp3" => "mp3_44100_128",
@@ -587,7 +591,6 @@ impl LLMProvider for ElevenLabsProvider {
         let body = ElevenLabsSpeech {
             text: &request.input,
             model_id: &request.model,
-            voice_settings: request.speed.map(|speed| ElevenLabsVoiceSettings { speed }),
         };
         let response = self
             .client
@@ -718,6 +721,16 @@ pub(crate) fn native_audio_base_config(
     provider: &'static str,
 ) -> Result<BaseConfig, ProviderError> {
     let mut base = BaseConfig::from_env(provider);
+    if config
+        .get("max_retries")
+        .is_some_and(|value| value.as_u64() != Some(u64::from(BaseConfig::default().max_retries)))
+    {
+        return Err(ProviderError::configuration(
+            provider,
+            "max_retries is unsupported for native audio providers",
+        ));
+    }
+    base.max_retries = 0;
     base.api_key = config
         .get("api_key")
         .and_then(Value::as_str)
@@ -732,13 +745,6 @@ pub(crate) fn native_audio_base_config(
     }
     if let Some(timeout) = config.get("timeout").and_then(Value::as_u64) {
         base.timeout = timeout;
-    }
-    if let Some(max_retries) = config
-        .get("max_retries")
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-    {
-        base.max_retries = max_retries;
     }
     if let Some(access) = config.get("endpoint_access") {
         base.endpoint_access = serde_json::from_value(access.clone()).map_err(|error| {
