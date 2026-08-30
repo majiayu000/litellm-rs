@@ -148,11 +148,17 @@ impl RequestPricing {
     }
 
     pub(in crate::server::routes::ai) fn has_time_pricing(&self) -> bool {
-        self.priced_parts()
-            .and_then(|(provider, model)| {
-                self.snapshot.get_model_info_for_provider(provider, model)
-            })
-            .is_some_and(|(_, info)| info.cost_per_second.is_some())
+        self.model_info().is_some_and(|info| {
+            info.cost_per_second.is_some()
+                || ["input_cost_per_second", "output_cost_per_second"]
+                    .iter()
+                    .any(|key| {
+                        info.extra
+                            .get(*key)
+                            .and_then(serde_json::Value::as_f64)
+                            .is_some()
+                    })
+        })
     }
 
     pub(in crate::server::routes::ai) fn calculate_time(
@@ -166,11 +172,25 @@ impl RequestPricing {
             .snapshot
             .get_model_info_for_provider(provider, model)
             .ok_or_else(|| self.pricing_error())?;
-        let rate = info.cost_per_second.ok_or_else(|| {
-            crate::utils::error::gateway_error::GatewayError::Config(format!(
-                "time pricing is unavailable for '{provider}/{resolved}'"
-            ))
-        })?;
+        let rate = info
+            .cost_per_second
+            .or_else(|| {
+                let input = info
+                    .extra
+                    .get("input_cost_per_second")
+                    .and_then(serde_json::Value::as_f64);
+                let output = info
+                    .extra
+                    .get("output_cost_per_second")
+                    .and_then(serde_json::Value::as_f64);
+                (input.is_some() || output.is_some())
+                    .then(|| input.unwrap_or(0.0) + output.unwrap_or(0.0))
+            })
+            .ok_or_else(|| {
+                crate::utils::error::gateway_error::GatewayError::Config(format!(
+                    "time pricing is unavailable for '{provider}/{resolved}'"
+                ))
+            })?;
         let total_cost = total_time_seconds * rate;
         Ok(CostResult {
             input_cost: 0.0,
@@ -181,6 +201,39 @@ impl RequestPricing {
             model: resolved,
             provider: info.litellm_provider,
             cost_type: CostType::TimeBased,
+        })
+    }
+
+    pub(in crate::server::routes::ai) fn has_character_pricing(&self) -> bool {
+        self.model_info()
+            .is_some_and(|info| info.input_cost_per_character.is_some())
+    }
+
+    pub(in crate::server::routes::ai) fn calculate_characters(
+        &self,
+        characters: f64,
+    ) -> crate::utils::error::gateway_error::Result<CostResult> {
+        let Some((provider, model)) = self.priced_parts() else {
+            return Err(self.pricing_error());
+        };
+        let (resolved, info) = self
+            .snapshot
+            .get_model_info_for_provider(provider, model)
+            .ok_or_else(|| self.pricing_error())?;
+        let rate = info.input_cost_per_character.ok_or_else(|| {
+            crate::utils::error::gateway_error::GatewayError::Config(format!(
+                "character pricing is unavailable for '{provider}/{resolved}'"
+            ))
+        })?;
+        Ok(CostResult {
+            input_cost: characters * rate,
+            output_cost: 0.0,
+            total_cost: characters * rate,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: resolved,
+            provider: info.litellm_provider,
+            cost_type: CostType::CharacterBased,
         })
     }
 }

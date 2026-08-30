@@ -274,16 +274,15 @@ macro_rules! dispatch_provider {
         dispatch_provider!(@expand async_direct, $self, $method,)
     };
 
-    // ================================================================
     // @expand arms: single source of truth for the Provider variant list.
     // To add/remove a variant, update these 4 arms.
-    // ================================================================
-
     (@expand sync, $self:expr, $method:ident, $($arg:expr),*) => {
         match $self {
             Provider::OpenAI(p) => p.$method($($arg),*),
             Provider::Anthropic(p) => p.$method($($arg),*),
             Provider::Bedrock(p) => p.$method($($arg),*),
+            Provider::Deepgram(p) => p.$method($($arg),*),
+            Provider::ElevenLabs(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extra")]
             Provider::Azure(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extra")]
@@ -313,6 +312,8 @@ macro_rules! dispatch_provider {
             Provider::OpenAI(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Anthropic(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Bedrock(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::Deepgram(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::ElevenLabs(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extra")]
             Provider::Azure(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extra")]
@@ -342,6 +343,8 @@ macro_rules! dispatch_provider {
             Provider::OpenAI(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Anthropic(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Bedrock(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::Deepgram(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::ElevenLabs(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extra")]
             Provider::Azure(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extra")]
@@ -371,6 +374,8 @@ macro_rules! dispatch_provider {
             Provider::OpenAI(p) => LLMProvider::$method(p).await,
             Provider::Anthropic(p) => LLMProvider::$method(p).await,
             Provider::Bedrock(p) => LLMProvider::$method(p).await,
+            Provider::Deepgram(p) => LLMProvider::$method(p).await,
+            Provider::ElevenLabs(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extra")]
             Provider::Azure(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extra")]
@@ -416,22 +421,19 @@ macro_rules! dispatch_provider_selective {
 }
 
 mod audio_dispatch;
+pub use audio_dispatch::{DeepgramProvider, ElevenLabsProvider};
 mod capability_dispatch;
 mod model_health_check;
 pub mod model_identity;
 
-/// Unified built-in Provider enum (Rust-idiomatic design).
-///
-/// This enum provides zero-cost abstractions and type safety for all providers.
-/// Each variant contains a concrete provider implementation. Router
-/// deployments dispatch through this closed enum; third-party `LLMProvider`
-/// implementations are not routeable without crate changes that add enum,
-/// dispatch, and factory support.
+/// Unified built-in provider enum used by router deployments.
 #[derive(Debug, Clone)]
 pub enum Provider {
     OpenAI(openai::OpenAIProvider),
     Anthropic(anthropic::AnthropicProvider),
     Bedrock(bedrock::BedrockProvider),
+    Deepgram(DeepgramProvider),
+    ElevenLabs(ElevenLabsProvider),
     #[cfg(feature = "providers-extra")]
     Azure(azure::AzureOpenAIProvider),
     #[cfg(feature = "providers-extra")]
@@ -568,6 +570,8 @@ impl Provider {
             }
             Provider::Anthropic(_) => "anthropic",
             Provider::Bedrock(_) => "bedrock",
+            Provider::Deepgram(_) => "deepgram",
+            Provider::ElevenLabs(_) => "elevenlabs",
             #[cfg(feature = "providers-extra")]
             Provider::Azure(_) => "azure",
             #[cfg(feature = "providers-extra")]
@@ -601,6 +605,8 @@ impl Provider {
             Provider::OpenAI(_) => ProviderType::OpenAI,
             Provider::Anthropic(_) => ProviderType::Anthropic,
             Provider::Bedrock(_) => ProviderType::Bedrock,
+            Provider::Deepgram(_) => ProviderType::Deepgram,
+            Provider::ElevenLabs(_) => ProviderType::ElevenLabs,
             #[cfg(feature = "providers-extra")]
             Provider::Azure(_) => ProviderType::Azure,
             #[cfg(feature = "providers-extra")]
@@ -625,7 +631,7 @@ impl Provider {
         }
     }
 
-    /// Single source of truth for factory branches currently wired in `from_config_async`.
+    /// Provider types wired in `from_config_async`.
     pub fn factory_supported_provider_types() -> &'static [ProviderType] {
         registry::dispatchable_provider_types_slice()
     }

@@ -32,14 +32,12 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
-    total_time_seconds: Option<f64>,
+    pricing_units: Option<f64>,
     usage: &PricingUsage,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     super::super::spend::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
-    let budget_reservation = if let Some(total_time_seconds) =
-        total_time_seconds.filter(|_| request_pricing.has_time_pricing())
-    {
-        match request_pricing.calculate_time(total_time_seconds) {
+    let budget_reservation = if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
+        match cost {
             Ok(cost) if cost.total_cost > 0.0 => budget_limits
                 .reserve_spend(budget_provider, budget_model, cost.total_cost)
                 .map(Some)
@@ -89,15 +87,13 @@ pub(super) async fn record_audio_spend(
     api_key_id: Option<uuid::Uuid>,
     budget_provider: &str,
     budget_model: &str,
-    total_time_seconds: Option<f64>,
+    pricing_units: Option<f64>,
     usage: &PricingUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
-    if let Some(total_time_seconds) = total_time_seconds
-        && request_pricing.has_time_pricing()
-    {
-        match request_pricing.calculate_time(total_time_seconds) {
+    if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
+        match cost {
             Ok(cost) => {
                 settle_audio_budget_or_record(
                     budget_limits,
@@ -116,7 +112,7 @@ pub(super) async fn record_audio_spend(
             }
             Err(error) => {
                 tracing::error!(
-                    "time-based audio spend calculation failed for pricing provider \
+                    "unit-based audio spend calculation failed for pricing provider \
                      budget provider '{budget_provider}' model \
                      '{budget_model}': {error}; skipping budget spend"
                 );
@@ -130,7 +126,7 @@ pub(super) async fn record_audio_spend(
                     usage,
                     budget_reservation,
                     key_budget_reservation,
-                    "time-based audio spend calculation failed",
+                    "unit-based audio spend calculation failed",
                 )
                 .await;
             }
@@ -151,6 +147,20 @@ pub(super) async fn record_audio_spend(
         key_budget_reservation,
     )
     .await;
+}
+
+fn audio_unit_cost(
+    request_pricing: &super::super::spend::RequestPricing,
+    pricing_units: Option<f64>,
+) -> Option<crate::utils::error::gateway_error::Result<crate::core::pricing_service::CostResult>> {
+    let units = pricing_units?;
+    if request_pricing.has_time_pricing() {
+        Some(request_pricing.calculate_time(units))
+    } else if request_pricing.has_character_pricing() {
+        Some(request_pricing.calculate_characters(units))
+    } else {
+        None
+    }
 }
 
 fn settle_audio_budget_or_record(

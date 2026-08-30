@@ -145,6 +145,20 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         true,
     ),
     entry(
+        ProviderType::Deepgram,
+        "deepgram",
+        &[],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
+        ProviderType::ElevenLabs,
+        "elevenlabs",
+        &["eleven_labs", "eleven-labs"],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
         ProviderType::V0,
         "v0",
         &[],
@@ -497,6 +511,8 @@ mod tests {
             ProviderType::OpenAI,
             ProviderType::Anthropic,
             ProviderType::Bedrock,
+            ProviderType::Deepgram,
+            ProviderType::ElevenLabs,
             ProviderType::Mistral,
             ProviderType::Cloudflare,
         ]

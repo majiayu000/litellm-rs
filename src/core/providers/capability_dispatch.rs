@@ -74,6 +74,16 @@ impl Provider {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
             }
+            Provider::Deepgram(provider) => provider
+                .models()
+                .iter()
+                .find(|info| info.id == model)
+                .is_some_and(|info| info.capabilities.contains(capability)),
+            Provider::ElevenLabs(provider) => provider
+                .models()
+                .iter()
+                .find(|info| info.id == model)
+                .is_some_and(|info| info.capabilities.contains(capability)),
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }

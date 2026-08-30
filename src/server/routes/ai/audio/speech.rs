@@ -96,6 +96,7 @@ pub async fn audio_speech(
             let pricing_config = pricing_config.clone();
             async move {
                 let usage = super::budgeting::speech_usage(&request.input);
+                let pricing_units = request.input.chars().count() as f64;
                 let budget_provider = provider.name().to_string();
                 let request_pricing = super::super::spend::request_pricing_for_provider(
                     &pricing_service,
@@ -126,7 +127,7 @@ pub async fn audio_speech(
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                None,
+                                Some(pricing_units),
                                 &reserve_usage,
                             )
                         },
@@ -144,7 +145,7 @@ pub async fn audio_speech(
                                     api_key_id,
                                     budget.provider(),
                                     budget.model(),
-                                    None,
+                                    Some(pricing_units),
                                     &settle_usage,
                                     budget_reservation,
                                     key_budget_reservation,
