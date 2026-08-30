@@ -3,7 +3,7 @@
 use super::types::{ModelTokenConfig, TokenEstimate};
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent};
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tiktoken_rs::{ChatCompletionRequestMessage, bpe_for_model, num_tokens_from_messages};
 
 /// Token counter for different models
@@ -11,6 +11,8 @@ use tiktoken_rs::{ChatCompletionRequestMessage, bpe_for_model, num_tokens_from_m
 pub struct TokenCounter {
     /// Model-specific token counting configurations
     model_configs: HashMap<String, ModelTokenConfig>,
+    /// Models explicitly registered by callers.
+    custom_model_configs: HashSet<String>,
 }
 
 /// Explicit tokenizer contract selected for a provider attempt.
@@ -62,6 +64,7 @@ impl TokenCounter {
     pub fn new() -> Self {
         Self {
             model_configs: ModelTokenConfig::default_configs(),
+            custom_model_configs: HashSet::new(),
         }
     }
 
@@ -75,7 +78,9 @@ impl TokenCounter {
             TokenizerIdentity::ExactOpenAi(_) => {
                 self.exact_completion_tokens(identity.tokenizer_model()?, prompt)
             }
-            TokenizerIdentity::Approximate { .. } => self.approximate_completion_tokens(prompt),
+            TokenizerIdentity::Approximate { .. } => {
+                self.approximate_completion_tokens(identity, prompt)
+            }
         }
     }
 
@@ -89,7 +94,7 @@ impl TokenCounter {
             TokenizerIdentity::ExactOpenAi(_) => {
                 let model = identity.tokenizer_model()?;
                 let Some(total_tokens) = self.exact_chat_tokens(model, messages)? else {
-                    return self.approximate_chat_tokens(messages);
+                    return self.approximate_chat_tokens(identity, messages);
                 };
                 Ok(TokenEstimate {
                     input_tokens: total_tokens,
@@ -99,12 +104,18 @@ impl TokenCounter {
                     confidence: 1.0,
                 })
             }
-            TokenizerIdentity::Approximate { .. } => self.approximate_chat_tokens(messages),
+            TokenizerIdentity::Approximate { .. } => {
+                self.approximate_chat_tokens(identity, messages)
+            }
         }
     }
 
-    fn approximate_chat_tokens(&self, messages: &[ChatMessage]) -> Result<TokenEstimate> {
-        let config = self.approximate_model_config()?;
+    fn approximate_chat_tokens(
+        &self,
+        identity: &TokenizerIdentity,
+        messages: &[ChatMessage],
+    ) -> Result<TokenEstimate> {
+        let config = self.approximate_model_config(identity)?;
         let mut total_tokens = config.request_overhead;
 
         for message in messages {
@@ -228,8 +239,12 @@ impl TokenCounter {
         })
     }
 
-    fn approximate_completion_tokens(&self, prompt: &str) -> Result<TokenEstimate> {
-        let config = self.approximate_model_config()?;
+    fn approximate_completion_tokens(
+        &self,
+        identity: &TokenizerIdentity,
+        prompt: &str,
+    ) -> Result<TokenEstimate> {
+        let config = self.approximate_model_config(identity)?;
         let input_tokens = config.request_overhead + self.estimate_text_tokens(config, prompt);
 
         Ok(TokenEstimate {
@@ -264,7 +279,7 @@ impl TokenCounter {
             });
         }
 
-        let config = self.approximate_model_config()?;
+        let config = self.approximate_model_config(identity)?;
         let mut total_tokens = config.request_overhead;
 
         for text in input {
@@ -333,16 +348,32 @@ impl TokenCounter {
         })
     }
 
-    fn approximate_model_config(&self) -> Result<&ModelTokenConfig> {
-        self.model_configs
-            .get("default")
-            .ok_or_else(|| GatewayError::Config("No default token config found".to_string()))
+    fn approximate_model_config(&self, identity: &TokenizerIdentity) -> Result<&ModelTokenConfig> {
+        if self.custom_model_configs.contains(identity.model()) {
+            return self.model_configs.get(identity.model()).ok_or_else(|| {
+                GatewayError::Config(format!(
+                    "No token config found for explicitly configured model: {}",
+                    identity.model()
+                ))
+            });
+        }
+
+        let family = match identity.provider() {
+            "openai" if identity.model().starts_with("gpt-4") => "gpt-4",
+            "openai" if identity.model().starts_with("gpt-3.5") => "gpt-3.5-turbo",
+            "anthropic" if identity.model().starts_with("claude-3") => "claude-3",
+            "anthropic" if identity.model().starts_with("claude-2") => "claude-2",
+            _ => "default",
+        };
+        self.model_configs.get(family).ok_or_else(|| {
+            GatewayError::Config(format!("No token config found for family: {family}"))
+        })
     }
 
     fn config_for_identity(&self, identity: &TokenizerIdentity) -> Result<&ModelTokenConfig> {
         match identity {
             TokenizerIdentity::ExactOpenAi(_) => self.get_model_config(identity.tokenizer_model()?),
-            TokenizerIdentity::Approximate { .. } => self.approximate_model_config(),
+            TokenizerIdentity::Approximate { .. } => self.approximate_model_config(identity),
         }
     }
 
@@ -364,6 +395,7 @@ impl TokenCounter {
 
     /// Add or update model configuration
     pub fn add_model_config(&mut self, config: ModelTokenConfig) {
+        self.custom_model_configs.insert(config.model.clone());
         self.model_configs.insert(config.model.clone(), config);
     }
 

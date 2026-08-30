@@ -5,6 +5,8 @@ use crate::core::models::openai::{
     ChatMessage, ContentPart, FunctionCall, ImageUrl, MessageContent, MessageRole, ToolCall,
 };
 use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
+use crate::utils::ai::counter::types::ModelTokenConfig;
+use std::collections::HashMap;
 
 #[test]
 fn test_text_token_estimation() {
@@ -171,6 +173,103 @@ fn approximate_provider_identity_does_not_select_a_prefix_family_config() {
 
         assert!(!fits, "{provider}/gpt-4 must use the default 4k window");
     }
+}
+
+#[test]
+fn anthropic_approximation_uses_only_the_anthropic_family_config() {
+    let counter = TokenCounter::new();
+    let identity = TokenizerIdentity::approximate("anthropic", "claude-3-opus");
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("Hello world".to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    }];
+
+    assert_eq!(
+        counter
+            .count_completion_tokens(&identity, "Hello world")
+            .unwrap()
+            .input_tokens,
+        10
+    );
+    assert_eq!(
+        counter
+            .count_chat_tokens(&identity, &messages)
+            .unwrap()
+            .input_tokens,
+        17
+    );
+    assert_eq!(
+        counter
+            .count_embedding_tokens(&identity, &["Hello world".to_string()])
+            .unwrap()
+            .input_tokens,
+        10
+    );
+    assert!(
+        counter
+            .check_context_window(&identity, 100_000, None)
+            .unwrap()
+    );
+}
+
+#[test]
+fn explicit_custom_config_applies_to_every_approximate_entry_point() {
+    let mut counter = TokenCounter::new();
+    counter.add_model_config(ModelTokenConfig {
+        model: "tenant-model".to_string(),
+        chars_per_token: 1.0,
+        message_overhead: 11,
+        request_overhead: 17,
+        max_context_tokens: 12_345,
+        special_tokens: HashMap::new(),
+    });
+    let identity = TokenizerIdentity::approximate("custom", "tenant-model");
+    let messages = vec![ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Text("abcd".to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    }];
+
+    assert_eq!(
+        counter
+            .count_completion_tokens(&identity, "abcd")
+            .unwrap()
+            .input_tokens,
+        22
+    );
+    assert_eq!(
+        counter
+            .count_chat_tokens(&identity, &messages)
+            .unwrap()
+            .input_tokens,
+        38
+    );
+    assert_eq!(
+        counter
+            .count_embedding_tokens(&identity, &["abcd".to_string()])
+            .unwrap()
+            .input_tokens,
+        22
+    );
+    assert!(
+        counter
+            .check_context_window(&identity, 12_000, Some(300))
+            .unwrap()
+    );
+    assert!(
+        !counter
+            .check_context_window(&identity, 12_346, None)
+            .unwrap()
+    );
 }
 
 #[test]
