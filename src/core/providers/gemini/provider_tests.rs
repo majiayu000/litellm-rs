@@ -111,10 +111,11 @@ fn priced_gemini_3_7_flash_is_callable_on_the_developer_api() {
 }
 
 #[test]
-fn vertex_provider_does_not_assume_developer_only_models() {
+fn vertex_provider_supports_only_documented_current_models() {
     let provider = GeminiProvider::new(GeminiConfig::new_vertex_ai("project", "location")).unwrap();
 
     assert!(!provider.supports_model("gemini-3.6-flash"));
+    assert!(provider.supports_model("gemini-3.7-flash"));
     assert!(!provider.supports_model("gemini-3.5-flash-lite"));
     assert!(provider.supports_model("gemini-3.5-flash"));
 }
@@ -260,13 +261,17 @@ fn test_request_validation_unsupported_model() {
 }
 
 #[test]
-fn july_2026_models_reject_non_empty_assistant_prefill() {
+fn fixed_sampling_models_reject_non_empty_assistant_prefill() {
     let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
         "test-api-key-12345678901234567890",
     ))
     .unwrap();
 
-    for model in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
+    for model in [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+    ] {
         let mut request = create_valid_request(model);
         request.messages.push(ChatMessage {
             role: MessageRole::Assistant,
@@ -298,13 +303,17 @@ fn test_supported_openai_params() {
 }
 
 #[test]
-fn july_2026_models_do_not_advertise_sampling_parameters() {
+fn fixed_sampling_models_do_not_advertise_sampling_parameters() {
     let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
         "test-api-key-12345678901234567890",
     ))
     .unwrap();
 
-    for model in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
+    for model in [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+    ] {
         let params = provider.get_supported_openai_params(model);
         assert!(!params.contains(&"temperature"), "{model}");
         assert!(!params.contains(&"top_p"), "{model}");
@@ -314,7 +323,7 @@ fn july_2026_models_do_not_advertise_sampling_parameters() {
 }
 
 #[tokio::test]
-async fn july_2026_models_drop_sampling_parameters() {
+async fn fixed_sampling_models_drop_sampling_parameters() {
     let provider = GeminiProvider::new(GeminiConfig::new_google_ai(
         "test-api-key-12345678901234567890",
     ))
@@ -326,14 +335,20 @@ async fn july_2026_models_drop_sampling_parameters() {
         ("max_tokens".to_string(), serde_json::json!(16)),
     ]);
 
-    let mapped = provider
-        .map_openai_params(params, "gemini-3.6-flash")
-        .await
-        .unwrap();
-    assert!(!mapped.contains_key("temperature"));
-    assert!(!mapped.contains_key("top_p"));
-    assert!(!mapped.contains_key("top_k"));
-    assert_eq!(mapped["max_output_tokens"], serde_json::json!(16));
+    for model in ["gemini-3.7-flash", "gemini-3.6-flash"] {
+        let mapped = provider
+            .map_openai_params(params.clone(), model)
+            .await
+            .unwrap();
+        assert!(!mapped.contains_key("temperature"), "{model}");
+        assert!(!mapped.contains_key("top_p"), "{model}");
+        assert!(!mapped.contains_key("top_k"), "{model}");
+        assert_eq!(
+            mapped["max_output_tokens"],
+            serde_json::json!(16),
+            "{model}"
+        );
+    }
 }
 
 #[tokio::test]

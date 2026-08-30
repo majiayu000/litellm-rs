@@ -124,9 +124,11 @@ impl VertexAIProvider {
         let model = super::parse_vertex_model(&request.model);
         let is_catalog_gemini =
             super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
+        let is_legacy_gemini = super::is_exact_legacy_vertex_gemini_model(&request.model);
+        let is_gemini = is_catalog_gemini || is_legacy_gemini;
 
         // Transform request based on model type
-        let (endpoint, body) = if is_catalog_gemini {
+        let (endpoint, body) = if is_gemini {
             let endpoint = if request.stream {
                 "streamGenerateContent"
             } else {
@@ -162,7 +164,7 @@ impl VertexAIProvider {
             .map_err(|e| ProviderError::response_parsing("vertex_ai", e.to_string()))?;
 
         // Transform response back to standard format
-        if model.is_gemini() {
+        if is_gemini {
             self.gemini_transformer
                 .transform_chat_response(response_body, &model)
         } else {
@@ -251,9 +253,7 @@ impl VertexAIProvider {
         model: &str,
         messages: &[Value],
     ) -> Result<usize, VertexAIError> {
-        let model_obj = super::parse_vertex_model(model);
-        let endpoint = "countTokens";
-        let url = self.build_url(&model_obj, endpoint, false);
+        let url = self.count_tokens_url(model);
 
         let body = serde_json::json!({
             "contents": messages
@@ -269,6 +269,14 @@ impl VertexAIProvider {
             .as_u64()
             .map(|v| v as usize)
             .ok_or_else(|| ProviderError::response_parsing("vertex_ai", "Missing token count"))
+    }
+
+    pub(super) fn count_tokens_url(&self, model: &str) -> String {
+        if super::is_vertex_gemini_chat_model(model, self.config.enable_experimental) {
+            return self.build_google_catalog_model_url(model, "countTokens", false);
+        }
+        let model_obj = super::parse_vertex_model(model);
+        self.build_url(&model_obj, "countTokens", false)
     }
 }
 
@@ -292,11 +300,12 @@ impl LLMProvider for VertexAIProvider {
         use std::sync::LazyLock;
         fn load_models(
             surface: crate::core::providers::gemini::GoogleGeminiApiSurface,
+            pricing_time: chrono::DateTime<chrono::Utc>,
         ) -> Vec<ModelInfo> {
             let mut models = crate::core::providers::gemini::get_gemini_registry()
-                .list_model_infos_for_surface(surface);
+                .list_model_infos_for_surface_at(surface, pricing_time);
             for model in &mut models {
-                match super::vertex_prices_per_1k(&model.id) {
+                match super::vertex_prices_per_1k_at(&model.id, pricing_time) {
                     Ok((input, output)) => {
                         model.input_cost_per_1k_tokens = input;
                         model.output_cost_per_1k_tokens = output;
@@ -310,18 +319,40 @@ impl LLMProvider for VertexAIProvider {
             }
             models
         }
-        static STABLE_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-            load_models(crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi)
-        });
-        static EXPERIMENTAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+        static STABLE_PROMOTIONAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
             load_models(
-                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+                chrono::DateTime::<chrono::Utc>::MIN_UTC,
             )
         });
-        if self.config.enable_experimental {
-            &EXPERIMENTAL_MODELS
-        } else {
-            &STABLE_MODELS
+        static STABLE_STANDARD_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAi,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )
+        });
+        static EXPERIMENTAL_PROMOTIONAL_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+                chrono::DateTime::<chrono::Utc>::MIN_UTC,
+            )
+        });
+        static EXPERIMENTAL_STANDARD_MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+            load_models(
+                crate::core::providers::gemini::GoogleGeminiApiSurface::VertexAiExperimental,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )
+        });
+        match (
+            self.config.enable_experimental,
+            crate::core::providers::gemini::models::flash_uses_standard_pricing_at(
+                chrono::Utc::now(),
+            ),
+        ) {
+            (true, true) => &EXPERIMENTAL_STANDARD_MODELS,
+            (true, false) => &EXPERIMENTAL_PROMOTIONAL_MODELS,
+            (false, true) => &STABLE_STANDARD_MODELS,
+            (false, false) => &STABLE_PROMOTIONAL_MODELS,
         }
     }
 
@@ -406,6 +437,19 @@ impl LLMProvider for VertexAIProvider {
 
     /// Model
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        if crate::core::providers::gemini::models::uses_fixed_sampling_contract(model) {
+            return &[
+                "messages",
+                "model",
+                "max_tokens",
+                "stop",
+                "stream",
+                "tools",
+                "tool_choice",
+                "response_format",
+                "user",
+            ];
+        }
         // VertexAI supports OpenAI-compatible parameters for Gemini models
         if model.contains("gemini") {
             &[
@@ -458,15 +502,17 @@ impl LLMProvider for VertexAIProvider {
             generation_config.insert("maxOutputTokens".to_string(), max_tokens.clone());
         }
 
-        if let Some(temperature) = params.get("temperature") {
+        let fixed_sampling =
+            crate::core::providers::gemini::models::uses_fixed_sampling_contract(model);
+        if !fixed_sampling && let Some(temperature) = params.get("temperature") {
             generation_config.insert("temperature".to_string(), temperature.clone());
         }
 
-        if let Some(top_p) = params.get("top_p") {
+        if !fixed_sampling && let Some(top_p) = params.get("top_p") {
             generation_config.insert("topP".to_string(), top_p.clone());
         }
 
-        if let Some(top_k) = params.get("top_k") {
+        if !fixed_sampling && let Some(top_k) = params.get("top_k") {
             generation_config.insert("topK".to_string(), top_k.clone());
         }
 
@@ -527,7 +573,7 @@ impl LLMProvider for VertexAIProvider {
         _context: RequestContext,
     ) -> std::result::Result<Value, ProviderError> {
         let model = super::parse_vertex_model(&request.model);
-        if model.is_gemini() {
+        if super::is_vertex_gemini_chat_model(&request.model, self.config.enable_experimental) {
             self.gemini_transformer
                 .transform_chat_request(&request, &model)
         } else if model.is_partner_model() {
@@ -559,8 +605,9 @@ impl LLMProvider for VertexAIProvider {
             return Err(error_mapper.map_json_error(&response_json));
         }
 
-        let model = super::parse_vertex_model(model);
-        if model.is_gemini() {
+        let raw_model = model;
+        let model = super::parse_vertex_model(raw_model);
+        if super::is_vertex_gemini_chat_model(raw_model, self.config.enable_experimental) {
             self.gemini_transformer
                 .transform_chat_response(response_json, &model)
         } else if model.is_partner_model() {

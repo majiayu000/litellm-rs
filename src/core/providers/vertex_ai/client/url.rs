@@ -6,9 +6,14 @@ impl VertexAIProvider {
         if let Some(api_base) = self.config.api_base.as_deref() {
             return format!("{}/{}:{}", api_base.trim_end_matches('/'), model, endpoint);
         }
+        let host = if self.config.location == "global" {
+            "aiplatform.googleapis.com".to_string()
+        } else {
+            format!("{}-aiplatform.googleapis.com", self.config.location)
+        };
         format!(
-            "https://{}-aiplatform.googleapis.com/{}/projects/{}/locations/{}/publishers/google/models/{}:{}",
-            self.config.location,
+            "https://{}/{}/projects/{}/locations/{}/publishers/google/models/{}:{}",
+            host,
             self.config.api_version,
             self.config.project_id,
             self.config.location,
