@@ -329,7 +329,7 @@ fn validate_capability_target(
     let capability_provider = match (selected_provider, qualifier) {
         ("openai", Some("openai")) | ("azure", Some("openai")) => "openai",
         ("azure_ai", Some(provider @ ("openai" | "azure_ai"))) => provider,
-        ("openai_compatible", Some("xai")) => "xai",
+        ("openai_compatible", Some("xai")) | ("xai", Some("xai")) => "xai",
         (_, Some(_)) => {
             return Err(invalid_field(
                 provider_name,
