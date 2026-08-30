@@ -413,6 +413,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voyage_rerank_rejects_invalid_request_before_upstream_io() {
+        let mock = MockVoyageServer::start_voyage_mock().await;
+        let state = build_state(voyage_provider(&mock.base_url)).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        for body in [
+            json!({"model": "rerank-2.5", "query": "", "documents": ["document"]}),
+            json!({"model": "rerank-2.5", "query": "query", "documents": []}),
+            json!({"model": "rerank-2.5", "query": "query", "documents": ["document"], "top_n": 0}),
+        ] {
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/rerank")
+                    .set_json(body)
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(mock.requests().is_empty());
+        mock.shutdown_voyage_mock().await;
+    }
+
+    #[tokio::test]
     async fn voyage_upstream_errors_keep_status_and_message() {
         let mock = MockVoyageServer::start_voyage_mock().await;
         let state = build_state(voyage_provider(&mock.base_url)).await;

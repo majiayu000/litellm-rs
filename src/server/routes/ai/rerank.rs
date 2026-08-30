@@ -109,6 +109,8 @@ async fn handle_rerank_with_state(
                     let pricing_config = pricing_config.clone();
                     async move {
                         if let Provider::Voyage(provider) = &selected_provider {
+                            RerankService::validate_request(&request)
+                                .map_err(rerank_gateway_error_to_provider_error)?;
                             let request_pricing = super::spend::request_pricing_for_provider(
                                 &pricing_service,
                                 &selected_provider,
