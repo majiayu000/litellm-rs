@@ -2,7 +2,9 @@ use crate::core::audio::types::{
     SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
     TranslationResponse, WordInfo, format_to_content_type,
 };
-use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+use crate::core::providers::base::{
+    BaseConfig, BaseHttpClient, HttpErrorMapper, apply_provider_headers,
+};
 use crate::core::providers::shared::parse_retry_after_from_body;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
@@ -16,6 +18,11 @@ use reqwest::{Method, StatusCode, Url, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+
+#[path = "audio_dispatch_support.rs"]
+mod support;
+pub(crate) use support::native_audio_base_config;
+use support::native_audio_headers;
 
 impl Provider {
     /// Transcribe audio to text.
@@ -87,6 +94,7 @@ struct DeepgramResults {
 
 #[derive(Deserialize)]
 struct DeepgramChannel {
+    detected_language: Option<String>,
     alternatives: Vec<DeepgramAlternative>,
 }
 
@@ -227,35 +235,36 @@ impl LLMProvider for DeepgramProvider {
                 query.append_pair("detect_language", "true");
             }
         }
-        let response = self
-            .client
-            .request_preserving_endpoint_policy(Method::POST, url)?
-            .header(header::AUTHORIZATION, format!("Token {}", self.api_key))
-            .header(header::CONTENT_TYPE, audio_content_type(&request.filename))
-            .body(request.file)
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let response = apply_provider_headers(
+            self.client
+                .request_preserving_endpoint_policy(Method::POST, url)?,
+            native_audio_headers(
+                &self.client,
+                "authorization",
+                format!("Token {}", self.api_key),
+            ),
+        )
+        .header(header::CONTENT_TYPE, audio_content_type(&request.filename))
+        .body(request.file)
+        .send()
+        .await
+        .map_err(|error| self.client.map_preserved_request_error(error))?;
         let response = response_or_error(response, "deepgram", false).await?;
         let parsed: DeepgramResponse = response.json().await.map_err(|_| {
             ProviderError::response_parsing("deepgram", "invalid transcription response")
         })?;
-        let alternative = parsed
-            .results
-            .channels
-            .into_iter()
-            .next()
-            .and_then(|channel| channel.alternatives.into_iter().next())
-            .ok_or_else(|| {
-                ProviderError::response_parsing("deepgram", "transcription response has no result")
-            })?;
+        let channel = parsed.results.channels.into_iter().next().ok_or_else(|| {
+            ProviderError::response_parsing("deepgram", "transcription response has no result")
+        })?;
+        let detected_language = channel.detected_language;
+        let alternative = channel.alternatives.into_iter().next().ok_or_else(|| {
+            ProviderError::response_parsing("deepgram", "transcription response has no result")
+        })?;
         Ok(TranscriptionResponse {
             text: alternative.transcript,
             task: Some("transcribe".to_string()),
-            language: alternative
-                .languages
-                .into_iter()
-                .next()
+            language: detected_language
+                .or_else(|| alternative.languages.into_iter().next())
                 .or(request.language),
             duration: parsed.metadata.and_then(|metadata| metadata.duration),
             words: alternative.words.map(|words| {
@@ -283,6 +292,8 @@ impl LLMProvider for DeepgramProvider {
             "wav" => ("linear16", Some("wav")),
             "opus" => ("opus", Some("ogg")),
             "pcm" => ("linear16", None),
+            "aac" => ("aac", None),
+            "flac" => ("flac", None),
             format => {
                 return Err(ProviderError::invalid_request(
                     "deepgram",
@@ -302,14 +313,19 @@ impl LLMProvider for DeepgramProvider {
                 query.append_pair("speed", &speed.to_string());
             }
         }
-        let response = self
-            .client
-            .request_preserving_endpoint_policy(Method::POST, url)?
-            .header(header::AUTHORIZATION, format!("Token {}", self.api_key))
-            .json(&json!({"text": request.input}))
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let response = apply_provider_headers(
+            self.client
+                .request_preserving_endpoint_policy(Method::POST, url)?,
+            native_audio_headers(
+                &self.client,
+                "authorization",
+                format!("Token {}", self.api_key),
+            ),
+        )
+        .json(&json!({"text": request.input}))
+        .send()
+        .await
+        .map_err(|error| self.client.map_preserved_request_error(error))?;
         let response = response_or_error(response, "deepgram", false).await?;
         speech_response(response, requested_format, "deepgram").await
     }
@@ -355,8 +371,8 @@ struct ElevenLabsTranscription {
 #[derive(Deserialize)]
 struct ElevenLabsWord {
     text: String,
-    start: f64,
-    end: f64,
+    start: Option<f64>,
+    end: Option<f64>,
     #[serde(rename = "type")]
     word_type: String,
 }
@@ -522,14 +538,17 @@ impl LLMProvider for ElevenLabsProvider {
         {
             form = form.text("timestamps_granularity", "word");
         }
-        let response = self
-            .client
-            .request_preserving_endpoint_policy(Method::POST, self.endpoint("v1/speech-to-text")?)?
-            .header("xi-api-key", &self.api_key)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let response = apply_provider_headers(
+            self.client.request_preserving_endpoint_policy(
+                Method::POST,
+                self.endpoint("v1/speech-to-text")?,
+            )?,
+            native_audio_headers(&self.client, "xi-api-key", self.api_key.clone()),
+        )
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| self.client.map_preserved_request_error(error))?;
         let response = response_or_error(response, "elevenlabs", true).await?;
         let parsed: ElevenLabsTranscription = response.json().await.map_err(|_| {
             ProviderError::response_parsing("elevenlabs", "invalid transcription response")
@@ -542,12 +561,16 @@ impl LLMProvider for ElevenLabsProvider {
             words: parsed.words.map(|words| {
                 words
                     .into_iter()
-                    .filter(|word| word.word_type == "word")
-                    .map(|word| WordInfo {
-                        word: word.text,
-                        start: word.start,
-                        end: word.end,
-                    })
+                    .filter_map(
+                        |word| match (word.word_type.as_str(), word.start, word.end) {
+                            ("word", Some(start), Some(end)) if start <= end => Some(WordInfo {
+                                word: word.text,
+                                start,
+                                end,
+                            }),
+                            _ => None,
+                        },
+                    )
                     .collect()
             }),
             segments: None,
@@ -592,14 +615,15 @@ impl LLMProvider for ElevenLabsProvider {
             text: &request.input,
             model_id: &request.model,
         };
-        let response = self
-            .client
-            .request_preserving_endpoint_policy(Method::POST, url)?
-            .header("xi-api-key", &self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let response = apply_provider_headers(
+            self.client
+                .request_preserving_endpoint_policy(Method::POST, url)?,
+            native_audio_headers(&self.client, "xi-api-key", self.api_key.clone()),
+        )
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| self.client.map_preserved_request_error(error))?;
         let response = response_or_error(response, "elevenlabs", true).await?;
         speech_response(response, requested_format, "elevenlabs").await
     }
@@ -717,42 +741,4 @@ async fn response_or_error(
         status.as_u16(),
         &body,
     ))
-}
-
-pub(crate) fn native_audio_base_config(
-    config: &Value,
-    provider: &'static str,
-) -> Result<BaseConfig, ProviderError> {
-    let mut base = BaseConfig::from_env(provider);
-    if config
-        .get("max_retries")
-        .is_some_and(|value| value.as_u64() != Some(u64::from(BaseConfig::default().max_retries)))
-    {
-        return Err(ProviderError::configuration(
-            provider,
-            "max_retries is unsupported for native audio providers",
-        ));
-    }
-    base.max_retries = 0;
-    base.api_key = config
-        .get("api_key")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or(base.api_key);
-    if let Some(api_base) = config
-        .get("base_url")
-        .or_else(|| config.get("api_base"))
-        .and_then(Value::as_str)
-    {
-        base.api_base = Some(api_base.trim_end_matches('/').to_string());
-    }
-    if let Some(timeout) = config.get("timeout").and_then(Value::as_u64) {
-        base.timeout = timeout;
-    }
-    if let Some(access) = config.get("endpoint_access") {
-        base.endpoint_access = serde_json::from_value(access.clone()).map_err(|error| {
-            ProviderError::configuration(provider, format!("invalid endpoint_access: {error}"))
-        })?;
-    }
-    Ok(base)
 }

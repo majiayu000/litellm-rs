@@ -134,11 +134,16 @@ mod tests {
         match request.path() {
             "/v1/listen" => HttpResponse::Ok().json(json!({
                 "metadata": {"duration": 1.25},
-                "results": {"channels": [{"alternatives": [{
-                    "transcript": "deepgram transcript",
-                    "languages": ["en"],
-                    "words": [{"word": "deepgram", "start": 0.0, "end": 0.4}]
-                }]}]}
+                "results": {"channels": [{
+                    "detected_language": request.query_string()
+                        .contains("detect_language=true")
+                        .then_some("fr"),
+                    "alternatives": [{
+                        "transcript": "deepgram transcript",
+                        "languages": ["en"],
+                        "words": [{"word": "deepgram", "start": 0.0, "end": 0.4}]
+                    }]
+                }]}
             })),
             "/v1/speak" => HttpResponse::Ok()
                 .insert_header(("content-type", "audio/wav"))
@@ -146,7 +151,10 @@ mod tests {
             "/v1/speech-to-text" => HttpResponse::Ok().json(json!({
                 "text": "elevenlabs transcript",
                 "language_code": "en",
-                "words": [{"text": "elevenlabs", "type": "word", "start": 0.0, "end": 0.5}]
+                "words": [
+                    {"text": " ", "type": "spacing", "start": null, "end": null},
+                    {"text": "elevenlabs", "type": "word", "start": 0.0, "end": 0.5}
+                ]
             })),
             path if path.starts_with("/v1/text-to-speech/") => HttpResponse::Ok()
                 .insert_header(("content-type", "audio/mpeg"))
@@ -254,6 +262,7 @@ mod tests {
         assert_eq!(transcript.text, "elevenlabs transcript");
         assert_eq!(transcript.language.as_deref(), Some("en"));
         assert_eq!(transcript.duration, None);
+        assert_eq!(transcript.words.as_deref().map(<[_]>::len), Some(1));
 
         let speech = provider
             .text_to_speech(
@@ -386,10 +395,11 @@ mod tests {
         let mut request = transcription_request("nova-3");
         request.language = None;
 
-        provider
+        let response = provider
             .audio_transcription(request, RequestContext::new())
             .await
             .expect("Deepgram automatic language detection should succeed");
+        assert_eq!(response.language.as_deref(), Some("fr"));
 
         let requests = mock.requests();
         assert_eq!(requests.len(), 1);
@@ -403,6 +413,9 @@ mod tests {
         assert!(!query.contains_key("language"));
         mock.shutdown().await;
     }
+
+    #[path = "audio_native_followup_tests.rs"]
+    mod followup_tests;
 
     #[tokio::test]
     async fn native_audio_errors_and_timeout_are_structured() {
