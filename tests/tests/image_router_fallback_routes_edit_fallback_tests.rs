@@ -1,8 +1,14 @@
 use super::*;
 #[cfg(feature = "providers-extended")]
+use litellm_rs::core::budget::{BudgetConfig, BudgetScope, ModelLimitConfig};
+#[cfg(feature = "providers-extended")]
 use litellm_rs::core::providers::Provider;
 #[cfg(feature = "providers-extended")]
+use litellm_rs::core::types::context::RequestContext;
+#[cfg(feature = "providers-extended")]
 use litellm_rs::core::types::model::ProviderCapability;
+#[cfg(feature = "providers-extended")]
+use uuid::Uuid;
 
 #[tokio::test]
 async fn native_image_routes_fallback_when_selected_identity_snapshot_is_gone() {
@@ -257,13 +263,13 @@ async fn native_image_edit_rejects_multiple_images_before_upstream_io() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
-async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
+async fn ambiguous_bfl_image_submissions_settle_all_budgets() {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("mock BFL listener should bind");
     let address = listener.local_addr().expect("mock address should exist");
     let server = tokio::spawn(async move {
-        for task in ["edit", "generation"] {
+        for _ in 0..2 {
             let (mut socket, _) = listener.accept().await.expect("submit should arrive");
             use tokio::io::AsyncReadExt as _;
             let mut request = vec![0_u8; 8192];
@@ -271,20 +277,7 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
                 .read(&mut request)
                 .await
                 .expect("submit request should read");
-            let body = if task == "edit" {
-                format!(r#"{{"id":"{task}","polling_url":"http://127.0.0.1:1/poll/{task}"}}"#)
-            } else {
-                "not-json".to_string()
-            };
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            use tokio::io::AsyncWriteExt as _;
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .expect("submit response should write");
+            drop(socket);
         }
     });
     let state = build_route_policy_test_state_with_pricing(
@@ -310,6 +303,14 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
         "bfl-primary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
+    for model in ["flux-kontext-pro", "flux-pro-1.1"] {
+        state
+            .budget_limits
+            .models
+            .set_model_limit(model, ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
+    }
+    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
+    let budget_manager = state.budget_manager.clone();
     let budget_limits = state.budget_limits.clone();
     let app = test::init_service(
         App::new()
@@ -319,37 +320,37 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
     .await;
     let boundary = "litellm-rs-bfl-accepted-budget";
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/images/edits")
-            .insert_header((
-                "content-type",
-                format!("multipart/form-data; boundary={boundary}"),
-            ))
-            .set_payload(image_edit_multipart_body_for_model(
-                boundary,
-                "flux-kontext-pro",
-                1,
-            ))
-            .to_request(),
-    )
-    .await;
+    let edit_request = test::TestRequest::post()
+        .uri("/v1/images/edits")
+        .insert_header((
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        ))
+        .set_payload(image_edit_multipart_body_for_model(
+            boundary,
+            "flux-kontext-pro",
+            1,
+        ))
+        .to_request();
+    edit_request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let resp = test::call_service(&app, edit_request).await;
 
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    let generation_resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/images/generations")
-            .set_json(json!({
-                "model": "flux-pro-1.1",
-                "prompt": "a glass city",
-                "n": 1,
-                "response_format": "url"
-            }))
-            .to_request(),
-    )
-    .await;
+    let generation_request = test::TestRequest::post()
+        .uri("/v1/images/generations")
+        .set_json(json!({
+            "model": "flux-pro-1.1",
+            "prompt": "a glass city",
+            "n": 1,
+            "response_format": "url"
+        }))
+        .to_request();
+    generation_request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let generation_resp = test::call_service(&app, generation_request).await;
     assert_eq!(generation_resp.status(), StatusCode::BAD_GATEWAY);
     server.await.expect("mock server should finish");
     let configured_spend = budget_limits
@@ -358,6 +359,15 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
         .map(|usage| usage.current_spend)
         .unwrap_or_default();
     assert!((configured_spend - 0.12).abs() < f64::EPSILON);
+    for model in ["flux-kontext-pro", "flux-pro-1.1"] {
+        let spend = budget_limits
+            .models
+            .get_model_usage(model)
+            .map(|usage| usage.current_spend)
+            .unwrap_or_default();
+        assert!((spend - 0.06).abs() < f64::EPSILON, "{model}");
+    }
+    assert!((budget_manager.get_current_spend(&api_key_scope) - 0.12).abs() < f64::EPSILON);
     assert!(
         budget_limits
             .providers
@@ -369,33 +379,133 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
-async fn accepted_stability_body_failure_settles_configured_provider_budget() {
+async fn ambiguous_stability_image_submissions_settle_all_budgets() {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("mock Stability listener should bind");
     let address = listener.local_addr().expect("mock address should exist");
     let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("request should arrive");
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-        let mut request = vec![0_u8; 8192];
-        let _ = socket
-            .read(&mut request)
-            .await
-            .expect("request should read");
-        let body = br#"{"error":"proxy returned JSON with a 2xx status"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("response headers should write");
-        socket
-            .write_all(body)
-            .await
-            .expect("response body should write");
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            use tokio::io::AsyncReadExt as _;
+            let mut request = vec![0_u8; 8192];
+            let _ = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            drop(socket);
+        }
     });
+    let mut provider = image_provider(
+        "stability-primary",
+        "stability",
+        &format!("http://{address}"),
+        vec!["stable-image-core".to_string(), "inpaint".to_string()],
+    );
+    provider.max_retries = 0;
+    let state = build_route_policy_test_state_with_pricing(
+        vec![provider],
+        Some(HashMap::from([
+            (
+                "stable-image-core".to_string(),
+                flat_image_model_info_for_provider("stability", 0.06),
+            ),
+            (
+                "inpaint".to_string(),
+                flat_image_model_info_for_provider("stability", 0.06),
+            ),
+        ])),
+    )
+    .await;
+    state.budget_limits.providers.set_provider_limit(
+        "stability-primary",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    for model in ["stable-image-core", "inpaint"] {
+        state
+            .budget_limits
+            .models
+            .set_model_limit(model, ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
+    }
+    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
+    let budget_manager = state.budget_manager.clone();
+    let budget_limits = state.budget_limits.clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let generation_request = test::TestRequest::post()
+        .uri("/v1/images/generations")
+        .set_json(json!({
+            "model": "stable-image-core",
+            "prompt": "a glass city",
+            "n": 1,
+            "response_format": "png"
+        }))
+        .to_request();
+    generation_request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let resp = test::call_service(&app, generation_request).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let boundary = "litellm-rs-stability-ambiguous-edit";
+    let edit_request = test::TestRequest::post()
+        .uri("/v1/images/edits")
+        .insert_header((
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        ))
+        .set_payload(image_edit_multipart_body_for_model(boundary, "inpaint", 1))
+        .to_request();
+    edit_request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let edit_resp = test::call_service(&app, edit_request).await;
+    assert_eq!(edit_resp.status(), StatusCode::BAD_GATEWAY);
+    server.await.expect("mock server should finish");
+    let configured_spend = budget_limits
+        .providers
+        .get_provider_usage("stability-primary")
+        .map(|usage| usage.current_spend)
+        .unwrap_or_default();
+    assert!((configured_spend - 0.12).abs() < f64::EPSILON);
+    for model in ["stable-image-core", "inpaint"] {
+        let spend = budget_limits
+            .models
+            .get_model_usage(model)
+            .map(|usage| usage.current_spend)
+            .unwrap_or_default();
+        assert!((spend - 0.06).abs() < f64::EPSILON, "{model}");
+    }
+    assert!((budget_manager.get_current_spend(&api_key_scope) - 0.12).abs() < f64::EPSILON);
+}
+
+#[cfg(feature = "providers-extended")]
+async fn create_test_api_key_budget(state: &AppState) -> (BudgetScope, Uuid) {
+    let scope = BudgetScope::ApiKey(format!("native-media-{}", Uuid::new_v4()));
+    let budget = state
+        .budget_manager
+        .create_budget(
+            scope.clone(),
+            BudgetConfig::new("native media route budget", 100.0),
+        )
+        .await
+        .expect("API key budget should be created");
+    let budget_id = Uuid::parse_str(&budget.id).expect("budget id should be a UUID");
+    (scope, budget_id)
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn pre_io_native_validation_failure_cancels_all_budgets() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Stability listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
     let mut provider = image_provider(
         "stability-primary",
         "stability",
@@ -415,7 +525,13 @@ async fn accepted_stability_body_failure_settles_configured_provider_budget() {
         "stability-primary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
+    state.budget_limits.models.set_model_limit(
+        "stable-image-core",
+        ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
     let budget_limits = state.budget_limits.clone();
+    let budget_manager = state.budget_manager.clone();
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state))
@@ -423,28 +539,40 @@ async fn accepted_stability_body_failure_settles_configured_provider_budget() {
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/images/generations")
-            .set_json(json!({
-                "model": "stable-image-core",
-                "prompt": "a glass city",
-                "n": 1,
-                "response_format": "png"
-            }))
-            .to_request(),
-    )
-    .await;
+    let request = test::TestRequest::post()
+        .uri("/v1/images/generations")
+        .set_json(json!({
+            "model": "stable-image-core",
+            "prompt": "a glass city",
+            "n": 2,
+            "response_format": "png"
+        }))
+        .to_request();
+    request
+        .extensions_mut()
+        .insert(RequestContext::new().with_api_key_budget(api_key_budget_id));
+    let response = test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "pre-I/O validation reached Stability"
+    );
 
-    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    server.await.expect("mock server should finish");
-    let configured_spend = budget_limits
+    let provider_spend = budget_limits
         .providers
         .get_provider_usage("stability-primary")
         .map(|usage| usage.current_spend)
         .unwrap_or_default();
-    assert!((configured_spend - 0.06).abs() < f64::EPSILON);
+    let model_spend = budget_limits
+        .models
+        .get_model_usage("stable-image-core")
+        .map(|usage| usage.current_spend)
+        .unwrap_or_default();
+    assert_eq!(provider_spend, 0.0);
+    assert_eq!(model_spend, 0.0);
+    assert_eq!(budget_manager.get_current_spend(&api_key_scope), 0.0);
 }
 
 #[tokio::test]

@@ -333,11 +333,8 @@ pub mod runway {
             let env = BaseConfig::from_env(PROVIDER);
             config.base.api_key = std::env::var("RUNWAYML_API_SECRET")
                 .ok()
-                .and_then(|value| {
-                    let value = value.trim();
-                    (!value.is_empty()).then(|| value.to_string())
-                })
-                .or(env.api_key);
+                .and_then(trimmed_credential)
+                .or_else(|| env.api_key.and_then(trimmed_credential));
             config.base.timeout = env.timeout;
             config.base.max_retries = env.max_retries;
             if env.api_base.is_some() {
@@ -345,6 +342,11 @@ pub mod runway {
             }
             config
         }
+    }
+
+    fn trimmed_credential(value: String) -> Option<String> {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
     }
 
     impl ProviderConfig for RunwayConfig {

@@ -106,12 +106,19 @@ mod tests {
         request: HttpRequest,
         body: Bytes,
     ) -> HttpResponse {
-        state.paths.lock().unwrap().push(request.path().to_string());
+        let path = request.path().to_string();
+        state.paths.lock().unwrap().push(path.clone());
         state.bodies.lock().unwrap().push(body);
-        HttpResponse::Ok().json(json!({
-            "created": 1710000000,
-            "data": [{ "url": "https://images.example.test/edit.png" }]
-        }))
+        if path.starts_with("/v2beta/") {
+            HttpResponse::Ok()
+                .content_type("image/png")
+                .body("native-png")
+        } else {
+            HttpResponse::Ok().json(json!({
+                "created": 1710000000,
+                "data": [{ "url": "https://images.example.test/edit.png" }]
+            }))
+        }
     }
 
     async fn mock_image_generation(

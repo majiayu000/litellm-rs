@@ -73,6 +73,9 @@ fn runway_env_uses_official_secret_with_legacy_fallback() {
         "both",
         "blank-secret-with-legacy",
         "legacy-only",
+        "trimmed-legacy",
+        "blank-key-only",
+        "both-blank",
     ] {
         let status = std::process::Command::new(
             std::env::current_exe().expect("test executable should exist"),
@@ -97,6 +100,9 @@ fn runway_env_uses_official_secret_with_legacy_fallback() {
                 ("RUNWAYML_API_KEY", "legacy-key"),
             ],
             "legacy-only" => vec![("RUNWAYML_API_KEY", "legacy-key")],
+            "trimmed-legacy" => vec![("RUNWAYML_API_KEY", "  legacy-key  ")],
+            "blank-key-only" => vec![("RUNWAYML_API_KEY", "   ")],
+            "both-blank" => vec![("RUNWAYML_API_SECRET", "   "), ("RUNWAYML_API_KEY", "   ")],
             _ => unreachable!(),
         })
         .status()
@@ -112,17 +118,21 @@ fn runway_env_precedence_child() {
     let Ok(case) = std::env::var("RUNWAY_ENV_PRECEDENCE_CHILD") else {
         return;
     };
-    let expected = if matches!(case.as_str(), "legacy-only" | "blank-secret-with-legacy") {
-        "legacy-key"
-    } else {
-        "official-secret"
-    };
-
     let config = RunwayConfig::from_env();
+    let expected = match case.as_str() {
+        "legacy-only" | "trimmed-legacy" | "blank-secret-with-legacy" => Some("legacy-key"),
+        "blank-key-only" | "both-blank" => None,
+        _ => Some("official-secret"),
+    };
     assert!(
-        config.base.api_key.as_deref() == Some(expected),
+        config.base.api_key.as_deref() == expected,
         "Runway selected the wrong environment credential"
     );
+    if expected.is_none() {
+        let error = RunwayProvider::from_env()
+            .expect_err("blank Runway environment credentials must fail configuration");
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+    }
     assert!(
         RunwayConfig::with_api_key("explicit-key")
             .base

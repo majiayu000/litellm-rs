@@ -231,7 +231,8 @@ impl StabilityProvider {
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|error| self.client.map_preserved_request_error(error))?;
+                .map_err(|error| self.client.map_preserved_request_error(error))
+                .map_err(mark_post_submit_error_non_retryable)?;
         let status = response.status();
         let content_type = response
             .headers()
@@ -240,7 +241,11 @@ impl StabilityProvider {
             .map(str::to_owned);
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
-            Err(error) if status.is_success() => return Err(post_header_body_error(error)),
+            Err(error) if status.is_success() => {
+                return Err(mark_post_submit_error_non_retryable(
+                    self.client.map_preserved_request_error(error),
+                ));
+            }
             Err(error) => return Err(self.client.map_preserved_request_error(error)),
         };
         if !status.is_success() {
@@ -314,7 +319,8 @@ impl StabilityProvider {
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|error| self.client.map_preserved_request_error(error))?;
+                .map_err(|error| self.client.map_preserved_request_error(error))
+                .map_err(mark_post_submit_error_non_retryable)?;
         let status = response.status();
         let content_type = response
             .headers()
@@ -323,7 +329,11 @@ impl StabilityProvider {
             .map(str::to_owned);
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
-            Err(error) if status.is_success() => return Err(post_header_body_error(error)),
+            Err(error) if status.is_success() => {
+                return Err(mark_post_submit_error_non_retryable(
+                    self.client.map_preserved_request_error(error),
+                ));
+            }
             Err(error) => return Err(self.client.map_preserved_request_error(error)),
         };
         if !status.is_success() {
@@ -341,10 +351,12 @@ impl StabilityProvider {
     }
 }
 
-fn post_header_body_error(error: reqwest::Error) -> ProviderError {
+fn mark_post_submit_error_non_retryable(error: ProviderError) -> ProviderError {
     ProviderError::other(
         PROVIDER,
-        format!("response body failed after Stability accepted the request: {error}"),
+        format!(
+            "Stability submission may have been accepted; retrying could duplicate it: {error}"
+        ),
     )
 }
 
@@ -373,7 +385,7 @@ fn ensure_image_body(body: &[u8], content_type: Option<&str>) -> Result<(), Prov
 pub(crate) fn is_post_submit_error(error: &ProviderError) -> bool {
     matches!(error,
         ProviderError::Other { provider: PROVIDER, message }
-            if message.starts_with("response body failed after Stability accepted the request:"))
+            if message.starts_with("Stability submission may have been accepted;"))
         || matches!(
             error,
             ProviderError::ResponseParsing {
