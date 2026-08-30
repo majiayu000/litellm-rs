@@ -189,6 +189,9 @@ mod matrix {
     }
 }
 
+use super::Router;
+use std::collections::HashMap;
+
 fn function<'a>(source: &'a str, signature: &str) -> &'a str {
     let start = source
         .find(signature)
@@ -230,8 +233,30 @@ fn credential_resolver_and_construction_source_guards() {
         }
     }
     let gateway = include_str!("gateway_config.rs");
-    let construction = function(gateway, "pub async fn from_gateway_config_with_aliases(");
-    assert_eq!(construction.matches("create_provider(").count(), 1);
+    let identity = include_str!("gateway_identity.rs");
+    let canonical = function(
+        gateway,
+        "pub(super) async fn from_gateway_config_with_identity(",
+    );
+    assert_eq!(canonical.matches("create_provider(").count(), 1);
+
+    let construction_entry_points = [
+        function(gateway, "pub async fn from_gateway_config("),
+        function(gateway, "pub async fn from_gateway_config_with_aliases("),
+        canonical,
+        function(identity, "pub async fn from_gateway_config_with_pricing("),
+        function(
+            identity,
+            "pub async fn from_gateway_config_with_aliases_and_pricing(",
+        ),
+    ];
+    assert_eq!(
+        construction_entry_points
+            .iter()
+            .map(|entry_point| entry_point.matches("create_provider(").count())
+            .sum::<usize>(),
+        1
+    );
 }
 
 #[test]
@@ -308,4 +333,248 @@ fn unambiguously_chat_only_provider_can_opt_into_native_probe() {
     };
 
     assert!(provider.validate_health_check_runtime().is_ok());
+}
+
+fn identity_provider_config(
+    model: &str,
+    mapping: Option<crate::core::providers::model_identity::ModelIdentityMapping>,
+) -> crate::config::models::provider::ProviderConfig {
+    let mut config = crate::config::models::provider::ProviderConfig {
+        name: "identity-openai".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        models: vec![model.to_string()],
+        ..Default::default()
+    };
+    if let Some(mapping) = mapping {
+        config.settings.insert(
+            crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({model: mapping}),
+        );
+    }
+    config
+}
+
+fn runtime_price(provider: &str) -> crate::core::pricing_service::LiteLLMModelInfo {
+    crate::core::pricing_service::LiteLLMModelInfo {
+        max_tokens: Some(4096),
+        max_input_tokens: Some(4096),
+        max_output_tokens: Some(1024),
+        input_cost_per_token: Some(0.01),
+        output_cost_per_token: Some(0.02),
+        input_cost_per_character: None,
+        output_cost_per_character: None,
+        cost_per_second: None,
+        litellm_provider: provider.to_string(),
+        mode: "chat".to_string(),
+        supports_function_calling: None,
+        supports_vision: None,
+        supports_streaming: None,
+        supports_parallel_function_calling: None,
+        supports_system_message: None,
+        extra: HashMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn pricing_aware_default_openai_publishes_only_callable_catalog_models() {
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default()
+            .expect("embedded pricing should load"),
+    );
+    let provider = crate::config::models::provider::ProviderConfig {
+        name: "default-openai".to_string(),
+        provider_type: "openai".to_string(),
+        api_key: "sk-test".to_string(),
+        models: Vec::new(),
+        ..Default::default()
+    };
+
+    let router = Router::from_gateway_config_with_pricing(&[provider], None, pricing)
+        .await
+        .expect("default OpenAI catalog should publish only callable deployments");
+
+    assert!(!router.get_deployments_for_model("gpt-4").is_empty());
+    for non_callable in [
+        "high/1536-x-1024/gpt-image-1",
+        "openai/container",
+        "daybreak-blue-latest",
+        "openai/sora-2",
+        "GPT-4",
+    ] {
+        assert!(
+            router.get_deployments_for_model(non_callable).is_empty(),
+            "non-callable or non-exact catalog identity {non_callable:?} became routable"
+        );
+    }
+}
+
+#[tokio::test]
+async fn pricing_aware_constructor_validates_runtime_only_target_and_binds_same_service() {
+    let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+    pricing.add_custom_model("runtime-only-price".to_string(), runtime_price("openai"));
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some("gpt-4".to_string()),
+        Some("runtime-only-price".to_string()),
+    );
+
+    let router = Router::from_gateway_config_with_pricing(
+        &[identity_provider_config("wire-deployment", Some(mapping))],
+        None,
+        pricing.clone(),
+    )
+    .await
+    .expect("injected runtime target should validate");
+    let deployment = router
+        .get_deployment("identity-openai-wire-deployment")
+        .expect("deployment should be published");
+    let bound = deployment
+        .provider
+        .runtime_pricing()
+        .expect("managed provider should retain injected authority");
+    assert!(std::sync::Arc::ptr_eq(&pricing, &bound));
+    assert_eq!(
+        deployment
+            .provider
+            .deployment_model_identity()
+            .and_then(|identity| identity.pricing_model()),
+        Some("runtime-only-price")
+    );
+    assert!(deployment.provider.supports_capability_for_model(
+        "wire-deployment",
+        &crate::core::types::model::ProviderCapability::ChatCompletion,
+    ));
+    assert!(!deployment.provider.supports_capability_for_model(
+        "wire-deployment",
+        &crate::core::types::model::ProviderCapability::Embeddings,
+    ));
+}
+
+#[tokio::test]
+async fn unmapped_configured_deployment_starts_unpriced_and_fails_capability_selection() {
+    let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+    let router = Router::from_gateway_config_with_pricing(
+        &[identity_provider_config("wire-deployment", None)],
+        None,
+        pricing,
+    )
+    .await
+    .expect("an exact configured deployment must survive without semantic mappings");
+
+    let deployment = router
+        .get_deployment("identity-openai-wire-deployment")
+        .expect("configured deployment should be published");
+    let identity = deployment
+        .provider
+        .deployment_model_identity()
+        .expect("configured deployment should retain a typed identity");
+    assert_eq!(identity.wire_model(), "wire-deployment");
+    assert_eq!(identity.capability_catalog_model(), None);
+    assert_eq!(identity.pricing_model(), None);
+
+    let error = match router.select_deployment_lease_for_capability(
+        "wire-deployment",
+        &crate::core::types::model::ProviderCapability::ChatCompletion,
+    ) {
+        Ok(_) => panic!("an unmapped deployment must not gain catalog capabilities"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("model_identity_mappings.wire-deployment.capability_catalog_model"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn pricing_only_mapping_never_grants_provider_capability() {
+    let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+    pricing.add_custom_model("runtime-only-price".to_string(), runtime_price("openai"));
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        None,
+        Some("runtime-only-price".to_string()),
+    );
+    let router = Router::from_gateway_config_with_pricing(
+        &[identity_provider_config("wire-deployment", Some(mapping))],
+        None,
+        pricing,
+    )
+    .await
+    .expect("pricing-only deployment may be retained for non-capability consumers");
+    let deployment = router
+        .get_deployment("identity-openai-wire-deployment")
+        .expect("deployment should be published");
+    assert!(!deployment.provider.supports_capability_for_model(
+        "wire-deployment",
+        &crate::core::types::model::ProviderCapability::ChatCompletion,
+    ));
+}
+
+#[tokio::test]
+async fn explicit_unpriced_mapping_never_falls_back_to_raw_catalog_price() {
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default()
+            .expect("embedded pricing should load"),
+    );
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some("gpt-4".to_string()),
+        None,
+    );
+    let router = Router::from_gateway_config_with_pricing(
+        &[identity_provider_config("gpt-4", Some(mapping))],
+        None,
+        pricing.clone(),
+    )
+    .await
+    .expect("explicit unpriced mapping should remain routable by capability");
+    let deployment = router
+        .get_deployment("identity-openai-gpt-4")
+        .expect("deployment should be published");
+    let identity = deployment
+        .provider
+        .deployment_model_identity()
+        .expect("validated deployment identity should bind");
+    assert_eq!(identity.pricing_model(), None);
+    assert_eq!(identity.capability_catalog_model(), Some("gpt-4"));
+}
+
+#[tokio::test]
+async fn compatibility_constructor_rejects_runtime_mapping_without_authority() {
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some("gpt-4".to_string()),
+        Some("runtime-only-price".to_string()),
+    );
+    let error = Router::from_gateway_config(
+        &[identity_provider_config("wire-deployment", Some(mapping))],
+        None,
+    )
+    .await
+    .expect_err("mapping without injected runtime pricing must fail");
+    let text = error.to_string();
+    assert!(text.contains("model_identity_mappings") && text.contains("pricing"));
+}
+
+#[tokio::test]
+async fn pricing_aware_constructor_fails_absent_target_before_snapshot_publication() {
+    let pricing = std::sync::Arc::new(crate::core::pricing_service::PricingService::new(None));
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some("gpt-4".to_string()),
+        Some("missing-runtime-price".to_string()),
+    );
+    let error = Router::from_gateway_config_with_pricing(
+        &[identity_provider_config("wire-deployment", Some(mapping))],
+        None,
+        pricing,
+    )
+    .await
+    .expect_err("missing runtime target must fail startup");
+    let text = error.to_string();
+    assert!(
+        text.contains("identity-openai")
+            && text.contains("wire-deployment")
+            && text.contains("pricing_model")
+            && text.contains("missing-runtime-price"),
+        "{text}"
+    );
 }

@@ -353,8 +353,7 @@ pub(super) struct SettledStream {
     pub(super) api_key_id: Option<Uuid>,
     pub(super) provider: String,
     pub(super) model: String,
-    pub(super) pricing_provider: String,
-    pub(super) pricing_model: String,
+    pub(super) request_pricing: spend::RequestPricing,
     pub(super) budget_reservation: Option<UnifiedBudgetReservation>,
     pub(super) key_budget_reservation: Option<BudgetReservation>,
 }
@@ -374,8 +373,7 @@ impl SettledStream {
                 api_key_id: self.api_key_id,
                 provider: &self.provider,
                 model: &self.model,
-                pricing_provider: &self.pricing_provider,
-                pricing_model: &self.pricing_model,
+                request_pricing: self.request_pricing.clone(),
                 usage,
                 saw_upstream_output,
                 budget_reservation: self.budget_reservation.take(),
@@ -389,14 +387,14 @@ impl SettledStream {
         spend::record_stream_disconnect_spend_with_reservation_with_policy(
             self.pricing_service.as_ref(),
             &self.pricing_config,
-            spend::usage_spend_settlement_with_pricing(
+            spend::usage_spend_settlement_with_request_pricing(
                 (
                     self.budget_limits.as_ref(),
                     &self.key_manager,
                     self.api_key_id,
                 ),
                 (&self.provider, &self.model, usage),
-                (&self.pricing_provider, &self.pricing_model),
+                self.request_pricing.clone(),
                 self.budget_reservation.take(),
                 self.key_budget_reservation.take(),
             ),
@@ -422,7 +420,7 @@ mod tests {
 
     use super::{ApiKeyBudgetPolicy, BudgetedCall, SettledStream};
 
-    fn limited_budget() -> Arc<UnifiedBudgetLimits> {
+    pub(super) fn limited_budget() -> Arc<UnifiedBudgetLimits> {
         let limits = UnifiedBudgetLimits::new();
         limits.providers.set_provider_limit(
             "openai",
@@ -710,23 +708,28 @@ mod tests {
         assert!(settled.load(Ordering::Relaxed));
     }
 
-    fn settled_stream(
+    pub(super) fn settled_stream(
         budget_limits: Arc<UnifiedBudgetLimits>,
         reservation: Option<UnifiedBudgetReservation>,
     ) -> SettledStream {
+        let pricing_service = Arc::new(
+            PricingService::with_embedded_default()
+                .expect("embedded pricing should load for settled stream tests"),
+        );
+        let request_pricing = crate::server::routes::ai::spend::RequestPricing::from_exact(
+            pricing_service.as_ref(),
+            "openai",
+            "gpt-4",
+        );
         SettledStream {
-            pricing_service: Arc::new(
-                PricingService::with_embedded_default()
-                    .expect("embedded pricing should load for settled stream tests"),
-            ),
+            pricing_service,
             pricing_config: GatewayPricingConfig::default(),
             budget_limits,
             key_manager: KeyManager::new(InMemoryKeyRepository::new()),
             api_key_id: None,
             provider: "openai".to_string(),
             model: "gpt-4".to_string(),
-            pricing_provider: "openai".to_string(),
-            pricing_model: "gpt-4".to_string(),
+            request_pricing,
             budget_reservation: reservation,
             key_budget_reservation: None,
         }

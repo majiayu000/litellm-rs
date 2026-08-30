@@ -78,11 +78,12 @@ pub(super) async fn handle_streaming_completion(
             let callback = callback_for_execution.clone();
             async move {
                 let provider_name = provider.name().to_string();
-                let (pricing_provider, pricing_model) = spend::pricing_identity_for_provider(
-                    pricing_service.as_ref(),
+                let request_pricing = spend::request_pricing_for_provider(
+                    &pricing_service,
                     &provider,
                     &selected_model,
-                );
+                    ProviderCapability::ChatCompletionStream,
+                )?;
                 let request_for_provider = token_policy::prepare_chat_request_for_provider(
                     context.api_key_max_tokens_per_request(),
                     &provider_name,
@@ -97,12 +98,10 @@ pub(super) async fn handle_streaming_completion(
                         );
                 let provider_context = context.as_ref().clone();
                 let reserve_pricing_config = pricing_config.clone();
-                let reserve_pricing_provider = pricing_provider.clone();
-                let reserve_pricing_model = pricing_model.clone();
+                let reserve_request_pricing = request_pricing.clone();
                 let callback_provider = provider_name.clone();
                 let callback_model = selected_model.clone();
-                let callback_pricing_provider = reserve_pricing_provider.clone();
-                let callback_pricing_model = reserve_pricing_model.clone();
+                let callback_request_pricing = request_pricing.clone();
                 let (stream, reservations) = budgeted
                     .for_selected_with_api_key_budget(
                         provider_name.clone(),
@@ -112,23 +111,20 @@ pub(super) async fn handle_streaming_completion(
                     )
                     .reserve_call(
                         |budget| {
-                            spend::reserve_chat_completion_budget_with_split_pricing(
-                                pricing_service.as_ref(),
+                            spend::reserve_chat_completion_budget_with_request_pricing(
+                                &reserve_request_pricing,
                                 &reserve_pricing_config,
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                &reserve_pricing_provider,
-                                &reserve_pricing_model,
                                 request_for_budget,
                             )
                         },
                         || {
-                            callback.begin_provider_execution(
+                            callback.begin_provider_execution_with_pricing(
                                 callback_provider,
                                 callback_model,
-                                callback_pricing_provider,
-                                callback_pricing_model,
+                                callback_request_pricing,
                             );
                             provider.chat_completion_stream(request_for_provider, provider_context)
                         },
@@ -143,8 +139,7 @@ pub(super) async fn handle_streaming_completion(
                     api_key_id,
                     provider: provider_name.clone(),
                     model: selected_model.clone(),
-                    pricing_provider,
-                    pricing_model,
+                    request_pricing,
                     budget_reservation,
                     key_budget_reservation,
                 };

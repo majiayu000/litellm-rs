@@ -43,6 +43,8 @@ pub struct OpenAIProvider {
     pub(crate) config: OpenAIConfig,
     /// Model registry
     pub(crate) model_registry: &'static OpenAIModelRegistry,
+    pub(crate) model_identity:
+        Option<crate::core::providers::model_identity::DeploymentProviderBinding>,
 }
 
 impl OpenAIProvider {
@@ -95,6 +97,7 @@ impl OpenAIProvider {
             pool_manager,
             config,
             model_registry,
+            model_identity: None,
         })
     }
 
@@ -479,32 +482,28 @@ impl LLMProvider for OpenAIProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        let usage = crate::core::cost::types::UsageTokens::new(input_tokens, output_tokens);
-        if let Ok(breakdown) =
-            crate::core::cost::calculator::generic_cost_per_token(model, &usage, "openai")
-        {
-            return Ok(breakdown.total_cost);
-        }
-
-        let model_info = self.get_model_info(model)?;
-
-        let input_cost = model_info
-            .input_cost_per_1k_tokens
-            .map(|cost| (input_tokens as f64 / 1000.0) * cost)
-            .unwrap_or(0.0);
-
-        let output_cost = model_info
-            .output_cost_per_1k_tokens
-            .map(|cost| (output_tokens as f64 / 1000.0) * cost)
-            .unwrap_or(0.0);
-
-        Ok(input_cost + output_cost)
+        crate::core::providers::model_identity::calculate_managed_provider_cost(
+            &crate::core::providers::Provider::OpenAI(self.clone()),
+            model,
+            input_tokens,
+            output_tokens,
+        )
+        .unwrap_or_else(|| {
+            Err(ProviderError::configuration(
+                "pricing",
+                "OpenAI pricing authority dispatch is unavailable",
+            ))
+        })
     }
 
     // ==================== Python LiteLLM Compatible Interface ====================
 
     fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
-        let model = model.strip_prefix("openai/").unwrap_or(model);
+        let model = self
+            .model_identity
+            .as_ref()
+            .and_then(|binding| binding.identity().capability_catalog_model())
+            .unwrap_or_else(|| model.strip_prefix("openai/").unwrap_or(model));
 
         // Return parameters based on model capabilities
         if let Some(model_spec) = self.model_registry.get_model_spec(model) {

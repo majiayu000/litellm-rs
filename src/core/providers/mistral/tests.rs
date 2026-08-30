@@ -178,8 +178,8 @@ async fn test_current_mistral_alias_metadata() {
     };
     assert_eq!(small_4.max_context_length, 256000);
     assert!(small_4.supports_multimodal);
-    assert_eq!(small_4.input_cost_per_1k_tokens, Some(0.0001));
-    assert_eq!(small_4.output_cost_per_1k_tokens, Some(0.0003));
+    assert_eq!(small_4.input_cost_per_1k_tokens, Some(0.00015));
+    assert_eq!(small_4.output_cost_per_1k_tokens, Some(0.0006));
 
     let Some(medium_alias) = models.iter().find(|m| m.id == "mistral-medium") else {
         panic!("mistral-medium alias should be present");
@@ -213,6 +213,68 @@ async fn test_provider_models_have_pricing() {
         assert_eq!(model.provider, "mistral");
         assert!(model.input_cost_per_1k_tokens.is_some());
         assert!(model.output_cost_per_1k_tokens.is_some());
+    }
+}
+
+#[tokio::test]
+async fn test_mistral_small_4_static_pricing_and_alias_boundaries() {
+    let provider = MistralProvider::new(create_test_config()).await.unwrap();
+    let models = provider.models();
+
+    for model_id in [
+        "mistral-small-latest",
+        "mistral-small-2603",
+        "mistral-small-4",
+        "mistral-small",
+    ] {
+        let Some(model) = models.iter().find(|model| model.id == model_id) else {
+            panic!("{model_id} should be present in the static Mistral catalog");
+        };
+        assert_eq!(model.input_cost_per_1k_tokens, Some(0.00015));
+        assert_eq!(model.output_cost_per_1k_tokens, Some(0.0006));
+    }
+
+    let Some(alias) = models.iter().find(|model| model.id == "mistral-small-4") else {
+        panic!("mistral-small-4 alias should be present");
+    };
+    assert_eq!(
+        alias.metadata.get("alias_for"),
+        Some(&serde_json::json!("mistral-small-latest"))
+    );
+    assert_eq!(
+        provider.canonical_model_id("mistral/mistral-small-2603"),
+        "mistral-small-2603"
+    );
+    assert_eq!(
+        provider.canonical_model_id("mistral/mistral-small-4"),
+        "mistral-small-latest"
+    );
+
+    let Some(previous_generation) = models.iter().find(|model| model.id == "mistral-small-2506")
+    else {
+        panic!("mistral-small-2506 should remain in the static Mistral catalog");
+    };
+    assert_eq!(previous_generation.input_cost_per_1k_tokens, Some(0.0001));
+    assert_eq!(previous_generation.output_cost_per_1k_tokens, Some(0.0003));
+    assert!(
+        !models
+            .iter()
+            .any(|model| model.id == "mistral-small-2603-preview")
+    );
+    assert_eq!(
+        provider.canonical_model_id("mistral/mistral-small-2603-preview"),
+        "mistral-small-2603-preview"
+    );
+    for (candidate, canonical) in [
+        ("mistral/Mistral-Small-2603", "Mistral-Small-2603"),
+        ("MISTRAL/mistral-small-2603", "MISTRAL/mistral-small-2603"),
+        ("openai/mistral-small-2603", "openai/mistral-small-2603"),
+        (
+            "mistral/mistral/mistral-small-2603",
+            "mistral/mistral-small-2603",
+        ),
+    ] {
+        assert_eq!(provider.canonical_model_id(candidate), canonical);
     }
 }
 
@@ -441,10 +503,33 @@ async fn test_calculate_cost_known_model() {
 async fn test_calculate_cost_current_small_model() {
     let provider = MistralProvider::new(create_test_config()).await.unwrap();
 
-    let cost = provider
-        .calculate_cost("mistral-small-latest", 1000, 500)
-        .await;
-    assert!(matches!(cost, Ok(v) if (v - 0.00025).abs() < f64::EPSILON));
+    for model in [
+        "mistral-small-latest",
+        "mistral-small-2603",
+        "mistral-small-4",
+        "mistral-small",
+        "mistral/mistral-small-2603",
+        "mistral/mistral-small-4",
+    ] {
+        let cost = provider.calculate_cost(model, 1000, 500).await;
+        assert!(
+            matches!(cost, Ok(value) if (value - 0.00045).abs() < f64::EPSILON),
+            "{model} should use the central Mistral Small 4 runtime price"
+        );
+    }
+
+    let central = crate::core::pricing::get_pricing_db()
+        .get_model_info("mistral/mistral-small-2603")
+        .unwrap_or_else(|| panic!("official Mistral Small 4 row should be centrally priced"));
+    assert_eq!(central.input_cost_per_token, Some(0.000_000_15));
+    assert_eq!(central.output_cost_per_token, Some(0.000_000_6));
+    assert_eq!(
+        central
+            .extra
+            .get("cache_read_input_token_cost")
+            .and_then(serde_json::Value::as_f64),
+        Some(0.000_000_015)
+    );
 }
 
 #[tokio::test]
@@ -470,7 +555,7 @@ async fn test_calculate_cost_current_alias_prices_are_deterministic() {
     let small = provider.calculate_cost("mistral-small", 1000, 500).await;
 
     assert!(matches!(large, Ok(v) if (v - 0.00125).abs() < f64::EPSILON));
-    assert!(matches!(small, Ok(v) if (v - 0.00025).abs() < f64::EPSILON));
+    assert!(matches!(small, Ok(v) if (v - 0.00045).abs() < f64::EPSILON));
 }
 
 #[tokio::test]

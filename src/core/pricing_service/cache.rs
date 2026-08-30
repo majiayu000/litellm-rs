@@ -1,6 +1,7 @@
 //! Caching and refresh functionality for the pricing service
 
 use super::service::PricingService;
+use super::service::build_pricing_data;
 use super::types::{PricingEventType, PricingUpdateEvent};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::sync::Arc;
@@ -65,12 +66,11 @@ impl PricingService {
             self.load_from_file().await?
         };
 
-        // Update in-memory data and timestamp in single lock
+        let timestamp = SystemTime::now();
+        let next = Arc::new(build_pricing_data(data, timestamp));
         {
-            let mut pricing_data = self.pricing_data.write();
-            pricing_data.models.clear();
-            pricing_data.models.extend(data);
-            pricing_data.last_updated = SystemTime::now();
+            let _write_guard = self.pricing_write_lock.lock();
+            self.pricing_data.store(next);
         }
 
         // Send update event
@@ -78,7 +78,7 @@ impl PricingService {
             event_type: PricingEventType::DataRefreshed,
             model: "*".to_string(),
             provider: "*".to_string(),
-            timestamp: SystemTime::now(),
+            timestamp,
         });
 
         info!("Pricing data refreshed successfully");
@@ -87,7 +87,7 @@ impl PricingService {
 
     /// Check if pricing data needs refresh
     pub fn needs_refresh(&self) -> bool {
-        let data = self.pricing_data.read();
+        let data = self.pricing_data.load();
         SystemTime::now()
             .duration_since(data.last_updated)
             .map(|duration| duration > self.cache_ttl)

@@ -20,14 +20,6 @@ pub(super) const VERTEX_PROVIDER_ALIASES: &[&str] = &[
     "vertex_ai-zai_models",
 ];
 
-pub(super) fn is_vertex_publisher_prefix(provider: &str, prefix: &str) -> bool {
-    provider == "vertex_ai"
-        && matches!(
-            prefix.to_ascii_lowercase().as_str(),
-            "ai21" | "meta" | "mistral"
-        )
-}
-
 pub(super) fn uses_google_completion_calculator(
     requested_provider: &str,
     catalog_provider: &str,
@@ -37,32 +29,19 @@ pub(super) fn uses_google_completion_calculator(
         || catalog_provider.starts_with("vertex_ai_")
 }
 
-pub(super) fn exact_pricing_candidates(
-    provider: &str,
-    model: &str,
-    normalized_model: &str,
-) -> Vec<String> {
-    let model = model.to_ascii_lowercase();
-    let normalized_model = normalized_model.to_ascii_lowercase();
-    let mut candidates = Vec::with_capacity(5);
-    for candidate in [
-        model.clone(),
-        normalized_model.clone(),
-        format!("{provider}/{model}"),
-        format!("{provider}/{normalized_model}"),
-    ] {
-        if !candidates.contains(&candidate) {
-            candidates.push(candidate);
-        }
+pub(super) fn explicit_pricing_alias(provider: &str, model: &str) -> Option<&'static str> {
+    if provider != "vertex_ai" {
+        return None;
     }
-
-    if provider == "vertex_ai"
-        && let Some(alias) = vertex_pricing_alias(&model)
-        && !candidates.iter().any(|candidate| candidate == alias)
-    {
-        candidates.push(alias.to_string());
-    }
-    candidates
+    let parsed = crate::core::types::model_id::ModelIdRef::parse(model);
+    let local = if parsed.provider().is_some_and(|prefix| {
+        crate::core::pricing::normalize_pricing_provider(prefix) == "vertex_ai"
+    }) {
+        parsed.model()
+    } else {
+        parsed.raw()
+    };
+    vertex_pricing_alias(&local.to_ascii_lowercase())
 }
 
 fn vertex_pricing_alias(model: &str) -> Option<&'static str> {
@@ -78,6 +57,8 @@ fn vertex_pricing_alias(model: &str) -> Option<&'static str> {
         "meta/llama-4-maverick-17b-128e-instruct" => {
             Some("vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas")
         }
+        "ai21/jamba-1.5-large" => Some("vertex_ai/jamba-1.5-large"),
+        "mistral/mistral-large-2411" => Some("vertex_ai/mistral-large-2411"),
         "mistral/mistral-nemo" => Some("vertex_ai/mistral-nemo@latest"),
         _ => None,
     }

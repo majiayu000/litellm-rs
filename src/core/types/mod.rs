@@ -7,11 +7,15 @@ pub mod context;
 pub mod health;
 pub mod metrics;
 pub mod model;
+pub mod model_id;
+#[cfg(test)]
+mod model_id_tests;
 pub mod pagination;
 pub mod service;
 
 // Split from requests.rs (new modules)
 pub mod anthropic;
+pub mod anthropic_continuation;
 pub mod chat;
 pub mod codex;
 pub mod content;

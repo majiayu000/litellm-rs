@@ -1,5 +1,6 @@
 use super::RequestValidator;
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent, MessageRole};
+use crate::core::providers::ChatMessageContinuation;
 use crate::utils::error::gateway_error::{GatewayError, Result};
 
 impl RequestValidator {
@@ -7,6 +8,40 @@ impl RequestValidator {
     pub fn validate_chat_completion_request(
         model: &str,
         messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+    ) -> Result<()> {
+        Self::validate_chat_completion_request_inner(model, messages, None, max_tokens, temperature)
+    }
+
+    /// Validate a chat request carrying typed per-message provider extensions.
+    pub(crate) fn validate_chat_completion_request_with_extensions(
+        model: &str,
+        messages: &[ChatMessage],
+        extensions: &[ChatMessageContinuation],
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+    ) -> Result<()> {
+        if messages.len() != extensions.len() {
+            return Err(GatewayError::Validation(format!(
+                "Message extension length mismatch: expected {}, got {}",
+                messages.len(),
+                extensions.len()
+            )));
+        }
+        Self::validate_chat_completion_request_inner(
+            model,
+            messages,
+            Some(extensions),
+            max_tokens,
+            temperature,
+        )
+    }
+
+    fn validate_chat_completion_request_inner(
+        model: &str,
+        messages: &[ChatMessage],
+        extensions: Option<&[ChatMessageContinuation]>,
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<()> {
@@ -21,20 +56,25 @@ impl RequestValidator {
         }
 
         for (i, message) in messages.iter().enumerate() {
-            Self::validate_chat_message(message, i)?;
+            Self::validate_chat_message_with_extension(
+                message,
+                extensions.and_then(|items| items.get(i)),
+                i,
+            )?;
         }
 
         // Validate max_tokens
         if let Some(max_tokens) = max_tokens {
+            let max_output_tokens = 100_000;
             if max_tokens == 0 {
                 return Err(GatewayError::Validation(
                     "max_tokens must be greater than 0".to_string(),
                 ));
             }
-            if max_tokens > 100000 {
-                return Err(GatewayError::Validation(
-                    "max_tokens cannot exceed 100000".to_string(),
-                ));
+            if max_tokens > max_output_tokens {
+                return Err(GatewayError::Validation(format!(
+                    "max_tokens cannot exceed {max_output_tokens}"
+                )));
             }
         }
 
@@ -52,16 +92,38 @@ impl RequestValidator {
 
     /// Validate chat message
     pub(super) fn validate_chat_message(message: &ChatMessage, index: usize) -> Result<()> {
+        Self::validate_chat_message_with_extension(message, None, index)
+    }
+
+    fn validate_chat_message_with_extension(
+        message: &ChatMessage,
+        extension: Option<&ChatMessageContinuation>,
+        index: usize,
+    ) -> Result<()> {
         // Validate role
         match message.role {
-            MessageRole::System
-            | MessageRole::Developer
-            | MessageRole::User
-            | MessageRole::Assistant => {
+            MessageRole::System | MessageRole::Developer | MessageRole::User => {
                 // These roles should have content
                 if message.content.is_none() {
                     return Err(GatewayError::Validation(format!(
                         "Message at index {} with role {:?} must have content",
+                        index, message.role
+                    )));
+                }
+            }
+            MessageRole::Assistant => {
+                let has_tools = message
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty());
+                let has_extension = extension.is_some_and(|value| !value.is_empty());
+                if message.content.is_none()
+                    && !has_tools
+                    && message.function_call.is_none()
+                    && !has_extension
+                {
+                    return Err(GatewayError::Validation(format!(
+                        "Message at index {} with role {:?} must have content, tool calls, function_call, or a typed continuation",
                         index, message.role
                     )));
                 }
@@ -96,6 +158,15 @@ impl RequestValidator {
                     )));
                 }
             }
+        }
+
+        if extension.is_some_and(|value| !value.is_empty())
+            && message.role != MessageRole::Assistant
+        {
+            return Err(GatewayError::Validation(format!(
+                "Typed Anthropic continuation at message index {} requires assistant role",
+                index
+            )));
         }
 
         // Validate content if present

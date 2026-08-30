@@ -1,7 +1,6 @@
 use crate::config::models::gateway::GatewayPricingConfig;
 use crate::core::budget::{BudgetReservation, UnifiedBudgetLimits, UnifiedBudgetReservation};
 use crate::core::keys::KeyManager;
-use crate::core::pricing_service::PricingService;
 use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::ProviderError;
 
@@ -28,32 +27,19 @@ pub(super) fn estimated_audio_file_seconds(file: &[u8]) -> f64 {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reserve_audio_provider_budget_with_pricing(
-    pricing_service: &PricingService,
+    request_pricing: &super::super::spend::RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
     total_time_seconds: Option<f64>,
     usage: &PricingUsage,
 ) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     super::super::spend::ensure_budget_available(budget_limits, budget_provider, budget_model)?;
-    let budget_reservation = if is_time_priced_audio(
-        pricing_service,
-        pricing_provider,
-        pricing_model,
-        total_time_seconds,
-    ) {
-        match pricing_service.calculate_loaded_completion_cost_for_provider(
-            pricing_provider,
-            pricing_model,
-            0,
-            0,
-            None,
-            None,
-            total_time_seconds,
-        ) {
+    let budget_reservation = if let Some(total_time_seconds) =
+        total_time_seconds.filter(|_| request_pricing.has_time_pricing())
+    {
+        match request_pricing.calculate_time(total_time_seconds) {
             Ok(cost) if cost.total_cost > 0.0 => budget_limits
                 .reserve_spend(budget_provider, budget_model, cost.total_cost)
                 .map(Some)
@@ -82,14 +68,12 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
             )?,
         }
     } else {
-        super::super::spend::reserve_pricing_usage_budget_with_policy(
-            pricing_service,
+        super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
+            request_pricing,
             pricing_config,
             budget_limits,
             budget_provider,
             budget_model,
-            pricing_provider,
-            pricing_model,
             usage,
         )?
     };
@@ -98,37 +82,22 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn record_audio_spend(
-    pricing_service: &PricingService,
+    request_pricing: &super::super::spend::RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     key_manager: &KeyManager,
     api_key_id: Option<uuid::Uuid>,
     budget_provider: &str,
     budget_model: &str,
-    pricing_provider: &str,
-    pricing_model: &str,
     total_time_seconds: Option<f64>,
     usage: &PricingUsage,
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
     if let Some(total_time_seconds) = total_time_seconds
-        && is_time_priced_audio(
-            pricing_service,
-            pricing_provider,
-            pricing_model,
-            Some(total_time_seconds),
-        )
+        && request_pricing.has_time_pricing()
     {
-        match pricing_service.calculate_loaded_completion_cost_for_provider(
-            pricing_provider,
-            pricing_model,
-            0,
-            0,
-            None,
-            None,
-            Some(total_time_seconds),
-        ) {
+        match request_pricing.calculate_time(total_time_seconds) {
             Ok(cost) => {
                 settle_audio_budget_or_record(
                     budget_limits,
@@ -148,7 +117,7 @@ pub(super) async fn record_audio_spend(
             Err(error) => {
                 tracing::error!(
                     "time-based audio spend calculation failed for pricing provider \
-                     '{pricing_provider}' budget provider '{budget_provider}' model \
+                     budget provider '{budget_provider}' model \
                      '{budget_model}': {error}; skipping budget spend"
                 );
                 super::super::spend::settle_unpriced_usage(
@@ -169,34 +138,19 @@ pub(super) async fn record_audio_spend(
         return;
     }
 
-    super::super::spend::record_pricing_usage_spend_with_reservation_with_policy(
-        pricing_service,
+    super::super::spend::record_pricing_usage_spend_with_request_pricing(
+        request_pricing,
         pricing_config,
         budget_limits,
         key_manager,
         api_key_id,
         budget_provider,
         budget_model,
-        pricing_provider,
-        pricing_model,
         usage,
         budget_reservation,
         key_budget_reservation,
     )
     .await;
-}
-
-fn is_time_priced_audio(
-    pricing_service: &PricingService,
-    pricing_provider: &str,
-    pricing_model: &str,
-    total_time_seconds: Option<f64>,
-) -> bool {
-    total_time_seconds.is_some()
-        && pricing_service
-            .get_model_info_for_provider(pricing_provider, pricing_model)
-            .map(|(_, model_info)| model_info.cost_per_second.is_some())
-            .unwrap_or(false)
 }
 
 fn settle_audio_budget_or_record(
@@ -244,6 +198,7 @@ mod tests {
     use super::*;
     use crate::core::budget::{BudgetConfig, BudgetManager, BudgetScope};
     use crate::core::keys::InMemoryKeyRepository;
+    use crate::core::pricing_service::PricingService;
 
     #[test]
     fn audio_file_usage_keeps_audio_tokens_out_of_total_tokens() {
@@ -271,15 +226,16 @@ mod tests {
             .tracker()
             .reserve_spend(&scope, 0.5)
             .unwrap_or_else(|error| panic!("API key budget should reserve: {error:?}"));
+        let request_pricing = crate::server::routes::ai::spend::RequestPricing::from_exact(
+            &pricing, "openai", "gpt-4o",
+        );
 
         record_audio_spend(
-            &pricing,
+            &request_pricing,
             &GatewayPricingConfig::default(),
             &budget_limits,
             &key_manager,
             None,
-            "openai",
-            "gpt-4o",
             "openai",
             "gpt-4o",
             None,

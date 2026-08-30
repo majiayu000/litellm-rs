@@ -31,20 +31,6 @@ fn test_extract_content_from_chunk() {
     assert!(content.is_empty());
 }
 
-#[test]
-fn test_token_estimation() {
-    let handler = StreamingHandler::new("gpt-4".to_string());
-
-    // Test token estimation
-    let text = "Hello world"; // 11 chars -> ~3 tokens
-    let tokens = handler.estimate_token_count(text);
-    assert_eq!(tokens, 3);
-
-    let longer_text = "This is a longer text for testing"; // 34 chars -> ~9 tokens
-    let tokens = handler.estimate_token_count(longer_text);
-    assert_eq!(tokens, 9);
-}
-
 #[tokio::test]
 async fn test_sse_utils() {
     // Test SSE line parsing

@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::pricing_service::PricingUsage;
 
 fn create_test_model_info(provider: &str) -> LiteLLMModelInfo {
     LiteLLMModelInfo {
@@ -313,7 +314,6 @@ async fn test_calculate_completion_cost_propagates_missing_token_pricing() {
     let mut model_info = create_test_model_info("openai");
     model_info.output_cost_per_token = None;
     service.add_custom_model("gpt-public-missing-price".to_string(), model_info);
-    service.pricing_data.write().last_updated = SystemTime::now();
 
     let result = service
         .calculate_completion_cost("gpt-public-missing-price", 1000, 500, None, None, None)
@@ -332,7 +332,6 @@ async fn test_calculate_completion_cost_requires_time_for_time_based_pricing() {
     let service = PricingService::new(None);
     let model_info = create_time_based_model_info("replicate");
     service.add_custom_model("replicate/timed".to_string(), model_info);
-    service.pricing_data.write().last_updated = SystemTime::now();
 
     let result = service
         .calculate_completion_cost("replicate/timed", 0, 0, None, None, None)
@@ -427,7 +426,6 @@ async fn pricing_review_rejects_negative_total_time_seconds() {
         "replicate/negative-duration".to_string(),
         create_time_based_model_info("replicate"),
     );
-    service.pricing_data.write().last_updated = SystemTime::now();
 
     let result = service
         .calculate_completion_cost("replicate/negative-duration", 0, 0, None, None, Some(-1.0))
@@ -448,7 +446,6 @@ async fn pricing_review_rejects_nan_total_time_seconds() {
         "replicate/nan-duration".to_string(),
         create_time_based_model_info("replicate"),
     );
-    service.pricing_data.write().last_updated = SystemTime::now();
 
     let result = service
         .calculate_completion_cost("replicate/nan-duration", 0, 0, None, None, Some(f64::NAN))
@@ -469,7 +466,6 @@ async fn pricing_review_uses_token_pricing_for_token_priced_together_ai_model() 
         "together/token-priced".to_string(),
         create_test_model_info("together_ai"),
     );
-    service.pricing_data.write().last_updated = SystemTime::now();
 
     let result = service
         .calculate_completion_cost("together/token-priced", 1000, 500, None, None, None)
@@ -492,7 +488,6 @@ async fn pricing_review_uses_token_pricing_for_token_priced_baseten_model() {
         "baseten/token-priced".to_string(),
         create_test_model_info("baseten"),
     );
-    service.pricing_data.write().last_updated = SystemTime::now();
 
     let result = service
         .calculate_completion_cost("baseten/token-priced", 2000, 750, None, None, None)
@@ -523,4 +518,134 @@ fn test_pricing_service_clone() {
     // Adding to original should be visible in clone (same Arc)
     service.add_custom_model("gpt-3.5".to_string(), create_test_model_info("openai"));
     assert!(cloned.get_model_info("gpt-3.5").is_some());
+}
+
+#[test]
+fn custom_model_overwrite_moves_provider_index_atomically() {
+    let service = PricingService::new(None);
+    service.add_custom_model(
+        "shared-model".to_string(),
+        create_test_model_info("provider_one"),
+    );
+    assert!(
+        service
+            .get_model_info_for_provider("provider_one", "shared-model")
+            .is_some()
+    );
+
+    service.add_custom_model(
+        "shared-model".to_string(),
+        create_test_model_info("provider_two"),
+    );
+
+    assert!(
+        service
+            .get_model_info_for_provider("provider_one", "shared-model")
+            .is_none(),
+        "overwriting a key must remove its old provider ownership"
+    );
+    assert!(
+        service
+            .get_model_info_for_provider("provider_two", "shared-model")
+            .is_some(),
+        "overwriting a key must publish its new provider ownership"
+    );
+}
+
+#[test]
+fn pinned_pricing_snapshot_is_immutable_across_service_updates() {
+    let service = PricingService::new(None);
+    let mut first = create_test_model_info("openai");
+    first.input_cost_per_token = Some(0.01);
+    first.output_cost_per_token = Some(0.02);
+    service.add_custom_model("snapshot-model".to_string(), first);
+
+    let snapshot_a = service.snapshot();
+    let usage = PricingUsage::new(10, 5);
+    let cost_a = snapshot_a
+        .calculate_loaded_usage_cost_for_provider("openai", "snapshot-model", &usage)
+        .expect("snapshot A should price the model")
+        .total_cost;
+
+    let mut second = create_test_model_info("openai");
+    second.input_cost_per_token = Some(0.10);
+    second.output_cost_per_token = Some(0.20);
+    service.add_custom_model("snapshot-model".to_string(), second);
+    let snapshot_b = service.snapshot();
+
+    assert_eq!(
+        snapshot_a
+            .calculate_loaded_usage_cost_for_provider("openai", "snapshot-model", &usage)
+            .expect("snapshot A remains valid")
+            .total_cost,
+        cost_a,
+    );
+    assert_ne!(
+        snapshot_b
+            .calculate_loaded_usage_cost_for_provider("openai", "snapshot-model", &usage)
+            .expect("snapshot B should see the replacement")
+            .total_cost,
+        cost_a,
+    );
+}
+
+#[test]
+fn failed_refresh_preserves_existing_snapshot_and_future_readers() {
+    let service = PricingService::new(None);
+    service.add_custom_model(
+        "stable-snapshot-model".to_string(),
+        create_test_model_info("stable_provider"),
+    );
+    let snapshot = service.snapshot();
+
+    let replacement = create_test_model_info("replacement_provider");
+    service.add_custom_model("replacement-model".to_string(), replacement);
+
+    assert!(
+        snapshot
+            .get_model_info_for_provider("stable_provider", "stable-snapshot-model")
+            .is_some()
+    );
+    assert!(
+        snapshot
+            .get_model_info_for_provider("replacement_provider", "replacement-model")
+            .is_none(),
+        "an existing reader must not observe a later published snapshot"
+    );
+}
+
+#[tokio::test]
+async fn failed_refresh_preserves_models_indexes_and_timestamp() {
+    let path = std::env::temp_dir().join(format!(
+        "litellm-pricing-invalid-{}-{}.json",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(&path, "{ invalid json")
+        .unwrap_or_else(|error| panic!("invalid pricing fixture should write: {error}"));
+
+    let service = PricingService::new(Some(path.to_string_lossy().into_owned()));
+    service.add_custom_model(
+        "stable-model".to_string(),
+        create_test_model_info("stable_provider"),
+    );
+    let before = service.get_statistics().last_updated;
+
+    let error = service
+        .refresh_pricing_data()
+        .await
+        .expect_err("invalid refresh must fail explicitly");
+    assert!(error.to_string().contains("Failed to parse pricing JSON"));
+    assert_eq!(service.get_statistics().last_updated, before);
+    assert!(
+        service
+            .get_model_info_for_provider("stable_provider", "stable-model")
+            .is_some(),
+        "failed refresh must preserve both model and provider index"
+    );
+
+    let _ = std::fs::remove_file(path);
 }

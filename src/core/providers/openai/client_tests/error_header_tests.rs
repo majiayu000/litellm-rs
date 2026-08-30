@@ -84,6 +84,7 @@ fn test_get_request_headers_with_organization() {
         pool_manager: Arc::new(GlobalPoolManager::default()),
         config,
         model_registry: get_openai_registry(),
+        model_identity: None,
     };
 
     let headers = provider.get_request_headers();
@@ -102,6 +103,7 @@ fn test_get_request_headers_with_project() {
         pool_manager: Arc::new(GlobalPoolManager::default()),
         config,
         model_registry: get_openai_registry(),
+        model_identity: None,
     };
 
     let headers = provider.get_request_headers();

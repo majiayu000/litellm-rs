@@ -17,6 +17,8 @@ include = [
     "config/*.example",
     "config/*.template",
     "config/model_prices_extended.json",
+    "config/model_catalog_authority.json",
+    "config/model_catalog_decisions.json",
     "migrations/**/*",
     ".github/workflows/*.yml",
     "build.rs",
