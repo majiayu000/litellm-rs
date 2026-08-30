@@ -194,6 +194,8 @@ mod matrix {
 }
 
 use super::Router;
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::types::model::ProviderCapability;
 use std::collections::HashMap;
 
 fn function<'a>(source: &'a str, signature: &str) -> &'a str {
@@ -350,6 +352,38 @@ fn identity_provider_config(
         models: vec![model.to_string()],
         ..Default::default()
     };
+    if let Some(mapping) = mapping {
+        config.settings.insert(
+            crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({model: mapping}),
+        );
+    }
+    config
+}
+
+fn openai_like_identity_config(
+    name: &str,
+    provider_type: &str,
+    model: &str,
+    mapping: Option<crate::core::providers::model_identity::ModelIdentityMapping>,
+) -> crate::config::models::provider::ProviderConfig {
+    let mut config = crate::config::models::provider::ProviderConfig {
+        name: name.to_string(),
+        provider_type: provider_type.to_string(),
+        api_key: "test-key".to_string(),
+        models: vec![model.to_string()],
+        ..Default::default()
+    };
+    if provider_type == "openai_compatible" {
+        config.settings.insert(
+            "base_url".to_string(),
+            serde_json::json!("https://vertex.example.com/v1"),
+        );
+        config.settings.insert(
+            "provider_name".to_string(),
+            serde_json::json!("vertex_publisher"),
+        );
+    }
     if let Some(mapping) = mapping {
         config.settings.insert(
             crate::core::providers::model_identity::MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
@@ -581,4 +615,185 @@ async fn pricing_aware_constructor_fails_absent_target_before_snapshot_publicati
             && text.contains("missing-runtime-price"),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn xai_identity_is_automatic_only_for_native_or_explicitly_mapped_publishers() {
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default()
+            .expect("embedded pricing should load"),
+    );
+    let qualified = "xai/grok-4.6";
+    let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
+        Some(qualified.to_string()),
+        Some(qualified.to_string()),
+    );
+    let mut custom = openai_like_identity_config("custom-xai", "xai", "custom/grok-4.6", None);
+    custom.models = [
+        "custom/grok-4.6",
+        "custom/xai/grok-4.6",
+        "custom/custom/grok-4.6",
+        "customized/grok-4.6",
+        "wrong/grok-4.6",
+        "custom/grok-4.6-latest",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    custom
+        .settings
+        .insert("model_prefix".to_string(), serde_json::json!("custom/"));
+    let providers = vec![
+        openai_like_identity_config("native-xai", "xai", qualified, None),
+        openai_like_identity_config(
+            "mapped-vertex",
+            "openai_compatible",
+            qualified,
+            Some(mapping),
+        ),
+        openai_like_identity_config("unmapped-vertex", "openai_compatible", qualified, None),
+        custom,
+    ];
+    let router = Router::from_gateway_config_with_pricing(&providers, None, pricing)
+        .await
+        .expect("exact native and explicitly mapped xAI identities should validate");
+    let ids = router.get_deployments_for_model(qualified);
+    let deployment = |name: &str| {
+        ids.iter()
+            .find(|id| id.starts_with(name))
+            .and_then(|id| router.get_deployment(id))
+            .unwrap_or_else(|| panic!("missing {name} deployment in {ids:?}"))
+    };
+
+    let native = deployment("native-xai");
+    let crate::core::providers::Provider::OpenAILike(native_provider) = &native.provider else {
+        panic!("xAI catalog provider must use OpenAI-compatible transport");
+    };
+    let native_json = LLMProvider::transform_request(
+        native_provider,
+        crate::core::types::chat::ChatRequest {
+            model: qualified.to_string(),
+            messages: vec![],
+            ..Default::default()
+        },
+        crate::core::types::context::RequestContext::default(),
+    )
+    .await
+    .expect("native xAI transform");
+    assert_eq!(native_json["model"], "grok-4.6");
+
+    let mapped = deployment("mapped-vertex");
+    assert!(
+        mapped
+            .provider
+            .supports_capability_for_model(qualified, &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        !mapped
+            .provider
+            .supports_capability_for_model(qualified, &ProviderCapability::BatchProcessing)
+    );
+    let crate::core::providers::Provider::OpenAILike(mapped_provider) = &mapped.provider else {
+        panic!("mapped publisher must use OpenAI-compatible transport");
+    };
+    let mapped_json = LLMProvider::transform_request(
+        mapped_provider,
+        crate::core::types::chat::ChatRequest {
+            model: qualified.to_string(),
+            messages: vec![],
+            extra_params: HashMap::from([(
+                "reasoning_effort".to_string(),
+                serde_json::json!("xhigh"),
+            )]),
+            ..Default::default()
+        },
+        crate::core::types::context::RequestContext::default(),
+    )
+    .await
+    .expect("mapped publisher transform");
+    assert_eq!(mapped_json["model"], qualified);
+    assert_eq!(mapped_json["reasoning_effort"], "xhigh");
+    for field in ["stop", "presence_penalty", "frequency_penalty"] {
+        let request = crate::core::types::chat::ChatRequest {
+            model: qualified.to_string(),
+            messages: vec![],
+            extra_params: HashMap::from([
+                ("reasoning_effort".to_string(), serde_json::json!("high")),
+                (field.to_string(), serde_json::json!(1)),
+            ]),
+            ..Default::default()
+        };
+        assert!(
+            LLMProvider::transform_request(
+                mapped_provider,
+                request,
+                crate::core::types::context::RequestContext::default(),
+            )
+            .await
+            .is_err(),
+            "{field} must be rejected after the final extra-body merge"
+        );
+    }
+
+    let unmapped = deployment("unmapped-vertex");
+    assert!(
+        !unmapped
+            .provider
+            .supports_capability_for_model(qualified, &ProviderCapability::ChatCompletion)
+    );
+    assert!(
+        unmapped
+            .provider
+            .calculate_cost(qualified, 1, 1)
+            .await
+            .is_err(),
+        "an unmapped publisher must not turn absent pricing into zero"
+    );
+
+    let short = native
+        .provider
+        .calculate_cost(qualified, 199_999, 0)
+        .await
+        .expect("short-context xAI pricing");
+    let long = native
+        .provider
+        .calculate_cost(qualified, 200_000, 0)
+        .await
+        .expect("long-context xAI pricing");
+    assert!((short - 0.399_998).abs() < 1e-12);
+    assert!((long - 0.8).abs() < 1e-12);
+
+    for (raw, wire) in [
+        ("custom/grok-4.6", "grok-4.6"),
+        ("custom/xai/grok-4.6", "xai/grok-4.6"),
+    ] {
+        let id = router
+            .get_deployments_for_model(raw)
+            .into_iter()
+            .next()
+            .expect("custom xAI deployment id");
+        let custom = router.get_deployment(&id).expect("custom xAI deployment");
+        let identity = custom
+            .provider
+            .deployment_model_identity()
+            .expect("custom xAI identity");
+        assert_eq!(identity.wire_model(), wire);
+        assert_eq!(identity.capability_catalog_model(), Some("grok-4.6"));
+        assert_eq!(identity.pricing_model(), Some(qualified));
+    }
+    for invalid in [
+        "custom/custom/grok-4.6",
+        "customized/grok-4.6",
+        "wrong/grok-4.6",
+        "custom/grok-4.6-latest",
+    ] {
+        assert!(
+            router
+                .select_deployment_lease_for_capability(
+                    invalid,
+                    &ProviderCapability::ChatCompletion,
+                )
+                .is_err(),
+            "{invalid} must not acquire xAI capability"
+        );
+    }
 }

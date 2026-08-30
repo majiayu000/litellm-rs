@@ -130,6 +130,104 @@ mod mapped_identity_tests {
         }
     }
 
+    #[tokio::test]
+    async fn openai_compatible_request_pricing_consumes_exact_binding() {
+        use crate::core::providers::model_identity::{
+            MODEL_IDENTITY_MAPPINGS_KEY, ModelIdentityMapping,
+        };
+
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        let mapped = ModelIdentityMapping::new(
+            Some("xai/grok-4.6".to_string()),
+            Some("xai/grok-4.6".to_string()),
+        );
+        let mut config = ProviderConfig {
+            name: "mapped-openai-compatible".to_string(),
+            provider_type: "openai_compatible".to_string(),
+            api_key: "test-key".to_string(),
+            models: vec!["wire-grok".to_string()],
+            ..Default::default()
+        };
+        config.settings.insert(
+            "base_url".to_string(),
+            serde_json::json!("https://vertex.example.com/v1"),
+        );
+        config.settings.insert(
+            "provider_name".to_string(),
+            serde_json::json!("vertex_publisher"),
+        );
+        config.settings.insert(
+            MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({"wire-grok": mapped}),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
+            .await
+            .expect("mapped OpenAI-compatible deployment should bind");
+        let deployment = router
+            .get_deployment("mapped-openai-compatible-wire-grok")
+            .expect("mapped deployment should be published");
+
+        let request_pricing = request_pricing_for_provider(
+            &pricing,
+            &deployment.provider,
+            &deployment.model,
+            ProviderCapability::ChatCompletion,
+        )
+        .expect("bound request pricing should resolve");
+        assert_eq!(
+            request_pricing.priced_parts(),
+            Some(("xai", "xai/grok-4.6"))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicitly_unpriced_openai_compatible_binding_never_uses_wire_price() {
+        use crate::core::providers::model_identity::{
+            MODEL_IDENTITY_MAPPINGS_KEY, ModelIdentityMapping,
+        };
+
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        let mapped = ModelIdentityMapping::new(Some("xai/grok-4.6".to_string()), None);
+        let mut config = ProviderConfig {
+            name: "unpriced-openai-compatible".to_string(),
+            provider_type: "openai_compatible".to_string(),
+            api_key: "test-key".to_string(),
+            models: vec!["gpt-4".to_string()],
+            ..Default::default()
+        };
+        config.settings.insert(
+            "base_url".to_string(),
+            serde_json::json!("https://vertex.example.com/v1"),
+        );
+        config.settings.insert(
+            "provider_name".to_string(),
+            serde_json::json!("vertex_publisher"),
+        );
+        config.settings.insert(
+            MODEL_IDENTITY_MAPPINGS_KEY.to_string(),
+            serde_json::json!({"gpt-4": mapped}),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing.clone())
+            .await
+            .expect("explicitly unpriced deployment should bind");
+        let deployment = router
+            .get_deployment("unpriced-openai-compatible-gpt-4")
+            .expect("unpriced deployment should be published");
+
+        let request_pricing = request_pricing_for_provider(
+            &pricing,
+            &deployment.provider,
+            &deployment.model,
+            ProviderCapability::ChatCompletion,
+        )
+        .expect("explicitly unpriced identity should remain representable");
+        assert_eq!(request_pricing.priced_parts(), None);
+    }
+
     #[test]
     fn unpriced_openai_mapping_retains_canonical_identity_only_for_real_mapping() {
         assert_eq!(

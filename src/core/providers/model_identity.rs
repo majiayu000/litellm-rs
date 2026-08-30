@@ -1,7 +1,4 @@
-//! Config-backed, exact model identity validation.
-
-use crate::core::pricing_service::PricingService;
-use crate::core::pricing_service::PricingSnapshot;
+use crate::core::pricing_service::{PricingService, PricingSnapshot};
 use crate::core::providers::registry::model_catalog_authority::{
     CatalogAuthority, CatalogResolution,
 };
@@ -12,7 +9,6 @@ use std::sync::Arc;
 
 pub const MODEL_IDENTITY_MAPPINGS_KEY: &str = "model_identity_mappings";
 
-/// Explicit semantic identities for one configured wire/deployment model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelIdentityMapping {
@@ -31,14 +27,12 @@ impl ModelIdentityMapping {
     }
 }
 
-/// Exact provider-scoped price address pinned during startup validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExactPricingIdentity {
     provider: String,
     model: String,
 }
 
-/// Exact provider-scoped callable catalog address pinned during validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExactCapabilityIdentity {
     provider: String,
@@ -55,7 +49,6 @@ impl ExactPricingIdentity {
     }
 }
 
-/// Owned immutable identity attached to one provider clone in a deployment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeploymentModelIdentity {
     wire_model: String,
@@ -76,7 +69,6 @@ pub(crate) enum DeploymentPricingIdentity<'a> {
     NotApplicable,
 }
 
-/// Immutable provider-private binding created from one startup pricing authority.
 #[derive(Clone, Debug)]
 pub(crate) struct DeploymentProviderBinding {
     identity: DeploymentModelIdentity,
@@ -189,8 +181,6 @@ pub enum ModelIdentityValidationError {
     },
 }
 
-/// Validate one deployment using the maintained catalog and the injected
-/// runtime pricing snapshot. Explicit mapping wins over legacy and raw catalog.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_deployment_identity(
     provider_name: &str,
@@ -339,6 +329,7 @@ fn validate_capability_target(
     let capability_provider = match (selected_provider, qualifier) {
         ("openai", Some("openai")) | ("azure", Some("openai")) => "openai",
         ("azure_ai", Some(provider @ ("openai" | "azure_ai"))) => provider,
+        ("openai_compatible", Some("xai")) | ("xai", Some("xai")) => "xai",
         (_, Some(_)) => {
             return Err(invalid_field(
                 provider_name,
@@ -349,6 +340,15 @@ fn validate_capability_target(
             ));
         }
         ("azure", None) => "openai",
+        ("openai_compatible", None) => {
+            return Err(invalid_field(
+                provider_name,
+                wire_model,
+                "capability_catalog_model",
+                target,
+                "cross-provider target requires an exact provider qualifier",
+            ));
+        }
         (provider, None) => provider,
     };
     match catalog.resolve_model(capability_provider, target) {
@@ -396,19 +396,32 @@ fn validate_pricing_target(
             "empty target",
         ));
     }
-    if single_identity_qualifier(provider_name, wire_model, target)?
-        .is_some_and(|qualifier| qualifier != selected_provider)
-    {
-        return Err(invalid_field(
-            provider_name,
-            wire_model,
-            "pricing_model",
-            target,
-            "wrong provider qualifier",
-        ));
-    }
+    let qualifier = single_identity_qualifier(provider_name, wire_model, target)?;
+    let pricing_provider = match (selected_provider, qualifier) {
+        ("openai_compatible", Some("xai")) => "xai",
+        ("openai_compatible", _) => {
+            return Err(invalid_field(
+                provider_name,
+                wire_model,
+                "pricing_model",
+                target,
+                "cross-provider target requires an exact provider qualifier",
+            ));
+        }
+        (provider, Some(qualifier)) if provider == qualifier => provider,
+        (_, Some(_)) => {
+            return Err(invalid_field(
+                provider_name,
+                wire_model,
+                "pricing_model",
+                target,
+                "wrong or missing provider qualifier",
+            ));
+        }
+        (provider, None) => provider,
+    };
     let (model, _) = pricing
-        .get_model_info_for_provider(selected_provider, target)
+        .get_model_info_for_provider(pricing_provider, target)
         .ok_or_else(|| {
             invalid_field(
                 provider_name,
@@ -419,7 +432,7 @@ fn validate_pricing_target(
             )
         })?;
     Ok(ExactPricingIdentity {
-        provider: selected_provider.to_string(),
+        provider: pricing_provider.to_string(),
         model,
     })
 }
@@ -457,6 +470,8 @@ pub(crate) fn canonical_identity_provider(provider: &str) -> Option<&'static str
         "openai" => Some("openai"),
         "azure" | "azure-openai" | "azure_openai" => Some("azure"),
         "azure_ai" | "azure-ai" | "azureai" => Some("azure_ai"),
+        "xai" => Some("xai"),
+        "openai_compatible" => Some("openai_compatible"),
         _ => None,
     }
 }
@@ -483,17 +498,9 @@ pub(crate) fn calculate_managed_provider_cost(
     input_tokens: u32,
     output_tokens: u32,
 ) -> Option<Result<f64, crate::core::providers::ProviderError>> {
-    let pricing_provider = canonical_identity_provider(match provider.provider_type() {
-        crate::core::providers::provider_type::ProviderType::OpenAI => "openai",
-        #[cfg(feature = "providers-extra")]
-        crate::core::providers::provider_type::ProviderType::Azure => "azure",
-        #[cfg(feature = "providers-extra")]
-        crate::core::providers::provider_type::ProviderType::AzureAI => "azure_ai",
-        _ => return None,
-    })?;
     let usage = crate::core::pricing_service::PricingUsage::new(input_tokens, output_tokens);
-    let result = if let Some(identity) = provider.deployment_model_identity() {
-        match (identity.pricing_provider(), identity.pricing_model()) {
+    if let Some(identity) = provider.deployment_model_identity() {
+        let result = match (identity.pricing_provider(), identity.pricing_model()) {
             (Some(pricing_provider), Some(pricing_model)) => provider
                 .runtime_pricing()
                 .ok_or_else(|| {
@@ -524,19 +531,41 @@ pub(crate) fn calculate_managed_provider_cost(
                     identity.wire_model()
                 ),
             )),
+        };
+        return Some(result);
+    }
+    let pricing_provider = match provider {
+        crate::core::providers::Provider::OpenAI(_) => "openai",
+        #[cfg(feature = "providers-extra")]
+        crate::core::providers::Provider::Azure(_) => "azure",
+        #[cfg(feature = "providers-extra")]
+        crate::core::providers::Provider::AzureAI(_) => "azure_ai",
+        crate::core::providers::Provider::OpenAILike(inner)
+            if inner.config().provider_name == "xai"
+                && super::openai_like::models::is_xai_current_model(wire_model) =>
+        {
+            "xai"
         }
-    } else {
+        _ => return None,
+    };
+    Some(
         crate::core::pricing_service::PricingService::shared_embedded_default()
             .and_then(|pricing| {
                 pricing
-                    .calculate_loaded_usage_cost_for_provider(pricing_provider, wire_model, &usage)
+                    .calculate_loaded_usage_cost_for_provider(
+                        pricing_provider,
+                        super::openai_like::models::xai_current_pricing_model(
+                            pricing_provider,
+                            wire_model,
+                        ),
+                        &usage,
+                    )
                     .map(|cost| cost.total_cost)
             })
             .map_err(|error| {
                 crate::core::providers::ProviderError::configuration("pricing", error.to_string())
-            })
-    };
-    Some(result)
+            }),
+    )
 }
 
 #[cfg(test)]
@@ -744,5 +773,27 @@ mod tests {
             .expect_err("wrong or double capability qualifier must fail closed");
             assert!(error.to_string().contains("provider"), "{error}");
         }
+    }
+
+    #[test]
+    fn explicit_openai_compatible_mapping_can_target_qualified_xai_only() {
+        let (catalog, pricing) = authorities();
+        pricing.add_custom_model("xai/grok-4.6".to_string(), pricing_info("xai"));
+        let validate = |mapping: &ModelIdentityMapping| {
+            validate_deployment_identity(
+                "vertex",
+                "openai_compatible",
+                "xai/grok-4.6",
+                Some(mapping),
+                None,
+                &catalog,
+                &pricing.snapshot(),
+            )
+        };
+        let qualified = "xai/grok-4.6".to_string();
+        let mapping = ModelIdentityMapping::new(Some(qualified.clone()), Some(qualified));
+        validate(&mapping).expect("qualified xAI mapping should validate");
+        let bare = ModelIdentityMapping::new(Some("grok-4.6".to_string()), None);
+        assert!(validate(&bare).is_err());
     }
 }

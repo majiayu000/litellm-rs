@@ -477,6 +477,10 @@ async fn test_xai_high_context_uses_registered_pricing() {
         .unwrap();
 
     assert!((cost - 0.315).abs() < 1e-12);
+    let current_alias = LLMProvider::calculate_cost(&provider, "grok-build-latest", 1_000, 1_000)
+        .await
+        .unwrap();
+    assert!((current_alias - 0.008).abs() < 1e-12);
 }
 
 #[tokio::test]
@@ -738,4 +742,54 @@ async fn test_openrouter_thinking_wired_in_transform() {
         Some("high"),
         "reasoning.effort must be forwarded"
     );
+}
+
+#[tokio::test]
+async fn current_xai_reasoning_normalizes_after_extra_merge() {
+    let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+        .with_provider_name("xai")
+        .with_skip_api_key(true);
+    let provider = OpenAILikeProvider::new(config).await.unwrap();
+    for (model, effort, expected) in [
+        ("grok-4.5", "xhigh", "high"),
+        ("grok-4.6", "xhigh", "xhigh"),
+    ] {
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![],
+            reasoning_effort: Some(effort.to_string()),
+            extra_params: std::collections::HashMap::from([(
+                "reasoning_effort".to_string(),
+                serde_json::json!(effort),
+            )]),
+            ..Default::default()
+        };
+        let json = provider.transform_chat_request(request).unwrap();
+        assert_eq!(json["reasoning_effort"], expected);
+    }
+
+    for extra in [serde_json::json!("low"), serde_json::json!(7)] {
+        let request = ChatRequest {
+            model: "grok-4.6".to_string(),
+            messages: vec![],
+            reasoning_effort: Some("high".to_string()),
+            extra_params: std::collections::HashMap::from([(
+                "reasoning_effort".to_string(),
+                extra,
+            )]),
+            ..Default::default()
+        };
+        assert!(provider.transform_chat_request(request).is_err());
+    }
+
+    let request = ChatRequest {
+        model: "grok-4.6".to_string(),
+        messages: vec![],
+        extra_params: std::collections::HashMap::from([
+            ("reasoning_effort".to_string(), serde_json::json!("high")),
+            ("stop".to_string(), serde_json::json!(["done"])),
+        ]),
+        ..Default::default()
+    };
+    assert!(provider.transform_chat_request(request).is_err());
 }

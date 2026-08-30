@@ -2,9 +2,9 @@
   "_metadata": {
     "schema_version": 1,
     "revision": "classification-1241-v1",
-    "decision_source_sha256": "e6f047d1f6c2d644dd236bc0b51bbf4a82b0354a56c89b00eb68c816bce6e032",
+    "decision_source_sha256": "e03662421df3507e8a5be175f8976b968f0f59d9acc51aa5bc67f7569b168476",
     "pricing_universe_sha256": "98a6b49d858d0cd466482284f880f24529b304fb840743f8da279bad2cbfe23f",
-    "classification_sha256": "57d6bc1901811975420c2cfb43e208e2b578dd9dd99d6cd3cb379980d67bf1a0",
+    "classification_sha256": "1454b3bc526e00b6cafdc0fcf585a8aebb4c98a045cda5b3cd58b5c7c33df311",
     "total_entry_count": 3474,
     "enforced_providers": [
       "azure",
@@ -638,9 +638,9 @@
         "unreviewed": 29
       },
       "xai": {
-        "callable": 0,
+        "callable": 3,
         "pricing_only": 0,
-        "unreviewed": 36
+        "unreviewed": 33
       },
       "xiaomi_mimo": {
         "callable": 0,
@@ -29174,26 +29174,85 @@
     {
       "provider": "xai",
       "pricing_key": "xai/grok-4.5",
-      "decision": "unreviewed",
+      "decision": "callable",
       "evidence_sources": [
-        "evidence-001"
+        "evidence-104",
+        "evidence-106"
+      ],
+      "catalog_model_id": "grok-4.5",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
+      "supported_parameters": [
+        "messages",
+        "reasoning_effort",
+        "response_format",
+        "tools"
+      ],
+      "aliases": [
+        "grok-build-latest"
       ]
     },
     {
       "provider": "xai",
       "pricing_key": "xai/grok-4.5-latest",
-      "decision": "unreviewed",
+      "decision": "callable",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "evidence-104",
+        "evidence-106"
+      ],
+      "catalog_model_id": "grok-4.5-latest",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
+      "supported_parameters": [
+        "messages",
+        "reasoning_effort",
+        "response_format",
+        "tools"
+      ],
+      "aliases": []
     },
     {
       "provider": "xai",
       "pricing_key": "xai/grok-4.6",
-      "decision": "unreviewed",
+      "decision": "callable",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "evidence-105",
+        "evidence-106"
+      ],
+      "catalog_model_id": "grok-4.6",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
+      "supported_parameters": [
+        "messages",
+        "reasoning_effort",
+        "response_format",
+        "tools"
+      ],
+      "aliases": []
     },
     {
       "provider": "xai",
