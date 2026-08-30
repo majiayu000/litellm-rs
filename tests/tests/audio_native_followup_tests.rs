@@ -1,29 +1,5 @@
 use super::*;
-use std::ffi::OsString;
-
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe { std::env::set_var(key, value) };
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => unsafe { std::env::set_var(self.key, value) },
-            None => unsafe { std::env::remove_var(self.key) },
-        }
-    }
-}
+use std::process::Command;
 
 async fn native_provider_with_headers(provider_type: ProviderType, base_url: &str) -> Provider {
     Provider::from_config_async(
@@ -73,20 +49,42 @@ async fn deepgram_accepts_aac_and_flac_speech_formats() {
 
 #[tokio::test]
 async fn native_audio_rejects_nonzero_environment_retries() {
-    let _lock = ENV_LOCK.lock().await;
-    for (provider_type, key) in [
-        (ProviderType::Deepgram, "DEEPGRAM_MAX_RETRIES"),
-        (ProviderType::ElevenLabs, "ELEVENLABS_MAX_RETRIES"),
+    for (provider, key) in [
+        ("deepgram", "DEEPGRAM_MAX_RETRIES"),
+        ("elevenlabs", "ELEVENLABS_MAX_RETRIES"),
     ] {
-        let guard = EnvVarGuard::set(key, "2");
-        let error =
-            Provider::from_config_async(provider_type, json!({"api_key": "native-audio-secret"}))
-                .await
-                .expect_err("environment retries must not be silently disabled");
-        assert!(matches!(error, ProviderError::Configuration { .. }));
-        assert!(error.to_string().contains("max_retries"));
-        drop(guard);
+        let status = Command::new(std::env::current_exe().expect("test executable should exist"))
+            .args([
+                "--exact",
+                "tests::followup_tests::native_audio_env_retry_child",
+                "--nocapture",
+            ])
+            .env("NATIVE_AUDIO_RETRY_CHILD_PROVIDER", provider)
+            .env_remove("DEEPGRAM_MAX_RETRIES")
+            .env_remove("ELEVENLABS_MAX_RETRIES")
+            .env(key, "2")
+            .status()
+            .expect("isolated retry validation test should run");
+        assert!(status.success(), "retry validation failed for {provider}");
     }
+}
+
+#[tokio::test]
+async fn native_audio_env_retry_child() {
+    let Ok(provider) = std::env::var("NATIVE_AUDIO_RETRY_CHILD_PROVIDER") else {
+        return;
+    };
+    let provider_type = match provider.as_str() {
+        "deepgram" => ProviderType::Deepgram,
+        "elevenlabs" => ProviderType::ElevenLabs,
+        other => panic!("unexpected child provider: {other}"),
+    };
+    let error =
+        Provider::from_config_async(provider_type, json!({"api_key": "native-audio-secret"}))
+            .await
+            .expect_err("environment retries must not be silently disabled");
+    assert!(matches!(error, ProviderError::Configuration { .. }));
+    assert!(error.to_string().contains("max_retries"));
 }
 
 #[tokio::test]
