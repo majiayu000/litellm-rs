@@ -13,7 +13,7 @@ pub(super) fn build_voyage_provider(
             "api_key is required",
         ));
     }
-    let api_base = config_str(config, "api_base").or_else(|| config_str(config, "base_url"));
+    let api_base = config_str(config, "base_url").or_else(|| config_str(config, "api_base"));
     let timeout = config
         .get("timeout")
         .and_then(serde_json::Value::as_u64)

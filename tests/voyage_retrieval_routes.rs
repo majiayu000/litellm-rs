@@ -130,6 +130,11 @@ mod tests {
         if body["query"] == "force-error" {
             return HttpResponse::TooManyRequests().json(json!({"detail": "voyage rate limit"}));
         }
+        if body["query"] == "malformed-response" {
+            return HttpResponse::Ok()
+                .content_type("application/json")
+                .body("{");
+        }
         HttpResponse::Ok().json(json!({
             "results": [
                 {"index": 1, "relevance_score": 0.9},
@@ -310,6 +315,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voyage_base_url_precedes_api_base_alias() {
+        let primary = MockVoyageServer::start_voyage_mock().await;
+        let alias = MockVoyageServer::start_voyage_mock().await;
+        let mut provider = voyage_provider(&primary.base_url);
+        provider
+            .settings
+            .insert("api_base".to_string(), json!(alias.base_url.clone()));
+        let state = build_state(provider).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/rerank")
+                .set_json(json!({
+                    "model": "rerank-2.5",
+                    "query": "best document",
+                    "documents": ["first", "second"]
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(primary.requests().len(), 1);
+        assert!(alias.requests().is_empty());
+        primary.shutdown_voyage_mock().await;
+        alias.shutdown_voyage_mock().await;
+    }
+
+    #[tokio::test]
     async fn voyage_retrieval_rejects_wrong_qualifier_and_unknown_model_without_io() {
         let mock = MockVoyageServer::start_voyage_mock().await;
         let state = build_state(voyage_provider(&mock.base_url)).await;
@@ -409,6 +450,20 @@ mod tests {
         assert_eq!(rerank_response.status(), StatusCode::TOO_MANY_REQUESTS);
         let rerank_error: Value = test::read_body_json(rerank_response).await;
         assert!(rerank_error.to_string().contains("voyage rate limit"));
+
+        let malformed_response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/rerank")
+                .set_json(json!({
+                    "model": "rerank-2.5",
+                    "query": "malformed-response",
+                    "documents": ["first", "second"]
+                }))
+                .to_request(),
+        )
+        .await;
+        assert!(malformed_response.status().is_server_error());
 
         mock.shutdown_voyage_mock().await;
     }

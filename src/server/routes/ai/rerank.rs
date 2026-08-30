@@ -495,7 +495,7 @@ fn rerank_provider_supports_model(
 ) -> bool {
     let (requested_provider, served_model) = split_rerank_model(requested_model);
     if let Some(requested_provider) = requested_provider
-        && provider_config::normalize_provider_selector(requested_provider) != kind.as_str()
+        && !rerank_qualifier_matches(kind, requested_provider)
     {
         return false;
     }
@@ -510,6 +510,13 @@ fn rerank_provider_supports_model(
     }
 
     kind.supports_model(served_model)
+}
+
+fn rerank_qualifier_matches(kind: RerankProviderKind, qualifier: &str) -> bool {
+    crate::core::providers::registry::entry_for_name(qualifier).map_or_else(
+        || qualifier == kind.as_str(),
+        |entry| entry.canonical_name == kind.as_str(),
+    )
 }
 
 fn rerank_provider_kind(provider: &ProviderConfig) -> Option<RerankProviderKind> {

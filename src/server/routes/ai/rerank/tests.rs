@@ -97,6 +97,27 @@ fn provider_model_filter_rejects_unconfigured_unknown_models() {
 }
 
 #[test]
+fn provider_model_filter_rejects_undeclared_voyage_qualifiers() {
+    let provider = provider_config("voyage", "voyage", vec!["rerank-2.5"]);
+
+    assert!(rerank_provider_supports_model(
+        &provider,
+        RerankProviderKind::Voyage,
+        "voyage/rerank-2.5"
+    ));
+    assert!(!rerank_provider_supports_model(
+        &provider,
+        RerankProviderKind::Voyage,
+        "voy-age/rerank-2.5"
+    ));
+    assert!(!rerank_provider_supports_model(
+        &provider,
+        RerankProviderKind::Voyage,
+        "voy_age/rerank-2.5"
+    ));
+}
+
+#[test]
 fn selected_provider_uses_configured_endpoint_aliases() {
     let mut provider = provider_config("custom-voyage", "voyage", vec!["rerank-2.5"]);
     provider.settings.insert(

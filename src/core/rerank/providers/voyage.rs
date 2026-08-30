@@ -2,6 +2,7 @@
 
 use super::rerank_upstream_error;
 use crate::core::net::ProviderEndpointAccess;
+use crate::core::providers::ProviderError;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::rerank::service::RerankProvider;
 use crate::core::rerank::types::{
@@ -136,7 +137,9 @@ impl RerankProvider for VoyageRerankProvider {
             return Err(rerank_upstream_error("voyage", status, body));
         }
         let response: VoyageRerankResponse = response.json().await.map_err(|error| {
-            GatewayError::Validation(format!("Failed to parse Voyage rerank response: {error}"))
+            voyage_response_parsing_error(format!(
+                "Failed to parse Voyage rerank response: {error}"
+            ))
         })?;
         let mut indexes = HashSet::with_capacity(response.results.len());
         let results = response
@@ -144,7 +147,7 @@ impl RerankProvider for VoyageRerankProvider {
             .into_iter()
             .map(|result| {
                 if result.index >= request.documents.len() || !indexes.insert(result.index) {
-                    return Err(GatewayError::Validation(format!(
+                    return Err(voyage_response_parsing_error(format!(
                         "Invalid Voyage rerank result index {}",
                         result.index
                     )));
@@ -181,5 +184,27 @@ impl RerankProvider for VoyageRerankProvider {
 
     fn supported_models(&self) -> Vec<&'static str> {
         VOYAGE_RERANK_MODELS.to_vec()
+    }
+}
+
+fn voyage_response_parsing_error(message: String) -> GatewayError {
+    GatewayError::Provider(ProviderError::response_parsing("voyage", message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_upstream_response_keeps_response_parsing_category() {
+        let error = voyage_response_parsing_error("malformed JSON".to_string());
+
+        assert!(matches!(
+            error,
+            GatewayError::Provider(ProviderError::ResponseParsing {
+                provider: "voyage",
+                ..
+            })
+        ));
     }
 }
