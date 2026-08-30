@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn stability_rejects_sizes_its_model_cannot_express_before_network_access() {
     for (model, size) in [
-        ("stable-image-core", "1024x1024"),
+        ("stable-image-core", "512x512"),
         ("stable-image-ultra", "512x512"),
         ("sd3.5-large", "1792x1024"),
     ] {
@@ -67,7 +67,13 @@ async fn bfl_ratio_only_models_reject_noncanonical_exact_sizes_before_network_ac
 #[cfg(feature = "runway-media")]
 #[test]
 fn runway_env_uses_official_secret_with_legacy_fallback() {
-    for case in ["secret-only", "both", "legacy-only"] {
+    for case in [
+        "secret-only",
+        "trimmed-secret",
+        "both",
+        "blank-secret-with-legacy",
+        "legacy-only",
+    ] {
         let status = std::process::Command::new(
             std::env::current_exe().expect("test executable should exist"),
         )
@@ -81,8 +87,13 @@ fn runway_env_uses_official_secret_with_legacy_fallback() {
         .env_remove("RUNWAYML_API_KEY")
         .envs(match case {
             "secret-only" => vec![("RUNWAYML_API_SECRET", "official-secret")],
+            "trimmed-secret" => vec![("RUNWAYML_API_SECRET", "  official-secret  ")],
             "both" => vec![
                 ("RUNWAYML_API_SECRET", "official-secret"),
+                ("RUNWAYML_API_KEY", "legacy-key"),
+            ],
+            "blank-secret-with-legacy" => vec![
+                ("RUNWAYML_API_SECRET", "   "),
                 ("RUNWAYML_API_KEY", "legacy-key"),
             ],
             "legacy-only" => vec![("RUNWAYML_API_KEY", "legacy-key")],
@@ -101,7 +112,7 @@ fn runway_env_precedence_child() {
     let Ok(case) = std::env::var("RUNWAY_ENV_PRECEDENCE_CHILD") else {
         return;
     };
-    let expected = if case == "legacy-only" {
+    let expected = if matches!(case.as_str(), "legacy-only" | "blank-secret-with-legacy") {
         "legacy-key"
     } else {
         "official-secret"

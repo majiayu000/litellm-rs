@@ -382,12 +382,19 @@ async fn accepted_stability_body_failure_settles_configured_provider_budget() {
             .read(&mut request)
             .await
             .expect("request should read");
+        let body = br#"{"error":"proxy returned JSON with a 2xx status"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
         socket
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 100\r\nConnection: close\r\n\r\ntruncated",
-            )
+            .write_all(response.as_bytes())
             .await
-            .expect("truncated response should write");
+            .expect("response headers should write");
+        socket
+            .write_all(body)
+            .await
+            .expect("response body should write");
     });
     let mut provider = image_provider(
         "stability-primary",

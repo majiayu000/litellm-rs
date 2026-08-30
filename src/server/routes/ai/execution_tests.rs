@@ -225,6 +225,53 @@ async fn test_execute_with_selected_deployment_maps_provider_error() {
 }
 
 #[tokio::test]
+async fn native_media_mutations_do_not_retry_ambiguous_transport_failures() {
+    for capability in [
+        ProviderCapability::ImageGeneration,
+        ProviderCapability::ImageEdit,
+    ] {
+        let router = UnifiedRouter::new(RouterConfig {
+            num_retries: 1,
+            ..Default::default()
+        });
+        let provider = Provider::OpenAI(
+            OpenAIProvider::with_api_key("sk-test-key")
+                .await
+                .expect("test provider should build"),
+        );
+        router.add_deployment(Deployment::new(
+            format!("{capability:?}"),
+            provider,
+            "gpt-image-1".to_string(),
+            "image-model".to_string(),
+        ));
+        let attempts = Arc::new(Mutex::new(0_u32));
+
+        let error = execute_with_selected_deployment(&router, "image-model", capability.clone(), {
+            let attempts = attempts.clone();
+            move |_provider, _model, _deployment_id| {
+                let attempts = attempts.clone();
+                async move {
+                    *attempts.lock().expect("attempt lock") += 1;
+                    Err::<((), u64), _>(ProviderError::network(
+                        "native-media",
+                        "connection reset before response headers",
+                    ))
+                }
+            }
+        })
+        .await
+        .expect_err("ambiguous native media submission should fail");
+
+        assert!(
+            matches!(error, GatewayError::Provider(ProviderError::Network { .. })),
+            "unexpected {capability:?} error: {error:?}"
+        );
+        assert_eq!(*attempts.lock().expect("attempt lock"), 1, "{capability:?}");
+    }
+}
+
+#[tokio::test]
 async fn test_execute_with_selected_deployment_excludes_provider_budget_failures() {
     let router = build_provider_budget_fallback_router().await;
     let attempts = Arc::new(Mutex::new(Vec::new()));

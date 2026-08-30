@@ -533,6 +533,9 @@ async fn native_image_factory_merges_gateway_custom_headers() {
 #[path = "media_native_review_loop_tests.rs"]
 mod review_loop_tests;
 
+#[path = "media_native_final_invariant_tests.rs"]
+mod final_invariant_tests;
+
 #[tokio::test]
 async fn bfl_does_not_advertise_unpriced_flux_2_models() {
     let provider = BflProvider::new(BflConfig::with_api_key("bfl-secret"))

@@ -331,7 +331,13 @@ pub mod runway {
         pub fn from_env() -> Self {
             let mut config = Self::default();
             let env = BaseConfig::from_env(PROVIDER);
-            config.base.api_key = std::env::var("RUNWAYML_API_SECRET").ok().or(env.api_key);
+            config.base.api_key = std::env::var("RUNWAYML_API_SECRET")
+                .ok()
+                .and_then(|value| {
+                    let value = value.trim();
+                    (!value.is_empty()).then(|| value.to_string())
+                })
+                .or(env.api_key);
             config.base.timeout = env.timeout;
             config.base.max_retries = env.max_retries;
             if env.api_base.is_some() {
@@ -430,8 +436,11 @@ pub mod runway {
                 .validate()
                 .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
             Ok(Self {
-                client: BaseHttpClient::new_for_provider(PROVIDER, config.base.clone())?,
-                lifecycle: GenerationLifecycle::new(
+                client: BaseHttpClient::new_for_provider_no_redirect(
+                    PROVIDER,
+                    config.base.clone(),
+                )?,
+                lifecycle: GenerationLifecycle::new_no_redirect(
                     PROVIDER,
                     config.base.clone(),
                     config.poll_policy,

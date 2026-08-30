@@ -88,7 +88,7 @@ async fn stability_generation_uses_native_multipart_contract() {
         .image_generation(
             ImageGenerationRequest {
                 prompt: "paint a lighthouse".to_string(),
-                model: Some("stable-image-ultra".to_string()),
+                model: Some("stable-image-core".to_string()),
                 n: Some(1),
                 size: Some("1024x1024".to_string()),
                 quality: None,
@@ -106,7 +106,7 @@ async fn stability_generation_uses_native_multipart_contract() {
     assert!(response.data[0].b64_json.is_some());
     let captured_request = captured.lock().expect("capture lock");
     let request = String::from_utf8_lossy(&captured_request);
-    assert!(request.starts_with("POST /v2beta/stable-image/generate/ultra HTTP/1.1"));
+    assert!(request.starts_with("POST /v2beta/stable-image/generate/core HTTP/1.1"));
     assert!(request.contains("name=\"aspect_ratio\""));
     assert!(request.contains("1:1"));
     assert!(

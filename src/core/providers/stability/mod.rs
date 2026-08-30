@@ -115,7 +115,7 @@ impl StabilityProvider {
         config
             .validate()
             .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
-        let client = BaseHttpClient::new_for_provider(PROVIDER, config.base.clone())?;
+        let client = BaseHttpClient::new_for_provider_no_redirect(PROVIDER, config.base.clone())?;
         Ok(Self {
             config,
             client,
@@ -191,7 +191,11 @@ impl StabilityProvider {
             .text("prompt", request.prompt.clone())
             .text("output_format", output_format.to_string());
         if let Some(size) = request.size.as_deref() {
-            if size != "1024x1024" || !(model == "stable-image-ultra" || model.starts_with("sd3")) {
+            if size != "1024x1024"
+                || !(model == "stable-image-core"
+                    || model == "stable-image-ultra"
+                    || model.starts_with("sd3"))
+            {
                 return Err(ProviderError::invalid_request(
                     PROVIDER,
                     format!("Stability model '{model}' cannot guarantee exact image size '{size}'"),
@@ -229,6 +233,11 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) if status.is_success() => return Err(post_header_body_error(error)),
@@ -237,7 +246,7 @@ impl StabilityProvider {
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
         }
-        ensure_image_body(&bytes)?;
+        ensure_image_body(&bytes, content_type.as_deref())?;
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
             data: vec![ImageData {
@@ -307,6 +316,11 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) if status.is_success() => return Err(post_header_body_error(error)),
@@ -315,7 +329,7 @@ impl StabilityProvider {
         if !status.is_success() {
             return Err(map_error_response(status.as_u16(), &bytes));
         }
-        ensure_image_body(&bytes)?;
+        ensure_image_body(&bytes, content_type.as_deref())?;
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
             data: vec![ImageData {
@@ -334,11 +348,23 @@ fn post_header_body_error(error: reqwest::Error) -> ProviderError {
     )
 }
 
-fn ensure_image_body(body: &[u8]) -> Result<(), ProviderError> {
+fn ensure_image_body(body: &[u8], content_type: Option<&str>) -> Result<(), ProviderError> {
     if body.is_empty() {
         return Err(ProviderError::response_parsing(
             PROVIDER,
             "Stability response contained an empty image body",
+        ));
+    }
+    let image_content_type = content_type
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().starts_with("image/"));
+    let image_signature = body.starts_with(b"\x89PNG\r\n\x1a\n")
+        || body.starts_with(b"\xff\xd8\xff")
+        || (body.len() >= 12 && body.starts_with(b"RIFF") && &body[8..12] == b"WEBP");
+    if !image_content_type && !image_signature {
+        return Err(ProviderError::response_parsing(
+            PROVIDER,
+            "Stability response did not contain image content",
         ));
     }
     Ok(())
@@ -348,9 +374,13 @@ pub(crate) fn is_post_submit_error(error: &ProviderError) -> bool {
     matches!(error,
         ProviderError::Other { provider: PROVIDER, message }
             if message.starts_with("response body failed after Stability accepted the request:"))
-        || matches!(error,
-            ProviderError::ResponseParsing { provider: PROVIDER, message }
-                if message == "Stability response contained an empty image body")
+        || matches!(
+            error,
+            ProviderError::ResponseParsing {
+                provider: PROVIDER,
+                ..
+            }
+        )
 }
 
 fn map_error_response(status: u16, body: &[u8]) -> ProviderError {
