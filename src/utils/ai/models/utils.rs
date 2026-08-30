@@ -44,7 +44,7 @@ impl ModelUtils {
                 supports_tool_choice: true,
                 supports_response_schema: true,
                 supports_system_messages: true,
-                supports_web_search: false,
+                supports_web_search: true,
                 supports_url_context: true,
                 supports_vision: true,
                 supports_streaming: true,

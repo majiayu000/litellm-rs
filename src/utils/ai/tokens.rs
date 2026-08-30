@@ -88,6 +88,10 @@ impl TokenUtils {
             });
         }
 
+        if openai_realtime2_limits(model).is_some() {
+            return Ok(TokenizerType::OpenAI);
+        }
+
         if Self::OPENAI_MODELS
             .iter()
             .any(|&m| model_lower.starts_with(m))
@@ -627,10 +631,18 @@ mod tests {
         ] {
             assert_eq!(TokenUtils::get_max_tokens_for_model(model), Some(128_000));
             assert!(TokenUtils::validate_token_limit(model, 128_001).is_err());
+            assert!(matches!(
+                TokenUtils::select_tokenizer(model),
+                Ok(TokenizerType::OpenAI)
+            ));
             let cost = TokenUtils::calculate_cost(model, 1_000, 500)
                 .unwrap_or_else(|error| panic!("{model} cost should calculate: {error}"));
             assert!((cost - expected_cost).abs() < 1e-12, "{model}: {cost}");
         }
+        assert!(matches!(
+            TokenUtils::select_tokenizer("azure/gpt-realtime-2"),
+            Ok(TokenizerType::Custom(_))
+        ));
     }
 
     #[test]

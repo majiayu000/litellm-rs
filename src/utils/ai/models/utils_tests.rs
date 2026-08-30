@@ -90,6 +90,7 @@ fn test_get_model_capabilities_gpt56_matches_registry_shape() {
         );
         assert!(caps.supports_function_calling, "{model}");
         assert!(caps.supports_response_schema, "{model}");
+        assert!(caps.supports_web_search, "{model}");
         assert!(caps.supports_vision, "{model}");
         assert!(caps.supports_streaming, "{model}");
     }
