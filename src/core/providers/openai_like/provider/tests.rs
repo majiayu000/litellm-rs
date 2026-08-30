@@ -750,7 +750,10 @@ async fn current_xai_reasoning_normalizes_after_extra_merge() {
         .with_provider_name("xai")
         .with_skip_api_key(true);
     let provider = OpenAILikeProvider::new(config).await.unwrap();
-    for (model, effort) in [("grok-4.5", "xhigh"), ("grok-4.6", "xhigh")] {
+    for (model, effort, expected) in [
+        ("grok-4.5", "xhigh", "high"),
+        ("grok-4.6", "xhigh", "xhigh"),
+    ] {
         let request = ChatRequest {
             model: model.to_string(),
             messages: vec![],
@@ -762,7 +765,7 @@ async fn current_xai_reasoning_normalizes_after_extra_merge() {
             ..Default::default()
         };
         let json = provider.transform_chat_request(request).unwrap();
-        assert_eq!(json["reasoning_effort"], effort);
+        assert_eq!(json["reasoning_effort"], expected);
     }
 
     for extra in [serde_json::json!("low"), serde_json::json!(7)] {

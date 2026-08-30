@@ -381,28 +381,40 @@ pub fn xai_native_wire_model(provider_name: &str, has_prefix: bool, mut model: S
 }
 
 pub fn take_xai_reasoning_effort(
-    is_xai_model: bool,
+    xai_model: Option<&str>,
     typed: Option<String>,
     extra_params: &mut HashMap<String, Value>,
 ) -> Result<Option<String>, OpenAILikeError> {
-    if !is_xai_model {
+    let Some(model) = xai_model else {
         return Ok(typed);
-    }
-    match (typed, extra_params.remove("reasoning_effort")) {
-        (Some(typed), Some(Value::String(extra))) if typed == extra => Ok(Some(typed)),
-        (Some(typed), Some(Value::String(extra))) => Err(OpenAILikeError::configuration(
-            PROVIDER_NAME,
-            format!("conflicting xAI reasoning_effort values: '{typed}' and '{extra}'"),
-        )),
-        (_, Some(value)) if !value.is_string() => Err(OpenAILikeError::configuration(
-            PROVIDER_NAME,
-            "xAI reasoning_effort must be a string",
-        )),
-        (None, Some(Value::String(effort))) => Ok(Some(effort)),
-        (Some(effort), None) => Ok(Some(effort)),
-        (None, None) => Ok(None),
+    };
+    let effort = match (typed, extra_params.remove("reasoning_effort")) {
+        (Some(typed), Some(Value::String(extra))) if typed == extra => Some(typed),
+        (Some(typed), Some(Value::String(extra))) => {
+            return Err(OpenAILikeError::configuration(
+                PROVIDER_NAME,
+                format!("conflicting xAI reasoning_effort values: '{typed}' and '{extra}'"),
+            ));
+        }
+        (_, Some(value)) if !value.is_string() => {
+            return Err(OpenAILikeError::configuration(
+                PROVIDER_NAME,
+                "xAI reasoning_effort must be a string",
+            ));
+        }
+        (None, Some(Value::String(effort))) | (Some(effort), None) => Some(effort),
+        (None, None) => None,
         _ => unreachable!("non-string values are rejected above"),
-    }
+    };
+    Ok(effort.map(|effort| {
+        if effort == "xhigh"
+            && XAI_GROK_45_MODEL_IDS.contains(&model.strip_prefix("xai/").unwrap_or(model))
+        {
+            "high".to_string()
+        } else {
+            effort
+        }
+    }))
 }
 
 pub fn reject_xai_reasoning_incompatible_params(request: &Value) -> Result<(), OpenAILikeError> {
@@ -434,12 +446,7 @@ pub fn xai_reasoning_efforts_for_model(model_id: &str) -> Option<&'static [&'sta
 }
 
 pub fn xai_accepts_reasoning_effort(model_id: &str, effort: &str) -> bool {
-    xai_reasoning_efforts_for_model(model_id).is_some_and(|allowed| {
-        allowed.contains(&effort)
-            || (effort == "xhigh"
-                && XAI_GROK_45_MODEL_IDS
-                    .contains(&model_id.strip_prefix("xai/").unwrap_or(model_id)))
-    })
+    xai_reasoning_efforts_for_model(model_id).is_some_and(|allowed| allowed.contains(&effort))
 }
 
 pub fn is_xai_current_model(model_id: &str) -> bool {

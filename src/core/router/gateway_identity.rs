@@ -12,7 +12,7 @@ use crate::core::providers::model_identity::{
 };
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::model_catalog_authority::{
-    CatalogAuthority, CatalogResolution,
+    CatalogAuthority, CatalogDecision, CatalogResolution,
 };
 use crate::core::types::model_id::ModelIdRef;
 use std::collections::HashMap;
@@ -47,18 +47,33 @@ impl GatewayIdentityAuthority {
         let (identity_provider, identity_model) = match provider {
             Provider::OpenAILike(openai_like) if openai_like.config().provider_name == "xai" => {
                 let configured = openai_like.config().get_effective_model(wire_model);
+                let parsed = ModelIdRef::parse(&configured);
+                if parsed.provider() == Some("xai")
+                    && ModelIdRef::parse(parsed.model()).provider() == Some("xai")
+                {
+                    return Err(RouterError::InvalidConfiguration(format!(
+                        "provider '{provider_name}' deployment '{wire_model}' has double provider qualification"
+                    )));
+                }
                 let effective = crate::core::providers::openai_like::models::xai_native_wire_model(
                     "xai",
                     openai_like.config().model_prefix.is_some(),
                     configured,
                 );
-                if mapping.is_none()
-                    && !matches!(
-                        self.catalog.resolve_model("xai", &effective),
-                        CatalogResolution::Callable(_)
-                    )
-                {
-                    return Ok(());
+                if mapping.is_none() {
+                    let resolution = self.catalog.resolve_model("xai", &effective);
+                    let pricing_key = if ModelIdRef::parse(&effective).provider() == Some("xai") {
+                        effective.clone()
+                    } else {
+                        format!("xai/{effective}")
+                    };
+                    let legacy_unreviewed = matches!(resolution, CatalogResolution::Unreviewed)
+                        || (matches!(resolution, CatalogResolution::Unknown)
+                            && self.catalog.decision_for_pricing_key("xai", &pricing_key)
+                                == Some(CatalogDecision::Unreviewed));
+                    if legacy_unreviewed {
+                        return Ok(());
+                    }
                 }
                 ("xai", effective)
             }
@@ -189,4 +204,70 @@ pub(super) fn take_identity_mappings(
         }
     }
     Ok(mappings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GatewayIdentityAuthority;
+    use crate::core::pricing_service::PricingService;
+    use crate::core::providers::Provider;
+    use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
+    use std::sync::Arc;
+
+    async fn native_xai_provider() -> Provider {
+        let config = OpenAILikeConfig::new("https://api.x.ai/v1")
+            .with_provider_name("xai")
+            .with_skip_api_key(true);
+        Provider::OpenAILike(
+            OpenAILikeProvider::new(config)
+                .await
+                .expect("native xAI provider"),
+        )
+    }
+
+    fn authority() -> GatewayIdentityAuthority {
+        let pricing = Arc::new(
+            PricingService::with_embedded_default().expect("embedded pricing should load"),
+        );
+        GatewayIdentityAuthority::new(pricing).expect("identity authority")
+    }
+
+    #[tokio::test]
+    async fn native_xai_rejects_double_qualifier_before_wire_normalization() {
+        let mut provider = native_xai_provider().await;
+        let error = authority()
+            .bind("native-xai", &mut provider, "xai/xai/grok-4.6", None)
+            .expect_err("double xAI qualification must fail before stripping");
+        assert!(error.to_string().contains("double provider qualification"));
+    }
+
+    #[tokio::test]
+    async fn native_xai_unknown_models_bind_unpriced_while_legacy_pricing_remains() {
+        for model in ["grok-4.6-latest", "unknown-xai-model"] {
+            let mut provider = native_xai_provider().await;
+            authority()
+                .bind("native-xai", &mut provider, model, None)
+                .expect("unknown configured model should bind without privilege");
+            let identity = provider
+                .deployment_model_identity()
+                .expect("unknown configured model must retain an identity");
+            assert_eq!(identity.wire_model(), model);
+            assert_eq!(identity.capability_catalog_model(), None);
+            assert_eq!(identity.pricing_model(), None);
+            assert!(provider.calculate_cost(model, 1, 1).await.is_err());
+        }
+
+        let mut legacy = native_xai_provider().await;
+        authority()
+            .bind("native-xai", &mut legacy, "grok-4.3", None)
+            .expect("legacy unreviewed model should preserve compatibility");
+        assert!(legacy.deployment_model_identity().is_none());
+        assert!(
+            legacy
+                .calculate_cost("grok-4.3", 1_000, 1_000)
+                .await
+                .unwrap()
+                > 0.0
+        );
+    }
 }

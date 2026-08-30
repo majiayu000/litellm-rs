@@ -375,7 +375,7 @@ impl OpenAILikeProvider {
 
         let mut extra_params = request.extra_params;
         let reasoning_effort = super::models::take_xai_reasoning_effort(
-            xai_model.is_some(),
+            xai_model.as_deref(),
             request.reasoning_effort,
             &mut extra_params,
         )?;

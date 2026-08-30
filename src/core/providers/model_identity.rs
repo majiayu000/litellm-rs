@@ -399,8 +399,17 @@ fn validate_pricing_target(
     let qualifier = single_identity_qualifier(provider_name, wire_model, target)?;
     let pricing_provider = match (selected_provider, qualifier) {
         ("openai_compatible", Some("xai")) => "xai",
+        ("openai_compatible", _) => {
+            return Err(invalid_field(
+                provider_name,
+                wire_model,
+                "pricing_model",
+                target,
+                "cross-provider target requires an exact provider qualifier",
+            ));
+        }
         (provider, Some(qualifier)) if provider == qualifier => provider,
-        ("openai_compatible", None) | (_, Some(_)) => {
+        (_, Some(_)) => {
             return Err(invalid_field(
                 provider_name,
                 wire_model,
@@ -411,15 +420,6 @@ fn validate_pricing_target(
         }
         (provider, None) => provider,
     };
-    if pricing_provider == "openai_compatible" {
-        return Err(invalid_field(
-            provider_name,
-            wire_model,
-            "pricing_model",
-            target,
-            "cross-provider target requires an exact provider qualifier",
-        ));
-    }
     let (model, _) = pricing
         .get_model_info_for_provider(pricing_provider, target)
         .ok_or_else(|| {
