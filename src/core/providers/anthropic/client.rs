@@ -717,6 +717,14 @@ impl AnthropicClient {
             }
         }
     }
+
+    fn manual_thinking_supports_tool_choice(tool_choice: Option<&ToolChoice>) -> bool {
+        match tool_choice {
+            Some(ToolChoice::String(choice)) => matches!(choice.as_str(), "auto" | "none"),
+            Some(ToolChoice::Specific { .. }) => false,
+            None => true,
+        }
+    }
 }
 
 mod request;
