@@ -14,7 +14,9 @@ use crate::core::types::context::RequestContext;
 use crate::core::types::embedding::EmbeddingRequest;
 use crate::core::types::health::HealthStatus;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
-use crate::core::types::responses::{ChatChunk, ChatResponse, EmbeddingData, EmbeddingResponse};
+use crate::core::types::responses::{
+    ChatChunk, ChatResponse, EmbeddingData, EmbeddingResponse, Usage,
+};
 use crate::utils::error::gateway_error::GatewayError;
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -25,6 +27,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
+use std::sync::Arc;
 
 static NATIVE_CAPABILITIES: &[ProviderCapability] =
     &[ProviderCapability::Embeddings, ProviderCapability::Rerank];
@@ -299,7 +302,23 @@ pub struct OciNativeProvider {
     config: OciConfig,
     base_url: String,
     client: BaseHttpClient,
+    signing_key: OciIamSigningKey,
     models: Vec<ModelInfo>,
+}
+
+#[derive(Clone)]
+struct OciIamSigningKey(Arc<jsonwebtoken::EncodingKey>);
+
+impl fmt::Debug for OciIamSigningKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
+impl OciIamSigningKey {
+    fn as_ref(&self) -> &jsonwebtoken::EncodingKey {
+        self.0.as_ref()
+    }
 }
 
 impl OciNativeProvider {
@@ -320,6 +339,7 @@ impl OciNativeProvider {
                 "compartment_id must be an OCI compartment OCID",
             ));
         }
+        let signing_key = oci_iam_signing_key(&config.auth)?;
         let base_url = config.api_base()?;
         let client = BaseHttpClient::new_for_provider(
             "oci",
@@ -346,6 +366,7 @@ impl OciNativeProvider {
             config,
             base_url,
             client,
+            signing_key,
             models,
         })
     }
@@ -356,7 +377,14 @@ impl OciNativeProvider {
         let url = format!("{}/actions/{action}", self.base_url);
         let body = serde_json::to_string(&body)
             .map_err(|error| ProviderError::serialization("oci", error.to_string()))?;
-        let headers = oci_iam_headers(&self.config.auth, "POST", &url, &body, chrono::Utc::now())?;
+        let headers = oci_iam_headers(
+            &self.config.auth,
+            self.signing_key.as_ref(),
+            "POST",
+            &url,
+            &body,
+            chrono::Utc::now(),
+        )?;
         let mut request = self.client.post(url)?.body(body);
         for (key, value) in headers {
             request = request.header(key, value);
@@ -395,30 +423,68 @@ impl OciNativeProvider {
             .to_string();
         let inputs = request.input.to_vec();
         let response = self.post_action("embedText", serde_json::json!({"compartmentId": self.config.compartment_id, "servingMode": {"servingType": "ON_DEMAND", "modelId": model}, "inputs": inputs})).await?;
-        let embeddings = response
-            .get("embeddings")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                ProviderError::response_parsing("oci", "embedding response missing embeddings")
-            })?;
-        let mut data = Vec::with_capacity(embeddings.len());
-        for (index, embedding) in embeddings.iter().enumerate() {
-            let embedding = serde_json::from_value::<Vec<f32>>(embedding.clone())
-                .map_err(|error| ProviderError::response_parsing("oci", error.to_string()))?;
-            data.push(EmbeddingData {
-                object: "embedding".to_string(),
-                index: index as u32,
-                embedding,
-            });
-        }
-        Ok(EmbeddingResponse {
-            object: "list".to_string(),
-            data,
-            model,
-            usage: None,
-            embeddings: None,
-        })
+        parse_oci_embedding_response(model, response)
     }
+}
+
+fn parse_oci_embedding_response(
+    model: String,
+    response: Value,
+) -> Result<EmbeddingResponse, ProviderError> {
+    let embeddings = response
+        .get("embeddings")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ProviderError::response_parsing("oci", "embedding response missing embeddings")
+        })?;
+    let mut data = Vec::with_capacity(embeddings.len());
+    for (index, embedding) in embeddings.iter().enumerate() {
+        let embedding = serde_json::from_value::<Vec<f32>>(embedding.clone())
+            .map_err(|error| ProviderError::response_parsing("oci", error.to_string()))?;
+        data.push(EmbeddingData {
+            object: "embedding".to_string(),
+            index: index as u32,
+            embedding,
+        });
+    }
+    let usage = response
+        .get("usage")
+        .map(|usage| -> Result<Usage, ProviderError> {
+            let prompt_tokens = usage
+                .get("promptTokens")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    ProviderError::response_parsing("oci", "embedding usage missing promptTokens")
+                })?;
+            let total_tokens = usage
+                .get("totalTokens")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    ProviderError::response_parsing("oci", "embedding usage missing totalTokens")
+                })?;
+            let completion_tokens = total_tokens.checked_sub(prompt_tokens).ok_or_else(|| {
+                ProviderError::response_parsing(
+                    "oci",
+                    "embedding usage totalTokens is smaller than promptTokens",
+                )
+            })?;
+            Ok(Usage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                ..Usage::default()
+            })
+        })
+        .transpose()?;
+    Ok(EmbeddingResponse {
+        object: "list".to_string(),
+        data,
+        model,
+        usage,
+        embeddings: None,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -431,53 +497,18 @@ impl RerankProvider for OciRerankProvider {
             .strip_prefix("oci/")
             .unwrap_or(&request.model)
             .to_string();
-        let response = self.0.post_action("rerankText", serde_json::json!({"compartmentId": self.0.config.compartment_id, "servingMode": {"servingType": "ON_DEMAND", "modelId": model}, "query": request.query, "documents": request.documents.iter().map(RerankDocument::get_text).collect::<Vec<_>>(), "topN": request.top_n})).await.map_err(GatewayError::Provider)?;
-        let raw = response
-            .get("rerankResults")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                GatewayError::Validation("OCI rerank response missing rerankResults".to_string())
-            })?;
-        let mut results = Vec::with_capacity(raw.len());
-        for item in raw {
-            let index = item
-                .get("index")
-                .and_then(Value::as_u64)
-                .and_then(|v| usize::try_from(v).ok())
-                .ok_or_else(|| {
-                    GatewayError::Validation("OCI rerank result missing index".to_string())
-                })?;
-            let relevance_score = item
-                .get("relevanceScore")
-                .and_then(Value::as_f64)
-                .ok_or_else(|| {
-                    GatewayError::Validation("OCI rerank result missing relevanceScore".to_string())
-                })?;
-            let document = if request.return_documents.unwrap_or(true) {
-                Some(request.documents.get(index).cloned().ok_or_else(|| {
-                    GatewayError::Validation("OCI rerank result index is out of range".to_string())
-                })?)
-            } else {
-                None
-            };
-            results.push(RerankResult {
-                index,
-                relevance_score,
-                document,
-            });
-        }
-        let id = response
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| GatewayError::Validation("OCI rerank response missing id".to_string()))?
-            .to_string();
-        Ok(RerankResponse {
-            id,
-            results,
+        let body = oci_rerank_body(&self.0.config, &model, &request);
+        let response = self
+            .0
+            .post_action("rerankText", body)
+            .await
+            .map_err(GatewayError::Provider)?;
+        parse_oci_rerank_response(
             model,
-            usage: None,
-            meta: HashMap::new(),
-        })
+            response,
+            &request.documents,
+            request.return_documents.unwrap_or(true),
+        )
     }
     fn provider_name(&self) -> &'static str {
         "oci"
@@ -495,8 +526,109 @@ impl RerankProvider for OciRerankProvider {
     }
 }
 
+fn oci_rerank_body(config: &OciConfig, model: &str, request: &RerankRequest) -> Value {
+    let mut body = serde_json::json!({
+        "compartmentId": config.compartment_id,
+        "servingMode": {"servingType": "ON_DEMAND", "modelId": model},
+        "input": request.query,
+        "documents": request.documents.iter().map(RerankDocument::get_text).collect::<Vec<_>>(),
+        "isEcho": request.return_documents.unwrap_or(true),
+    });
+    if let Some(top_n) = request.top_n {
+        body["topN"] = Value::from(top_n);
+    }
+    body
+}
+
+fn parse_oci_rerank_response(
+    model: String,
+    response: Value,
+    documents: &[RerankDocument],
+    return_documents: bool,
+) -> Result<RerankResponse, GatewayError> {
+    let raw = response
+        .get("documentRanks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            GatewayError::Validation("OCI rerank response missing documentRanks".to_string())
+        })?;
+    let mut results = Vec::with_capacity(raw.len());
+    for item in raw {
+        let index = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| {
+                GatewayError::Validation("OCI rerank result missing index".to_string())
+            })?;
+        let relevance_score = item
+            .get("relevanceScore")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                GatewayError::Validation("OCI rerank result missing relevanceScore".to_string())
+            })?;
+        let document = if return_documents {
+            Some(documents.get(index).cloned().ok_or_else(|| {
+                GatewayError::Validation("OCI rerank result index is out of range".to_string())
+            })?)
+        } else {
+            None
+        };
+        results.push(RerankResult {
+            index,
+            relevance_score,
+            document,
+        });
+    }
+    Ok(RerankResponse {
+        id: uuid::Uuid::new_v4().to_string(),
+        results,
+        model,
+        usage: None,
+        meta: HashMap::new(),
+    })
+}
+
+fn oci_iam_signing_key(auth: &OciAuth) -> Result<OciIamSigningKey, ProviderError> {
+    let OciAuth::Iam {
+        tenancy_ocid,
+        user_ocid,
+        fingerprint,
+        private_key_pem,
+    } = auth
+    else {
+        return Err(ProviderError::configuration(
+            "oci",
+            "IAM credentials are required",
+        ));
+    };
+    for (field, value, prefix) in [
+        ("tenancy_ocid", tenancy_ocid.as_str(), "ocid1.tenancy."),
+        ("user_ocid", user_ocid.as_str(), "ocid1.user."),
+    ] {
+        if !value.trim().starts_with(prefix) {
+            return Err(ProviderError::configuration(
+                "oci",
+                format!("{field} must be a valid OCI OCID"),
+            ));
+        }
+    }
+    if fingerprint.trim().is_empty() {
+        return Err(ProviderError::configuration(
+            "oci",
+            "fingerprint cannot be empty",
+        ));
+    }
+    let key =
+        jsonwebtoken::EncodingKey::from_rsa_pem(private_key_pem.as_bytes()).map_err(|_| {
+            ProviderError::configuration("oci", "private_key_pem is not a valid RSA private key")
+        })?;
+    Ok(OciIamSigningKey(Arc::new(key)))
+}
+
 fn oci_iam_headers(
     auth: &OciAuth,
+    key: &jsonwebtoken::EncodingKey,
     method: &str,
     url: &str,
     body: &str,
@@ -506,7 +638,7 @@ fn oci_iam_headers(
         tenancy_ocid,
         user_ocid,
         fingerprint,
-        private_key_pem,
+        ..
     } = auth
     else {
         return Err(ProviderError::configuration(
@@ -536,12 +668,8 @@ fn oci_iam_headers(
         "(request-target): {} {target}\nhost: {host}\ndate: {date}\nx-content-sha256: {digest}\ncontent-type: application/json\ncontent-length: {content_length}",
         method.to_ascii_lowercase()
     );
-    let key =
-        jsonwebtoken::EncodingKey::from_rsa_pem(private_key_pem.as_bytes()).map_err(|_| {
-            ProviderError::configuration("oci", "private_key_pem is not a valid RSA private key")
-        })?;
     let signature_url =
-        jsonwebtoken::crypto::sign(canonical.as_bytes(), &key, jsonwebtoken::Algorithm::RS256)
+        jsonwebtoken::crypto::sign(canonical.as_bytes(), key, jsonwebtoken::Algorithm::RS256)
             .map_err(|_| ProviderError::configuration("oci", "failed to sign request"))?;
     let raw_signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(signature_url)
@@ -568,60 +696,4 @@ const fn default_retries() -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn official_endpoints_are_mode_specific_and_region_is_validated() {
-        let config = OciConfig {
-            region: "us-chicago-1".to_string(),
-            compartment_id: None,
-            auth: OciAuth::ApiKey {
-                token: "key".to_string(),
-            },
-            api_mode: OciApiMode::OpenAiCompatible,
-            base_url: None,
-            endpoint_access: ProviderEndpointAccess::PublicOnly,
-            timeout: 60,
-            max_retries: 2,
-            models: Vec::new(),
-        };
-        assert_eq!(
-            config.api_base().expect("valid compatible region"),
-            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
-        );
-        assert_eq!(
-            OciConfig {
-                api_mode: OciApiMode::Native,
-                ..config.clone()
-            }
-            .api_base()
-            .expect("valid native region"),
-            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130"
-        );
-        assert!(
-            OciConfig {
-                region: "us/evil".to_string(),
-                ..config
-            }
-            .api_base()
-            .is_err()
-        );
-    }
-    #[tokio::test]
-    async fn auth_and_mode_combinations_fail_closed() {
-        let config = OciConfig {
-            region: "us-chicago-1".to_string(),
-            compartment_id: Some("ocid1.compartment.oc1..test".to_string()),
-            auth: OciAuth::ApiKey {
-                token: "key".to_string(),
-            },
-            api_mode: OciApiMode::Native,
-            base_url: None,
-            endpoint_access: ProviderEndpointAccess::PublicOnly,
-            timeout: 60,
-            max_retries: 2,
-            models: Vec::new(),
-        };
-        assert!(config.build().await.is_err());
-    }
-}
+mod tests;

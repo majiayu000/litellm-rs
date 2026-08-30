@@ -1,7 +1,119 @@
 use super::create_provider;
-#[cfg(feature = "providers-extended")]
+use crate::config::Validate;
 use crate::core::providers::Provider;
 use crate::core::providers::ProviderError;
+
+#[tokio::test]
+async fn sagemaker_standard_provider_config_validates_and_builds() {
+    let config = crate::config::models::provider::ProviderConfig {
+        name: "sagemaker-chat".to_string(),
+        provider_type: "sagemaker".to_string(),
+        models: vec!["tenant-chat".to_string()],
+        settings: serde_json::from_value(serde_json::json!({
+            "aws_access_key_id": "AKIATEST",
+            "aws_secret_access_key": "secret-test",
+            "aws_session_token": "session-test",
+            "region": "us-east-1",
+            "endpoint_name": "tenant-chat",
+            "payload_transformer": "open_ai_chat"
+        }))
+        .expect("settings object"),
+        ..Default::default()
+    };
+
+    let mut with_unused_api_key = config.clone();
+    with_unused_api_key.api_key = "unused-top-level-key".to_string();
+
+    config.validate().expect("standard config should validate");
+    let provider = create_provider(config)
+        .await
+        .expect("standard config should build SageMaker");
+    assert!(matches!(provider, Provider::Enterprise(_)));
+    create_provider(with_unused_api_key)
+        .await
+        .expect("irrelevant top-level API key should be discarded");
+}
+
+#[tokio::test]
+async fn snowflake_organization_alias_builds_through_standard_config() {
+    let config = crate::config::models::provider::ProviderConfig {
+        name: "snowflake".to_string(),
+        provider_type: "snowflake".to_string(),
+        api_key: "oauth-token".to_string(),
+        organization: Some("org-account".to_string()),
+        settings: serde_json::from_value(serde_json::json!({
+            "token_type": "OAUTH"
+        }))
+        .expect("settings object"),
+        ..Default::default()
+    };
+
+    config.validate().expect("standard config should validate");
+    let provider = create_provider(config)
+        .await
+        .expect("organization alias should build Snowflake");
+    assert!(matches!(provider, Provider::Enterprise(_)));
+}
+
+#[tokio::test]
+async fn oci_standard_provider_config_validates_and_builds() {
+    let config = crate::config::models::provider::ProviderConfig {
+        name: "oci".to_string(),
+        provider_type: "oci".to_string(),
+        api_key: "oci-compatible-token".to_string(),
+        settings: serde_json::from_value(serde_json::json!({
+            "region": "us-chicago-1",
+            "api_mode": "open_ai_compatible"
+        }))
+        .expect("settings object"),
+        ..Default::default()
+    };
+
+    config.validate().expect("standard config should validate");
+    let provider = create_provider(config)
+        .await
+        .expect("standard config should build OCI compatible runtime");
+    assert!(matches!(provider, Provider::Enterprise(_)));
+}
+
+#[tokio::test]
+async fn watsonx_requires_explicit_access_token_in_settings() {
+    let explicit = crate::config::models::provider::ProviderConfig {
+        name: "watsonx".to_string(),
+        provider_type: "watsonx".to_string(),
+        api_version: Some("2025-01-01".to_string()),
+        project: Some("project-id".to_string()),
+        settings: serde_json::from_value(serde_json::json!({
+            "access_token": "iam-access-token",
+            "region": "us-south"
+        }))
+        .expect("settings object"),
+        ..Default::default()
+    };
+    explicit
+        .validate()
+        .expect("explicit access token config should validate");
+    assert!(matches!(
+        create_provider(explicit).await,
+        Ok(Provider::Enterprise(_))
+    ));
+
+    let ambiguous = crate::config::models::provider::ProviderConfig {
+        name: "watsonx".to_string(),
+        provider_type: "watsonx".to_string(),
+        api_key: "ibm-api-key-is-not-an-access-token".to_string(),
+        project: Some("project-id".to_string()),
+        settings: serde_json::from_value(serde_json::json!({
+            "region": "us-south"
+        }))
+        .expect("settings object"),
+        ..Default::default()
+    };
+    let error = create_provider(ambiguous)
+        .await
+        .expect_err("api_key must not be reinterpreted as an IAM access token");
+    assert!(error.to_string().contains("access_token"));
+}
 
 #[tokio::test]
 async fn reports_unknown_custom_provider() {

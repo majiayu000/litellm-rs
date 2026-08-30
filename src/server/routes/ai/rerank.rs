@@ -2,15 +2,12 @@
 
 use crate::config::models::provider::ProviderConfig;
 use crate::core::providers::{Provider, ProviderError};
-use crate::core::rerank::{
-    CohereRerankProvider, JinaRerankProvider, RerankRequest, RerankResponse, RerankService,
-};
+use crate::core::rerank::{RerankProvider, RerankRequest, RerankResponse};
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{error, info};
 
 use super::{
@@ -51,14 +48,13 @@ async fn handle_rerank_with_state(
 ) -> Result<RerankResponse, GatewayError> {
     let requested_model = state.unified_router.resolve_model_name(&request.model);
     request.model = requested_model.clone();
+    let config = state.config();
     ensure_rerank_provider_candidate_configured(
-        state.config().gateway.providers.as_slice(),
+        config.gateway.providers.as_slice(),
         &requested_model,
     )?;
-    let router_models = rerank_router_models(
-        state.config().gateway.providers.as_slice(),
-        &requested_model,
-    );
+    let router_models = rerank_router_models(config.gateway.providers.as_slice(), &requested_model);
+    drop(config);
 
     let mut last_router_error = None;
     let budgeted = state.budgeted.clone();
@@ -71,29 +67,21 @@ async fn handle_rerank_with_state(
                 let request = request.clone();
                 let requested_model = requested_model.clone();
                 let budgeted = budgeted.clone();
-                move |selected_provider, selected_model, selected_deployment_id| {
+                move |selected_provider, _selected_model, _selected_deployment_id| {
                     let request = request.clone();
                     let requested_model = requested_model.clone();
                     let budgeted = budgeted.clone();
                     async move {
-                        let selected = selected_rerank_provider(
-                            state.config().gateway.providers.as_slice(),
-                            &selected_deployment_id,
-                            &selected_provider,
-                            &selected_model,
-                            &requested_model,
-                        )?;
+                        let runtime = selected_rerank_runtime(&selected_provider)?;
                         let served_model = served_rerank_model(&requested_model);
-                        let budget_provider = selected.provider_name.clone();
+                        let budget_provider = runtime.provider_name().to_string();
                         budgeted
                             .for_selected(budget_provider, served_model.to_string())
                             .with_settlement_mode(SettlementMode::AvailabilityOnly)
                             .reserve_call_settle(
                                 |_budget| Ok(None),
                                 || async move {
-                                    let service = build_rerank_service(&selected)
-                                        .map_err(rerank_gateway_error_to_provider_error)?;
-                                    service
+                                    runtime
                                         .rerank(request)
                                         .await
                                         .map_err(rerank_gateway_error_to_provider_error)
@@ -142,54 +130,8 @@ fn ensure_rerank_route_authorized(state: &AppState, req: &HttpRequest) -> Result
     }
 }
 
-fn build_rerank_service(provider: &SelectedRerankProvider) -> Result<RerankService, GatewayError> {
-    let mut service = RerankService::new();
-    service
-        .set_default_provider(provider.kind.as_str())
-        .set_timeout(provider.timeout);
-
-    match provider.kind {
-        RerankProviderKind::Cohere => {
-            let rerank_provider = CohereRerankProvider::new_with_endpoint(
-                provider.api_key.clone(),
-                provider
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://api.cohere.ai/v1"),
-                provider.endpoint_access,
-                provider.timeout.as_secs(),
-            )?;
-            service.register_provider("cohere", Arc::new(rerank_provider));
-        }
-        RerankProviderKind::Jina => {
-            let rerank_provider = JinaRerankProvider::new_with_endpoint(
-                provider.api_key.clone(),
-                provider
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://api.jina.ai/v1"),
-                provider.endpoint_access,
-                provider.timeout.as_secs(),
-            )?;
-            service.register_provider("jina", Arc::new(rerank_provider));
-        }
-        RerankProviderKind::Watsonx => {
-            let config = watsonx_rerank_config(provider)?;
-            let rerank_provider = crate::core::providers::watsonx::WatsonxProvider::new(config)
-                .map_err(|error| GatewayError::Config(error.to_string()))?
-                .rerank_adapter();
-            service.register_provider("watsonx", Arc::new(rerank_provider));
-        }
-        RerankProviderKind::Oci => {
-            let config = oci_rerank_config(provider)?;
-            let rerank_provider = crate::core::providers::oci::OciNativeProvider::new(config)
-                .map_err(|error| GatewayError::Config(error.to_string()))?
-                .rerank_adapter();
-            service.register_provider("oci", Arc::new(rerank_provider));
-        }
-    }
-
-    Ok(service)
+fn selected_rerank_runtime(provider: &Provider) -> Result<Arc<dyn RerankProvider>, ProviderError> {
+    provider.rerank_adapter()
 }
 
 #[cfg(test)]
@@ -230,6 +172,7 @@ fn ensure_rerank_provider_candidate_configured(
     }
 }
 
+#[cfg(test)]
 fn selected_rerank_provider_from_config(
     provider: &ProviderConfig,
     kind: RerankProviderKind,
@@ -244,78 +187,7 @@ fn selected_rerank_provider_from_config(
     Ok(SelectedRerankProvider {
         provider_name: provider.name.clone(),
         kind,
-        api_key: provider.api_key.clone(),
-        base_url: provider.base_url.clone(),
-        timeout: Duration::from_secs(provider.timeout),
-        endpoint_access: provider.endpoint_access,
-        max_retries: provider.max_retries,
-        models: provider.models.clone(),
-        settings: provider.settings.clone(),
-        project: provider.project.clone(),
-        api_version: provider.api_version.clone(),
     })
-}
-
-fn selected_rerank_provider(
-    providers: &[ProviderConfig],
-    selected_deployment_id: &str,
-    selected_provider: &Provider,
-    selected_model: &str,
-    requested_model: &str,
-) -> Result<SelectedRerankProvider, ProviderError> {
-    let selected_provider_name = selected_provider.name();
-    let candidates = rerank_candidate_configs(providers);
-    let supported_candidates = candidates
-        .iter()
-        .copied()
-        .filter(|(provider, kind)| rerank_provider_supports_model(provider, *kind, requested_model))
-        .collect::<Vec<_>>();
-    let matching = supported_candidates
-        .iter()
-        .copied()
-        .find(|(provider, _)| {
-            selected_deployment_matches_provider_config(
-                selected_deployment_id,
-                provider,
-                selected_model,
-            )
-        })
-        .or_else(|| {
-            supported_candidates.iter().copied().find(|(provider, kind)| {
-                provider.name == selected_provider_name
-                || provider
-                    .settings
-                    .get("provider_name")
-                    .and_then(|value| value.as_str())
-                    == Some(selected_provider_name)
-                || (provider.models.is_empty() && provider.name == selected_model)
-                || (provider.models.iter().any(|model| model == selected_model)
-                    && kind.as_str() == selected_provider_name)
-            })
-        })
-        .ok_or_else(|| {
-            ProviderError::configuration(
-                "rerank_proxy",
-                format!(
-                    "selected rerank provider '{selected_provider_name}' for model '{selected_model}' has no matching gateway provider config"
-                ),
-            )
-        })?;
-
-    selected_rerank_provider_from_config(matching.0, matching.1)
-        .map_err(rerank_gateway_error_to_provider_error)
-}
-
-fn selected_deployment_matches_provider_config(
-    selected_deployment_id: &str,
-    provider: &ProviderConfig,
-    selected_model: &str,
-) -> bool {
-    selected_deployment_id == provider.name
-        || selected_deployment_id
-            .strip_prefix(provider.name.as_str())
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            == Some(selected_model)
 }
 
 fn rerank_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
@@ -500,90 +372,11 @@ impl RerankProviderKind {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct SelectedRerankProvider {
     provider_name: String,
     kind: RerankProviderKind,
-    api_key: String,
-    base_url: Option<String>,
-    timeout: Duration,
-    endpoint_access: crate::core::net::ProviderEndpointAccess,
-    max_retries: u32,
-    models: Vec<String>,
-    settings: std::collections::HashMap<String, serde_json::Value>,
-    project: Option<String>,
-    api_version: Option<String>,
-}
-
-fn watsonx_rerank_config(
-    provider: &SelectedRerankProvider,
-) -> Result<crate::core::providers::watsonx::WatsonxConfig, GatewayError> {
-    let required = |key: &str| {
-        provider
-            .settings
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| GatewayError::Config(format!("watsonx rerank requires settings.{key}")))
-    };
-    let project_id = provider
-        .settings
-        .get("project_id")
-        .or_else(|| provider.settings.get("project"))
-        .cloned()
-        .or_else(|| provider.project.clone().map(serde_json::Value::String));
-    let api_version = match provider.settings.get("api_version") {
-        Some(serde_json::Value::String(version)) if !version.trim().is_empty() => version.clone(),
-        Some(_) => {
-            return Err(GatewayError::Config(
-                "watsonx rerank settings.api_version must be a non-empty string".to_string(),
-            ));
-        }
-        None => provider
-            .api_version
-            .clone()
-            .unwrap_or_else(|| "2024-05-31".to_string()),
-    };
-    let config = serde_json::json!({
-        "access_token": provider.api_key,
-        "project_id": project_id,
-        "space_id": provider.settings.get("space_id"),
-        "region": required("region")?,
-        "api_version": api_version,
-        "base_url": provider.base_url,
-        "endpoint_access": provider.endpoint_access,
-        "timeout": provider.timeout.as_secs(),
-        "max_retries": provider.max_retries,
-        "models": provider.models,
-    });
-    serde_json::from_value(config)
-        .map_err(|error| GatewayError::Config(format!("invalid watsonx rerank config: {error}")))
-}
-
-fn oci_rerank_config(
-    provider: &SelectedRerankProvider,
-) -> Result<crate::core::providers::oci::OciConfig, GatewayError> {
-    let required = |key: &str| {
-        provider
-            .settings
-            .get(key)
-            .cloned()
-            .ok_or_else(|| GatewayError::Config(format!("OCI rerank requires settings.{key}")))
-    };
-    let config = serde_json::json!({
-        "region": required("region")?,
-        "compartment_id": required("compartment_id")?,
-        "auth": required("auth")?,
-        "api_mode": "native",
-        "base_url": provider.base_url,
-        "endpoint_access": provider.endpoint_access,
-        "timeout": provider.timeout.as_secs(),
-        "max_retries": provider.max_retries,
-        "models": provider.models,
-    });
-    serde_json::from_value(config)
-        .map_err(|error| GatewayError::Config(format!("invalid OCI rerank config: {error}")))
 }
 
 #[cfg(test)]
@@ -598,6 +391,29 @@ mod tests {
             models: models.into_iter().map(ToString::to_string).collect(),
             ..ProviderConfig::default()
         }
+    }
+
+    #[tokio::test]
+    async fn selected_rerank_runtime_comes_from_typed_provider_snapshot() {
+        let provider = crate::core::providers::factory::create_provider(ProviderConfig {
+            name: "watsonx".to_string(),
+            provider_type: "watsonx".to_string(),
+            project: Some("runtime-project".to_string()),
+            models: vec!["ibm-rerank".to_string()],
+            settings: serde_json::from_value(serde_json::json!({
+                "access_token": "runtime-access-token",
+                "region": "us-south"
+            }))
+            .expect("settings object"),
+            ..Default::default()
+        })
+        .await
+        .expect("typed watsonx runtime");
+
+        let runtime = selected_rerank_runtime(&provider)
+            .expect("typed selected provider should expose its rerank runtime");
+        assert_eq!(runtime.provider_name(), "watsonx");
+        assert!(runtime.supports_model("ibm-rerank"));
     }
 
     #[test]
@@ -622,19 +438,6 @@ mod tests {
             Some(RerankProviderKind::Watsonx)
         );
         assert_eq!(rerank_provider_kind(&oci), Some(RerankProviderKind::Oci));
-    }
-
-    #[test]
-    fn watsonx_rerank_preserves_top_level_project_and_api_version() {
-        let mut provider = provider_config("watsonx", "watsonx", vec!["ibm-rerank"]);
-        provider.project = Some("project-id".to_string());
-        provider.api_version = Some("2025-01-01".to_string());
-        provider.settings.insert("region".into(), "us-south".into());
-        let selected = selected_rerank_provider_from_config(&provider, RerankProviderKind::Watsonx)
-            .expect("watsonx deployment should select");
-        let config = watsonx_rerank_config(&selected).expect("watsonx config should normalize");
-        assert_eq!(config.project_id.as_deref(), Some("project-id"));
-        assert_eq!(config.api_version, "2025-01-01");
     }
 
     #[test]
@@ -716,35 +519,6 @@ mod tests {
             .expect("matching provider should be selected");
 
         assert_eq!(selected.provider_name, "right-cohere");
-        assert_eq!(selected.kind, RerankProviderKind::Cohere);
-    }
-
-    #[cfg(feature = "providers-extended")]
-    #[tokio::test]
-    async fn selected_provider_uses_deployment_id_for_native_cohere_duplicate_model() {
-        let primary = provider_config("cohere-a", "cohere", vec!["rerank-english-v3.0"]);
-        let fallback = provider_config("cohere-b", "cohere", vec!["rerank-english-v3.0"]);
-        let cohere =
-            match crate::core::providers::cohere::CohereProvider::with_api_key("test-key").await {
-                Ok(provider) => provider,
-                Err(error) => panic!("native cohere provider should build: {error}"),
-            };
-        let provider = Provider::Cohere(cohere);
-
-        let selected = match selected_rerank_provider(
-            &[primary, fallback],
-            "cohere-b-rerank-english-v3.0",
-            &provider,
-            "rerank-english-v3.0",
-            "rerank-english-v3.0",
-        ) {
-            Ok(selected) => selected,
-            Err(error) => {
-                panic!("selected deployment id should identify the fallback config: {error}")
-            }
-        };
-
-        assert_eq!(selected.provider_name, "cohere-b");
         assert_eq!(selected.kind, RerankProviderKind::Cohere);
     }
 }

@@ -452,13 +452,12 @@ fn parse_rerank(
             document,
         });
     }
-    let id = response
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| GatewayError::Validation("watsonx rerank response missing id".to_string()))?
-        .to_string();
     Ok(RerankResponse {
-        id,
+        id: response
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         results,
         model,
         usage: response
@@ -536,5 +535,30 @@ mod tests {
             .api_base()
             .is_err()
         );
+    }
+
+    #[test]
+    fn official_rerank_response_without_id_gets_internal_id() {
+        let documents = vec![
+            RerankDocument::from("first"),
+            RerankDocument::from("second"),
+        ];
+        let parsed = parse_rerank(
+            "watsonx",
+            "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+            serde_json::json!({
+                "model_id": "cross-encoder/ms-marco-minilm-l-12-v2",
+                "results": [{"index": 1, "score": 0.91}],
+                "created_at": "2026-08-30T00:00:00Z",
+                "input_token_count": 12
+            }),
+            &documents,
+            true,
+        )
+        .expect("official response shape should parse");
+
+        assert!(!parsed.id.is_empty());
+        assert_eq!(parsed.results[0].index, 1);
+        assert_eq!(parsed.usage.and_then(|usage| usage.total_tokens), Some(12));
     }
 }

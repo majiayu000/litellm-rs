@@ -93,6 +93,26 @@ fn catalog_fallback_is_http_chat_only() {
 }
 
 #[test]
+fn enterprise_rerank_routes_are_declared_explicitly() {
+    assert!(supports_provider_surface(
+        "oci",
+        ProviderRouteSurface::HttpRerank
+    ));
+    assert!(supports_provider_surface(
+        "watsonx",
+        ProviderRouteSurface::HttpRerank
+    ));
+    assert!(!supports_provider_surface(
+        "sagemaker",
+        ProviderRouteSurface::HttpRerank
+    ));
+    assert!(!supports_provider_surface(
+        "cerebras",
+        ProviderRouteSurface::HttpRerank
+    ));
+}
+
+#[test]
 fn selector_aliases_resolve_to_canonical_matrix_entries() {
     assert_eq!(canonical_selector("azure-openai"), "azure");
     assert_eq!(canonical_selector("google_vertex"), "vertex_ai");
@@ -146,6 +166,7 @@ fn missing_text_provider_selectors_are_exact_http_only_catalog_routes() {
         ));
         for unsupported in [
             ProviderRouteSurface::HttpEmbeddings,
+            ProviderRouteSurface::HttpRerank,
             ProviderRouteSurface::HttpImageGeneration,
             ProviderRouteSurface::SdkChat,
             ProviderRouteSurface::SdkChatStream,

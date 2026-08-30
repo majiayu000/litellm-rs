@@ -129,6 +129,7 @@ pub mod failure;
 pub mod provider_error_conversions;
 pub mod provider_registry;
 pub mod registry; // Data-driven Tier 1 provider catalog
+mod rerank_dispatch;
 pub mod unified_provider;
 // Test modules (only compiled during tests)
 #[cfg(test)]

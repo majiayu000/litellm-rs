@@ -21,6 +21,7 @@ pub(super) async fn build_enterprise_provider(
         }
         ProviderType::Snowflake => {
             rename(&mut object, "organization", "account_identifier");
+            object.remove("account_id");
             let config =
                 serde_json::from_value::<crate::core::providers::snowflake::SnowflakeConfig>(
                     object.into(),
@@ -40,7 +41,12 @@ pub(super) async fn build_enterprise_provider(
             Ok(EnterpriseProvider::Oci(config.build().await?))
         }
         ProviderType::Watsonx => {
-            rename(&mut object, "api_key", "access_token");
+            if object.remove("api_key").is_some() {
+                return Err(ProviderError::configuration(
+                    "watsonx",
+                    "api_key is not an IAM access token; configure settings.access_token explicitly",
+                ));
+            }
             rename(&mut object, "project", "project_id");
             let config = serde_json::from_value::<crate::core::providers::watsonx::WatsonxConfig>(
                 object.into(),
@@ -51,6 +57,7 @@ pub(super) async fn build_enterprise_provider(
             ))
         }
         ProviderType::SageMaker => {
+            object.remove("api_key");
             let config =
                 serde_json::from_value::<crate::core::providers::sagemaker::SageMakerConfig>(
                     object.into(),
@@ -97,7 +104,7 @@ pub(super) fn minimal_test_config(provider_type: &ProviderType) -> Option<serde_
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::config::models::provider::ProviderConfig;
     use crate::core::router::{DefaultRuntimeBinding, RuntimeBinding, UnifiedRouter};
     use std::sync::Arc;
 
@@ -106,14 +113,35 @@ mod tests {
         let binding =
             DefaultRuntimeBinding::new(RuntimeBinding::new(Arc::new(UnifiedRouter::default())));
         let generation = binding.load().generation();
-        let invalid = build_enterprise_provider(
-            ProviderType::Databricks,
-            serde_json::json!({
-                "workspace_url": "file:///etc/passwd", "api_key": "test"
-            }),
-        )
-        .await;
-        assert!(invalid.is_err());
+        let invalid = ProviderConfig {
+            name: "oci-native".to_string(),
+            provider_type: "oci".to_string(),
+            models: vec!["cohere.rerank-v3-5".to_string()],
+            settings: serde_json::from_value(serde_json::json!({
+                "region": "us-chicago-1",
+                "compartment_id": "ocid1.compartment.oc1..test",
+                "api_mode": "native",
+                "auth": {
+                    "type": "iam",
+                    "tenancy_ocid": "ocid1.tenancy.oc1..test",
+                    "user_ocid": "ocid1.user.oc1..test",
+                    "fingerprint": "aa:bb:cc",
+                    "private_key_pem": "not-an-rsa-private-key"
+                }
+            }))
+            .expect("settings object"),
+            ..ProviderConfig::default()
+        };
+
+        let construction_failed = match UnifiedRouter::from_gateway_config(&[invalid], None).await {
+            Ok(router) => {
+                binding.replace(RuntimeBinding::new(Arc::new(router)));
+                false
+            }
+            Err(_) => true,
+        };
+
+        assert!(construction_failed);
         assert_eq!(binding.load().generation(), generation);
     }
 }

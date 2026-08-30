@@ -13,6 +13,7 @@ pub enum ProviderRouteSurface {
     HttpChat,
     HttpChatStream,
     HttpEmbeddings,
+    HttpRerank,
     HttpImageGeneration,
     SdkChat,
     SdkChatStream,
@@ -58,6 +59,7 @@ pub struct ProviderSurfaceSupport {
     pub http_chat: SurfaceSupport,
     pub http_chat_stream: SurfaceSupport,
     pub http_embeddings: SurfaceSupport,
+    pub http_rerank: SurfaceSupport,
     pub http_image_generation: SurfaceSupport,
     pub sdk_chat: SurfaceSupport,
     pub sdk_chat_stream: SurfaceSupport,
@@ -73,6 +75,7 @@ impl ProviderSurfaceSupport {
             ProviderRouteSurface::HttpChat => self.http_chat,
             ProviderRouteSurface::HttpChatStream => self.http_chat_stream,
             ProviderRouteSurface::HttpEmbeddings => self.http_embeddings,
+            ProviderRouteSurface::HttpRerank => self.http_rerank,
             ProviderRouteSurface::HttpImageGeneration => self.http_image_generation,
             ProviderRouteSurface::SdkChat => self.sdk_chat,
             ProviderRouteSurface::SdkChatStream => self.sdk_chat_stream,
@@ -133,14 +136,16 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         [P, P, U, U, U, U, U, U, U],
         "Snowflake Cortex OpenAI-compatible chat and SSE.",
     ),
-    row(
+    rerank_row(
         "oci",
         [P, P, S, U, U, U, U, U, U],
+        S,
         "OCI compatible mode provides chat/SSE; IAM native mode provides embeddings and rerank.",
     ),
-    row(
+    rerank_row(
         "watsonx",
         [S, U, S, U, U, U, U, U, U],
+        S,
         "watsonx native chat, embeddings, and rerank; streaming is not implemented.",
     ),
     row(
@@ -158,9 +163,10 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         [S, U, U, U, U, U, U, U, U],
         "Workers AI chat only.",
     ),
-    row(
+    rerank_row(
         "cohere",
         [EXTENDED, EXTENDED, EXTENDED, U, U, U, U, U, U],
+        EXTENDED,
         "Native provider is behind providers-extended.",
     ),
     row(
@@ -355,6 +361,7 @@ const fn row(
         http_chat: support[0],
         http_chat_stream: support[1],
         http_embeddings: support[2],
+        http_rerank: U,
         http_image_generation: support[3],
         sdk_chat: support[4],
         sdk_chat_stream: support[5],
@@ -363,4 +370,15 @@ const fn row(
         completion_chat_stream: support[8],
         notes,
     }
+}
+
+const fn rerank_row(
+    selector: &'static str,
+    support: [SurfaceSupport; 9],
+    http_rerank: SurfaceSupport,
+    notes: &'static str,
+) -> ProviderSurfaceSupport {
+    let mut result = row(selector, support, notes);
+    result.http_rerank = http_rerank;
+    result
 }

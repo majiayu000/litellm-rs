@@ -11,13 +11,28 @@ use std::collections::HashMap;
 type HmacSha256 = Hmac<Sha256>;
 
 /// AWS SigV4 signer for Bedrock requests
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SigV4Signer {
     access_key: String,
     secret_key: String,
     session_token: Option<String>,
     region: String,
     service: String,
+}
+
+impl std::fmt::Debug for SigV4Signer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigV4Signer")
+            .field("access_key", &"[REDACTED]")
+            .field("secret_key", &"[REDACTED]")
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("region", &self.region)
+            .field("service", &self.service)
+            .finish()
+    }
 }
 
 impl SigV4Signer {
@@ -60,10 +75,17 @@ impl SigV4Signer {
         // Parse URL
         let parsed_url = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
 
-        let host = parsed_url.host_str().ok_or("Missing host in URL")?;
+        let mut host = match parsed_url.host().ok_or("Missing host in URL")? {
+            url::Host::Domain(domain) => domain.to_string(),
+            url::Host::Ipv4(address) => address.to_string(),
+            url::Host::Ipv6(address) => format!("[{address}]"),
+        };
+        if let Some(port) = parsed_url.port() {
+            host.push_str(&format!(":{port}"));
+        }
 
         let path = canonical_uri(parsed_url.path());
-        let query = parsed_url.query().unwrap_or("");
+        let query = canonical_query(parsed_url.query());
 
         // Format timestamp
         let amz_date = timestamp.format("%Y%m%dT%H%M%SZ").to_string();
@@ -71,7 +93,7 @@ impl SigV4Signer {
 
         // Create canonical headers
         let mut canonical_headers = headers.clone();
-        canonical_headers.insert("host".to_string(), host.to_string());
+        canonical_headers.insert("host".to_string(), host);
         canonical_headers.insert("x-amz-date".to_string(), amz_date.clone());
 
         if let Some(ref token) = self.session_token {
@@ -166,13 +188,69 @@ impl SigV4Signer {
 }
 
 fn canonical_uri(path: &str) -> String {
+    aws_uri_encode(path.as_bytes(), true)
+}
+
+fn canonical_query(query: Option<&str>) -> String {
+    let Some(query) = query else {
+        return String::new();
+    };
+    let mut pairs = query
+        .split('&')
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (
+                aws_uri_encode(&percent_decode(key), false),
+                aws_uri_encode(&percent_decode(value), false),
+            )
+        })
+        .collect::<Vec<_>>();
+    pairs.sort_unstable();
+    pairs
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn percent_decode(value: &str) -> Vec<u8> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_digit(bytes[index + 1]), hex_digit(bytes[index + 2]))
+        {
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    decoded
+}
+
+fn hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn aws_uri_encode(bytes: &[u8], preserve_slash: bool) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut encoded = String::with_capacity(path.len());
-    for byte in path.bytes() {
+    let mut encoded = String::with_capacity(bytes.len());
+    for &byte in bytes {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 encoded.push(byte as char);
             }
+            b'/' if preserve_slash => encoded.push('/'),
             _ => {
                 encoded.push('%');
                 encoded.push(HEX[(byte >> 4) as usize] as char);
@@ -203,6 +281,22 @@ mod tests {
     }
 
     #[test]
+    fn signer_debug_redacts_all_credentials() {
+        let signer = SigV4Signer::new(
+            "debug-access-key".to_string(),
+            "debug-secret-key".to_string(),
+            Some("debug-session-token".to_string()),
+            "us-east-1".to_string(),
+        );
+
+        let debug = format!("{signer:?}");
+        assert!(!debug.contains("debug-access-key"));
+        assert!(!debug.contains("debug-secret-key"));
+        assert!(!debug.contains("debug-session-token"));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[test]
     fn service_specific_signer_uses_sagemaker_scope() {
         let signer = SigV4Signer::new_for_service(
             "AKIATEST".to_string(),
@@ -222,6 +316,65 @@ mod tests {
             )
             .expect("SageMaker request should sign");
         assert!(signed["Authorization"].contains("/us-east-1/sagemaker/aws4_request"));
+    }
+
+    #[test]
+    fn canonical_query_sorts_and_encodes_equivalent_pairs() {
+        let signer = SigV4Signer::new_for_service(
+            "AKIATEST".to_string(),
+            "testsecret".to_string(),
+            None,
+            "us-east-1".to_string(),
+            "sagemaker",
+        );
+        let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let first = signer
+            .sign_request(
+                "GET",
+                "https://runtime.sagemaker.us-east-1.amazonaws.com/invoke?z=two%20words&a=%2Fmodel",
+                &HashMap::new(),
+                "",
+                timestamp,
+            )
+            .expect("first query should sign");
+        let second = signer
+            .sign_request(
+                "GET",
+                "https://runtime.sagemaker.us-east-1.amazonaws.com/invoke?a=%2Fmodel&z=two%20words",
+                &HashMap::new(),
+                "",
+                timestamp,
+            )
+            .expect("second query should sign");
+
+        assert_eq!(
+            canonical_query(Some("z=two%20words&a=%2Fmodel")),
+            "a=%2Fmodel&z=two%20words"
+        );
+        assert_eq!(first["Authorization"], second["Authorization"]);
+    }
+
+    #[test]
+    fn canonical_host_includes_non_default_port() {
+        let signer = SigV4Signer::new_for_service(
+            "AKIATEST".to_string(),
+            "testsecret".to_string(),
+            None,
+            "us-east-1".to_string(),
+            "sagemaker",
+        );
+        let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let signed = signer
+            .sign_request(
+                "POST",
+                "https://example.com:8443/invoke",
+                &HashMap::new(),
+                "{}",
+                timestamp,
+            )
+            .expect("custom endpoint should sign");
+
+        assert_eq!(signed["host"], "example.com:8443");
     }
 
     #[test]
