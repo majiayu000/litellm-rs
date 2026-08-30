@@ -230,8 +230,8 @@ pub mod runway {
 
     use crate::core::providers::ProviderError;
     use crate::core::providers::base::{
-        BaseConfig, BaseHttpClient, HttpErrorMapper, ProviderRequestBuilder, header_owned,
-        header_static,
+        BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, ProviderRequestBuilder,
+        apply_provider_headers, header_owned, header_static,
     };
     use crate::core::providers::media::{
         GenerationLifecycle, GenerationOutput, GenerationPoll, PollPolicy,
@@ -450,10 +450,7 @@ pub mod runway {
             self.lifecycle
                 .wait_for_json(
                     self.task_url(task_id)?,
-                    vec![
-                        header_owned("authorization".to_string(), format!("Bearer {api_key}")),
-                        header_static("x-runway-version", API_VERSION),
-                    ],
+                    self.request_headers(api_key),
                     cancellation,
                     decode_task_poll,
                 )
@@ -530,9 +527,30 @@ pub mod runway {
             &self,
             request: ProviderRequestBuilder,
         ) -> Result<ProviderRequestBuilder, ProviderError> {
-            Ok(request
-                .bearer_auth(self.api_key()?)
-                .header("x-runway-version", API_VERSION))
+            Ok(apply_provider_headers(
+                request,
+                self.request_headers(self.api_key()?),
+            ))
+        }
+
+        fn request_headers(&self, api_key: &str) -> Vec<HeaderPair> {
+            let mut headers = self
+                .config
+                .base
+                .headers
+                .iter()
+                .filter(|(key, _)| {
+                    !key.eq_ignore_ascii_case("authorization")
+                        && !key.eq_ignore_ascii_case("x-runway-version")
+                })
+                .map(|(key, value)| header_owned(key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            headers.push(header_owned(
+                "authorization".to_string(),
+                format!("Bearer {api_key}"),
+            ));
+            headers.push(header_static("x-runway-version", API_VERSION));
+            headers
         }
 
         fn api_key(&self) -> Result<&str, ProviderError> {

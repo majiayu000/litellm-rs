@@ -4,8 +4,10 @@ use crate::config::models::provider::ProviderConfig;
 mod generation;
 mod multipart;
 mod native_edit;
+mod native_spend;
 mod pricing_keys;
 mod proxy_spend;
+mod routing;
 
 use crate::core::models::openai::ImageGenerationRequest;
 use crate::core::pricing_service::PricingUsage;
@@ -30,6 +32,10 @@ use super::route_http::RouteHttpClient;
 use super::{openai_errors, provider_config};
 use multipart::{extract_text_field as extract_multipart_text_field, replace_text_field};
 use proxy_spend::{image_proxy_cost, record_image_proxy_spend};
+use routing::{
+    ensure_image_edit_candidate_configured, ensure_image_proxy_candidate_configured,
+    image_proxy_router_models, missing_image_proxy_provider_error, selected_image_proxy_provider,
+};
 
 const OPENAI_IMAGE_BASE_URL: &str = "https://api.openai.com/v1";
 const MAX_IMAGE_MULTIPART_BYTES: usize = 64 * 1024 * 1024;
@@ -146,21 +152,27 @@ async fn proxy_image_multipart_endpoint(
         replace_text_field(&body, &content_type, "model", &requested_model)?
     };
     let requested_model = requested_model.as_str();
-    match endpoint {
+    let native_edit_candidate = match endpoint {
         ImageProxyEndpoint::Edits => {
-            ensure_image_edit_candidate_configured(state, requested_model)?;
+            ensure_image_edit_candidate_configured(state, requested_model)?
         }
-        ImageProxyEndpoint::Variations => ensure_image_proxy_candidate_configured(
-            state.config().gateway.providers.as_slice(),
-            requested_model,
-        )?,
-    }
+        ImageProxyEndpoint::Variations => {
+            ensure_image_proxy_candidate_configured(
+                state.config().gateway.providers.as_slice(),
+                requested_model,
+            )?;
+            false
+        }
+    };
     let budgeted = state.budgeted.clone();
     let pricing_service = budgeted.pricing();
     let budget_limits = budgeted.budget_limits();
     let key_manager = budgeted.key_manager();
-    let router_models =
-        image_proxy_router_models(state.config().gateway.providers.as_slice(), requested_model);
+    let router_models = image_proxy_router_models(
+        state.config().gateway.providers.as_slice(),
+        requested_model,
+        native_edit_candidate,
+    );
     let pricing_config = state.config().gateway.pricing.clone();
     let api_key_id = super::context::get_authenticated_api_key(req).map(|key| key.metadata.id);
     let api_key_budget_id = context.api_key_budget_id();
@@ -181,7 +193,7 @@ async fn proxy_image_multipart_endpoint(
                 let content_type = content_type.clone();
                 let form_fields = form_fields.clone();
                 let context = context.clone();
-                move |selected_provider, selected_model, _deployment_id| {
+                move |selected_provider, selected_model, deployment_id| {
                     let budgeted = budgeted.clone();
                     let budget_limits = budget_limits.clone();
                     let key_manager = key_manager.clone();
@@ -207,6 +219,15 @@ async fn proxy_image_multipart_endpoint(
                                     context,
                                     selected_provider,
                                     selected_model,
+                                    state
+                                        .unified_router
+                                        .configured_provider_name(&deployment_id)
+                                        .ok_or_else(|| {
+                                            ProviderError::configuration(
+                                                "image_edit",
+                                                "selected deployment identity is unavailable",
+                                            )
+                                        })?,
                                     request,
                                 )
                                 .await?;
@@ -460,120 +481,6 @@ async fn image_proxy_response_to_http_response(
         .body(body))
 }
 
-fn ensure_image_proxy_candidate_configured(
-    providers: &[ProviderConfig],
-    requested_model: &str,
-) -> Result<(), GatewayError> {
-    let candidates = image_proxy_candidate_configs(providers);
-    if candidates.is_empty() {
-        return Err(missing_image_proxy_provider_error());
-    }
-
-    if candidates
-        .iter()
-        .any(|provider| image_provider_supports_requested_model(provider, Some(requested_model)))
-    {
-        Ok(())
-    } else {
-        Err(GatewayError::Provider(ProviderError::model_not_found(
-            "image_proxy",
-            requested_model,
-        )))
-    }
-}
-
-fn ensure_image_edit_candidate_configured(
-    state: &AppState,
-    requested_model: &str,
-) -> Result<(), GatewayError> {
-    let native_candidate = state
-        .unified_router
-        .get_deployments_for_model(requested_model)
-        .into_iter()
-        .filter_map(|deployment_id| state.unified_router.get_deployment(&deployment_id))
-        .any(|deployment| {
-            native_edit::is_native_image_provider(&deployment.provider)
-                && deployment.provider.supports_capability_for_model(
-                    &deployment.model,
-                    &ProviderCapability::ImageEdit,
-                )
-        });
-    if native_candidate {
-        return Ok(());
-    }
-
-    ensure_image_proxy_candidate_configured(
-        state.config().gateway.providers.as_slice(),
-        requested_model,
-    )
-}
-
-fn image_proxy_router_models(providers: &[ProviderConfig], requested_model: &str) -> Vec<String> {
-    let candidates = image_proxy_candidate_configs(providers);
-    let mut router_models = Vec::new();
-    if candidates.iter().any(|provider| {
-        !provider.models.is_empty() && provider.models.iter().any(|model| model == requested_model)
-    }) {
-        router_models.push(requested_model.to_string());
-    }
-
-    let wildcard_models = candidates
-        .into_iter()
-        .filter(|provider| provider.models.is_empty())
-        .map(|provider| provider.name.clone())
-        .collect::<Vec<_>>();
-    if wildcard_models.is_empty() {
-        if router_models.is_empty() {
-            router_models.push(requested_model.to_string());
-        }
-        router_models
-    } else {
-        router_models.extend(wildcard_models);
-        router_models
-    }
-}
-
-fn selected_image_proxy_provider(
-    providers: &[ProviderConfig],
-    selected_provider: &Provider,
-    selected_model: &str,
-    requested_model: &str,
-) -> Result<ImageProxyProvider, ProviderError> {
-    let provider_name = selected_provider.name();
-    let candidates = image_proxy_candidate_configs(providers);
-    let matching = candidates
-        .iter()
-        .copied()
-        .filter(|provider| image_provider_supports_requested_model(provider, Some(requested_model)))
-        .find(|provider| {
-            provider.name == provider_name
-                || provider
-                    .settings
-                    .get("provider_name")
-                    .and_then(|value| value.as_str())
-                    == Some(provider_name)
-                || (provider.models.is_empty() && provider.name == selected_model)
-        })
-        .ok_or_else(|| {
-            ProviderError::configuration(
-                "image_proxy",
-                format!(
-                    "selected image provider '{provider_name}' for model '{selected_model}' has no matching gateway provider config"
-                ),
-            )
-        })?;
-
-    image_proxy_provider_from_config(matching).map_err(image_proxy_gateway_error_to_provider_error)
-}
-
-fn image_proxy_candidate_configs(providers: &[ProviderConfig]) -> Vec<&ProviderConfig> {
-    providers
-        .iter()
-        .filter(|provider| provider.enabled)
-        .filter(|provider| is_openai_image_provider(provider))
-        .collect()
-}
-
 fn image_proxy_provider_from_config(
     provider: &ProviderConfig,
 ) -> Result<ImageProxyProvider, GatewayError> {
@@ -651,16 +558,6 @@ fn image_proxy_tokens_used(usage: &PricingUsage) -> u64 {
     )
 }
 
-fn image_provider_supports_requested_model(
-    provider: &ProviderConfig,
-    requested_model: Option<&str>,
-) -> bool {
-    let Some(requested_model) = requested_model else {
-        return true;
-    };
-    provider.models.is_empty() || provider.models.iter().any(|model| model == requested_model)
-}
-
 fn image_proxy_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {
     if let Some(base_url) = provider.base_url.as_deref() {
         let trimmed = base_url.trim().trim_end_matches('/');
@@ -715,13 +612,6 @@ fn image_multipart_content_type(req: &HttpRequest) -> Result<String, GatewayErro
     ))
 }
 
-fn missing_image_proxy_provider_error() -> GatewayError {
-    GatewayError::BadRequest(
-        "Image edits and variations API requires an enabled openai or openai_compatible provider"
-            .to_string(),
-    )
-}
-
 fn apply_image_proxy_headers(
     mut request: ProviderRequestBuilder,
     provider: &ImageProxyProvider,
@@ -768,16 +658,6 @@ fn push_image_proxy_header(
     })?;
     headers.push((name, value));
     Ok(())
-}
-
-fn is_openai_image_provider(provider: &ProviderConfig) -> bool {
-    let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
-    let provider_name = provider_config::normalize_provider_selector(&provider.name);
-
-    provider_type == "openai"
-        || provider_type == "openaicompatible"
-        || provider_name == "openai"
-        || provider_name == "openaicompatible"
 }
 
 impl ImageProxyEndpoint {

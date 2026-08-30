@@ -1,5 +1,6 @@
 use crate::core::models::openai::{ImageGenerationRequest, ImageGenerationResponse};
 use crate::core::pricing_service::PricingUsage;
+use crate::core::providers::ProviderError;
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageGenerationRequest as CoreImageRequest;
 use crate::core::types::model::ProviderCapability;
@@ -44,7 +45,7 @@ pub async fn handle_image_generation_with_state(
         &state.unified_router,
         &requested_model,
         ProviderCapability::ImageGeneration,
-        move |provider, selected_model, _deployment_id| {
+        move |provider, selected_model, deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let budgeted = budgeted.clone();
@@ -52,14 +53,21 @@ pub async fn handle_image_generation_with_state(
             let pricing_service = pricing_service.clone();
             let pricing_config = pricing_config.clone();
             async move {
-                let budget_provider = provider.name().to_string();
-                let mut request_pricing =
-                    super::super::spend::request_pricing_for_provider(
-                        &pricing_service,
-                        &provider,
-                        &selected_model,
-                        ProviderCapability::ImageGeneration,
-                    )?;
+                let budget_provider = state
+                    .unified_router
+                    .configured_provider_name(&deployment_id)
+                    .ok_or_else(|| {
+                        ProviderError::configuration(
+                            "image_generation",
+                            "selected deployment identity is unavailable",
+                        )
+                    })?;
+                let mut request_pricing = super::super::spend::request_pricing_for_provider(
+                    &pricing_service,
+                    &provider,
+                    &selected_model,
+                    ProviderCapability::ImageGeneration,
+                )?;
                 if let Some(variant) = super::pricing_keys::resolve_image_request_pricing(
                     &request_pricing,
                     core_request.size.as_deref(),
@@ -77,52 +85,49 @@ pub async fn handle_image_generation_with_state(
                 let reserve_usage = usage.clone();
                 let settle_usage = usage;
                 let settle_key_manager = key_manager.clone();
-                budgeted
-                    .for_selected_with_api_key_budget(
+                super::native_spend::reserve_call_settle_media_job(
+                    budgeted.for_selected_with_api_key_budget(
                         budget_provider.clone(),
                         selected_model.clone(),
                         api_key_budget_id,
                         ApiKeyBudgetPolicy::FromProviderReservation,
-                    )
-                    .reserve_call_settle(
-                        |budget| {
-                            super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
-                                &reserve_request_pricing,
-                                &reserve_pricing_config,
-                                budget.budget_limits(),
-                                budget.provider(),
-                                budget.model(),
-                                &reserve_usage,
-                            )
-                        },
-                        || provider.create_images(request_for_provider, context),
-                        |response, reservations, budget| {
-                            let (budget_reservation, key_budget_reservation) =
-                                reservations.into_parts();
-                            async move {
-                                let tokens_used = u64::from(
-                                    settle_usage
-                                        .total_tokens
-                                        .saturating_add(settle_usage.image_tokens.unwrap_or(0)),
-                                );
-                                super::super::spend::record_pricing_usage_spend_with_request_pricing(
-                                    &settle_request_pricing,
-                                    &settle_pricing_config,
-                                    budget.budget_limits(),
-                                    &settle_key_manager,
-                                    api_key_id,
-                                    budget.provider(),
-                                    budget.model(),
-                                    &settle_usage,
-                                    budget_reservation,
-                                    key_budget_reservation,
-                                )
-                                .await;
-                                (response, tokens_used)
-                            }
-                        },
-                    )
-                    .await
+                    ),
+                    |budget| {
+                        super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
+                            &reserve_request_pricing,
+                            &reserve_pricing_config,
+                            budget.budget_limits(),
+                            budget.provider(),
+                            budget.model(),
+                            &reserve_usage,
+                        )
+                    },
+                    || provider.create_images(request_for_provider, context),
+                    |reservations, budget| async move {
+                        let (budget_reservation, key_budget_reservation) =
+                            reservations.into_parts();
+                        let tokens_used = u64::from(
+                            settle_usage
+                                .total_tokens
+                                .saturating_add(settle_usage.image_tokens.unwrap_or(0)),
+                        );
+                        super::super::spend::record_pricing_usage_spend_with_request_pricing(
+                            &settle_request_pricing,
+                            &settle_pricing_config,
+                            budget.budget_limits(),
+                            &settle_key_manager,
+                            api_key_id,
+                            budget.provider(),
+                            budget.model(),
+                            &settle_usage,
+                            budget_reservation,
+                            key_budget_reservation,
+                        )
+                        .await;
+                        tokens_used
+                    },
+                )
+                .await
             }
         },
     )

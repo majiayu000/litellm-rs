@@ -152,6 +152,134 @@ async fn bfl_poll_transport_error_is_not_safe_to_resubmit() {
 }
 
 #[tokio::test]
+async fn stability_post_header_body_failures_are_not_retryable() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Stability listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let _request = read_http_request(&mut socket).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 100\r\nConnection: close\r\n\r\ntruncated",
+                )
+                .await
+                .expect("truncated response should write");
+        }
+    });
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+    let generation_error = provider
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "paint a lighthouse".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: None,
+                quality: None,
+                response_format: Some("png".to_string()),
+                style: None,
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("truncated generation response should fail");
+    let edit_error = provider
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "replace the background".to_string(),
+                model: Some("inpaint".to_string()),
+                n: Some(1),
+                size: None,
+                response_format: Some("png".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("truncated edit response should fail");
+    server.await.expect("mock server should finish");
+
+    assert!(matches!(generation_error, ProviderError::Other { .. }));
+    assert!(matches!(edit_error, ProviderError::Other { .. }));
+}
+
+#[tokio::test]
+async fn stability_generation_and_edit_map_403_to_content_filtered() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock Stability listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let _request = read_http_request(&mut socket).await;
+            let body = r#"{"name":"content_moderation","errors":["flagged"]}"#;
+            let response = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("moderation response should write");
+        }
+    });
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+    let generation_error = provider
+        .image_generation(
+            ImageGenerationRequest {
+                prompt: "moderated prompt".to_string(),
+                model: Some("stable-image-core".to_string()),
+                n: Some(1),
+                size: None,
+                quality: None,
+                response_format: Some("png".to_string()),
+                style: None,
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("403 generation should be content-filtered");
+    let edit_error = provider
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "moderated prompt".to_string(),
+                model: Some("inpaint".to_string()),
+                n: Some(1),
+                size: None,
+                response_format: Some("png".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("403 edit should be content-filtered");
+    server.await.expect("mock server should finish");
+
+    assert!(matches!(
+        generation_error,
+        ProviderError::ContentFiltered { .. }
+    ));
+    assert!(matches!(edit_error, ProviderError::ContentFiltered { .. }));
+}
+
+#[tokio::test]
 async fn bfl_does_not_advertise_unpriced_flux_2_models() {
     let provider = BflProvider::new(BflConfig::with_api_key("bfl-secret"))
         .expect("BFL provider should initialize");

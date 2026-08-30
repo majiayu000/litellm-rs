@@ -234,16 +234,9 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| ProviderError::network(PROVIDER, error.to_string()))?;
+        let bytes = response.bytes().await.map_err(post_header_body_error)?;
         if !status.is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                PROVIDER,
-                status.as_u16(),
-                &String::from_utf8_lossy(&bytes),
-            ));
+            return Err(map_error_response(status.as_u16(), &bytes));
         }
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
@@ -314,16 +307,9 @@ impl StabilityProvider {
                 .await
                 .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| ProviderError::network(PROVIDER, error.to_string()))?;
+        let bytes = response.bytes().await.map_err(post_header_body_error)?;
         if !status.is_success() {
-            return Err(HttpErrorMapper::map_status_code(
-                PROVIDER,
-                status.as_u16(),
-                &String::from_utf8_lossy(&bytes),
-            ));
+            return Err(map_error_response(status.as_u16(), &bytes));
         }
         Ok(ImageGenerationResponse {
             created: chrono::Utc::now().timestamp().unsigned_abs(),
@@ -333,6 +319,26 @@ impl StabilityProvider {
                 revised_prompt: None,
             }],
         })
+    }
+}
+
+fn post_header_body_error(error: reqwest::Error) -> ProviderError {
+    ProviderError::other(
+        PROVIDER,
+        format!("response body failed after Stability accepted the request: {error}"),
+    )
+}
+
+fn map_error_response(status: u16, body: &[u8]) -> ProviderError {
+    if status == 403 {
+        ProviderError::content_filtered(
+            PROVIDER,
+            "request was flagged by Stability content moderation",
+            None,
+            Some(false),
+        )
+    } else {
+        HttpErrorMapper::map_status_code(PROVIDER, status, &String::from_utf8_lossy(body))
     }
 }
 

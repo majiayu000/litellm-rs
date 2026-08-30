@@ -739,6 +739,18 @@ async fn runway_submit_query_cancel_and_wait_use_native_task_contract() {
     let mut config = RunwayConfig::with_api_key("runway-secret");
     config.base.api_base = Some(format!("http://{address}/v1"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config
+        .base
+        .headers
+        .insert("x-runway-route".to_string(), "configured".to_string());
+    config.base.headers.insert(
+        "authorization".to_string(),
+        "Bearer attacker-controlled".to_string(),
+    );
+    config.base.headers.insert(
+        "X-Runway-Version".to_string(),
+        "attacker-controlled".to_string(),
+    );
     config.poll_policy = PollPolicy::from_millis(1, 4, 200);
     let provider = RunwayProvider::new(config).expect("Runway provider should initialize");
     let task = provider
@@ -777,6 +789,12 @@ async fn runway_submit_query_cancel_and_wait_use_native_task_contract() {
     assert!(requests[0].contains("authorization: Bearer runway-secret"));
     assert!(requests[0].contains("x-runway-version: 2024-11-06"));
     assert!(requests[0].contains("\"promptImage\":\"https://images.example/source.png\""));
+    for request in requests.iter() {
+        assert!(request.contains("x-runway-route: configured"));
+        assert!(request.contains("authorization: Bearer runway-secret"));
+        assert!(request.contains("x-runway-version: 2024-11-06"));
+        assert!(!request.contains("attacker-controlled"));
+    }
 }
 
 #[cfg(feature = "runway-media")]

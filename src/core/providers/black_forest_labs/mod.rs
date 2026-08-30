@@ -392,6 +392,11 @@ fn mark_post_submit_error_non_retryable(error: ProviderError) -> ProviderError {
     }
 }
 
+pub(crate) fn is_post_submit_error(error: &ProviderError) -> bool {
+    matches!(error, ProviderError::Other { provider: PROVIDER, message }
+        if message.starts_with("BFL task was already accepted;"))
+}
+
 fn parse_size(size: &str) -> Result<(u32, u32), ProviderError> {
     let (width, height) = size.split_once('x').ok_or_else(|| {
         ProviderError::invalid_request(PROVIDER, format!("invalid image size '{size}'"))

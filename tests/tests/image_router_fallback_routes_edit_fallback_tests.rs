@@ -67,6 +67,183 @@ async fn image_edit_transport_uses_the_same_selected_deployment() {
     proxy.stop().await;
 }
 
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn native_image_edit_precedes_wildcard_proxy_router_key() {
+    let native = MockImageServer::start().await;
+    let proxy = MockImageServer::start().await;
+    let native_base = native.base_url.trim_end_matches("/v1");
+    let state = build_route_policy_test_state_with_pricing(
+        vec![
+            image_provider(
+                "stability-native",
+                "stability",
+                native_base,
+                vec!["inpaint".to_string()],
+            ),
+            image_provider(
+                "wild-proxy",
+                "openai_compatible",
+                &proxy.base_url,
+                Vec::new(),
+            ),
+        ],
+        Some(HashMap::from([(
+            "inpaint".to_string(),
+            flat_image_model_info_for_provider("stability", 0.06),
+        )])),
+    )
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-native-before-wildcard";
+
+    let resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(image_edit_multipart_body_for_model(boundary, "inpaint", 1))
+            .to_request(),
+    )
+    .await;
+
+    let status = resp.status();
+    let response_body = test::read_body(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected gateway response: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+    assert_eq!(
+        native.paths(),
+        vec!["/v2beta/stable-image/edit/inpaint".to_string()]
+    );
+    assert!(
+        proxy.paths().is_empty(),
+        "wildcard proxy must remain unused"
+    );
+    native.stop().await;
+    proxy.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock BFL listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        for task in ["edit", "generation"] {
+            let (mut socket, _) = listener.accept().await.expect("submit should arrive");
+            use tokio::io::AsyncReadExt as _;
+            let mut request = vec![0_u8; 8192];
+            let _ = socket
+                .read(&mut request)
+                .await
+                .expect("submit request should read");
+            let body =
+                format!(r#"{{"id":"{task}","polling_url":"http://127.0.0.1:1/poll/{task}"}}"#);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            use tokio::io::AsyncWriteExt as _;
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("submit response should write");
+        }
+    });
+    let state = build_route_policy_test_state_with_pricing(
+        vec![image_provider(
+            "bfl-primary",
+            "black_forest_labs",
+            &format!("http://{address}"),
+            vec!["flux-kontext-pro".to_string(), "flux-pro-1.1".to_string()],
+        )],
+        Some(HashMap::from([
+            (
+                "flux-kontext-pro".to_string(),
+                flat_image_model_info_for_provider("black_forest_labs", 0.06),
+            ),
+            (
+                "flux-pro-1.1".to_string(),
+                flat_image_model_info_for_provider("black_forest_labs", 0.06),
+            ),
+        ])),
+    )
+    .await;
+    state.budget_limits.providers.set_provider_limit(
+        "bfl-primary",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let budget_limits = state.budget_limits.clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-bfl-accepted-budget";
+
+    let resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(image_edit_multipart_body_for_model(
+                boundary,
+                "flux-kontext-pro",
+                1,
+            ))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let generation_resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/generations")
+            .set_json(json!({
+                "model": "flux-pro-1.1",
+                "prompt": "a glass city",
+                "n": 1,
+                "response_format": "url"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(generation_resp.status(), StatusCode::BAD_GATEWAY);
+    server.await.expect("mock server should finish");
+    let configured_spend = budget_limits
+        .providers
+        .get_provider_usage("bfl-primary")
+        .map(|usage| usage.current_spend)
+        .unwrap_or_default();
+    assert!((configured_spend - 0.12).abs() < f64::EPSILON);
+    assert!(
+        budget_limits
+            .providers
+            .get_provider_usage("black_forest_labs")
+            .is_none(),
+        "canonical provider identity must not receive configured deployment spend"
+    );
+}
+
 #[tokio::test]
 async fn image_edit_records_flat_output_image_spend_after_success() {
     let mock = MockImageServer::start().await;

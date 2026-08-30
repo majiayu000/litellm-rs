@@ -29,6 +29,7 @@ pub(super) async fn execute_selected_native_image_edit(
     context: RequestContext,
     provider: Provider,
     selected_model: String,
+    budget_provider: String,
     mut request: ImageEditRequest,
 ) -> Result<(ImageGenerationResponse, u64), ProviderError> {
     let api_key_id = context.api_key_id();
@@ -37,7 +38,6 @@ pub(super) async fn execute_selected_native_image_edit(
     let key_manager = budgeted.key_manager();
     let pricing_service = budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
-    let budget_provider = provider.name().to_string();
     let mut request_pricing = super::super::spend::request_pricing_for_provider(
         &pricing_service,
         &provider,
@@ -61,51 +61,47 @@ pub(super) async fn execute_selected_native_image_edit(
     let settle_usage = usage;
     let settle_key_manager = key_manager.clone();
 
-    budgeted
-        .for_selected_with_api_key_budget(
+    super::native_spend::reserve_call_settle_media_job(
+        budgeted.for_selected_with_api_key_budget(
             budget_provider,
             selected_model,
             api_key_budget_id,
             ApiKeyBudgetPolicy::FromProviderReservation,
-        )
-        .reserve_call_settle(
-            |budget| {
-                super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
-                    &reserve_request_pricing,
-                    &reserve_pricing_config,
-                    budget.budget_limits(),
-                    budget.provider(),
-                    budget.model(),
-                    &reserve_usage,
-                )
-            },
-            || provider.edit_image(request, context),
-            |response, reservations, budget| {
-                let (budget_reservation, key_budget_reservation) = reservations.into_parts();
-                async move {
-                    super::super::spend::record_pricing_usage_spend_with_request_pricing(
-                        &settle_request_pricing,
-                        &settle_pricing_config,
-                        budget.budget_limits(),
-                        &settle_key_manager,
-                        api_key_id,
-                        budget.provider(),
-                        budget.model(),
-                        &settle_usage,
-                        budget_reservation,
-                        key_budget_reservation,
-                    )
-                    .await;
-                    let tokens_used = u64::from(
-                        settle_usage
-                            .total_tokens
-                            .saturating_add(settle_usage.image_tokens.unwrap_or(0)),
-                    );
-                    (response, tokens_used)
-                }
-            },
-        )
-        .await
+        ),
+        |budget| {
+            super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
+                &reserve_request_pricing,
+                &reserve_pricing_config,
+                budget.budget_limits(),
+                budget.provider(),
+                budget.model(),
+                &reserve_usage,
+            )
+        },
+        || provider.edit_image(request, context),
+        |reservations, budget| async move {
+            let (budget_reservation, key_budget_reservation) = reservations.into_parts();
+            super::super::spend::record_pricing_usage_spend_with_request_pricing(
+                &settle_request_pricing,
+                &settle_pricing_config,
+                budget.budget_limits(),
+                &settle_key_manager,
+                api_key_id,
+                budget.provider(),
+                budget.model(),
+                &settle_usage,
+                budget_reservation,
+                key_budget_reservation,
+            )
+            .await;
+            u64::from(
+                settle_usage
+                    .total_tokens
+                    .saturating_add(settle_usage.image_tokens.unwrap_or(0)),
+            )
+        },
+    )
+    .await
 }
 
 pub(super) fn parse_native_image_edit(

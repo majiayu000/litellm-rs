@@ -53,6 +53,10 @@ mod tests {
                         web::post().to(mock_image_generation),
                     )
                     .route("/v1/images/edits", web::post().to(mock_image_edit))
+                    .route(
+                        "/v2beta/stable-image/edit/inpaint",
+                        web::post().to(mock_image_edit),
+                    )
             })
             .listen(listener)
             .expect("mock server should listen")
