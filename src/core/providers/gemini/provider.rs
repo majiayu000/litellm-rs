@@ -38,7 +38,8 @@ use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 pub struct GeminiProvider {
     client: GeminiClient,
     surface: GoogleGeminiApiSurface,
-    supported_models: Vec<ModelInfo>,
+    promotional_models: Vec<ModelInfo>,
+    standard_models: Vec<ModelInfo>,
 }
 
 impl GeminiProvider {
@@ -59,12 +60,16 @@ impl GeminiProvider {
         } else {
             GoogleGeminiApiSurface::DeveloperApi
         };
-        let supported_models = registry.list_model_infos_for_surface(surface);
+        let promotional_models = registry
+            .list_model_infos_for_surface_at(surface, chrono::DateTime::<chrono::Utc>::MIN_UTC);
+        let standard_models = registry
+            .list_model_infos_for_surface_at(surface, chrono::DateTime::<chrono::Utc>::MAX_UTC);
 
         Ok(Self {
             client,
             surface,
-            supported_models,
+            promotional_models,
+            standard_models,
         })
     }
 
@@ -155,7 +160,11 @@ impl LLMProvider for GeminiProvider {
     }
 
     fn models(&self) -> &[ModelInfo] {
-        &self.supported_models
+        if super::models::flash_uses_standard_pricing_at(chrono::Utc::now()) {
+            &self.standard_models
+        } else {
+            &self.promotional_models
+        }
     }
 
     fn supports_model(&self, model: &str) -> bool {

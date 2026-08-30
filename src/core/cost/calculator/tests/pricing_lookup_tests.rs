@@ -78,6 +78,24 @@ fn test_generic_cost_per_token_unsupported_provider() {
 
 // Tests for get_model_pricing
 #[test]
+fn gemini_pricing_lookup_honors_the_explicit_utc_boundary() {
+    use chrono::{TimeZone, Utc};
+
+    let before = Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap();
+    let at = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+
+    let promotional = get_model_pricing_at("gemini-3.7-flash", "gemini", before)
+        .expect("promotional pricing should resolve");
+    assert_eq!(promotional.input_cost_per_1k_tokens, 0.00075);
+    assert_eq!(promotional.output_cost_per_1k_tokens, 0.00375);
+
+    let standard = get_model_pricing_at("gemini-3.7-flash", "gemini", at)
+        .expect("standard pricing should resolve");
+    assert_eq!(standard.input_cost_per_1k_tokens, 0.0015);
+    assert_eq!(standard.output_cost_per_1k_tokens, 0.0075);
+}
+
+#[test]
 fn test_get_openai_pricing_gpt4o_mini() {
     let pricing = get_model_pricing("gpt-4o-mini", "openai");
     assert!(pricing.is_ok());

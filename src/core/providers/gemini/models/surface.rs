@@ -12,7 +12,7 @@ struct DeveloperModelLifecycle {
 const DEVELOPER_CHAT_MODELS: [DeveloperModelLifecycle; 10] = [
     DeveloperModelLifecycle {
         id: "gemini-3.7-flash",
-        release_date: "2026-08-25",
+        release_date: "2026-08-13",
         shutdown_date: None,
     },
     DeveloperModelLifecycle {
@@ -205,6 +205,16 @@ mod tests {
                 .iter()
                 .any(|model| model.id == "gemini-3.5-flash")
         );
+        assert!(
+            vertex_models
+                .iter()
+                .any(|model| model.id == "gemini-3.7-flash")
+        );
+        assert!(
+            experimental_vertex_models
+                .iter()
+                .any(|model| model.id == "gemini-3.7-flash")
+        );
         for developer_only_id in ["gemini-3.6-flash", "gemini-3.5-flash-lite"] {
             assert!(developer_ids.contains(&developer_only_id));
             assert!(
@@ -258,6 +268,15 @@ mod tests {
         assert_eq!(
             developer_model.metadata["google_lifecycle_source"],
             serde_json::json!(OFFICIAL_LIFECYCLE_SOURCE)
+        );
+
+        let gemini_37 = developer_models
+            .iter()
+            .find(|model| model.id == "gemini-3.7-flash")
+            .unwrap();
+        assert_eq!(
+            gemini_37.metadata["google_release_date"],
+            serde_json::json!("2026-08-13")
         );
 
         let vertex_model = vertex_models

@@ -22,6 +22,33 @@ use super::{
     common_utils::{GenerationConfig, Part, convert_role},
     models::VertexAIModel,
 };
+use crate::core::providers::gemini::models::{
+    has_trailing_assistant_prefill, uses_fixed_sampling_contract,
+};
+
+fn vertex_audio_mime_type(format: Option<&str>) -> Result<&'static str, ProviderError> {
+    match format {
+        Some("aac" | "audio/aac" | "audio/x-aac") => Ok("audio/aac"),
+        Some("flac" | "audio/flac") => Ok("audio/flac"),
+        Some("mp3" | "audio/mp3") => Ok("audio/mp3"),
+        Some("m4a" | "audio/m4a") => Ok("audio/m4a"),
+        Some("mpeg" | "audio/mpeg") => Ok("audio/mpeg"),
+        Some("mpga" | "audio/mpga") => Ok("audio/mpga"),
+        Some("mp4" | "audio/mp4") => Ok("audio/mp4"),
+        Some("ogg" | "audio/ogg") => Ok("audio/ogg"),
+        Some("pcm" | "audio/pcm") => Ok("audio/pcm"),
+        Some("wav" | "audio/wav") => Ok("audio/wav"),
+        Some("webm" | "audio/webm") => Ok("audio/webm"),
+        Some(format) => Err(ProviderError::invalid_request(
+            "vertex_ai",
+            format!("Unsupported Vertex audio format: {format}"),
+        )),
+        None => Err(ProviderError::invalid_request(
+            "vertex_ai",
+            "Vertex audio content requires a format",
+        )),
+    }
+}
 
 /// Transformer for Gemini models
 #[derive(Debug, Clone, Default)]
@@ -38,6 +65,15 @@ impl GeminiTransformer {
         request: &ChatRequest,
         _model: &VertexAIModel,
     ) -> Result<Value, ProviderError> {
+        if uses_fixed_sampling_contract(&request.model) && has_trailing_assistant_prefill(request) {
+            return Err(ProviderError::invalid_request(
+                "vertex_ai",
+                format!(
+                    "Model {} does not accept a trailing non-empty assistant message",
+                    request.model
+                ),
+            ));
+        }
         let mut contents = Vec::new();
         let mut system_instruction = None;
         let mut tool_planner = GoogleToolPlanner::new("vertex_ai");
@@ -67,9 +103,10 @@ impl GeminiTransformer {
         }
 
         // Build generation config
+        let fixed_sampling = uses_fixed_sampling_contract(&request.model);
         let mut generation_config = GenerationConfig {
-            temperature: request.temperature,
-            top_p: request.top_p,
+            temperature: (!fixed_sampling).then_some(request.temperature).flatten(),
+            top_p: (!fixed_sampling).then_some(request.top_p).flatten(),
             top_k: None,
             max_output_tokens: request.max_tokens.map(|v| v as i32),
             stop_sequences: request.stop.clone(),
@@ -174,13 +211,34 @@ impl GeminiTransformer {
                                 Err(ProviderError::invalid_request("vertex_ai", "Only base64 images supported"))
                             }
                         }
-                        crate::core::types::content::ContentPart::Audio { audio: _audio } => {
-                            // Vertex AI doesn't directly support audio in chat completions
-                            // This would need to be handled via separate audio APIs
-                            Err(ProviderError::invalid_request("vertex_ai", "Audio content not supported in chat completions"))
+                        crate::core::types::content::ContentPart::Audio { audio } => {
+                            if audio.data.is_empty() {
+                                return Err(ProviderError::invalid_request(
+                                    "vertex_ai",
+                                    "Audio content cannot be empty",
+                                ));
+                            }
+                            let mime_type = vertex_audio_mime_type(audio.format.as_deref())?;
+                            Ok(Part::InlineData {
+                                inline_data: super::common_utils::InlineData {
+                                    mime_type: mime_type.to_string(),
+                                    data: audio.data.clone(),
+                                },
+                            })
                         }
-                        crate::core::types::content::ContentPart::Document { .. } => {
-                            Err(ProviderError::invalid_request("vertex_ai", "Document content not supported"))
+                        crate::core::types::content::ContentPart::Document { source, .. } => {
+                            if source.media_type != "application/pdf" || source.data.is_empty() {
+                                return Err(ProviderError::invalid_request(
+                                    "vertex_ai",
+                                    "Document content requires non-empty base64 application/pdf data",
+                                ));
+                            }
+                            Ok(Part::InlineData {
+                                inline_data: super::common_utils::InlineData {
+                                    mime_type: source.media_type.clone(),
+                                    data: source.data.clone(),
+                                },
+                            })
                         }
                         crate::core::types::content::ContentPart::ToolResult { .. } => {
                             Err(ProviderError::invalid_request("vertex_ai", "ToolResult should be handled separately"))

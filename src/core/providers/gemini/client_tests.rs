@@ -112,6 +112,101 @@ fn test_multimodal_message() {
 }
 
 #[test]
+fn developer_multimodal_parts_encode_audio_and_pdf_as_inline_data() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    let message = ChatMessage {
+        role: MessageRole::User,
+        content: Some(MessageContent::Parts(vec![
+            ContentPart::Audio {
+                audio: crate::core::types::content::AudioData {
+                    data: "YXVkaW8=".to_string(),
+                    format: Some("mp3".to_string()),
+                },
+            },
+            ContentPart::Document {
+                source: crate::core::types::content::DocumentSource {
+                    media_type: "application/pdf".to_string(),
+                    data: "JVBERi0xLjQK".to_string(),
+                },
+                cache_control: None,
+            },
+        ])),
+        ..Default::default()
+    };
+
+    let parts = transform_parts(&client, &message);
+    assert_eq!(parts[0]["inlineData"]["mimeType"], "audio/mp3");
+    assert_eq!(parts[0]["inlineData"]["data"], "YXVkaW8=");
+    assert_eq!(parts[1]["inlineData"]["mimeType"], "application/pdf");
+    assert_eq!(parts[1]["inlineData"]["data"], "JVBERi0xLjQK");
+}
+
+#[test]
+fn developer_multimodal_parts_emit_canonical_aac_mime_type() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    for format in ["aac", "audio/aac", "audio/x-aac"] {
+        let message = ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(vec![ContentPart::Audio {
+                audio: crate::core::types::content::AudioData {
+                    data: "YXVkaW8=".to_string(),
+                    format: Some(format.to_string()),
+                },
+            }])),
+            ..Default::default()
+        };
+
+        let parts = transform_parts(&client, &message);
+        assert_eq!(parts[0]["inlineData"]["mimeType"], "audio/aac", "{format}");
+    }
+}
+
+#[test]
+fn developer_multimodal_parts_reject_unsupported_or_empty_media() {
+    let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
+    for part in [
+        ContentPart::Audio {
+            audio: crate::core::types::content::AudioData {
+                data: "YXVkaW8=".to_string(),
+                format: Some("zip".to_string()),
+            },
+        },
+        ContentPart::Audio {
+            audio: crate::core::types::content::AudioData {
+                data: String::new(),
+                format: Some("mp3".to_string()),
+            },
+        },
+        ContentPart::Document {
+            source: crate::core::types::content::DocumentSource {
+                media_type: "text/plain".to_string(),
+                data: "dGV4dA==".to_string(),
+            },
+            cache_control: None,
+        },
+        ContentPart::Document {
+            source: crate::core::types::content::DocumentSource {
+                media_type: "application/pdf".to_string(),
+                data: String::new(),
+            },
+            cache_control: None,
+        },
+    ] {
+        let message = ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(vec![part])),
+            ..Default::default()
+        };
+        let mut planner = GoogleToolPlanner::new("gemini");
+        assert!(
+            client
+                .transform_message_content(0, &message, &mut planner)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn test_gemini_request_maps_tool_call_and_result_round_trip() {
     let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
     let request = ChatRequest {
@@ -191,32 +286,34 @@ fn test_gemini_request_rejects_unknown_tool_result_id() {
 }
 
 #[test]
-fn july_2026_request_body_omits_sampling_parameters() {
+fn fixed_sampling_models_omit_sampling_parameters_and_reject_prefill() {
     let client = GeminiClient::new(GeminiConfig::new_google_ai("test-key")).unwrap();
-    let mut request = ChatRequest {
-        model: "gemini-3.6-flash".to_string(),
-        messages: vec![ChatMessage {
-            role: MessageRole::User,
-            content: Some(MessageContent::Text("Hello".to_string())),
+    for model in ["gemini-3.7-flash", "gemini-3.6-flash"] {
+        let mut request = ChatRequest {
+            model: model.to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("Hello".to_string())),
+                ..Default::default()
+            }],
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            max_tokens: Some(16),
             ..Default::default()
-        }],
-        temperature: Some(0.7),
-        top_p: Some(0.9),
-        max_tokens: Some(16),
-        ..Default::default()
-    };
+        };
 
-    let body = client.transform_chat_request(&request).unwrap();
-    assert_eq!(body["generationConfig"]["maxOutputTokens"], 16);
-    assert!(body["generationConfig"].get("temperature").is_none());
-    assert!(body["generationConfig"].get("topP").is_none());
+        let body = client.transform_chat_request(&request).unwrap();
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 16);
+        assert!(body["generationConfig"].get("temperature").is_none());
+        assert!(body["generationConfig"].get("topP").is_none());
 
-    request.messages.push(ChatMessage {
-        role: MessageRole::Assistant,
-        content: Some(MessageContent::Text("prefill".to_string())),
-        ..Default::default()
-    });
-    assert!(client.transform_chat_request(&request).is_err());
+        request.messages.push(ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Text("prefill".to_string())),
+            ..Default::default()
+        });
+        assert!(client.transform_chat_request(&request).is_err(), "{model}");
+    }
 }
 
 #[test]

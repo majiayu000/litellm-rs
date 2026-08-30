@@ -65,6 +65,7 @@ pub enum Part {
 /// Inline data for images/media
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InlineData {
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
     pub data: String, // base64 encoded
 }
@@ -72,7 +73,9 @@ pub struct InlineData {
 /// File data reference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileData {
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
+    #[serde(rename = "fileUri")]
     pub file_uri: String,
 }
 
