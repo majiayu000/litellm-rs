@@ -109,9 +109,10 @@ async fn handle_embedding_internal(
         model: requested_model,
         input,
         user: request.user,
-        encoding_format: None,
-        dimensions: None,
-        task_type: None,
+        encoding_format: request.encoding_format,
+        dimensions: request.dimensions,
+        task_type: request.input_type,
+        truncation: request.truncation,
     };
 
     let requested_model = core_request.model.clone();

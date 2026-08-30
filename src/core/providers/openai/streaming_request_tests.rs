@@ -221,6 +221,7 @@ async fn test_openai_embeddings_map_non_success_status_before_deserialization()
         encoding_format: None,
         dimensions: None,
         task_type: None,
+        truncation: None,
     };
 
     let error = LLMProvider::embeddings(&provider, request, RequestContext::default())

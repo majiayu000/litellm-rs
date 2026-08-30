@@ -70,6 +70,7 @@ impl Provider {
             {
                 openai_like_provider_supports_gemini(provider.name())
             }
+            Provider::Voyage(provider) => provider.supports_capability_for_model(model, capability),
             _ => self.supports_capability(capability),
         }
     }

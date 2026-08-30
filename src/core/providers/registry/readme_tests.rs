@@ -148,6 +148,7 @@ fn expected_readme_tier2_row(entry: &ProviderRegistryEntry) -> Option<ExpectedRe
             "native factory (`providers-extended`)",
             ["✅", "✅", "✅", "–", "–"],
         )),
+        ProviderType::Voyage => Some(expected("always", ["–", "–", "✅", "–", "–"])),
         ProviderType::Gemini | ProviderType::GitHubCopilot => Some(expected(
             "native factory (`providers-extended`)",
             ["✅", "✅", "–", "–", "–"],

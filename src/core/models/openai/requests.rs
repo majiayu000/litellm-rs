@@ -195,6 +195,18 @@ pub struct EmbeddingRequest {
     pub input: serde_json::Value,
     /// User identifier
     pub user: Option<String>,
+    /// Output encoding format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding_format: Option<String>,
+    /// Requested embedding dimensions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<u32>,
+    /// Provider retrieval input type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_type: Option<String>,
+    /// Whether the provider may truncate over-length input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<bool>,
 }
 
 /// Image generation request
@@ -617,6 +629,10 @@ mod tests {
             model: "text-embedding-ada-002".to_string(),
             input: serde_json::json!("Hello world"),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         assert_eq!(req.model, "text-embedding-ada-002");
@@ -629,6 +645,10 @@ mod tests {
             model: "text-embedding-3-small".to_string(),
             input: serde_json::json!(["Hello", "World"]),
             user: Some("user-123".to_string()),
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         assert_eq!(req.model, "text-embedding-3-small");
@@ -642,6 +662,10 @@ mod tests {
             model: "text-embedding-3-large".to_string(),
             input: serde_json::json!("Test input"),
             user: None,
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();

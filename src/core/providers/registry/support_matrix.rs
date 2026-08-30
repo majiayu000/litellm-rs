@@ -139,6 +139,11 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         "Native provider is behind providers-extended.",
     ),
     row(
+        "voyage",
+        [U, U, S, U, U, U, U, U, U],
+        "Native Voyage embeddings plus the shared HTTP rerank route.",
+    ),
+    row(
         "vertex_ai",
         [EXTRA, EXTRA, EXTRA, EXTRA, U, U, U, U, U],
         "Native provider is behind providers-extra; SDK GoogleVertex is not implemented.",

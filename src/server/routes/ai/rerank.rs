@@ -4,6 +4,7 @@ use crate::config::models::provider::ProviderConfig;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::rerank::{
     CohereRerankProvider, JinaRerankProvider, RerankRequest, RerankResponse, RerankService,
+    VoyageRerankProvider,
 };
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -62,6 +63,7 @@ async fn handle_rerank_with_state(
 
     let mut last_router_error = None;
     let budgeted = state.budgeted.clone();
+    let pricing_service = budgeted.pricing();
     for router_model in router_models {
         let result = run_unary(
             &state.unified_router,
@@ -71,11 +73,28 @@ async fn handle_rerank_with_state(
                 let request = request.clone();
                 let requested_model = requested_model.clone();
                 let budgeted = budgeted.clone();
+                let pricing_service = pricing_service.clone();
                 move |selected_provider, selected_model, selected_deployment_id| {
                     let request = request.clone();
                     let requested_model = requested_model.clone();
                     let budgeted = budgeted.clone();
+                    let pricing_service = pricing_service.clone();
                     async move {
+                        if matches!(&selected_provider, Provider::Voyage(_)) {
+                            let request_pricing = super::spend::request_pricing_for_provider(
+                                &pricing_service,
+                                &selected_provider,
+                                &selected_model,
+                                ProviderCapability::Rerank,
+                            )?;
+                            if request_pricing.priced_parts().is_none() {
+                                return Err(super::spend::model_not_priced_error(
+                                    selected_provider.name(),
+                                    &selected_model,
+                                    "the selected Voyage model has no exact catalog price",
+                                ));
+                            }
+                        }
                         let selected = selected_rerank_provider(
                             state.config().gateway.providers.as_slice(),
                             &selected_deployment_id,
@@ -172,6 +191,18 @@ fn build_rerank_service(provider: &SelectedRerankProvider) -> Result<RerankServi
                 provider.timeout.as_secs(),
             )?;
             service.register_provider("jina", Arc::new(rerank_provider));
+        }
+        RerankProviderKind::Voyage => {
+            let rerank_provider = VoyageRerankProvider::new_with_endpoint(
+                provider.api_key.clone(),
+                provider
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://api.voyageai.com/v1"),
+                provider.endpoint_access,
+                provider.timeout.as_secs(),
+            )?;
+            service.register_provider("voyage", Arc::new(rerank_provider));
         }
     }
 
@@ -376,6 +407,10 @@ fn rerank_provider_kind(provider: &ProviderConfig) -> Option<RerankProviderKind>
     let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
     let provider_name = provider_config::normalize_provider_selector(&provider.name);
 
+    if provider_type == "voyage" || provider_name == "voyage" {
+        return Some(RerankProviderKind::Voyage);
+    }
+
     if provider_type.contains("cohere") || provider_name.contains("cohere") {
         return Some(RerankProviderKind::Cohere);
     }
@@ -389,7 +424,7 @@ fn rerank_provider_kind(provider: &ProviderConfig) -> Option<RerankProviderKind>
 
 fn rerank_provider_uses_registry_models(provider: &ProviderConfig) -> bool {
     let provider_type = provider_config::normalize_provider_selector(&provider.provider_type);
-    provider_type == "cohere"
+    matches!(provider_type.as_str(), "cohere" | "voyage")
 }
 
 fn served_rerank_model(model: &str) -> &str {
@@ -424,7 +459,8 @@ fn rerank_gateway_error_to_provider_error(error: GatewayError) -> ProviderError 
 
 fn missing_rerank_provider_error() -> GatewayError {
     GatewayError::NotFound(
-        "No configured rerank provider found; configure a cohere or jina provider".to_string(),
+        "No configured rerank provider found; configure a cohere, jina, or voyage provider"
+            .to_string(),
     )
 }
 
@@ -441,6 +477,7 @@ fn split_rerank_model(model: &str) -> (Option<&str>, &str) {
 enum RerankProviderKind {
     Cohere,
     Jina,
+    Voyage,
 }
 
 impl RerankProviderKind {
@@ -448,6 +485,7 @@ impl RerankProviderKind {
         match self {
             Self::Cohere => "cohere",
             Self::Jina => "jina",
+            Self::Voyage => "voyage",
         }
     }
 
@@ -465,6 +503,15 @@ impl RerankProviderKind {
                 "jina-reranker-v2-base-multilingual"
                     | "jina-reranker-v1-base-en"
                     | "jina-reranker-v1-turbo-en"
+            ),
+            Self::Voyage => matches!(
+                model,
+                "rerank-2.5"
+                    | "rerank-2.5-lite"
+                    | "rerank-2"
+                    | "rerank-2-lite"
+                    | "rerank-1"
+                    | "rerank-lite-1"
             ),
         }
     }
@@ -498,7 +545,8 @@ mod tests {
     fn detects_provider_kind_from_type_or_name() {
         let by_type = provider_config("primary", "cohere_rerank", Vec::new());
         let by_name = provider_config("jina-reranker", "custom", Vec::new());
-        let unsupported = provider_config("voyage", "voyage", Vec::new());
+        let voyage = provider_config("voyage", "voyage", Vec::new());
+        let unsupported = provider_config("custom", "custom", Vec::new());
 
         assert_eq!(
             rerank_provider_kind(&by_type),
@@ -507,6 +555,10 @@ mod tests {
         assert_eq!(
             rerank_provider_kind(&by_name),
             Some(RerankProviderKind::Jina)
+        );
+        assert_eq!(
+            rerank_provider_kind(&voyage),
+            Some(RerankProviderKind::Voyage)
         );
         assert_eq!(rerank_provider_kind(&unsupported), None);
     }

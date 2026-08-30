@@ -53,6 +53,9 @@ pub struct EmbeddingRequest {
     /// Task type (for Vertex AI etc)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_type: Option<String>,
+    /// Whether the provider may truncate over-length input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<bool>,
 }
 
 /// Embedding input type
@@ -286,6 +289,7 @@ mod tests {
             encoding_format: None,
             dimensions: None,
             task_type: None,
+            truncation: None,
         };
 
         assert_eq!(request.model, "text-embedding-ada-002");
@@ -300,6 +304,7 @@ mod tests {
             encoding_format: Some("float".to_string()),
             dimensions: Some(512),
             task_type: Some("RETRIEVAL_DOCUMENT".to_string()),
+            truncation: None,
         };
 
         assert_eq!(request.task_type, Some("RETRIEVAL_DOCUMENT".to_string()));
@@ -314,6 +319,7 @@ mod tests {
             encoding_format: None,
             dimensions: None,
             task_type: None,
+            truncation: None,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -342,6 +348,7 @@ mod tests {
             encoding_format: None,
             dimensions: None,
             task_type: None,
+            truncation: None,
         };
 
         let cloned = request.clone();

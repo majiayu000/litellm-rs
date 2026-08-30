@@ -25,6 +25,7 @@ mod registry;
 #[cfg(feature = "providers-extended")]
 mod replicate_builder;
 mod resolver;
+mod voyage_builder;
 
 pub(crate) use super::openai::config::validate_private_official_openai_endpoint;
 pub(crate) use endpoint_policy::{

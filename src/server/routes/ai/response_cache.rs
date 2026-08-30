@@ -347,6 +347,10 @@ mod tests {
             model: "text-embedding-3-small".to_string(),
             input: serde_json::json!("hello"),
             user: Some("caller-supplied".to_string()),
+            encoding_format: None,
+            dimensions: None,
+            input_type: None,
+            truncation: None,
         };
         let context = RequestContext::default().with_api_key(api_key_id);
 
