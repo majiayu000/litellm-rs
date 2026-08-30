@@ -47,10 +47,12 @@ impl GatewayIdentityAuthority {
         let (identity_provider, identity_model) = match provider {
             Provider::OpenAILike(openai_like) if openai_like.config().provider_name == "xai" => {
                 let configured = openai_like.config().get_effective_model(wire_model);
-                let parsed = ModelIdRef::parse(&configured);
-                if parsed.provider() == Some("xai")
-                    && ModelIdRef::parse(parsed.model()).provider() == Some("xai")
-                {
+                let has_double_xai_qualifier = |model: &str| {
+                    let parsed = ModelIdRef::parse(model);
+                    parsed.provider() == Some("xai")
+                        && ModelIdRef::parse(parsed.model()).provider() == Some("xai")
+                };
+                if has_double_xai_qualifier(wire_model) || has_double_xai_qualifier(&configured) {
                     return Err(RouterError::InvalidConfiguration(format!(
                         "provider '{provider_name}' deployment '{wire_model}' has double provider qualification"
                     )));
@@ -71,7 +73,12 @@ impl GatewayIdentityAuthority {
                         || (matches!(resolution, CatalogResolution::Unknown)
                             && self.catalog.decision_for_pricing_key("xai", &pricing_key)
                                 == Some(CatalogDecision::Unreviewed));
-                    if legacy_unreviewed {
+                    let registered_legacy = matches!(resolution, CatalogResolution::Unknown)
+                        && crate::core::traits::provider::llm_provider::trait_definition::LLMProvider::supports_model(
+                            openai_like,
+                            &effective,
+                        );
+                    if legacy_unreviewed || registered_legacy {
                         return Ok(());
                     }
                 }
@@ -223,6 +230,7 @@ mod tests {
     async fn native_xai_provider() -> Provider {
         let config = OpenAILikeConfig::new("https://api.x.ai/v1")
             .with_provider_name("xai")
+            .with_model_prefix("xai/")
             .with_skip_api_key(true);
         Provider::OpenAILike(
             OpenAILikeProvider::new(config)
@@ -263,18 +271,21 @@ mod tests {
             assert!(provider.calculate_cost(model, 1, 1).await.is_err());
         }
 
-        let mut legacy = native_xai_provider().await;
-        authority()
-            .bind("native-xai", &mut legacy, "grok-4.3", None)
-            .expect("legacy unreviewed model should preserve compatibility");
-        assert!(legacy.deployment_model_identity().is_none());
-        assert!(
-            legacy
-                .calculate_cost("grok-4.3", 1_000, 1_000)
-                .await
-                .unwrap()
-                > 0.0
-        );
+        for model in ["grok-4.3", "grok-latest", "grok-4-fast", "grok-4.20"] {
+            let mut legacy = native_xai_provider().await;
+            authority()
+                .bind("native-xai", &mut legacy, model, None)
+                .expect("registered legacy model should preserve compatibility");
+            assert!(
+                legacy.deployment_model_identity().is_none(),
+                "{model} must remain on the registered compatibility path"
+            );
+            assert!(legacy.supports_capability_for_model(
+                model,
+                &crate::core::types::model::ProviderCapability::ChatCompletion,
+            ));
+            assert!(legacy.calculate_cost(model, 1_000, 1_000).await.unwrap() > 0.0);
+        }
     }
 
     #[tokio::test]
