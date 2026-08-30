@@ -4,7 +4,7 @@ use crate::core::types::{
     chat::{ChatMessage, ChatRequest},
     context::RequestContext,
     message::{MessageContent, MessageRole},
-    thinking::ThinkingContent,
+    thinking::{ThinkingConfig, ThinkingContent},
     tools::FunctionCall,
 };
 
@@ -14,6 +14,27 @@ fn compatible_provider() -> AnthropicProvider {
         .with_allow_unknown_models(true)
         .with_configured_models(vec!["mimo-v2.5".to_string()]);
     AnthropicProvider::new(config).unwrap_or_else(|err| panic!("provider should build: {err}"))
+}
+
+#[tokio::test]
+async fn public_transform_uses_native_anthropic_serialization() {
+    let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key"))
+        .unwrap_or_else(|err| panic!("provider should build: {err}"));
+    let request = ChatRequest::new("claude-sonnet-4-6")
+        .add_system_message("Answer briefly")
+        .add_user_message("Explain the result")
+        .with_max_tokens(2_048)
+        .with_thinking(ThinkingConfig::new().enabled().with_budget(1_024));
+
+    let transformed = provider
+        .transform_request(request, RequestContext::new())
+        .await
+        .unwrap_or_else(|err| panic!("public transform should accept the request: {err}"));
+
+    assert_eq!(transformed["system"], "Answer briefly");
+    assert_eq!(transformed["messages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(transformed["thinking"]["type"], "enabled");
+    assert_eq!(transformed["thinking"]["budget_tokens"], 1_024);
 }
 
 #[tokio::test]

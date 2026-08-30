@@ -257,6 +257,12 @@ impl AnthropicClient {
         } else if let Some(thinking) = &request.thinking
             && thinking.enabled
         {
+            if !Self::manual_thinking_supports_tool_choice(request.tool_choice.as_ref()) {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    "Anthropic manual thinking only supports tool_choice auto or none",
+                ));
+            }
             let Some(model_spec) = model_spec else {
                 return Err(ProviderError::not_supported(
                     "anthropic",
