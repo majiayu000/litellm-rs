@@ -138,7 +138,11 @@ impl BflProvider {
             .map_err(|error| ProviderError::configuration(PROVIDER, error))?;
         Ok(Self {
             client: BaseHttpClient::new_for_provider(PROVIDER, config.base.clone())?,
-            lifecycle: GenerationLifecycle::new(PROVIDER, config.base.clone(), config.poll_policy)?,
+            lifecycle: GenerationLifecycle::new_no_redirect(
+                PROVIDER,
+                config.base.clone(),
+                config.poll_policy,
+            )?,
             config,
             models: supported_models(),
         })
@@ -215,15 +219,20 @@ impl BflProvider {
                 &body,
             ));
         }
-        let submit: Value = serde_json::from_str(&body).map_err(|error| {
-            ProviderError::response_parsing(
-                PROVIDER,
-                format!("invalid BFL submit response: {error}"),
-            )
-        })?;
-        let polling_url = submit["polling_url"].as_str().ok_or_else(|| {
-            ProviderError::response_parsing(PROVIDER, "BFL response omitted polling_url")
-        })?;
+        let submit: Value = serde_json::from_str(&body)
+            .map_err(|error| {
+                ProviderError::response_parsing(
+                    PROVIDER,
+                    format!("invalid BFL submit response: {error}"),
+                )
+            })
+            .map_err(mark_post_submit_error_non_retryable)?;
+        let polling_url = submit["polling_url"]
+            .as_str()
+            .ok_or_else(|| {
+                ProviderError::response_parsing(PROVIDER, "BFL response omitted polling_url")
+            })
+            .map_err(mark_post_submit_error_non_retryable)?;
         validate_polling_origin(
             self.config
                 .base

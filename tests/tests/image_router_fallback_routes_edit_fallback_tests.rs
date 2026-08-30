@@ -4,6 +4,17 @@ use litellm_rs::core::providers::Provider;
 #[cfg(feature = "providers-extended")]
 use litellm_rs::core::types::model::ProviderCapability;
 
+#[tokio::test]
+async fn native_image_routes_fallback_when_selected_identity_snapshot_is_gone() {
+    for source in [
+        include_str!("../../src/server/routes/ai/images/generation.rs"),
+        include_str!("../../src/server/routes/ai/images.rs"),
+    ] {
+        assert!(!source.contains("selected deployment identity is unavailable"));
+        assert!(source.contains("provider.name().to_string()"));
+    }
+}
+
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
 async fn image_edit_transport_uses_the_same_selected_deployment() {
@@ -207,8 +218,11 @@ async fn accepted_bfl_image_jobs_settle_configured_provider_budget() {
                 .read(&mut request)
                 .await
                 .expect("submit request should read");
-            let body =
-                format!(r#"{{"id":"{task}","polling_url":"http://127.0.0.1:1/poll/{task}"}}"#);
+            let body = if task == "edit" {
+                format!(r#"{{"id":"{task}","polling_url":"http://127.0.0.1:1/poll/{task}"}}"#)
+            } else {
+                "not-json".to_string()
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()

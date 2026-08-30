@@ -1,6 +1,5 @@
 use crate::core::models::openai::{ImageGenerationRequest, ImageGenerationResponse};
 use crate::core::pricing_service::PricingUsage;
-use crate::core::providers::ProviderError;
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageGenerationRequest as CoreImageRequest;
 use crate::core::types::model::ProviderCapability;
@@ -56,12 +55,7 @@ pub async fn handle_image_generation_with_state(
                 let budget_provider = state
                     .unified_router
                     .configured_provider_name(&deployment_id)
-                    .ok_or_else(|| {
-                        ProviderError::configuration(
-                            "image_generation",
-                            "selected deployment identity is unavailable",
-                        )
-                    })?;
+                    .unwrap_or_else(|| provider.name().to_string());
                 let mut request_pricing = super::super::spend::request_pricing_for_provider(
                     &pricing_service,
                     &provider,

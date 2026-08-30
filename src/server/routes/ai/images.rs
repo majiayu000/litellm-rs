@@ -221,21 +221,17 @@ async fn proxy_image_multipart_endpoint(
                                 requested_model,
                             )
                             .map_err(image_proxy_gateway_error_to_provider_error)?;
+                            let budget_provider = state
+                                .unified_router
+                                .configured_provider_name(&deployment_id)
+                                .unwrap_or_else(|| selected_provider.name().to_string());
                             let (response, tokens_used) =
                                 native_edit::execute_selected_native_image_edit(
                                     state,
                                     context,
                                     selected_provider,
                                     selected_model,
-                                    state
-                                        .unified_router
-                                        .configured_provider_name(&deployment_id)
-                                        .ok_or_else(|| {
-                                            ProviderError::configuration(
-                                                "image_edit",
-                                                "selected deployment identity is unavailable",
-                                            )
-                                        })?,
+                                    budget_provider,
                                     request,
                                 )
                                 .await?;

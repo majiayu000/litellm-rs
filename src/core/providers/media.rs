@@ -86,6 +86,19 @@ impl GenerationLifecycle {
         })
     }
 
+    /// Create a polling lifecycle that never follows provider redirects.
+    pub fn new_no_redirect(
+        provider: &'static str,
+        config: BaseConfig,
+        policy: PollPolicy,
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
+            provider,
+            client: BaseHttpClient::new_for_provider_no_redirect(provider, config)?,
+            policy,
+        })
+    }
+
     /// Poll a provider-owned URL until the decoder reports a terminal state.
     pub async fn wait_for_json<F>(
         &self,
