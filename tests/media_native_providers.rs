@@ -75,6 +75,14 @@ async fn stability_generation_uses_native_multipart_contract() {
     let mut config = StabilityConfig::with_api_key("stability-secret");
     config.base.api_base = Some(format!("http://{address}"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config
+        .base
+        .headers
+        .insert("x-stability-route".to_string(), "generation".to_string());
+    config.base.headers.insert(
+        "Authorization".to_string(),
+        "Bearer attacker-controlled".to_string(),
+    );
     let provider = StabilityProvider::new(config).expect("provider should initialize");
     let response = provider
         .image_generation(
@@ -105,6 +113,8 @@ async fn stability_generation_uses_native_multipart_contract() {
             .contains("authorization: bearer stability-secret")
     );
     assert!(request.to_ascii_lowercase().contains("accept: image/*"));
+    assert!(request.contains("x-stability-route: generation"));
+    assert!(!request.contains("attacker-controlled"));
     assert!(request.contains("paint a lighthouse"));
     assert!(!request.contains("stability-secret\r\n\r\n"));
 }
@@ -162,6 +172,14 @@ async fn stability_edit_uses_native_inpaint_multipart_contract() {
     let mut config = StabilityConfig::with_api_key("stability-secret");
     config.base.api_base = Some(format!("http://{address}"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config
+        .base
+        .headers
+        .insert("x-stability-route".to_string(), "edit".to_string());
+    config.base.headers.insert(
+        "authorization".to_string(),
+        "Bearer attacker-controlled".to_string(),
+    );
     let provider = StabilityProvider::new(config).expect("provider should initialize");
     provider
         .image_edit(
@@ -186,6 +204,37 @@ async fn stability_edit_uses_native_inpaint_multipart_contract() {
     assert!(request.contains("replace the background"));
     assert!(request.contains("source-image"));
     assert!(request.contains("mask-image"));
+    assert!(request.contains("x-stability-route: edit"));
+    assert!(request.contains("authorization: Bearer stability-secret"));
+    assert!(!request.contains("attacker-controlled"));
+}
+
+#[tokio::test]
+async fn stability_edit_rejects_unmapped_size_before_network_access() {
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some("http://127.0.0.1:1".to_string());
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = StabilityProvider::new(config).expect("provider should initialize");
+
+    let error = provider
+        .image_edit(
+            ImageEditRequest {
+                image: b"source-image".to_vec(),
+                mask: None,
+                prompt: "replace the background".to_string(),
+                model: Some("inpaint".to_string()),
+                n: Some(1),
+                size: Some("1024x1024".to_string()),
+                response_format: Some("png".to_string()),
+                user: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .expect_err("Stability edit size must not be silently ignored");
+
+    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+    assert!(error.to_string().contains("size"));
 }
 
 #[tokio::test]
@@ -380,6 +429,14 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
     let mut config = BflConfig::with_api_key("bfl-secret");
     config.base.api_base = Some(format!("http://{address}"));
     config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config
+        .base
+        .headers
+        .insert("x-bfl-route".to_string(), "media".to_string());
+    config
+        .base
+        .headers
+        .insert("X-Key".to_string(), "attacker-controlled".to_string());
     config.poll_policy = PollPolicy::from_millis(1, 4, 200);
     let provider = BflProvider::new(config).expect("BFL provider should initialize");
     let generation = provider
@@ -437,6 +494,16 @@ async fn bfl_generation_and_edit_use_submit_poll_contract() {
         requests
             .iter()
             .all(|request| request.contains("x-key: bfl-secret"))
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.contains("x-bfl-route: media"))
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.contains("attacker-controlled"))
     );
 }
 

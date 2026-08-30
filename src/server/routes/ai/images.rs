@@ -146,50 +146,19 @@ async fn proxy_image_multipart_endpoint(
         replace_text_field(&body, &content_type, "model", &requested_model)?
     };
     let requested_model = requested_model.as_str();
-    if matches!(endpoint, ImageProxyEndpoint::Edits)
-        && native_edit::is_native_image_edit_selected(state, requested_model)
-    {
-        return native_edit::handle_native_image_edit(
-            state,
-            context,
-            &body,
-            &content_type,
+    if matches!(endpoint, ImageProxyEndpoint::Variations) {
+        ensure_image_proxy_candidate_configured(
+            state.config().gateway.providers.as_slice(),
             requested_model,
-        )
-        .await;
+        )?;
     }
-    ensure_image_proxy_candidate_configured(
-        state.config().gateway.providers.as_slice(),
-        requested_model,
-    )?;
     let budgeted = state.budgeted.clone();
     let pricing_service = budgeted.pricing();
     let budget_limits = budgeted.budget_limits();
     let key_manager = budgeted.key_manager();
     let router_models =
         image_proxy_router_models(state.config().gateway.providers.as_slice(), requested_model);
-    let pricing_model = pricing_keys::resolve_image_pricing_model(
-        pricing_service.as_ref(),
-        "openai",
-        requested_model,
-        form_fields.size.as_deref(),
-        form_fields.quality.as_deref(),
-    )
-    .unwrap_or_else(|| requested_model.to_string());
-    let usage = estimated_image_proxy_usage(&form_fields, "openai", &pricing_model);
     let pricing_config = state.config().gateway.pricing.clone();
-    let (estimated_cost, unpriced) = image_proxy_cost(
-        pricing_service.as_ref(),
-        &pricing_config,
-        "openai",
-        &pricing_model,
-        &usage,
-    )?;
-    if estimated_cost <= 0.0 && !unpriced {
-        return Err(GatewayError::Config(format!(
-            "Image model '{requested_model}' has non-positive pricing"
-        )));
-    }
     let api_key_id = super::context::get_authenticated_api_key(req).map(|key| key.metadata.id);
     let api_key_budget_id = context.api_key_budget_id();
 
@@ -203,25 +172,74 @@ async fn proxy_image_multipart_endpoint(
                 let budgeted = budgeted.clone();
                 let budget_limits = budget_limits.clone();
                 let key_manager = key_manager.clone();
+                let pricing_service = pricing_service.clone();
                 let pricing_config = pricing_config.clone();
                 let body = body.clone();
                 let content_type = content_type.clone();
-                let usage = usage.clone();
+                let form_fields = form_fields.clone();
+                let context = context.clone();
                 move |selected_provider, selected_model, _deployment_id| {
                     let budgeted = budgeted.clone();
                     let budget_limits = budget_limits.clone();
                     let key_manager = key_manager.clone();
+                    let pricing_service = pricing_service.clone();
                     let pricing_config = pricing_config.clone();
                     let body = body.clone();
                     let content_type = content_type.clone();
-                    let usage = usage.clone();
+                    let form_fields = form_fields.clone();
+                    let context = context.clone();
                     async move {
+                        if matches!(endpoint, ImageProxyEndpoint::Edits)
+                            && native_edit::is_native_image_provider(&selected_provider)
+                        {
+                            let request = native_edit::parse_native_image_edit(
+                                &body,
+                                &content_type,
+                                requested_model,
+                            )
+                            .map_err(image_proxy_gateway_error_to_provider_error)?;
+                            let (response, tokens_used) =
+                                native_edit::execute_selected_native_image_edit(
+                                    state,
+                                    context,
+                                    selected_provider,
+                                    selected_model,
+                                    request,
+                                )
+                                .await?;
+                            return Ok((HttpResponse::Ok().json(response), tokens_used));
+                        }
+
                         let provider = selected_image_proxy_provider(
                             state.config().gateway.providers.as_slice(),
                             &selected_provider,
                             &selected_model,
                             requested_model,
                         )?;
+                        let pricing_model = pricing_keys::resolve_image_pricing_model(
+                            pricing_service.as_ref(),
+                            "openai",
+                            requested_model,
+                            form_fields.size.as_deref(),
+                            form_fields.quality.as_deref(),
+                        )
+                        .unwrap_or_else(|| requested_model.to_string());
+                        let usage =
+                            estimated_image_proxy_usage(&form_fields, "openai", &pricing_model);
+                        let (estimated_cost, unpriced) = image_proxy_cost(
+                            pricing_service.as_ref(),
+                            &pricing_config,
+                            "openai",
+                            &pricing_model,
+                            &usage,
+                        )
+                        .map_err(image_proxy_gateway_error_to_provider_error)?;
+                        if estimated_cost <= 0.0 && !unpriced {
+                            return Err(ProviderError::configuration(
+                                "image_proxy",
+                                format!("Image model '{requested_model}' has non-positive pricing"),
+                            ));
+                        }
                         let provider_for_call = provider.clone();
                         let (response, reservations) = budgeted
                             .for_selected_with_api_key_budget(

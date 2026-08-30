@@ -9,7 +9,9 @@ use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::net::validate_outbound_url_str;
-use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper, header_owned};
+use crate::core::providers::base::{
+    BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, apply_provider_headers, header_owned,
+};
 use crate::core::providers::media::{
     GenerationLifecycle, GenerationOutput, GenerationPoll, PollPolicy,
 };
@@ -146,6 +148,18 @@ impl BflProvider {
         Self::new(BflConfig::from_env())
     }
 
+    fn request_headers(&self, api_key: &str) -> Vec<HeaderPair> {
+        let mut headers = Vec::with_capacity(self.config.base.headers.len() + 1);
+        for (key, value) in &self.config.base.headers {
+            if key.eq_ignore_ascii_case("x-key") {
+                continue;
+            }
+            headers.push(header_owned(key.clone(), value.clone()));
+        }
+        headers.push(header_owned("x-key".to_string(), api_key.to_string()));
+        headers
+    }
+
     /// Submit and await a provider-native BFL image request.
     pub async fn generate_native(
         &self,
@@ -170,10 +184,8 @@ impl BflProvider {
         if cancellation.is_cancelled() {
             return Err(cancelled());
         }
-        let submit = self
-            .client
-            .post(url)?
-            .header("x-key", api_key)
+        let headers = self.request_headers(api_key);
+        let submit = apply_provider_headers(self.client.post(url)?, headers.clone())
             .json(&request.parameters);
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(cancelled()),
@@ -203,13 +215,9 @@ impl BflProvider {
             ProviderError::response_parsing(PROVIDER, "BFL response omitted polling_url")
         })?;
         self.lifecycle
-            .wait_for_json(
-                polling_url.to_string(),
-                vec![header_owned("x-key".to_string(), api_key.to_string())],
-                cancellation,
-                decode_poll,
-            )
+            .wait_for_json(polling_url.to_string(), headers, cancellation, decode_poll)
             .await
+            .map_err(mark_post_submit_error_non_retryable)
     }
 
     async fn validate_webhook(&self, parameters: &Map<String, Value>) -> Result<(), ProviderError> {
@@ -358,14 +366,29 @@ fn decode_poll(payload: Value) -> Result<GenerationPoll, ProviderError> {
                 .unwrap_or("BFL generation failed")
                 .to_string(),
         )),
-        Some("Request Moderated") => Ok(GenerationPoll::Rejected(
-            "BFL generation was moderated".to_string(),
+        Some("Request Moderated") => Err(ProviderError::content_filtered(
+            PROVIDER,
+            "BFL generation was moderated",
+            None,
+            Some(false),
         )),
         Some("Pending" | "Queued" | "Processing" | "Running") => Ok(GenerationPoll::Pending),
         status => Err(ProviderError::response_parsing(
             PROVIDER,
             format!("unknown BFL task status: {status:?}"),
         )),
+    }
+}
+
+fn mark_post_submit_error_non_retryable(error: ProviderError) -> ProviderError {
+    match error {
+        ProviderError::ContentFiltered { .. } | ProviderError::Cancelled { .. } => error,
+        error => ProviderError::other(
+            PROVIDER,
+            format!(
+                "BFL task was already accepted; polling failed and resubmitting could duplicate it: {error}"
+            ),
+        ),
     }
 }
 
@@ -554,5 +577,13 @@ mod tests {
         .expect_err("non-HTTP output must not escape as a successful result");
 
         assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+    }
+
+    #[test]
+    fn moderated_poll_is_content_filtered() {
+        let error = decode_poll(json!({ "status": "Request Moderated" }))
+            .expect_err("moderation must retain its content-policy direction");
+
+        assert!(matches!(error, ProviderError::ContentFiltered { .. }));
     }
 }

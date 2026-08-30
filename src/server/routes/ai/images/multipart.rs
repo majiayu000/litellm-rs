@@ -1,4 +1,5 @@
 use crate::utils::error::gateway_error::GatewayError;
+use actix_web::http::header::{ContentDisposition, DispositionParam, HeaderValue};
 use bytes::Bytes;
 
 pub(super) fn extract_text_field(
@@ -122,11 +123,24 @@ fn boundary(content_type: &str) -> Option<String> {
 
 fn part_has_field_name(headers: &str, field_name: &str) -> bool {
     headers.lines().any(|line| {
-        let line = line.trim();
-        line.to_ascii_lowercase()
-            .starts_with("content-disposition:")
-            && (line.contains(&format!("name=\"{field_name}\""))
-                || line.contains(&format!("name={field_name}")))
+        let Some((header_name, raw_value)) = line.split_once(':') else {
+            return false;
+        };
+        if !header_name
+            .trim()
+            .eq_ignore_ascii_case("content-disposition")
+        {
+            return false;
+        }
+        let Ok(value) = HeaderValue::from_bytes(raw_value.trim().as_bytes()) else {
+            return false;
+        };
+        let Ok(disposition) = ContentDisposition::from_raw(&value) else {
+            return false;
+        };
+        disposition.parameters.iter().any(
+            |parameter| matches!(parameter, DispositionParam::Name(name) if name == field_name),
+        )
     })
 }
 
@@ -205,6 +219,20 @@ mod tests {
         assert_eq!(
             extract_file_field(&Bytes::from(body), &content_type, "image").as_deref(),
             Some(binary.as_slice())
+        );
+    }
+
+    #[test]
+    fn file_field_name_does_not_match_a_filename_parameter() {
+        let boundary = "exact-name-boundary";
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let body = Bytes::from(format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"mask\"\r\nContent-Type: image/png\r\n\r\nsource-image\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"mask\"; filename=\"actual.png\"\r\nContent-Type: image/png\r\n\r\nactual-mask\r\n--{boundary}--\r\n"
+        ));
+
+        assert_eq!(
+            extract_file_field(&body, &content_type, "mask").as_deref(),
+            Some(b"actual-mask".as_slice())
         );
     }
 }

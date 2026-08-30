@@ -114,6 +114,44 @@ async fn bfl_cancellation_interrupts_submit_body_read() {
 }
 
 #[tokio::test]
+async fn bfl_poll_transport_error_is_not_safe_to_resubmit() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("mock BFL listener should bind");
+    let address = listener.local_addr().expect("mock address should exist");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("submit should arrive");
+        let _request = read_http_request(&mut socket).await;
+        let body = r#"{"id":"task-1","polling_url":"http://127.0.0.1:1/poll/task-1"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("submit response should write");
+    });
+
+    let mut config = BflConfig::with_api_key("bfl-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    config.poll_policy = PollPolicy::from_millis(1, 4, 200);
+    let provider = BflProvider::new(config).expect("BFL provider should initialize");
+    let error = provider
+        .generate_native(
+            BflImageRequest::new("flux-pro-1.1", "a glass city"),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("poll transport failure should surface");
+    server.await.expect("mock server should finish");
+
+    assert!(matches!(error, ProviderError::Other { .. }));
+    assert!(error.to_string().contains("already accepted"));
+}
+
+#[tokio::test]
 async fn bfl_does_not_advertise_unpriced_flux_2_models() {
     let provider = BflProvider::new(BflConfig::with_api_key("bfl-secret"))
         .expect("BFL provider should initialize");

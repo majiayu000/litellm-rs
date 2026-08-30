@@ -1,4 +1,71 @@
 use super::*;
+#[cfg(feature = "providers-extended")]
+use litellm_rs::core::providers::Provider;
+#[cfg(feature = "providers-extended")]
+use litellm_rs::core::types::model::ProviderCapability;
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn image_edit_transport_uses_the_same_selected_deployment() {
+    let proxy = MockImageServer::start().await;
+    let state = build_route_policy_test_state(vec![
+        image_provider(
+            "stability-native",
+            "stability",
+            "http://127.0.0.1:1",
+            vec!["inpaint".to_string()],
+        ),
+        openai_image_provider_with_mapping(
+            "openai-proxy",
+            &proxy.base_url,
+            "inpaint",
+            "gpt-image-1-mini",
+        ),
+    ])
+    .await;
+    add_raw_image_alias_pricing(&state, "inpaint", "gpt-image-1-mini");
+
+    let first = state
+        .unified_router
+        .select_deployment_lease_for_capability("inpaint", &ProviderCapability::ImageEdit)
+        .expect("first image edit deployment should be selectable");
+    assert!(matches!(
+        first.deployment().provider,
+        Provider::Stability(_)
+    ));
+    drop(first);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let boundary = "litellm-rs-selected-transport-boundary";
+    let resp = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/edits")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(image_edit_multipart_body_for_model(boundary, "inpaint", 1))
+            .to_request(),
+    )
+    .await;
+
+    let status = resp.status();
+    let response_body = test::read_body(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected gateway response: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+    assert_eq!(proxy.paths(), vec!["/v1/images/edits".to_string()]);
+    proxy.stop().await;
+}
 
 #[tokio::test]
 async fn image_edit_records_flat_output_image_spend_after_success() {

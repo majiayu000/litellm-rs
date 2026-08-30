@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use std::pin::Pin;
 
 use crate::core::providers::ProviderError;
-use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+use crate::core::providers::base::{
+    BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, apply_provider_headers, header,
+    header_owned,
+};
 use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
 use crate::core::traits::provider::ProviderConfig;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -124,6 +127,19 @@ impl StabilityProvider {
         Self::new(StabilityConfig::from_env())
     }
 
+    fn request_headers(&self, api_key: &str) -> Vec<HeaderPair> {
+        let mut headers = Vec::with_capacity(self.config.base.headers.len() + 2);
+        for (key, value) in &self.config.base.headers {
+            if key.eq_ignore_ascii_case("authorization") || key.eq_ignore_ascii_case("accept") {
+                continue;
+            }
+            headers.push(header_owned(key.clone(), value.clone()));
+        }
+        headers.push(header("Authorization", format!("Bearer {api_key}")));
+        headers.push(header("Accept", "image/*".to_string()));
+        headers
+    }
+
     fn endpoint_for_model(&self, model: &str) -> Result<String, ProviderError> {
         let path = match model {
             "stable-image-core" => "v2beta/stable-image/generate/core",
@@ -211,15 +227,12 @@ impl StabilityProvider {
             .api_key
             .as_deref()
             .ok_or_else(|| ProviderError::authentication(PROVIDER, "API key is required"))?;
-        let response = self
-            .client
-            .post(url)?
-            .bearer_auth(api_key)
-            .header(reqwest::header::ACCEPT, "image/*")
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let response =
+            apply_provider_headers(self.client.post(url)?, self.request_headers(api_key))
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
         let bytes = response
             .bytes()
@@ -250,6 +263,12 @@ impl StabilityProvider {
             return Err(ProviderError::invalid_request(
                 PROVIDER,
                 "Stability native editing returns exactly one image",
+            ));
+        }
+        if request.size.is_some() {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                "Stability native editing does not support the OpenAI size parameter",
             ));
         }
         let model = request.model.as_deref().unwrap_or("inpaint");
@@ -288,15 +307,12 @@ impl StabilityProvider {
                 .unwrap_or(DEFAULT_API_BASE)
                 .trim_end_matches('/')
         );
-        let response = self
-            .client
-            .post(url)?
-            .bearer_auth(api_key)
-            .header(reqwest::header::ACCEPT, "image/*")
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let response =
+            apply_provider_headers(self.client.post(url)?, self.request_headers(api_key))
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|error| self.client.map_preserved_request_error(error))?;
         let status = response.status();
         let bytes = response
             .bytes()

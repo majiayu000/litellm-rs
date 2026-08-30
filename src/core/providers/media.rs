@@ -246,8 +246,16 @@ pub mod runway {
     pub struct RunwayConfig {
         #[serde(flatten)]
         pub base: BaseConfig,
-        #[serde(skip, default)]
+        #[serde(skip, default = "default_runway_poll_policy")]
         pub poll_policy: PollPolicy,
+    }
+
+    fn default_runway_poll_policy() -> PollPolicy {
+        PollPolicy::new(
+            Duration::from_secs(5),
+            Duration::from_secs(20),
+            Duration::from_secs(600),
+        )
     }
 
     impl Default for RunwayConfig {
@@ -257,11 +265,7 @@ pub mod runway {
                     api_base: Some(DEFAULT_API_BASE.to_string()),
                     ..BaseConfig::default()
                 },
-                poll_policy: PollPolicy::new(
-                    Duration::from_secs(5),
-                    Duration::from_secs(20),
-                    Duration::from_secs(600),
-                ),
+                poll_policy: default_runway_poll_policy(),
             }
         }
     }
@@ -654,5 +658,16 @@ mod tests {
 
         assert!(policy.initial_delay >= Duration::from_secs(5));
         assert!(policy.max_delay >= policy.initial_delay);
+    }
+
+    #[test]
+    fn runway_deserialization_preserves_official_poll_interval() {
+        let config: RunwayConfig = serde_json::from_value(serde_json::json!({
+            "api_key": "runway-secret"
+        }))
+        .expect("Runway config should deserialize");
+
+        assert_eq!(config.poll_policy.initial_delay, Duration::from_secs(5));
+        assert_eq!(config.poll_policy.max_delay, Duration::from_secs(20));
     }
 }
