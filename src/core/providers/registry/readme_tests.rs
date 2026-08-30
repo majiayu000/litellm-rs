@@ -134,6 +134,9 @@ fn expected_readme_tier2_row(entry: &ProviderRegistryEntry) -> Option<ExpectedRe
         ProviderType::Anthropic => Some(expected("always", ["✅", "✅", "–", "–", "–"])),
         ProviderType::Mistral => Some(expected("always", ["✅", "✅", "passthrough", "–", "–"])),
         ProviderType::Cloudflare => Some(expected("always", ["✅", "–", "–", "–", "–"])),
+        ProviderType::Deepgram | ProviderType::ElevenLabs => {
+            Some(expected("always", ["–", "–", "–", "–", "✅"]))
+        }
         ProviderType::Bedrock => Some(expected("always", ["✅", "✅", "✅", "helper API", "–"])),
         ProviderType::OpenAICompatible => Some(expected("always", ["✅", "✅", "–", "–", "–"])),
         ProviderType::Azure | ProviderType::AzureAI => Some(expected(
@@ -148,6 +151,7 @@ fn expected_readme_tier2_row(entry: &ProviderRegistryEntry) -> Option<ExpectedRe
             "native factory (`providers-extended`)",
             ["✅", "✅", "✅", "–", "–"],
         )),
+        ProviderType::Voyage => Some(expected("always", ["–", "–", "✅", "–", "–"])),
         ProviderType::Gemini | ProviderType::GitHubCopilot => Some(expected(
             "native factory (`providers-extended`)",
             ["✅", "✅", "–", "–", "–"],

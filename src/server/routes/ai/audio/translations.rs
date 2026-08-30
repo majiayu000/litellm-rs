@@ -189,7 +189,10 @@ pub async fn audio_translations(
                                 budget.budget_limits(),
                                 budget.provider(),
                                 budget.model(),
-                                Some(total_time_seconds),
+                                Some(super::budgeting::AudioPricingUnits::Time {
+                                    seconds: total_time_seconds,
+                                    surface: ProviderCapability::AudioTranslation,
+                                }),
                                 &reserve_usage,
                             )
                         },
@@ -207,7 +210,10 @@ pub async fn audio_translations(
                                     api_key_id,
                                     budget.provider(),
                                     budget.model(),
-                                    Some(total_time_seconds),
+                                    Some(super::budgeting::AudioPricingUnits::Time {
+                                        seconds: total_time_seconds,
+                                        surface: ProviderCapability::AudioTranslation,
+                                    }),
                                     &settle_usage,
                                     budget_reservation,
                                     key_budget_reservation,

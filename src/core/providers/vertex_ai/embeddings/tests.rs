@@ -361,6 +361,7 @@ fn test_embedding_handler_transform_request_single_text() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);
@@ -381,6 +382,7 @@ fn test_embedding_handler_transform_request_array() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);
@@ -400,6 +402,7 @@ fn test_embedding_handler_transform_request_with_dimensions() {
         dimensions: Some(256),
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);
@@ -419,6 +422,7 @@ fn test_embedding_handler_multimodal_text() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);
@@ -438,6 +442,7 @@ fn test_embedding_handler_multimodal_base64_image() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);
@@ -461,6 +466,7 @@ fn test_embedding_handler_multimodal_gcs_image() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);
@@ -484,6 +490,7 @@ fn test_embedding_handler_multimodal_gcs_video() {
         dimensions: None,
         user: None,
         task_type: None,
+        truncation: None,
     };
 
     let result = handler.transform_request(&request);

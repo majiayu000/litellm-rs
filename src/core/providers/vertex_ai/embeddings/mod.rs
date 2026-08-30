@@ -432,6 +432,7 @@ impl BatchEmbeddingHandler {
                 dimensions: None,
                 user: None,
                 task_type: Some("RETRIEVAL_DOCUMENT".to_string()), // Default
+                truncation: None,
             };
 
             let handler = EmbeddingHandler::new(self.model.clone());

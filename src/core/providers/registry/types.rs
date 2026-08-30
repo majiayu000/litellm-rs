@@ -131,6 +131,13 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::Voyage,
+        "voyage",
+        &[],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
         ProviderType::DeepSeek,
         "deepseek",
         &["deep-seek"],
@@ -143,6 +150,20 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         &["deep-infra"],
         ProviderDispatchKind::CatalogOpenAiLike,
         true,
+    ),
+    entry(
+        ProviderType::Deepgram,
+        "deepgram",
+        &[],
+        ProviderDispatchKind::Native,
+        false,
+    ),
+    entry(
+        ProviderType::ElevenLabs,
+        "elevenlabs",
+        &["eleven_labs", "eleven-labs"],
+        ProviderDispatchKind::Native,
+        false,
     ),
     entry(
         ProviderType::V0,
@@ -511,8 +532,11 @@ mod tests {
             ProviderType::OpenAI,
             ProviderType::Anthropic,
             ProviderType::Bedrock,
+            ProviderType::Deepgram,
+            ProviderType::ElevenLabs,
             ProviderType::Mistral,
             ProviderType::Cloudflare,
+            ProviderType::Voyage,
         ]
         .into_iter()
         .chain([

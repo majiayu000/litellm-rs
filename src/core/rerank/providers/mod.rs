@@ -2,6 +2,7 @@
 
 mod cohere;
 mod jina;
+mod voyage;
 
 use crate::core::providers::ProviderError;
 use crate::utils::error::gateway_error::GatewayError;
@@ -9,6 +10,7 @@ use reqwest::StatusCode;
 
 pub use cohere::CohereRerankProvider;
 pub use jina::JinaRerankProvider;
+pub use voyage::VoyageRerankProvider;
 
 pub(crate) fn rerank_upstream_error(
     provider: &'static str,

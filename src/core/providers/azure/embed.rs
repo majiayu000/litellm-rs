@@ -253,6 +253,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -268,6 +269,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -283,6 +285,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -298,6 +301,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -313,6 +317,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -328,6 +333,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -343,6 +349,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -358,6 +365,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -373,6 +381,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::validate_request(&request);
@@ -390,6 +399,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::transform_request(&request);
@@ -409,6 +419,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::transform_request(&request);
@@ -428,6 +439,7 @@ mod tests {
             user: None,
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::transform_request(&request);
@@ -446,6 +458,7 @@ mod tests {
             user: Some("user-123".to_string()),
             encoding_format: None,
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::transform_request(&request);
@@ -464,6 +477,7 @@ mod tests {
             user: None,
             encoding_format: Some("base64".to_string()),
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::transform_request(&request);
@@ -482,6 +496,7 @@ mod tests {
             user: Some("user-456".to_string()),
             encoding_format: Some("float".to_string()),
             task_type: None,
+            truncation: None,
         };
 
         let result = AzureEmbeddingUtils::transform_request(&request);

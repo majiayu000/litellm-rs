@@ -2,10 +2,10 @@
   "_metadata": {
     "schema_version": 1,
     "revision": "classification-1241-v1",
-    "decision_source_sha256": "e03662421df3507e8a5be175f8976b968f0f59d9acc51aa5bc67f7569b168476",
-    "pricing_universe_sha256": "98a6b49d858d0cd466482284f880f24529b304fb840743f8da279bad2cbfe23f",
-    "classification_sha256": "1454b3bc526e00b6cafdc0fcf585a8aebb4c98a045cda5b3cd58b5c7c33df311",
-    "total_entry_count": 3474,
+    "decision_source_sha256": "e65ba6d7b2d1ecbed558f5bef1399fea3ab7b1d89e9d5e62b4e5e0dee32bc4b2",
+    "pricing_universe_sha256": "df6a8973d65a7b234cb56803658619b8d99600f440b6df0764722f81baa3bc78",
+    "classification_sha256": "3bfba92f67d9550a14f930694f1833c8771fbb362efbee8090f9dc07ad79a7d0",
+    "total_entry_count": 3475,
     "enforced_providers": [
       "azure",
       "azure_ai",
@@ -168,7 +168,7 @@
         "unreviewed": 1
       },
       "deepgram": {
-        "callable": 0,
+        "callable": 1,
         "pricing_only": 0,
         "unreviewed": 36
       },
@@ -9915,6 +9915,29 @@
       "evidence_sources": [
         "evidence-001"
       ]
+    },
+    {
+      "provider": "deepgram",
+      "pricing_key": "deepgram/aura-2-thalia-en",
+      "decision": "callable",
+      "evidence_sources": [
+        "evidence-107",
+        "evidence-108"
+      ],
+      "catalog_model_id": "aura-2-thalia-en",
+      "endpoints": [
+        "text_to_speech"
+      ],
+      "capabilities": [
+        "text_to_speech"
+      ],
+      "supported_parameters": [
+        "input",
+        "model",
+        "response_format",
+        "speed"
+      ],
+      "aliases": []
     },
     {
       "provider": "deepgram",

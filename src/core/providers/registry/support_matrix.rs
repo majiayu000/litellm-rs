@@ -134,9 +134,24 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         "Workers AI chat only.",
     ),
     row(
+        "deepgram",
+        [U, U, U, U, U, U, U, U, U],
+        "Native audio routes; this matrix covers chat, embeddings, and images.",
+    ),
+    row(
+        "elevenlabs",
+        [U, U, U, U, U, U, U, U, U],
+        "Native audio routes; this matrix covers chat, embeddings, and images.",
+    ),
+    row(
         "cohere",
         [EXTENDED, EXTENDED, EXTENDED, U, U, U, U, U, U],
         "Native provider is behind providers-extended.",
+    ),
+    row(
+        "voyage",
+        [U, U, S, U, U, U, U, U, U],
+        "Native Voyage embeddings plus the shared HTTP rerank route.",
     ),
     row(
         "vertex_ai",

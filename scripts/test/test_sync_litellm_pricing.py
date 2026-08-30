@@ -772,7 +772,7 @@ class CatalogAuthorityTests(unittest.TestCase):
                     (entry["provider"], entry["pricing_key"])
                 )
 
-        self.assertEqual(authority["_metadata"]["total_entry_count"], 3474)
+        self.assertEqual(authority["_metadata"]["total_entry_count"], 3475)
         self.assertEqual(
             target_counts,
             {"callable": 179, "pricing_only": 293, "unreviewed": 87},
@@ -780,6 +780,7 @@ class CatalogAuthorityTests(unittest.TestCase):
         self.assertEqual(
             sorted(callable_with_explicit_contract),
             [
+                ("deepgram", "deepgram/aura-2-thalia-en"),
                 ("xai", "xai/grok-4.5"),
                 ("xai", "xai/grok-4.5-latest"),
                 ("xai", "xai/grok-4.6"),

@@ -65,15 +65,13 @@ fn test_rerank_service_extract_provider() {
 
 #[test]
 fn test_rerank_service_validation() {
-    let service = RerankService::new();
-
     // Empty query
     let request = RerankRequest {
         query: "".to_string(),
         documents: vec![RerankDocument::text("doc")],
         ..Default::default()
     };
-    assert!(service.validate_request(&request).is_err());
+    assert!(RerankService::validate_request(&request).is_err());
 
     // Empty documents
     let request = RerankRequest {
@@ -81,7 +79,7 @@ fn test_rerank_service_validation() {
         documents: vec![],
         ..Default::default()
     };
-    assert!(service.validate_request(&request).is_err());
+    assert!(RerankService::validate_request(&request).is_err());
 
     // top_n = 0
     let request = RerankRequest {
@@ -90,7 +88,7 @@ fn test_rerank_service_validation() {
         top_n: Some(0),
         ..Default::default()
     };
-    assert!(service.validate_request(&request).is_err());
+    assert!(RerankService::validate_request(&request).is_err());
 
     // Valid request
     let request = RerankRequest {
@@ -99,7 +97,7 @@ fn test_rerank_service_validation() {
         top_n: Some(1),
         ..Default::default()
     };
-    assert!(service.validate_request(&request).is_ok());
+    assert!(RerankService::validate_request(&request).is_ok());
 }
 
 #[test]
@@ -161,6 +159,31 @@ async fn test_rerank_cache() {
     let stats = cache.stats().await;
     assert_eq!(stats.total_entries, 1);
     assert_eq!(stats.valid_entries, 1);
+}
+
+#[tokio::test]
+async fn rerank_cache_separates_truncation_requests() {
+    let cache = RerankCache::new(100, Duration::from_secs(3600));
+    let request = RerankRequest {
+        model: "voyage/rerank-2.5".to_string(),
+        query: "test query".to_string(),
+        documents: vec![RerankDocument::text("test doc")],
+        truncation: Some(false),
+        ..Default::default()
+    };
+    let response = RerankResponse {
+        id: "no-truncation".to_string(),
+        results: Vec::new(),
+        model: "rerank-2.5".to_string(),
+        usage: None,
+        meta: HashMap::new(),
+    };
+
+    cache.set(&request, &response).await;
+
+    let mut truncated_request = request;
+    truncated_request.truncation = Some(true);
+    assert!(cache.get(&truncated_request).await.is_none());
 }
 
 #[test]

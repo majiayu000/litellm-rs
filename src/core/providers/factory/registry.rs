@@ -1,13 +1,11 @@
-//! Provider construction registry
-//!
-//! Implements `Provider::from_config_async`, which maps each `ProviderType`
-//! to its concrete provider instantiation logic.
+//! Provider construction registry and `Provider::from_config_async` wiring.
 
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry as provider_registry;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::providers::{
-    Provider, anthropic, bedrock, cloudflare, mistral, openai, openai_like,
+    DeepgramProvider, ElevenLabsProvider, Provider, anthropic, bedrock, cloudflare, mistral,
+    openai, openai_like,
 };
 #[cfg(feature = "providers-extra")]
 use crate::core::providers::{azure, azure_ai, vertex_ai};
@@ -41,6 +39,7 @@ use super::fal_ai_builder::build_fal_ai_config_from_factory;
 use super::gemini_builder::build_gemini_config_from_factory;
 #[cfg(feature = "providers-extended")]
 use super::replicate_builder::build_replicate_config_from_factory;
+use super::voyage_builder::build_voyage_provider;
 
 #[cfg(feature = "providers-extended")]
 fn build_ollama_config_from_factory(
@@ -104,6 +103,12 @@ impl Provider {
                 let provider = anthropic::AnthropicProvider::new(anthropic_config)?;
                 Ok(Provider::Anthropic(provider))
             }
+            ProviderType::Deepgram => Ok(Provider::Deepgram(DeepgramProvider::new(
+                super::super::audio_dispatch::native_audio_base_config(&config, "deepgram")?,
+            )?)),
+            ProviderType::ElevenLabs => Ok(Provider::ElevenLabs(ElevenLabsProvider::new(
+                super::super::audio_dispatch::native_audio_base_config(&config, "elevenlabs")?,
+            )?)),
             ProviderType::Mistral => {
                 let mistral_config = build_mistral_config_from_factory(&config)?;
                 let provider = mistral::MistralProvider::new(mistral_config)
@@ -135,6 +140,7 @@ impl Provider {
                     ))
                 }
             }
+            ProviderType::Voyage => Ok(Provider::Voyage(build_voyage_provider(&config)?)),
             ProviderType::OpenAICompatible => {
                 let oai_like = build_openai_like_config_from_factory(&config)?;
                 let provider = openai_like::OpenAILikeProvider::new_openai_compatible(oai_like)
@@ -424,6 +430,9 @@ mod tests {
                 "timeout": 30,
                 "max_retries": 2
             }),
+            ProviderType::Deepgram | ProviderType::ElevenLabs => serde_json::json!({
+                "api_key": "test-native-audio-key"
+            }),
             _ => minimal_dispatch_config(),
         }
     }
@@ -453,7 +462,10 @@ mod tests {
                     | (ProviderType::Anthropic, Provider::Anthropic(_))
                     | (ProviderType::Bedrock, Provider::Bedrock(_))
                     | (ProviderType::Mistral, Provider::Mistral(_))
-                    | (ProviderType::Cloudflare, Provider::Cloudflare(_)) => {}
+                    | (ProviderType::Cloudflare, Provider::Cloudflare(_))
+                    | (ProviderType::Voyage, Provider::Voyage(_))
+                    | (ProviderType::Deepgram, Provider::Deepgram(_))
+                    | (ProviderType::ElevenLabs, Provider::ElevenLabs(_)) => {}
                     #[cfg(feature = "providers-extra")]
                     (ProviderType::Azure, Provider::Azure(_))
                     | (ProviderType::AzureAI, Provider::AzureAI(_))

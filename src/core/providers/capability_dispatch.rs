@@ -115,6 +115,16 @@ impl Provider {
                 .iter()
                 .find(|model_info| model_info.id == model)
                 .is_some_and(|model_info| model_info.capabilities.contains(capability)),
+            Provider::Deepgram(provider) => provider
+                .models()
+                .iter()
+                .find(|info| info.id == model)
+                .is_some_and(|info| info.capabilities.contains(capability)),
+            Provider::ElevenLabs(provider) => provider
+                .models()
+                .iter()
+                .find(|info| info.id == model)
+                .is_some_and(|info| info.capabilities.contains(capability)),
             Provider::OpenAILike(provider) if capability == &ProviderCapability::Rerank => {
                 openai_like_provider_supports_rerank(provider.name())
             }
@@ -123,6 +133,7 @@ impl Provider {
             {
                 openai_like_provider_supports_gemini(provider.name())
             }
+            Provider::Voyage(provider) => provider.supports_capability_for_model(model, capability),
             _ => self.supports_capability(capability),
         }
     }

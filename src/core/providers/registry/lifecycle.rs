@@ -62,6 +62,8 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "ProviderType::BlackForestLabs dispatches to native asynchronous image endpoints",
     ),
     wire("cloudflare", "native Provider enum variant"),
+    wire("deepgram", "native audio Provider enum variant"),
+    wire("elevenlabs", "native audio Provider enum variant"),
     providers_extended_wire(
         "cohere",
         "ProviderType::Cohere dispatches to native Cohere API paths when providers-extended is enabled",
@@ -116,6 +118,10 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     provider_extra_wire(
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
+    ),
+    wire(
+        "voyage",
+        "ProviderType::Voyage dispatches to native embedding and rerank endpoints",
     ),
 ];
 
