@@ -19,6 +19,8 @@ mod images;
 mod models;
 mod moderations;
 mod openai_errors;
+#[cfg(test)]
+mod openapi_contract_tests;
 mod provider_config;
 #[cfg(test)]
 mod provider_selection;
