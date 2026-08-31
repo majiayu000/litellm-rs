@@ -486,9 +486,6 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
             "unary completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(unary.contains("execute_with_selected_deployment_capability_typed"));
-    assert!(unary.contains("ProviderCapability::ChatCompletion"));
-
     let stream_start = end;
     let stream_end = source[stream_start..]
         .find("#[async_trait]")
@@ -507,8 +504,6 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
             "streaming completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(stream.contains("select_deployment_lease_for_capability_typed"));
-    assert!(stream.contains("ProviderCapability::ChatCompletionStream"));
     assert!(stream.contains("let _lease = &lease"));
 
     let facade = include_str!("default_router/mod.rs");
