@@ -8,6 +8,7 @@
   --accent: #3157d5;
   --accent-strong: #2343ac;
   --danger: #b42318;
+  --healthy: #16794a;
   --focus: #ffb020;
   --shadow: 0 16px 45px rgb(23 34 56 / 10%);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -27,6 +28,7 @@
     --accent: #86a3ff;
     --accent-strong: #abc0ff;
     --danger: #ff8a80;
+    --healthy: #73d7a3;
     --focus: #ffd166;
     --shadow: 0 18px 50px rgb(0 0 0 / 28%);
   }
@@ -301,6 +303,42 @@ td code {
 .spend-grid {
   display: grid;
   gap: 1.25rem;
+}
+
+.health-summary,
+.health-notice {
+  margin: 0 0 1rem;
+}
+
+.health-summary {
+  font-weight: 730;
+}
+
+.health-notice {
+  color: var(--muted);
+}
+
+.health-state {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 730;
+  text-transform: capitalize;
+}
+
+.health-state[data-health-state="healthy"] {
+  color: var(--healthy);
+}
+
+.health-state[data-health-state="unhealthy"] {
+  color: var(--danger);
+}
+
+.health-state[data-health-state="unknown"],
+.health-state[data-health-state="disabled"] {
+  color: var(--muted);
 }
 
 .status,

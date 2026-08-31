@@ -74,6 +74,7 @@ function resetProtectedState() {
   renderKeys();
   renderTeams();
   renderSpend();
+  providerHealthView.reset();
 }
 function endSession(message = "Signed out") {
   abortActiveRequests();
@@ -89,20 +90,23 @@ function endSession(message = "Signed out") {
   byId("session-label").textContent = message;
   byId("password").value = "";
 }
-async function decodeResponse(response) {
+async function decodeResponse(response, acceptedStatuses = []) {
   const text = await response.text();
   let payload = null;
   if (text) {
     try {
       payload = JSON.parse(text);
     } catch {
-      if (!response.ok) {
+      if (!response.ok && !acceptedStatuses.includes(response.status)) {
         throw new Error(text.trim() || `Gateway request failed (${response.status}).`);
       }
       throw new Error(`Gateway returned invalid JSON (${response.status}).`);
     }
   }
-  if (!response.ok || payload?.success === false) {
+  if (
+    (!response.ok && !acceptedStatuses.includes(response.status)) ||
+    payload?.success === false
+  ) {
     const structuredError =
       typeof payload?.error === "string"
         ? payload.error
@@ -130,7 +134,12 @@ async function publicRequest(path, options, generation) {
     state.controllers.delete(controller);
   }
 }
-async function apiRequest(path, options = {}, session = captureSession()) {
+async function apiRequest(
+  path,
+  options = {},
+  session = captureSession(),
+  responsePolicy = {},
+) {
   const controller = new AbortController();
   state.controllers.add(controller);
   const headers = new Headers(options.headers || {});
@@ -152,9 +161,14 @@ async function apiRequest(path, options = {}, session = captureSession()) {
       setStatus("Session expired. Protected dashboard data was cleared.");
       throw new DOMException("Administrator session expired", "AbortError");
     }
-    const data = await decodeResponse(response);
+    const data = await decodeResponse(
+      response,
+      responsePolicy.acceptedStatuses || [],
+    );
     ensureCurrent(session);
-    return data;
+    return responsePolicy.includeStatus
+      ? { data, status: response.status }
+      : data;
   } finally {
     state.controllers.delete(controller);
   }
@@ -361,6 +375,16 @@ function renderSpend() {
   );
   byId("team-spend-empty").hidden = state.teams.length !== 0;
 }
+const providerHealthView = window.createProviderHealthView({
+  apiRequest,
+  byId,
+  captureSession,
+  clearError,
+  ensureCurrent,
+  reportRequestError,
+  setStatus,
+  textCell,
+});
 async function loadKeys(session = captureSession()) {
   const requestVersion = ++state.keyRequestVersion;
   const requestedPage = state.keyPage;
@@ -442,7 +466,11 @@ async function refreshDashboard() {
   clearError();
   setStatus("Refreshing dashboard…");
   try {
-    await Promise.all([loadKeys(session), loadTeams(session)]);
+    await Promise.all([
+      loadKeys(session),
+      loadTeams(session),
+      providerHealthView.load(session),
+    ]);
     ensureCurrent(session);
     await loadTeamUsage(session);
     ensureCurrent(session);
@@ -696,7 +724,7 @@ function showView(view) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const panel of ["keys", "teams", "spend"]) {
+  for (const panel of ["keys", "teams", "spend", "health"]) {
     byId(`${panel}-panel`).hidden = panel !== view;
   }
   if (view === "spend") {
