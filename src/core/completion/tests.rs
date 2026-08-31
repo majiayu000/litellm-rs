@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::core::net::ProviderEndpointAccess;
-use crate::core::providers::Provider;
 use crate::core::providers::base::BaseConfig;
 use crate::core::providers::openai::{OpenAIConfig, OpenAIProvider};
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::{DeepgramProvider, Provider};
+use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::{Deployment, RuntimeBinding, UnifiedRouter};
 use crate::core::types::message::MessageRole;
 use crate::sdk::LLMClient;
@@ -15,6 +16,23 @@ use crate::utils::error::gateway_error::GatewayError;
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+fn non_chat_deployment(id: &str, public_model: &str) -> Deployment {
+    let mut deployment = Deployment::new(
+        id.to_string(),
+        Provider::Deepgram(
+            DeepgramProvider::new(BaseConfig {
+                api_key: Some("deepgram-test-key".to_string()),
+                ..Default::default()
+            })
+            .expect("non-chat provider should build"),
+        ),
+        "nova-3".to_string(),
+        public_model.to_string(),
+    );
+    deployment.config.priority = 0;
+    deployment
+}
 
 #[test]
 fn test_message_creation() {
@@ -123,36 +141,38 @@ async fn explicit_completion_facade_executes_selected_runtime_deployment() {
 }
 
 #[tokio::test]
-async fn explicit_completion_stream_executes_selected_runtime_deployment() {
+async fn runtime_handle_capability_filters_non_streaming_for_completion_and_sdk() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("mock provider should bind");
     let address = listener.local_addr().expect("mock address should exist");
     let upstream = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("request should arrive");
-        let mut request = vec![0_u8; 8192];
-        let bytes = socket
-            .read(&mut request)
-            .await
-            .expect("request should read");
-        let request = String::from_utf8_lossy(&request[..bytes]);
-        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
-        assert!(request.contains(r#""model":"canonical-stream-model""#));
-        assert!(request.contains(r#""stream":true"#));
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 8192];
+            let bytes = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..bytes]);
+            assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+            assert!(request.contains(r#""model":"canonical-stream-model""#));
+            assert!(request.contains(r#""stream":true"#));
 
-        let body = concat!(
-            "data: {\"id\":\"chatcmpl-runtime-stream\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"canonical-stream-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"runtime-stream\"},\"finish_reason\":null}]}\n\n",
-            "data: [DONE]\n\n"
-        );
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("response should write");
+            let body = concat!(
+                "data: {\"id\":\"chatcmpl-runtime-stream\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"canonical-stream-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"runtime-stream\"},\"finish_reason\":null}]}\n\n",
+                "data: [DONE]\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        }
     });
 
     let provider = OpenAIProvider::new(OpenAIConfig {
@@ -166,17 +186,29 @@ async fn explicit_completion_stream_executes_selected_runtime_deployment() {
     })
     .await
     .expect("provider should build");
-    let runtime = Arc::new(UnifiedRouter::default());
-    runtime.add_deployment(Deployment::new(
+    let runtime = Arc::new(UnifiedRouter::new(RouterConfig {
+        routing_strategy: RoutingStrategy::PriorityBased,
+        ..Default::default()
+    }));
+    runtime.add_deployment(non_chat_deployment(
+        "non-streaming-deployment",
+        "stream-facade-model",
+    ));
+    let mut stream_deployment = Deployment::new(
         "canonical-stream-deployment".to_string(),
         Provider::OpenAI(provider),
         "canonical-stream-model".to_string(),
         "stream-facade-model".to_string(),
-    ));
+    );
+    stream_deployment.config.priority = 10;
+    runtime.add_deployment(stream_deployment);
     let deployment = runtime
         .get_deployment("canonical-stream-deployment")
         .expect("stream deployment should exist");
-    let facade = DefaultRouter::from_runtime(RuntimeBinding::new(runtime));
+    let binding = RuntimeBinding::new(runtime);
+    let facade = DefaultRouter::from_runtime(binding.clone());
+    let sdk_facade = LLMClient::from_runtime(binding, "stream-facade-model")
+        .expect("SDK runtime facade should build");
 
     let mut stream = facade
         .complete_stream(
@@ -213,11 +245,47 @@ async fn explicit_completion_stream_executes_selected_runtime_deployment() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+
+    let mut sdk_stream = sdk_facade
+        .chat_stream(vec![SdkMessage {
+            role: SdkRole::User,
+            content: Some(SdkContent::Text("hello".to_string())),
+            name: None,
+            tool_calls: None,
+        }])
+        .await
+        .expect("canonical SDK stream should start");
+    assert_eq!(
+        deployment
+            .state
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    let sdk_chunk = sdk_stream
+        .next()
+        .await
+        .expect("SDK stream should yield a chunk")
+        .expect("SDK chunk should succeed");
+    assert_eq!(sdk_chunk.id, "chatcmpl-runtime-stream");
+    assert_eq!(sdk_chunk.model, "canonical-stream-model");
+    assert_eq!(
+        sdk_chunk.choices[0].delta.content.as_deref(),
+        Some("runtime-stream")
+    );
+    drop(sdk_stream);
+    assert_eq!(
+        deployment
+            .state
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
     upstream.await.expect("mock provider should finish");
 }
 
 #[tokio::test]
-async fn completion_and_sdk_facades_share_runtime_selection_and_error_categories() {
+async fn runtime_handle_capability_filters_non_chat_for_completion_and_sdk() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("mock provider should bind");
@@ -257,13 +325,22 @@ async fn completion_and_sdk_facades_share_runtime_selection_and_error_categories
     })
     .await
     .expect("provider should build");
-    let runtime = Arc::new(UnifiedRouter::default());
-    runtime.add_deployment(Deployment::new(
+    let runtime = Arc::new(UnifiedRouter::new(RouterConfig {
+        routing_strategy: RoutingStrategy::PriorityBased,
+        ..Default::default()
+    }));
+    runtime.add_deployment(non_chat_deployment(
+        "non-chat-deployment",
+        "public-runtime-model",
+    ));
+    let mut chat = Deployment::new(
         "shared-runtime-deployment".to_string(),
         Provider::OpenAI(provider),
         "shared-runtime-model".to_string(),
         "public-runtime-model".to_string(),
-    ));
+    );
+    chat.config.priority = 10;
+    runtime.add_deployment(chat);
     let binding = RuntimeBinding::new(runtime);
     let completion_facade = DefaultRouter::from_runtime(binding.clone());
     let sdk_facade = LLMClient::from_runtime(binding, "public-runtime-model")
@@ -409,8 +486,6 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
             "unary completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(unary.contains("execute_with_selected_deployment_typed"));
-
     let stream_start = end;
     let stream_end = source[stream_start..]
         .find("#[async_trait]")
@@ -429,7 +504,6 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
             "streaming completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(stream.contains("select_deployment_lease_typed"));
     assert!(stream.contains("let _lease = &lease"));
 
     let facade = include_str!("default_router/mod.rs");

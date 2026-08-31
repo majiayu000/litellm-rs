@@ -501,16 +501,18 @@ impl Router {
 }
 
 impl RuntimeHandle {
-    /// Select and reserve a deployment from this handle's pinned generation.
-    pub(crate) fn select_deployment_lease_typed(
+    /// Select and reserve a capable deployment from this handle's pinned generation.
+    pub(crate) fn select_deployment_lease_for_capability_typed(
         &self,
         model_name: &str,
+        capability: &ProviderCapability,
     ) -> Result<DeploymentLease, crate::core::providers::ProviderError> {
         self.binding
             .router
-            .select_deployment_lease_matching_in_snapshot(
+            .select_deployment_lease_for_capability_matching_in_snapshot(
                 self.snapshot.as_ref(),
                 model_name,
+                capability,
                 |_| true,
             )
             .map_err(router_error_to_provider_error)

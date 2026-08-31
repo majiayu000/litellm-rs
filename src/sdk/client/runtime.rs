@@ -4,6 +4,7 @@ use super::LLMClient;
 use crate::core::router::RuntimeHandle;
 use crate::core::types::chat::{ChatMessage as CoreMessage, ChatRequest as CoreChatRequest};
 use crate::core::types::context::RequestContext;
+use crate::core::types::model::ProviderCapability;
 use crate::core::types::responses::{
     ChatChunk as CoreChatChunk, ChatResponse as CoreChatResponse, FinishReason,
 };
@@ -45,23 +46,27 @@ impl LLMClient {
         let context = RequestContext::new();
         let execution = self
             .runtime_handle()?
-            .execute_with_selected_deployment_typed(&model, move |deployment| {
-                let mut request = core_request.clone();
-                let context = context.clone();
-                async move {
-                    request.model = deployment.model.clone();
-                    let response = deployment
-                        .provider
-                        .chat_completion(request, context)
-                        .await?;
-                    let tokens = response
-                        .usage
-                        .as_ref()
-                        .map(|usage| u64::from(usage.total_tokens))
-                        .unwrap_or_default();
-                    Ok((response, tokens))
-                }
-            })
+            .execute_with_selected_deployment_capability_typed(
+                &model,
+                &ProviderCapability::ChatCompletion,
+                move |deployment| {
+                    let mut request = core_request.clone();
+                    let context = context.clone();
+                    async move {
+                        request.model = deployment.model.clone();
+                        let response = deployment
+                            .provider
+                            .chat_completion(request, context)
+                            .await?;
+                        let tokens = response
+                            .usage
+                            .as_ref()
+                            .map(|usage| u64::from(usage.total_tokens))
+                            .unwrap_or_default();
+                        Ok((response, tokens))
+                    }
+                },
+            )
             .await
             .map_err(SDKError::from)?;
 
@@ -85,7 +90,10 @@ impl LLMClient {
         let context = RequestContext::new();
         let handle = self.runtime_handle()?;
         let lease = handle
-            .select_deployment_lease_typed(&model)
+            .select_deployment_lease_for_capability_typed(
+                &model,
+                &ProviderCapability::ChatCompletionStream,
+            )
             .map_err(SDKError::from)?;
         let deployment = lease.clone_deployment();
         let mut core_request = core_request;
