@@ -14,85 +14,82 @@ data:
       workers: 4
       timeout: 30
       max_body_size: 10485760
-      
+
     providers:
       - name: "openai-primary"
         provider_type: "openai"
-        enabled: true
-        weight: 100
-        config:
-          api_key: "${OPENAI_API_KEY}"
-          base_url: "https://api.openai.com/v1"
+        api_key: "${OPENAI_API_KEY}"
+        base_url: "https://api.openai.com/v1"
+        weight: 100.0
+        priority: 0
+        timeout: 30
+        max_retries: 3
         models:
-          - "gpt-4"
-          - "gpt-3.5-turbo"
-        health_check:
-          enabled: true
-          interval: 30
-          timeout: 10
-          retries: 3
-          
+          - "gpt-4o"
+          - "gpt-4.1-mini"
+        tags:
+          - "primary"
+        enabled: true
+
       - name: "anthropic-backup"
         provider_type: "anthropic"
-        enabled: true
-        weight: 80
-        config:
-          api_key: "${ANTHROPIC_API_KEY}"
-          base_url: "https://api.anthropic.com"
+        api_key: "${ANTHROPIC_API_KEY}"
+        base_url: "https://api.anthropic.com"
+        weight: 80.0
+        priority: 1
+        timeout: 30
+        max_retries: 3
         models:
-          - "claude-3-opus-20240229"
-          - "claude-3-sonnet-20240229"
-          
+          - "claude-sonnet-4-20250514"
+        tags:
+          - "backup"
+        enabled: true
+
     router:
-      strategy: "least_latency"
-      health_check_interval: 30
-      retry_attempts: 3
-      provider_timeout: 30
-      
-    auth:
-      jwt:
-        enabled: true
-        secret: "${JWT_SECRET}"
-        expiration: 3600
-      api_key:
-        enabled: true
-        header: "Authorization"
-      rbac:
-        enabled: true
-        default_role: "user"
-        
+      strategy: "latency_based"
+      circuit_breaker:
+        failure_threshold: 5
+        recovery_timeout: 60
+        min_requests: 10
+        success_threshold: 3
+      load_balancer:
+        health_check_enabled: true
+
     storage:
       database:
         url: "${DATABASE_URL}"
         max_connections: 10
         connection_timeout: 30
+        enabled: false
+        auto_migrate: false
       redis:
         url: "${REDIS_URL}"
         max_connections: 10
         connection_timeout: 5
-        
-    caching:
-      memory:
+        enabled: false
+
+    auth:
+      enable_jwt: true
+      enable_api_key: true
+      jwt_secret: "${LITELLM_JWT_SECRET}"
+      jwt_expiration: 3600
+      api_key_header: "Authorization"
+      allow_anonymous: false
+      rbac:
         enabled: true
-        max_size: 1000
-        ttl: 300
-      redis:
-        enabled: true
-        ttl: 3600
-        key_prefix: "gateway:"
-        
+        default_role: "user"
+
     monitoring:
       metrics:
         enabled: true
         port: 9090
         path: "/metrics"
-      health:
-        enabled: true
-        path: "/health"
-      logging:
-        level: "info"
-        format: "json"
+        interval_seconds: 15
       tracing:
-        enabled: true
-        endpoint: "${JAEGER_ENDPOINT}"
-        service_name: "rust-litellm-gateway"
+        enabled: false
+        endpoint: null
+        service_name: "litellm-rs"
+        sampling_rate: 0.1
+      health:
+        path: "/health"
+        detailed: true
