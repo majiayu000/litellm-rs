@@ -7,6 +7,7 @@ use crate::core::completion::{
 };
 use crate::core::router::RuntimeHandle;
 use crate::core::types::context::RequestContext;
+use crate::core::types::model::ProviderCapability;
 use futures::stream::StreamExt;
 
 fn reject_provider_overrides(options: &CompletionOptions) -> Result<()> {
@@ -39,23 +40,27 @@ pub(super) async fn complete_with_runtime_handle(
     let chat_request = convert_to_chat_completion_request(model, chat_messages, options)?;
     let context = RequestContext::new();
     let execution = handle
-        .execute_with_selected_deployment_typed(model, move |deployment| {
-            let mut request = chat_request.clone();
-            let context = context.clone();
-            async move {
-                request.model = deployment.model.clone();
-                let response = deployment
-                    .provider
-                    .chat_completion(request, context)
-                    .await?;
-                let tokens = response
-                    .usage
-                    .as_ref()
-                    .map(|usage| u64::from(usage.total_tokens))
-                    .unwrap_or_default();
-                Ok((response, tokens))
-            }
-        })
+        .execute_with_selected_deployment_capability_typed(
+            model,
+            &ProviderCapability::ChatCompletion,
+            move |deployment| {
+                let mut request = chat_request.clone();
+                let context = context.clone();
+                async move {
+                    request.model = deployment.model.clone();
+                    let response = deployment
+                        .provider
+                        .chat_completion(request, context)
+                        .await?;
+                    let tokens = response
+                        .usage
+                        .as_ref()
+                        .map(|usage| u64::from(usage.total_tokens))
+                        .unwrap_or_default();
+                    Ok((response, tokens))
+                }
+            },
+        )
         .await
         .map_err(GatewayError::from)?;
 
@@ -74,7 +79,10 @@ pub(super) async fn complete_stream_with_runtime_handle(
     chat_request.stream = true;
     let context = RequestContext::new();
     let lease = handle
-        .select_deployment_lease_typed(model)
+        .select_deployment_lease_for_capability_typed(
+            model,
+            &ProviderCapability::ChatCompletionStream,
+        )
         .map_err(GatewayError::from)?;
     let deployment = lease.clone_deployment();
     chat_request.model = deployment.model.clone();
