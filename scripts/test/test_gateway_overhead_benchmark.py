@@ -144,6 +144,8 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertIn("kill -0", runner)
         self.assertIn("source_git_sha", runner)
         self.assertIn("CARGO_PROFILE_RELEASE_", runner)
+        self.assertIn('artifact_tmp="$tmp_dir/artifact.json"', runner)
+        self.assertIn('.statusCodeDistribution | keys == ["200"]', runner)
         self.assertIn("%Y-%m-%dT%H%M%SZ", methodology)
 
     def test_runner_requires_the_exact_oha_release(self) -> None:
@@ -155,6 +157,10 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         result = self.run_preflight(extra_env={"RUSTFLAGS": "-C target-cpu=native"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("build override is not allowed: RUSTFLAGS", result.stderr)
+
+        result = self.run_preflight(extra_env={"CARGO_TARGET_DIR": "/tmp/other-target"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("build override is not allowed: CARGO_TARGET_DIR", result.stderr)
 
     def test_runner_refuses_an_existing_artifact(self) -> None:
         result = self.run_preflight(existing_output=True)

@@ -31,7 +31,7 @@ gateway, runs a 10-second warmup, then measures for 60 seconds at concurrency
 64. It rejects unrecorded Cargo/Rust build overrides and fails if the Git tree
 or HEAD changes, the exact tool version differs, either benchmark port is
 already owned, a spawned service exits, the output artifact exists, or any
-request fails.
+request fails or returns a status other than HTTP 200.
 
 Keep the load generator, gateway, and mock on an otherwise idle machine. Record
 every run rather than selecting the best result. For comparisons, use the same

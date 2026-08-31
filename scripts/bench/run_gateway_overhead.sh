@@ -40,6 +40,7 @@ for variable in \
   CARGO_BUILD_RUSTC_WRAPPER \
   CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
   CARGO_BUILD_TARGET \
+  CARGO_TARGET_DIR \
   CARGO_INCREMENTAL; do
   if [[ ${!variable+x} ]]; then
     echo "build override is not allowed: $variable" >&2
@@ -141,11 +142,12 @@ fi
 tmp_dir=$(mktemp -d)
 mock_pid=""
 gateway_pid=""
-artifact_tmp=""
+artifact_tmp="$tmp_dir/artifact.json"
+artifact_reserved=false
 cleanup() {
   if [[ -n "$gateway_pid" ]]; then kill "$gateway_pid" 2>/dev/null || true; fi
   if [[ -n "$mock_pid" ]]; then kill "$mock_pid" 2>/dev/null || true; fi
-  if [[ -n "$artifact_tmp" ]]; then rm -f "$artifact_tmp"; fi
+  if [[ "$artifact_reserved" == true ]]; then rm -f "$output_path"; fi
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT INT TERM
@@ -192,18 +194,25 @@ oha_args=(
 oha "${oha_args[@]}" \
   -z "${WARMUP_SECONDS}s" \
   http://127.0.0.1:18080/v1/chat/completions >"$tmp_dir/warmup.json"
-jq -e '.summary.successRate == 1 and (.errorDistribution | length == 0)' \
+jq -e '
+  .summary.successRate == 1 and
+  (.errorDistribution | length == 0) and
+  (.statusCodeDistribution | keys == ["200"])
+' \
   "$tmp_dir/warmup.json" >/dev/null
 
 oha "${oha_args[@]}" \
   -z "${DURATION_SECONDS}s" \
   http://127.0.0.1:18080/v1/chat/completions >"$tmp_dir/oha.json"
-jq -e '.summary.successRate == 1 and (.errorDistribution | length == 0)' \
+jq -e '
+  .summary.successRate == 1 and
+  (.errorDistribution | length == 0) and
+  (.statusCodeDistribution | keys == ["200"])
+' \
   "$tmp_dir/oha.json" >/dev/null
 
 artifact_dir=$(dirname "$output_path")
 mkdir -p "$artifact_dir"
-artifact_tmp=$(mktemp "$artifact_dir/.gateway-overhead.XXXXXX")
 jq -n \
   --arg captured_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
   --arg git_sha "$source_git_sha" \
@@ -281,12 +290,21 @@ jq -e '
 ' "$artifact_tmp" >/dev/null
 
 verify_source_unchanged
-if ! ln "$artifact_tmp" "$output_path"; then
+set -o noclobber
+if ! exec 3>"$output_path"; then
+  set +o noclobber
   echo "benchmark artifact already exists: $output_path" >&2
   exit 1
 fi
-rm -f "$artifact_tmp"
-artifact_tmp=""
+set +o noclobber
+artifact_reserved=true
+if ! cat "$artifact_tmp" >&3; then
+  exec 3>&-
+  echo "failed to publish benchmark artifact: $output_path" >&2
+  exit 1
+fi
+exec 3>&-
+artifact_reserved=false
 
 echo "wrote benchmark artifact: $output_path"
 jq '.results' "$output_path"
