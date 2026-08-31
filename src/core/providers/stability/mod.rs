@@ -178,11 +178,12 @@ impl StabilityProvider {
         ))
     }
 
-    fn form_for_request(
+    pub(crate) fn validate_image_generation_request(
         &self,
         request: &ImageGenerationRequest,
         model: &str,
-    ) -> Result<(Form, &'static str), ProviderError> {
+    ) -> Result<&'static str, ProviderError> {
+        self.endpoint_for_model(model)?;
         if request.n.is_some_and(|count| count != 1) {
             return Err(ProviderError::invalid_request(
                 PROVIDER,
@@ -207,20 +208,30 @@ impl StabilityProvider {
                 ));
             }
         };
+        if let Some(size) = request.size.as_deref()
+            && (size != "1024x1024"
+                || !(model == "stable-image-core"
+                    || model == "stable-image-ultra"
+                    || model.starts_with("sd3")))
+        {
+            return Err(ProviderError::invalid_request(
+                PROVIDER,
+                format!("Stability model '{model}' cannot guarantee exact image size '{size}'"),
+            ));
+        }
+        Ok(output_format)
+    }
+
+    fn form_for_request(
+        &self,
+        request: &ImageGenerationRequest,
+        model: &str,
+    ) -> Result<(Form, &'static str), ProviderError> {
+        let output_format = self.validate_image_generation_request(request, model)?;
         let mut form = Form::new()
             .text("prompt", request.prompt.clone())
             .text("output_format", output_format.to_string());
-        if let Some(size) = request.size.as_deref() {
-            if size != "1024x1024"
-                || !(model == "stable-image-core"
-                    || model == "stable-image-ultra"
-                    || model.starts_with("sd3"))
-            {
-                return Err(ProviderError::invalid_request(
-                    PROVIDER,
-                    format!("Stability model '{model}' cannot guarantee exact image size '{size}'"),
-                ));
-            }
+        if request.size.is_some() {
             form = form.text("aspect_ratio", "1:1".to_string());
         }
         if model.starts_with("sd3") {

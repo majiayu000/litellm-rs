@@ -309,6 +309,84 @@ async fn masked_bfl_edit_selects_exact_compatible_deployment_without_native_io()
 
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
+async fn incompatible_native_generation_selects_exact_compatible_without_native_io() {
+    let native = MockImageServer::start().await;
+    let proxy = MockImageServer::start().await;
+    let native_base = native.base_url.trim_end_matches("/v1");
+    let state = build_route_policy_test_state_with_pricing(
+        vec![
+            image_provider(
+                "stability-native",
+                "stability",
+                native_base,
+                vec!["stable-image-core".to_string()],
+            ),
+            openai_image_provider_with_mapping(
+                "exact-proxy",
+                &proxy.base_url,
+                "stable-image-core",
+                "gpt-image-1-mini",
+            ),
+        ],
+        Some(HashMap::from([
+            (
+                "stable-image-core".to_string(),
+                flat_image_model_info_for_provider("stability", 0.06),
+            ),
+            (
+                "gpt-image-1-mini".to_string(),
+                flat_image_model_info_for_provider("openai", 0.01),
+            ),
+        ])),
+    )
+    .await;
+    let mut runtime_config = state.config().as_ref().clone();
+    runtime_config.gateway.pricing.unpriced_model_policy =
+        litellm_rs::config::models::gateway::UnpricedModelPolicy::AllowUnpriced;
+    runtime_config
+        .gateway
+        .pricing
+        .unpriced_fallback_cost_per_1k_tokens = Some(0.01);
+    state.config.store(runtime_config);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/images/generations")
+            .set_json(json!({
+                "model": "stable-image-core",
+                "prompt": "a glass city",
+                "quality": "hd"
+            }))
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let response_body = test::read_body(response).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "exact compatible generation failed: {}",
+        String::from_utf8_lossy(&response_body)
+    );
+    assert!(
+        native.paths().is_empty(),
+        "incompatible Stability deployment must not receive I/O"
+    );
+    assert_eq!(proxy.paths(), vec!["/v1/images/generations".to_string()]);
+    native.stop().await;
+    proxy.stop().await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
 async fn native_image_edit_rejects_duplicate_masks_before_provider_io() {
     let native = MockImageServer::start().await;
     let native_base = native.base_url.trim_end_matches("/v1");

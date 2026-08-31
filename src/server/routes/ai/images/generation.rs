@@ -1,12 +1,39 @@
 use crate::core::models::openai::{ImageGenerationRequest, ImageGenerationResponse};
 use crate::core::pricing_service::PricingUsage;
+use crate::core::providers::Provider;
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageGenerationRequest as CoreImageRequest;
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
-use super::super::budgeted::{ApiKeyBudgetPolicy, run_unary};
+use super::super::budgeted::ApiKeyBudgetPolicy;
+
+#[cfg(feature = "providers-extended")]
+fn deployment_supports_request(
+    provider: &Provider,
+    selected_model: &str,
+    request: &CoreImageRequest,
+) -> bool {
+    match provider {
+        Provider::Stability(provider) => provider
+            .validate_image_generation_request(request, selected_model)
+            .is_ok(),
+        Provider::BlackForestLabs(provider) => provider
+            .validate_image_generation_request(request, selected_model)
+            .is_ok(),
+        _ => true,
+    }
+}
+
+#[cfg(not(feature = "providers-extended"))]
+fn deployment_supports_request(
+    _provider: &Provider,
+    _selected_model: &str,
+    _request: &CoreImageRequest,
+) -> bool {
+    true
+}
 
 /// Handle image generation with app state (UnifiedRouter only)
 pub async fn handle_image_generation_with_state(
@@ -40,10 +67,18 @@ pub async fn handle_image_generation_with_state(
     let key_manager = budgeted.key_manager();
     let pricing_service = budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
-    let core_response = run_unary(
+    let request_for_selection = core_request.clone();
+    let core_response = super::super::execution::execute_with_selected_deployment_matching(
         &state.unified_router,
         &requested_model,
         ProviderCapability::ImageGeneration,
+        move |deployment| {
+            deployment_supports_request(
+                &deployment.provider,
+                &deployment.model,
+                &request_for_selection,
+            )
+        },
         move |provider, selected_model, deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();

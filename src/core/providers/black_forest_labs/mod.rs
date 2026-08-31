@@ -295,6 +295,26 @@ impl BflProvider {
         &self,
         request: ImageGenerationRequest,
     ) -> Result<ImageGenerationResponse, ProviderError> {
+        let model = request.model.as_deref().unwrap_or("flux-pro-1.1");
+        self.validate_image_generation_request(&request, model)?;
+        let mut native = BflImageRequest::new(model, request.prompt);
+        if let Some(size) = request.size {
+            insert_size_parameters(model, &size, &mut native.parameters)?;
+        }
+        self.to_image_response(
+            self.generate_native(native, &CancellationToken::new())
+                .await?,
+        )
+    }
+
+    pub(crate) fn validate_image_generation_request(
+        &self,
+        request: &ImageGenerationRequest,
+        model: &str,
+    ) -> Result<(), ProviderError> {
+        if !MODELS.contains(&model) {
+            return Err(ProviderError::model_not_found(PROVIDER, model));
+        }
         if request.n.is_some_and(|count| count != 1) {
             return Err(ProviderError::invalid_request(
                 PROVIDER,
@@ -313,15 +333,10 @@ impl BflProvider {
                 "BFL native results are returned as signed URLs",
             ));
         }
-        let model = request.model.as_deref().unwrap_or("flux-pro-1.1");
-        let mut native = BflImageRequest::new(model, request.prompt);
-        if let Some(size) = request.size {
-            insert_size_parameters(model, &size, &mut native.parameters)?;
+        if let Some(size) = request.size.as_deref() {
+            insert_size_parameters(model, size, &mut Map::new())?;
         }
-        self.to_image_response(
-            self.generate_native(native, &CancellationToken::new())
-                .await?,
-        )
+        Ok(())
     }
 
     async fn unified_edit(
