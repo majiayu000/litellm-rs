@@ -33,8 +33,8 @@ spec:
         fsGroup: 1001
       containers:
       - name: gateway
-        # Replace `latest` with an immutable release tag or digest in production.
-        image: ghcr.io/majiayu000/litellm-rs:latest
+        # Replace with the immutable image promoted by your deployment pipeline.
+        image: litellm-rs:latest
         imagePullPolicy: IfNotPresent
         ports:
         - name: http

@@ -43,6 +43,6 @@ fn kubernetes_manifests_match_runtime_contract() {
     );
     assert_eq!(
         deployment.pointer("/spec/template/spec/containers/0/image"),
-        Some(&serde_json::json!("ghcr.io/majiayu000/litellm-rs:latest"))
+        Some(&serde_json::json!("litellm-rs:latest"))
     );
 }
