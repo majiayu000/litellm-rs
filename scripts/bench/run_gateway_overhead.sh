@@ -56,6 +56,27 @@ while IFS='=' read -r variable _; do
   esac
 done < <(env)
 
+cargo_home_dir=${CARGO_HOME:-${HOME:-}/.cargo}
+for cargo_config in "$cargo_home_dir/config.toml" "$cargo_home_dir/config"; do
+  if [[ -f "$cargo_config" ]]; then
+    echo "external Cargo configuration is not allowed: $cargo_config" >&2
+    exit 1
+  fi
+done
+ancestor_dir=$(dirname "$repo_root")
+while :; do
+  for cargo_config in "$ancestor_dir/.cargo/config.toml" "$ancestor_dir/.cargo/config"; do
+    if [[ -f "$cargo_config" ]]; then
+      echo "external Cargo configuration is not allowed: $cargo_config" >&2
+      exit 1
+    fi
+  done
+  if [[ "$ancestor_dir" == / ]]; then
+    break
+  fi
+  ancestor_dir=$(dirname "$ancestor_dir")
+done
+
 if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
   echo "benchmark evidence requires a clean Git worktree" >&2
   exit 1
@@ -102,7 +123,7 @@ wait_for_child_service() {
       sed -n '1,160p' "$log_path" >&2
       return 1
     fi
-    if curl --fail --silent "$url" >/dev/null; then
+    if curl --fail --silent --connect-timeout 0.2 --max-time 0.5 "$url" >/dev/null; then
       if ! kill -0 "$pid" 2>/dev/null; then
         echo "$label process exited during its readiness check; log follows" >&2
         sed -n '1,160p' "$log_path" >&2
@@ -125,7 +146,17 @@ case "$(uname -s)" in
     memory_bytes=$(sysctl -n hw.memsize)
     ;;
   Linux)
-    cpu_model=$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')
+    cpu_model=""
+    if command -v lscpu >/dev/null 2>&1; then
+      cpu_model=$(lscpu 2>/dev/null | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}' || true)
+    fi
+    if [[ -z "$cpu_model" && -r /proc/cpuinfo ]]; then
+      cpu_model=$(awk -F: '
+        tolower($1) ~ /model name|hardware/ {
+          sub(/^[[:space:]]+/, "", $2); print $2; exit
+        }
+      ' /proc/cpuinfo)
+    fi
     logical_cpus=$(getconf _NPROCESSORS_ONLN)
     memory_bytes=$(awk '/MemTotal/ {print $2 * 1024; exit}' /proc/meminfo)
     ;;
@@ -176,6 +207,8 @@ wait_for_child_service \
 
 response_file="$tmp_dir/response.json"
 curl --fail --silent \
+  --connect-timeout 1 \
+  --max-time 5 \
   -H 'content-type: application/json' \
   --data-binary "@$request_file" \
   http://127.0.0.1:18080/v1/chat/completions >"$response_file"

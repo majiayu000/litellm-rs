@@ -37,6 +37,7 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         oha_version: str = "oha 1.16.0",
         extra_env: dict[str, str] | None = None,
         existing_output: bool = False,
+        external_cargo_config: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             temp_dir = Path(directory)
@@ -53,6 +54,14 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
                 output.write_text("do not replace", encoding="utf-8")
             environment = os.environ.copy()
             environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
+            if external_cargo_config:
+                cargo_home = temp_dir / "cargo-home"
+                cargo_home.mkdir()
+                (cargo_home / "config.toml").write_text(
+                    '[build]\nrustflags = ["-C", "target-cpu=native"]\n',
+                    encoding="utf-8",
+                )
+                environment["CARGO_HOME"] = str(cargo_home)
             if extra_env:
                 environment.update(extra_env)
             return subprocess.run(
@@ -146,6 +155,8 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertIn("CARGO_PROFILE_RELEASE_", runner)
         self.assertIn('artifact_tmp="$tmp_dir/artifact.json"', runner)
         self.assertIn('.statusCodeDistribution | keys == ["200"]', runner)
+        self.assertIn("--max-time", runner)
+        self.assertIn("/proc/cpuinfo", runner)
         self.assertIn("%Y-%m-%dT%H%M%SZ", methodology)
 
     def test_runner_requires_the_exact_oha_release(self) -> None:
@@ -161,6 +172,10 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         result = self.run_preflight(extra_env={"CARGO_TARGET_DIR": "/tmp/other-target"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("build override is not allowed: CARGO_TARGET_DIR", result.stderr)
+
+        result = self.run_preflight(external_cargo_config=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("external Cargo configuration is not allowed", result.stderr)
 
     def test_runner_refuses_an_existing_artifact(self) -> None:
         result = self.run_preflight(existing_output=True)

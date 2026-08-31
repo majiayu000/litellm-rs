@@ -28,10 +28,12 @@ scripts/bench/run_gateway_overhead.sh \
 The script builds `gateway` with the recorded `build_flags` of `--release --bin
 gateway`, validates the benchmark config, starts the deterministic mock and
 gateway, runs a 10-second warmup, then measures for 60 seconds at concurrency
-64. It rejects unrecorded Cargo/Rust build overrides and fails if the Git tree
-or HEAD changes, the exact tool version differs, either benchmark port is
-already owned, a spawned service exits, the output artifact exists, or any
-request fails or returns a status other than HTTP 200.
+64. It rejects unrecorded Cargo/Rust environment overrides and Cargo
+configuration outside the checked-out repository. It fails if the Git tree or
+HEAD changes, the exact tool version differs, either benchmark port is already
+owned, a spawned service exits or misses its bounded readiness deadline, the
+output artifact exists, or any request fails or returns a status other than
+HTTP 200.
 
 Keep the load generator, gateway, and mock on an otherwise idle machine. Record
 every run rather than selecting the best result. For comparisons, use the same
