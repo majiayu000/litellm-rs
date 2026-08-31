@@ -4,6 +4,8 @@
 //! Canonical server-side models live under `crate::config::models::*`.
 
 pub mod builder;
+#[cfg(test)]
+mod kubernetes_tests;
 pub mod models;
 pub mod validation;
 
