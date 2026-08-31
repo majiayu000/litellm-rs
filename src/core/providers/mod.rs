@@ -8,8 +8,7 @@
 pub mod base;
 // Provider modules - alphabetically ordered
 // Tier 1 providers removed in favor of registry/catalog.rs are commented with their tier.
-// aiml_api: Tier 1 -> registry/catalog.rs
-// aleph_alpha: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: aiml_api, aleph_alpha.
 #[cfg(feature = "providers-extended")]
 #[cfg_attr(
     not(test),
@@ -22,15 +21,13 @@ pub mod anthropic;
 pub mod azure;
 #[cfg(feature = "providers-extra")]
 pub mod azure_ai;
-// baichuan: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: baichuan.
 pub mod bedrock;
-// bytez: Tier 1 -> registry/catalog.rs
-// cerebras: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: bytez, cerebras.
 pub mod cloudflare;
 #[cfg(feature = "providers-extended")]
 pub mod cohere;
-// comet_api: Tier 1 -> registry/catalog.rs
-// compactifai: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: comet_api, compactifai.
 #[cfg(feature = "providers-extended")]
 #[cfg_attr(
     not(test),
@@ -40,16 +37,10 @@ pub mod cohere;
     )
 )]
 pub mod custom_api;
-// dashscope: Tier 1 -> registry/catalog.rs
-// deepinfra: Tier 1 -> registry/catalog.rs
-// deepseek: Tier 1 -> registry/catalog.rs
-// docker_model_runner: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: dashscope, deepinfra, deepseek, docker_model_runner.
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
-// featherless: Tier 1 -> registry/catalog.rs
-// fireworks: Tier 1 -> registry/catalog.rs
-// friendliai: Tier 1 -> registry/catalog.rs
-// galadriel: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: featherless, fireworks, friendliai, galadriel.
 #[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
@@ -58,66 +49,44 @@ pub mod github;
 pub mod github_copilot;
 pub(crate) mod google_error;
 pub(crate) mod google_tool_loop;
-// groq: Tier 1 -> registry/catalog.rs
-// heroku: Tier 1 -> registry/catalog.rs
-// hosted_vllm: Tier 1 -> registry/catalog.rs
-// hyperbolic: Tier 1 -> registry/catalog.rs
-// infinity: Tier 1 -> registry/catalog.rs
-// lambda_ai: Tier 1 -> registry/catalog.rs
-// lemonade: Tier 1 -> registry/catalog.rs
-// linkup: Tier 1 -> registry/catalog.rs
-// llamafile: Tier 1 -> registry/catalog.rs
-// lm_studio: Tier 1 -> registry/catalog.rs
-// maritalk: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: groq, heroku, hosted_vllm, hyperbolic, infinity, lambda_ai,
+// lemonade, linkup, llamafile, lm_studio, maritalk.
 #[cfg(feature = "providers-extra")]
 pub mod meta_llama;
 // minimax: Tier 1 -> registry/catalog.rs
 pub mod mistral;
-// moonshot: Tier 1 -> registry/catalog.rs
-// nanogpt: Tier 1 -> registry/catalog.rs
-// nebius: Tier 1 -> registry/catalog.rs
-// novita: Tier 1 -> registry/catalog.rs
-// nscale: Tier 1 -> registry/catalog.rs
-// nvidia_nim: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: moonshot, nanogpt, nebius, novita, nscale, nvidia_nim.
 #[cfg(feature = "providers-extended")]
 pub mod ollama;
 // oobabooga: Tier 1 -> registry/catalog.rs
 pub mod openai;
 pub mod openai_like;
-// openrouter: Tier 1 -> registry/catalog.rs
-// ovhcloud: Tier 1 -> registry/catalog.rs
-// perplexity: Tier 1 -> registry/catalog.rs
-// poe: Tier 1 -> registry/catalog.rs
-// qwen: Tier 1 -> registry/catalog.rs
+// Catalog Tier 1: openrouter, ovhcloud, perplexity, poe, qwen.
+#[cfg(feature = "providers-extended")]
+#[path = "black_forest_labs/mod.rs"]
+pub mod bfl;
+#[cfg(feature = "providers-extended")]
+pub mod media;
 #[cfg(feature = "providers-extended")]
 pub mod replicate;
-// sambanova: Tier 1 -> registry/catalog.rs
-// siliconflow: Tier 1 -> registry/catalog.rs
-// together: Tier 1 -> registry/catalog.rs
+#[cfg(feature = "providers-extended")]
+pub mod stability;
+#[cfg(feature = "runway-media")]
+pub use media::runway;
+// Catalog Tier 1: siliconflow, together.
 #[cfg(feature = "providers-extra")]
 pub mod v0;
 #[cfg(feature = "providers-extra")]
 pub mod vertex_ai;
 pub mod voyage;
-// vllm: Tier 1 -> registry/catalog.rs
-// volcengine: Tier 1 -> registry/catalog.rs
-// wandb: Tier 1 -> registry/catalog.rs
-// xai: Tier 1 -> registry/catalog.rs
-// xiaomi_mimo: Tier 1 -> registry/catalog.rs
-// xinference: Tier 1 -> registry/catalog.rs
-// yi: Tier 1 -> registry/catalog.rs
-// zhipu: Tier 1 -> registry/catalog.rs
-// Shared utilities and architecture
+// Catalog Tier 1: vllm, volcengine, wandb, xai, xiaomi_mimo, xinference, yi, zhipu.
 pub mod macros; // Macros for reducing boilerplate
+pub mod provider_type;
 pub mod shared; // Shared utilities for all providers // Compile-time capability verification
 pub mod thinking; // Thinking/reasoning provider trait (modular)
-// Provider type enumeration (extracted from this module)
-pub mod provider_type;
 pub use provider_type::ProviderType;
-// Factory: create_provider, from_config_async, config builders
 pub mod factory;
 pub use factory::{create_provider, is_provider_selector_supported};
-// Registry and unified provider
 mod chat_continuation;
 pub mod contextual_error;
 pub mod failure;
@@ -125,16 +94,16 @@ pub mod provider_error_conversions;
 pub mod provider_registry;
 pub mod registry; // Data-driven Tier 1 provider catalog
 pub mod unified_provider;
-// Test modules (only compiled during tests)
 #[cfg(test)]
 mod unified_provider_tests;
-// Export main types
 pub use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::responses::{
     ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse,
 };
 use crate::core::types::{
-    chat::ChatRequest, embedding::EmbeddingRequest, image::ImageGenerationRequest,
+    chat::ChatRequest,
+    embedding::EmbeddingRequest,
+    image::{ImageEditRequest, ImageGenerationRequest},
 };
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
 pub(crate) use chat_continuation::{
@@ -304,6 +273,10 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(p) => p.$method($($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
             Provider::Voyage(p) => p.$method($($arg),*),
         }
@@ -336,6 +309,10 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(p) => LLMProvider::$method(p.as_ref(), $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Voyage(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
@@ -368,6 +345,10 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(p) => LLMProvider::$method(p, $($arg),*),
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(p) => LLMProvider::$method(p.as_ref(), $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Voyage(p) => LLMProvider::$method(p, $($arg),*),
         }
@@ -400,6 +381,10 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(p) => LLMProvider::$method(p).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(p) => LLMProvider::$method(p.as_ref()).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
             Provider::Voyage(p) => LLMProvider::$method(p).await,
         }
@@ -459,6 +444,10 @@ pub enum Provider {
     Cohere(cohere::CohereProvider),
     #[cfg(feature = "providers-extended")]
     Replicate(replicate::ReplicateProvider),
+    #[cfg(feature = "providers-extended")]
+    Stability(stability::StabilityProvider),
+    #[cfg(feature = "providers-extended")]
+    BlackForestLabs(Box<bfl::BflProvider>),
     /// Tier 1: data-driven OpenAI-compatible providers (groq, together, fireworks, etc.)
     OpenAILike(openai_like::OpenAILikeProvider),
     Voyage(voyage::VoyageProvider),
@@ -598,6 +587,10 @@ impl Provider {
             Provider::Cohere(_) => "cohere",
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => "replicate",
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(_) => "stability",
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(_) => "black_forest_labs",
             Provider::OpenAILike(p) => {
                 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
                 p.name()
@@ -634,6 +627,10 @@ impl Provider {
             Provider::Cohere(_) => ProviderType::Cohere,
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => ProviderType::Replicate,
+            #[cfg(feature = "providers-extended")]
+            Provider::Stability(_) => ProviderType::Stability,
+            #[cfg(feature = "providers-extended")]
+            Provider::BlackForestLabs(_) => ProviderType::BlackForestLabs,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
             Provider::Voyage(_) => ProviderType::Voyage,
         }
@@ -769,10 +766,7 @@ impl Provider {
         dispatch_provider!(async_err, self, embeddings, request, context)
     }
 
-    /// Create images.
-    ///
-    /// Route selection must confirm `ProviderCapability::ImageGeneration`
-    /// before calling this optional dispatch method.
+    /// Create images through an image-capable provider.
     pub async fn create_images(
         &self,
         request: ImageGenerationRequest,
@@ -780,6 +774,16 @@ impl Provider {
     ) -> Result<ImageGenerationResponse, ProviderError> {
         use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
         dispatch_provider!(async_err, self, image_generation, request, context)
+    }
+
+    /// Edit images through an image-edit-capable provider.
+    pub async fn edit_image(
+        &self,
+        request: ImageEditRequest,
+        context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+        dispatch_provider!(async_err, self, image_edit, request, context)
     }
 
     /// Get model information by ID

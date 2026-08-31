@@ -189,12 +189,16 @@ into the enum, dispatch, registry metadata, and factory.
 | `azure` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / ✅ | passthrough / passthrough | SDK exposes Azure embeddings; SDK chat is not implemented. |
 | `azure_ai` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / – | `providers-extra` / `providers-extra` | `completion()` supports `azure_ai/` and `azure-ai/` routes when the native feature is enabled. |
 | `bedrock` | ✅ / ✅ | ✅ / – | – / – / – | – / – | SDK Bedrock and public `completion()` routing are not implemented. |
-| `mistral`, `cloudflare`, `cohere`, `voyage`, `vertex_ai`, `gemini`, `fal_ai`, `replicate`, `ollama` | provider-specific | provider-specific | – / – / – | – / – | See `support_matrix.rs` for feature-gated HTTP support. Ollama retains its existing SDK stream-only path. |
+| `mistral`, `cloudflare`, `cohere`, `voyage`, `vertex_ai`, `gemini`, `fal_ai`, `replicate`, `stability`, `black_forest_labs`, `ollama` | provider-specific | provider-specific | – / – / – | – / – | See `support_matrix.rs` for feature-gated HTTP support. Ollama retains its existing SDK stream-only path. |
 | `google` / SDK `Google` | – / – | – / – | – / – / – | – / – | Google/Gemini SDK chat is intentionally unsupported until a real adapter exists. |
 | Default catalog dynamic routes: `openrouter`, `deepseek`, `moonshot`, `minimax`, `zhipu`, `zai`, `together_ai`, `fireworks_ai`, `aiml`, `groq`, `xiaomi_mimo`, `xai` | passthrough / passthrough | – / – | – / – / – | ✅ / ✅ | OpenAI-compatible routes wired into default `completion()` routing. |
 | Other Tier 1 catalog providers | passthrough / passthrough | – / – | – / – / – | – / – | HTTP gateway chat/stream only unless routed through explicit OpenAI-compatible config. |
 | SDK `Custom` | – / – | – / – | – / – / ✅ | – / – | SDK custom providers support embeddings when `base_url` is configured. |
 | SDK `Ollama` | – / – | – / – | – / ✅ / – | – / – | SDK streaming uses the OpenAI-compatible stream parser; SDK chat is not implemented. |
+
+The `runway-media` feature exposes a library-only Runway task contract for
+text/image-to-video submit, query, cancel, and result polling. It does not mount
+a gateway video route.
 
 ### Tier 2 — code-based providers
 
@@ -217,6 +221,8 @@ into the enum, dispatch, registry metadata, and factory.
 | Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
 | Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | fal.ai (`fal_ai`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native Fal AI image-generation endpoints; chat and streaming are explicitly unsupported. |
+| Stability AI (`stability`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native v2beta multipart image generation and editing endpoints. |
+| Black Forest Labs (`black_forest_labs`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native asynchronous submit/poll image generation and Kontext editing. |
 | Replicate (`replicate`) | native factory (`providers-extended`) | ✅ | ✅ | – | ✅ | – | Uses native Replicate prediction lifecycle handling for chat, streaming, and image generation; explicitly unsupported without `providers-extended`. |
 | Ollama (`ollama`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native `/api/chat` NDJSON streaming, `/api/embed`, and model tags/show endpoints. Localhost defaults to private-network endpoint policy; explicit endpoints keep their configured policy. |
 | GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |

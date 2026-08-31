@@ -77,6 +77,28 @@ where
     F: Fn(Provider, String, String) -> Fut + Clone,
     Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
 {
+    execute_with_selected_deployment_matching(
+        router,
+        requested_model,
+        capability,
+        |_| true,
+        operation,
+    )
+    .await
+}
+
+pub(super) async fn execute_with_selected_deployment_matching<T, F, Fut, P>(
+    router: &UnifiedRouter,
+    requested_model: &str,
+    capability: ProviderCapability,
+    is_candidate: P,
+    operation: F,
+) -> Result<T, GatewayError>
+where
+    F: Fn(Provider, String, String) -> Fut + Clone,
+    Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+    P: Fn(&Deployment) -> bool,
+{
     let max_attempts = router.config().num_retries + 1;
     let mut attempt = 1;
     // Selection failures control retry timing but must not replace the most
@@ -100,6 +122,7 @@ where
             |deployment| {
                 !excluded_budget_deployments.contains(deployment.id.as_str())
                     && !tried_deployments.contains(deployment.id.as_str())
+                    && is_candidate(deployment)
             },
         ) {
             Ok(lease) => lease,
@@ -107,7 +130,10 @@ where
                 match router.select_deployment_lease_for_capability_matching(
                     requested_model,
                     &capability,
-                    |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
+                    |deployment| {
+                        !excluded_budget_deployments.contains(deployment.id.as_str())
+                            && is_candidate(deployment)
+                    },
                 ) {
                     Ok(lease) => {
                         // Opening the full pool starts a new sweep. Forget the
