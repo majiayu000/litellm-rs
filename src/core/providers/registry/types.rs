@@ -257,6 +257,20 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         false,
     ),
     entry(
+        ProviderType::Stability,
+        "stability",
+        &["stability_ai", "stability-ai"],
+        providers_extended_native_dispatch_kind(),
+        false,
+    ),
+    entry(
+        ProviderType::BlackForestLabs,
+        "black_forest_labs",
+        &["bfl", "black-forest-labs"],
+        providers_extended_native_dispatch_kind(),
+        false,
+    ),
+    entry(
         ProviderType::AmazonNova,
         "amazon_nova",
         &["amazon-nova", "nova"],
@@ -537,6 +551,10 @@ mod tests {
             #[cfg(feature = "providers-extended")]
             ProviderType::FalAI,
             #[cfg(feature = "providers-extended")]
+            ProviderType::Stability,
+            #[cfg(feature = "providers-extended")]
+            ProviderType::BlackForestLabs,
+            #[cfg(feature = "providers-extended")]
             ProviderType::Replicate,
             #[cfg(feature = "providers-extended")]
             ProviderType::Gemini,
@@ -586,6 +604,14 @@ mod tests {
         );
         assert_eq!(
             dispatch_kind_for(&ProviderType::FalAI),
+            providers_extended_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::Stability),
+            providers_extended_native_dispatch_kind()
+        );
+        assert_eq!(
+            dispatch_kind_for(&ProviderType::BlackForestLabs),
             providers_extended_native_dispatch_kind()
         );
         assert_eq!(

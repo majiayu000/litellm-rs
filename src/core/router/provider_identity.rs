@@ -49,6 +49,13 @@ impl RoutingSnapshot {
 }
 
 impl Router {
+    pub(crate) fn configured_provider_name(&self, deployment_id: &str) -> Option<String> {
+        self.load_routing_snapshot()
+            .provider_names
+            .get(deployment_id)
+            .cloned()
+    }
+
     /// Return one consistent snapshot of deployments created for a configured
     /// provider name. Ad-hoc deployments retain their provider's canonical name.
     pub(crate) fn deployments_for_provider(&self, provider_name: &str) -> Vec<Arc<Deployment>> {

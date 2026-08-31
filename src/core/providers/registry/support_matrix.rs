@@ -179,6 +179,16 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         "Image-generation provider behind providers-extended.",
     ),
     row(
+        "stability",
+        [U, U, U, EXTENDED, U, U, U, U, U],
+        "Native image generation/edit provider behind providers-extended.",
+    ),
+    row(
+        "black_forest_labs",
+        [U, U, U, EXTENDED, U, U, U, U, U],
+        "Native asynchronous image generation/edit provider behind providers-extended.",
+    ),
+    row(
         "replicate",
         [EXTENDED, EXTENDED, U, EXTENDED, U, U, U, U, U],
         "Prediction lifecycle provider behind providers-extended.",
