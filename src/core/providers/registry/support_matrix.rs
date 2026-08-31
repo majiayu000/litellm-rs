@@ -13,6 +13,7 @@ pub enum ProviderRouteSurface {
     HttpChat,
     HttpChatStream,
     HttpEmbeddings,
+    HttpRerank,
     HttpImageGeneration,
     SdkChat,
     SdkChatStream,
@@ -58,6 +59,7 @@ pub struct ProviderSurfaceSupport {
     pub http_chat: SurfaceSupport,
     pub http_chat_stream: SurfaceSupport,
     pub http_embeddings: SurfaceSupport,
+    pub http_rerank: SurfaceSupport,
     pub http_image_generation: SurfaceSupport,
     pub sdk_chat: SurfaceSupport,
     pub sdk_chat_stream: SurfaceSupport,
@@ -73,6 +75,7 @@ impl ProviderSurfaceSupport {
             ProviderRouteSurface::HttpChat => self.http_chat,
             ProviderRouteSurface::HttpChatStream => self.http_chat_stream,
             ProviderRouteSurface::HttpEmbeddings => self.http_embeddings,
+            ProviderRouteSurface::HttpRerank => self.http_rerank,
             ProviderRouteSurface::HttpImageGeneration => self.http_image_generation,
             ProviderRouteSurface::SdkChat => self.sdk_chat,
             ProviderRouteSurface::SdkChatStream => self.sdk_chat_stream,
@@ -124,6 +127,33 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         "Core Bedrock runtime supports chat, stream, and embeddings; public completion() routing is not registered.",
     ),
     row(
+        "databricks",
+        [P, P, U, U, U, U, U, U, U],
+        "Databricks Model Serving OpenAI-compatible chat and SSE.",
+    ),
+    row(
+        "snowflake",
+        [P, P, U, U, U, U, U, U, U],
+        "Snowflake Cortex OpenAI-compatible chat and SSE.",
+    ),
+    rerank_row(
+        "oci",
+        [P, P, S, U, U, U, U, U, U],
+        S,
+        "OCI compatible mode provides chat/SSE; IAM native mode provides embeddings and rerank.",
+    ),
+    rerank_row(
+        "watsonx",
+        [S, U, S, U, U, U, U, U, U],
+        S,
+        "watsonx native chat, embeddings, and rerank; streaming is not implemented.",
+    ),
+    row(
+        "sagemaker",
+        [S, U, U, U, U, U, U, U, U],
+        "SageMaker InvokeEndpoint chat requires an explicit supported payload transformer.",
+    ),
+    row(
         "mistral",
         [S, S, P, U, U, U, U, U, U],
         "Native HTTP provider; SDK/completion adapters are not implemented.",
@@ -143,14 +173,16 @@ pub static PROVIDER_SURFACE_MATRIX: &[ProviderSurfaceSupport] = &[
         [U, U, U, U, U, U, U, U, U],
         "Native audio routes; this matrix covers chat, embeddings, and images.",
     ),
-    row(
+    rerank_row(
         "cohere",
         [EXTENDED, EXTENDED, EXTENDED, U, U, U, U, U, U],
+        EXTENDED,
         "Native provider is behind providers-extended.",
     ),
-    row(
+    rerank_row(
         "voyage",
         [U, U, S, U, U, U, U, U, U],
+        S,
         "Native Voyage embeddings plus the shared HTTP rerank route.",
     ),
     row(
@@ -355,6 +387,7 @@ const fn row(
         http_chat: support[0],
         http_chat_stream: support[1],
         http_embeddings: support[2],
+        http_rerank: U,
         http_image_generation: support[3],
         sdk_chat: support[4],
         sdk_chat_stream: support[5],
@@ -363,4 +396,15 @@ const fn row(
         completion_chat_stream: support[8],
         notes,
     }
+}
+
+const fn rerank_row(
+    selector: &'static str,
+    support: [SurfaceSupport; 9],
+    http_rerank: SurfaceSupport,
+    notes: &'static str,
+) -> ProviderSurfaceSupport {
+    let mut result = row(selector, support, notes);
+    result.http_rerank = http_rerank;
+    result
 }

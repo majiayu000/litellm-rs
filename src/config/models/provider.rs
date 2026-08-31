@@ -71,6 +71,16 @@ pub struct ProviderConfig {
 
 impl std::fmt::Debug for ProviderConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut settings = serde_json::Value::Object(
+            self.settings
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        );
+        crate::core::observability::redact_json_value(
+            &mut settings,
+            &crate::core::observability::RedactionConfig::default(),
+        );
         f.debug_struct("ProviderConfig")
             .field("name", &self.name)
             .field("provider_type", &self.provider_type)
@@ -89,7 +99,7 @@ impl std::fmt::Debug for ProviderConfig {
             .field("max_retries", &self.max_retries)
             .field("retry", &self.retry)
             .field("health_check", &self.health_check)
-            .field("settings", &self.settings)
+            .field("settings", &settings)
             .field("models", &self.models)
             .field("tags", &self.tags)
             .field("enabled", &self.enabled)
@@ -432,6 +442,35 @@ mod tests {
         assert_eq!(config.priority, 0);
         assert_eq!(config.rpm, 1000);
         assert!(config.enabled);
+    }
+
+    #[test]
+    fn provider_config_debug_redacts_nested_credentials() {
+        let mut config = ProviderConfig::default();
+        config
+            .settings
+            .insert("aws_secret_access_key".to_string(), "secret-value".into());
+        config
+            .settings
+            .insert("aws_session_token".to_string(), "session-value".into());
+        config
+            .settings
+            .insert("private_key_pem".to_string(), "private-pem-value".into());
+        config.settings.insert(
+            "auth".to_string(),
+            serde_json::json!({"token": "nested-token-value"}),
+        );
+
+        let debug = format!("{config:?}");
+        for secret in [
+            "secret-value",
+            "session-value",
+            "private-pem-value",
+            "nested-token-value",
+        ] {
+            assert!(!debug.contains(secret), "Debug leaked {secret}");
+        }
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

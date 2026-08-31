@@ -5,14 +5,13 @@ use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::rerank::{
     CohereRerankProvider, JinaRerankProvider, RerankProvider, RerankRequest, RerankResponse,
-    RerankService, VoyageRerankProvider,
+    RerankService,
 };
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{error, info};
 
 use super::{
@@ -74,14 +73,11 @@ async fn handle_rerank_with_state(
 ) -> Result<RerankResponse, GatewayError> {
     let requested_model = state.unified_router.resolve_model_name(&request.model);
     request.model = requested_model.clone();
-    ensure_rerank_provider_candidate_configured(
-        state.config().gateway.providers.as_slice(),
-        &requested_model,
-    )?;
-    let router_models = rerank_router_models(
-        state.config().gateway.providers.as_slice(),
-        &requested_model,
-    );
+    let config = state.config();
+    let rerank_providers = config.gateway.providers.clone();
+    ensure_rerank_provider_candidate_configured(&rerank_providers, &requested_model)?;
+    let router_models = rerank_router_models(&rerank_providers, &requested_model);
+    drop(config);
 
     let mut last_router_error = None;
     let budgeted = state.budgeted.clone();
@@ -100,6 +96,7 @@ async fn handle_rerank_with_state(
                 let key_manager = key_manager.clone();
                 let pricing_service = pricing_service.clone();
                 let pricing_config = pricing_config.clone();
+                let rerank_providers = rerank_providers.clone();
                 move |selected_provider, selected_model, selected_deployment_id| {
                     let request = request.clone();
                     let requested_model = requested_model.clone();
@@ -107,10 +104,11 @@ async fn handle_rerank_with_state(
                     let key_manager = key_manager.clone();
                     let pricing_service = pricing_service.clone();
                     let pricing_config = pricing_config.clone();
+                    let rerank_providers = rerank_providers.clone();
                     async move {
+                        RerankService::validate_request(&request)
+                            .map_err(rerank_gateway_error_to_provider_error)?;
                         if let Provider::Voyage(provider) = &selected_provider {
-                            RerankService::validate_request(&request)
-                                .map_err(rerank_gateway_error_to_provider_error)?;
                             let request_pricing = super::spend::request_pricing_for_provider(
                                 &pricing_service,
                                 &selected_provider,
@@ -193,23 +191,22 @@ async fn handle_rerank_with_state(
                                 .map(|((response, _total_tokens), tokens)| (response, tokens));
                         }
                         let selected = selected_rerank_provider(
-                            state.config().gateway.providers.as_slice(),
+                            &rerank_providers,
                             &selected_deployment_id,
                             &selected_provider,
                             &selected_model,
                             &requested_model,
                         )?;
+                        let runtime = selected_rerank_runtime(&selected_provider, &selected)?;
                         let served_model = served_rerank_model(&requested_model);
-                        let budget_provider = selected.provider_name.clone();
+                        let budget_provider = selected.provider_name;
                         budgeted
                             .for_selected(budget_provider, served_model.to_string())
                             .with_settlement_mode(SettlementMode::AvailabilityOnly)
                             .reserve_call_settle(
                                 |_budget| Ok(None),
                                 || async move {
-                                    let service = build_rerank_service(&selected)
-                                        .map_err(rerank_gateway_error_to_provider_error)?;
-                                    service
+                                    runtime
                                         .rerank(request)
                                         .await
                                         .map_err(rerank_gateway_error_to_provider_error)
@@ -272,52 +269,39 @@ fn ensure_rerank_route_authorized(state: &AppState, req: &HttpRequest) -> Result
     }
 }
 
-fn build_rerank_service(provider: &SelectedRerankProvider) -> Result<RerankService, GatewayError> {
-    let mut service = RerankService::new();
-    service
-        .set_default_provider(provider.kind.as_str())
-        .set_timeout(provider.timeout);
-
-    match provider.kind {
-        RerankProviderKind::Cohere => {
-            let rerank_provider = CohereRerankProvider::new_with_endpoint(
-                provider.api_key.clone(),
-                provider
+fn selected_rerank_runtime(
+    provider: &Provider,
+    selected: &SelectedRerankProvider,
+) -> Result<Arc<dyn RerankProvider>, ProviderError> {
+    match (provider, selected.kind) {
+        (Provider::OpenAILike(_), RerankProviderKind::Cohere) => {
+            CohereRerankProvider::new_with_endpoint(
+                selected.api_key.clone(),
+                selected
                     .base_url
                     .as_deref()
                     .unwrap_or("https://api.cohere.ai/v1"),
-                provider.endpoint_access,
-                provider.timeout.as_secs(),
-            )?;
-            service.register_provider("cohere", Arc::new(rerank_provider));
+                selected.endpoint_access,
+                selected.timeout_seconds,
+            )
+            .map(|provider| Arc::new(provider) as Arc<dyn RerankProvider>)
+            .map_err(rerank_gateway_error_to_provider_error)
         }
-        RerankProviderKind::Jina => {
-            let rerank_provider = JinaRerankProvider::new_with_endpoint(
-                provider.api_key.clone(),
-                provider
+        (Provider::OpenAILike(_), RerankProviderKind::Jina) => {
+            JinaRerankProvider::new_with_endpoint(
+                selected.api_key.clone(),
+                selected
                     .base_url
                     .as_deref()
                     .unwrap_or("https://api.jina.ai/v1"),
-                provider.endpoint_access,
-                provider.timeout.as_secs(),
-            )?;
-            service.register_provider("jina", Arc::new(rerank_provider));
+                selected.endpoint_access,
+                selected.timeout_seconds,
+            )
+            .map(|provider| Arc::new(provider) as Arc<dyn RerankProvider>)
+            .map_err(rerank_gateway_error_to_provider_error)
         }
-        RerankProviderKind::Voyage => {
-            let rerank_provider = VoyageRerankProvider::new_with_endpoint(
-                provider.api_key.clone(),
-                provider
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://api.voyageai.com/v1"),
-                provider.endpoint_access,
-                provider.timeout.as_secs(),
-            )?;
-            service.register_provider("voyage", Arc::new(rerank_provider));
-        }
+        _ => provider.rerank_adapter(),
     }
-
-    Ok(service)
 }
 
 #[cfg(test)]
@@ -362,7 +346,11 @@ fn selected_rerank_provider_from_config(
     provider: &ProviderConfig,
     kind: RerankProviderKind,
 ) -> Result<SelectedRerankProvider, GatewayError> {
-    if provider.api_key.trim().is_empty() {
+    if matches!(
+        kind,
+        RerankProviderKind::Cohere | RerankProviderKind::Jina | RerankProviderKind::Voyage
+    ) && provider.api_key.trim().is_empty()
+    {
         return Err(GatewayError::Config(format!(
             "Rerank provider '{}' is missing api_key",
             provider.name
@@ -374,7 +362,7 @@ fn selected_rerank_provider_from_config(
         kind,
         api_key: provider.api_key.clone(),
         base_url: provider.configured_endpoint().map(str::to_string),
-        timeout: Duration::from_secs(provider.timeout),
+        timeout_seconds: provider.timeout,
         endpoint_access: provider.endpoint_access,
     })
 }
@@ -387,10 +375,8 @@ fn selected_rerank_provider(
     requested_model: &str,
 ) -> Result<SelectedRerankProvider, ProviderError> {
     let selected_provider_name = selected_provider.name();
-    let candidates = rerank_candidate_configs(providers);
-    let supported_candidates = candidates
-        .iter()
-        .copied()
+    let supported_candidates = rerank_candidate_configs(providers)
+        .into_iter()
         .filter(|(provider, kind)| rerank_provider_supports_model(provider, *kind, requested_model))
         .collect::<Vec<_>>();
     let matching = supported_candidates
@@ -406,14 +392,14 @@ fn selected_rerank_provider(
         .or_else(|| {
             supported_candidates.iter().copied().find(|(provider, kind)| {
                 provider.name == selected_provider_name
-                || provider
-                    .settings
-                    .get("provider_name")
-                    .and_then(|value| value.as_str())
-                    == Some(selected_provider_name)
-                || (provider.models.is_empty() && provider.name == selected_model)
-                || (provider.models.iter().any(|model| model == selected_model)
-                    && kind.as_str() == selected_provider_name)
+                    || provider
+                        .settings
+                        .get("provider_name")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(selected_provider_name)
+                    || (provider.models.is_empty() && provider.name == selected_model)
+                    || (provider.models.iter().any(|model| model == selected_model)
+                        && kind.as_str() == selected_provider_name)
             })
         })
         .ok_or_else(|| {
@@ -536,6 +522,12 @@ fn rerank_provider_kind(provider: &ProviderConfig) -> Option<RerankProviderKind>
     if provider_type.contains("jina") || provider_name.contains("jina") {
         return Some(RerankProviderKind::Jina);
     }
+    if provider_type == "watsonx" || provider_name == "watsonx" {
+        return Some(RerankProviderKind::Watsonx);
+    }
+    if provider_type == "oci" || provider_name == "oci" {
+        return Some(RerankProviderKind::Oci);
+    }
 
     None
 }
@@ -577,7 +569,7 @@ fn rerank_gateway_error_to_provider_error(error: GatewayError) -> ProviderError 
 
 fn missing_rerank_provider_error() -> GatewayError {
     GatewayError::NotFound(
-        "No configured rerank provider found; configure a cohere, jina, or voyage provider"
+        "No configured rerank provider found; configure cohere, jina, voyage, watsonx, or OCI native retrieval"
             .to_string(),
     )
 }
@@ -595,6 +587,8 @@ fn split_rerank_model(model: &str) -> (Option<&str>, &str) {
 enum RerankProviderKind {
     Cohere,
     Jina,
+    Watsonx,
+    Oci,
     Voyage,
 }
 
@@ -603,6 +597,8 @@ impl RerankProviderKind {
         match self {
             Self::Cohere => "cohere",
             Self::Jina => "jina",
+            Self::Watsonx => "watsonx",
+            Self::Oci => "oci",
             Self::Voyage => "voyage",
         }
     }
@@ -622,6 +618,7 @@ impl RerankProviderKind {
                     | "jina-reranker-v1-base-en"
                     | "jina-reranker-v1-turbo-en"
             ),
+            Self::Watsonx | Self::Oci => false,
             Self::Voyage => matches!(
                 model,
                 "rerank-2.5"
@@ -641,7 +638,7 @@ struct SelectedRerankProvider {
     kind: RerankProviderKind,
     api_key: String,
     base_url: Option<String>,
-    timeout: Duration,
+    timeout_seconds: u64,
     endpoint_access: crate::core::net::ProviderEndpointAccess,
 }
 

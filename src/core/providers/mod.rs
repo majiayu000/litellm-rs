@@ -27,6 +27,7 @@ pub mod bedrock;
 pub mod cloudflare;
 #[cfg(feature = "providers-extended")]
 pub mod cohere;
+pub mod databricks;
 // Catalog Tier 1: comet_api, compactifai.
 #[cfg(feature = "providers-extended")]
 #[cfg_attr(
@@ -38,6 +39,7 @@ pub mod cohere;
 )]
 pub mod custom_api;
 // Catalog Tier 1: dashscope, deepinfra, deepseek, docker_model_runner.
+mod enterprise;
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
 // Catalog Tier 1: featherless, fireworks, friendliai, galadriel.
@@ -59,6 +61,7 @@ pub mod mistral;
 #[cfg(feature = "providers-extended")]
 pub mod ollama;
 // oobabooga: Tier 1 -> registry/catalog.rs
+pub mod oci;
 pub mod openai;
 pub mod openai_like;
 // Catalog Tier 1: openrouter, ovhcloud, perplexity, poe, qwen.
@@ -69,16 +72,19 @@ pub mod bfl;
 pub mod media;
 #[cfg(feature = "providers-extended")]
 pub mod replicate;
+pub mod sagemaker;
+pub mod snowflake;
 #[cfg(feature = "providers-extended")]
 pub mod stability;
 #[cfg(feature = "runway-media")]
 pub use media::runway;
-// Catalog Tier 1: siliconflow, together.
+// Catalog Tier 1: sambanova, siliconflow, together.
 #[cfg(feature = "providers-extra")]
 pub mod v0;
 #[cfg(feature = "providers-extra")]
 pub mod vertex_ai;
 pub mod voyage;
+pub mod watsonx;
 // Catalog Tier 1: vllm, volcengine, wandb, xai, xiaomi_mimo, xinference, yi, zhipu.
 pub mod macros; // Macros for reducing boilerplate
 pub mod provider_type;
@@ -93,6 +99,7 @@ pub mod failure;
 pub mod provider_error_conversions;
 pub mod provider_registry;
 pub mod registry; // Data-driven Tier 1 provider catalog
+mod rerank_dispatch;
 pub mod unified_provider;
 #[cfg(test)]
 mod unified_provider_tests;
@@ -202,21 +209,7 @@ pub(crate) fn gemini_transport_error(is_timeout: bool) -> ProviderError {
     }
     ProviderError::network("gemini_proxy", message)
 }
-// ==================== Provider Dispatch Macros ====================
-//
-// Consolidated into a single `dispatch_provider!` macro with 4 dispatch kinds,
-// selected by the first token.  The Provider variant list appears once per
-// `@expand` arm (4 arms total).  To add or remove a variant, update only the
-// `@expand` arms below.
-//
-// Former macros -> new calling convention:
-//   dispatch_provider!(self, method)              -> dispatch_provider!(sync, self, method)
-//   dispatch_provider!(self, method, arg)         -> dispatch_provider!(sync, self, method, arg)
-//   dispatch_provider_async!(self, m, a, b)       -> dispatch_provider!(async_err, self, m, a, b)
-//   dispatch_provider_value!(self, method)        -> dispatch_provider!(value, self, method)
-//   dispatch_provider_value!(self, method, arg)   -> dispatch_provider!(value, self, method, arg)
-//   dispatch_provider_async_direct!(self, method) -> dispatch_provider!(async_direct, self, method)
-
+// Keep every Provider variant in each dispatch arm below.
 macro_rules! dispatch_provider {
     // -- sync: p.$method(args...) --
     (sync, $self:expr, $method:ident) => {
@@ -273,6 +266,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => p.$method($($arg),*),
+            Provider::Enterprise(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Stability(p) => p.$method($($arg),*),
             #[cfg(feature = "providers-extended")]
@@ -309,6 +303,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::Enterprise(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
             Provider::Stability(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             #[cfg(feature = "providers-extended")]
@@ -345,6 +340,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::Enterprise(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
             Provider::Stability(p) => LLMProvider::$method(p, $($arg),*),
             #[cfg(feature = "providers-extended")]
@@ -381,6 +377,7 @@ macro_rules! dispatch_provider {
             Provider::Cohere(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(p) => LLMProvider::$method(p).await,
+            Provider::Enterprise(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
             Provider::Stability(p) => LLMProvider::$method(p).await,
             #[cfg(feature = "providers-extended")]
@@ -444,6 +441,7 @@ pub enum Provider {
     Cohere(cohere::CohereProvider),
     #[cfg(feature = "providers-extended")]
     Replicate(replicate::ReplicateProvider),
+    Enterprise(enterprise::EnterpriseProvider),
     #[cfg(feature = "providers-extended")]
     Stability(stability::StabilityProvider),
     #[cfg(feature = "providers-extended")]
@@ -587,6 +585,7 @@ impl Provider {
             Provider::Cohere(_) => "cohere",
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => "replicate",
+            Provider::Enterprise(p) => p.name(),
             #[cfg(feature = "providers-extended")]
             Provider::Stability(_) => "stability",
             #[cfg(feature = "providers-extended")]
@@ -627,6 +626,7 @@ impl Provider {
             Provider::Cohere(_) => ProviderType::Cohere,
             #[cfg(feature = "providers-extended")]
             Provider::Replicate(_) => ProviderType::Replicate,
+            Provider::Enterprise(p) => p.provider_type(),
             #[cfg(feature = "providers-extended")]
             Provider::Stability(_) => ProviderType::Stability,
             #[cfg(feature = "providers-extended")]

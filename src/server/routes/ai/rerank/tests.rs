@@ -15,6 +15,8 @@ fn detects_provider_kind_from_type_or_name() {
     let by_type = provider_config("primary", "cohere_rerank", Vec::new());
     let by_name = provider_config("jina-reranker", "custom", Vec::new());
     let voyage = provider_config("voyage", "voyage", Vec::new());
+    let watsonx = provider_config("primary", "watsonx", vec!["ibm-rerank"]);
+    let oci = provider_config("oci", "oci", vec!["cohere.rerank-v3-5"]);
     let unsupported = provider_config("custom", "custom", Vec::new());
 
     assert_eq!(
@@ -29,7 +31,38 @@ fn detects_provider_kind_from_type_or_name() {
         rerank_provider_kind(&voyage),
         Some(RerankProviderKind::Voyage)
     );
+    assert_eq!(
+        rerank_provider_kind(&watsonx),
+        Some(RerankProviderKind::Watsonx)
+    );
+    assert_eq!(rerank_provider_kind(&oci), Some(RerankProviderKind::Oci));
     assert_eq!(rerank_provider_kind(&unsupported), None);
+}
+
+#[tokio::test]
+async fn enterprise_rerank_runtime_uses_selected_typed_provider_snapshot() {
+    let config = ProviderConfig {
+        name: "watsonx".to_string(),
+        provider_type: "watsonx".to_string(),
+        project: Some("runtime-project".to_string()),
+        models: vec!["ibm-rerank".to_string()],
+        settings: serde_json::from_value(serde_json::json!({
+            "access_token": "runtime-access-token",
+            "region": "us-south"
+        }))
+        .expect("settings object"),
+        ..Default::default()
+    };
+    let provider = crate::core::providers::factory::create_provider(config.clone())
+        .await
+        .expect("typed watsonx runtime");
+    let selected = selected_rerank_provider_from_config(&config, RerankProviderKind::Watsonx)
+        .expect("watsonx request config should not require api_key");
+
+    let runtime = selected_rerank_runtime(&provider, &selected)
+        .expect("typed selected provider should expose its rerank runtime");
+    assert_eq!(runtime.provider_name(), "watsonx");
+    assert!(runtime.supports_model("ibm-rerank"));
 }
 
 #[test]

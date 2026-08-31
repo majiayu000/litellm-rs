@@ -1,0 +1,790 @@
+//! IBM watsonx.ai native chat, embeddings, and rerank transport.
+
+use crate::core::net::ProviderEndpointAccess;
+use crate::core::providers::ProviderError;
+use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
+use crate::core::providers::enterprise::{
+    normalize_enterprise_base_url, validate_request_header_value,
+};
+use crate::core::rerank::{
+    RerankDocument, RerankProvider, RerankRequest, RerankResponse, RerankResult, RerankUsage,
+};
+use crate::core::traits::error_mapper::{DefaultErrorMapper, trait_def::ErrorMapper};
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+use crate::core::types::chat::ChatRequest;
+use crate::core::types::context::RequestContext;
+use crate::core::types::embedding::EmbeddingRequest;
+use crate::core::types::health::HealthStatus;
+use crate::core::types::model::{ModelInfo, ProviderCapability};
+use crate::core::types::responses::{ChatResponse, EmbeddingData, EmbeddingResponse, Usage};
+use crate::utils::error::gateway_error::GatewayError;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+
+static CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::Embeddings,
+    ProviderCapability::Rerank,
+];
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatsonxConfig {
+    pub access_token: String,
+    pub project_id: Option<String>,
+    pub space_id: Option<String>,
+    pub region: String,
+    #[serde(default = "default_api_version")]
+    pub api_version: String,
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub endpoint_access: ProviderEndpointAccess,
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_retries")]
+    pub max_retries: u32,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+impl std::fmt::Debug for WatsonxConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatsonxConfig")
+            .field("access_token", &"[REDACTED]")
+            .field("project_id", &self.project_id)
+            .field("space_id", &self.space_id)
+            .field("region", &self.region)
+            .field("api_version", &self.api_version)
+            .field("base_url", &self.base_url)
+            .field("endpoint_access", &self.endpoint_access)
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .field("models", &self.models)
+            .finish()
+    }
+}
+
+impl WatsonxConfig {
+    fn validate(&self) -> Result<(), ProviderError> {
+        if self.access_token.trim().is_empty() {
+            return Err(ProviderError::configuration(
+                "watsonx",
+                "access_token is required",
+            ));
+        }
+        validate_request_header_value(
+            "watsonx",
+            "access_token",
+            &format!("Bearer {}", self.access_token),
+        )?;
+        if self.project_id.as_deref().is_some_and(str::is_empty)
+            || self.space_id.as_deref().is_some_and(str::is_empty)
+        {
+            return Err(ProviderError::configuration(
+                "watsonx",
+                "project_id and space_id cannot be empty",
+            ));
+        }
+        if self.project_id.is_some() == self.space_id.is_some() {
+            return Err(ProviderError::configuration(
+                "watsonx",
+                "exactly one of project_id or space_id is required",
+            ));
+        }
+        if self.api_version.len() != 10
+            || chrono::NaiveDate::parse_from_str(&self.api_version, "%Y-%m-%d").is_err()
+        {
+            return Err(ProviderError::configuration(
+                "watsonx",
+                "api_version must be a valid YYYY-MM-DD date",
+            ));
+        }
+        Ok(())
+    }
+    pub fn api_base(&self) -> Result<String, ProviderError> {
+        if let Some(base) = &self.base_url {
+            return normalize_enterprise_base_url("watsonx", base, false);
+        }
+        let region = self.region.trim();
+        if region.is_empty()
+            || !region
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        {
+            return Err(ProviderError::configuration(
+                "watsonx",
+                "region contains invalid characters",
+            ));
+        }
+        Ok(format!("https://{region}.ml.cloud.ibm.com"))
+    }
+    fn identity(&self, body: &mut serde_json::Map<String, Value>) {
+        if let Some(project) = &self.project_id {
+            body.insert("project_id".to_string(), Value::String(project.clone()));
+        }
+        if let Some(space) = &self.space_id {
+            body.insert("space_id".to_string(), Value::String(space.clone()));
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WatsonxProvider {
+    config: WatsonxConfig,
+    base_url: String,
+    client: BaseHttpClient,
+    models: Vec<ModelInfo>,
+}
+
+impl WatsonxProvider {
+    pub fn new(config: WatsonxConfig) -> Result<Self, ProviderError> {
+        config.validate()?;
+        let base_url = config.api_base()?;
+        let client = BaseHttpClient::new_for_provider_no_redirect(
+            "watsonx",
+            BaseConfig {
+                api_base: Some(base_url.clone()),
+                endpoint_access: config.endpoint_access,
+                timeout: config.timeout,
+                max_retries: config.max_retries,
+                ..BaseConfig::default()
+            },
+        )?;
+        let models = config
+            .models
+            .iter()
+            .map(|model| ModelInfo {
+                id: model.clone(),
+                name: model.clone(),
+                provider: "watsonx".to_string(),
+                capabilities: CAPABILITIES.to_vec(),
+                ..ModelInfo::default()
+            })
+            .collect();
+        Ok(Self {
+            config,
+            base_url,
+            client,
+            models,
+        })
+    }
+
+    fn native_body(&self, model: String, mut body: serde_json::Map<String, Value>) -> Value {
+        body.insert("model_id".to_string(), Value::String(model));
+        self.config.identity(&mut body);
+        Value::Object(body)
+    }
+    async fn post(&self, path: &str, body: Value) -> Result<Value, ProviderError> {
+        let mut url =
+            reqwest::Url::parse(&format!("{}{path}", self.base_url)).map_err(|error| {
+                ProviderError::configuration("watsonx", format!("invalid request URL: {error}"))
+            })?;
+        url.query_pairs_mut()
+            .append_pair("version", &self.config.api_version);
+        let response = self
+            .client
+            .post(url)?
+            .bearer_auth(&self.config.access_token)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| self.client.map_preserved_request_error(error))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| ProviderError::network("watsonx", "failed to read response"))?;
+        if !status.is_success() {
+            return Err(HttpErrorMapper::map_status_code(
+                "watsonx",
+                status.as_u16(),
+                &String::from_utf8_lossy(&bytes),
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|error| ProviderError::response_parsing("watsonx", error.to_string()))
+    }
+    pub fn rerank_adapter(&self) -> WatsonxRerankProvider {
+        WatsonxRerankProvider(self.clone())
+    }
+}
+
+impl LLMProvider for WatsonxProvider {
+    fn name(&self) -> &str {
+        "watsonx"
+    }
+    fn error_provider_name(&self) -> &'static str {
+        "watsonx"
+    }
+    fn capabilities(&self) -> &'static [ProviderCapability] {
+        CAPABILITIES
+    }
+    fn models(&self) -> &[ModelInfo] {
+        &self.models
+    }
+    fn supports_model(&self, model: &str) -> bool {
+        self.models.is_empty()
+            || self
+                .models
+                .iter()
+                .any(|item| item.id == model || format!("watsonx/{}", item.id) == model)
+    }
+    async fn chat_completion(
+        &self,
+        request: ChatRequest,
+        _context: RequestContext,
+    ) -> Result<ChatResponse, ProviderError> {
+        let model = request
+            .model
+            .strip_prefix("watsonx/")
+            .unwrap_or(&request.model)
+            .to_string();
+        let mut body = serde_json::to_value(request)
+            .map_err(|error| ProviderError::serialization("watsonx", error.to_string()))?
+            .as_object()
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::serialization("watsonx", "chat request must be an object")
+            })?;
+        body.remove("model");
+        let mut response = self
+            .post("/ml/v1/text/chat", self.native_body(model.clone(), body))
+            .await?;
+        let object = response.as_object_mut().ok_or_else(|| {
+            ProviderError::response_parsing("watsonx", "chat response must be an object")
+        })?;
+        let returned_model = object.remove("model_id").ok_or_else(|| {
+            ProviderError::response_parsing("watsonx", "chat response missing model_id")
+        })?;
+        object.insert("model".to_string(), returned_model);
+        object
+            .entry("object".to_string())
+            .or_insert(Value::String("chat.completion".to_string()));
+        serde_json::from_value(response)
+            .map_err(|error| ProviderError::response_parsing("watsonx", error.to_string()))
+    }
+    async fn embeddings(
+        &self,
+        request: EmbeddingRequest,
+        _context: RequestContext,
+    ) -> Result<EmbeddingResponse, ProviderError> {
+        let model = request
+            .model
+            .strip_prefix("watsonx/")
+            .unwrap_or(&request.model)
+            .to_string();
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "inputs".to_string(),
+            serde_json::to_value(request.input)
+                .map_err(|error| ProviderError::serialization("watsonx", error.to_string()))?,
+        );
+        let response = self
+            .post(
+                "/ml/v1/text/embeddings",
+                self.native_body(model.clone(), body),
+            )
+            .await?;
+        let results = response
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                ProviderError::response_parsing("watsonx", "embedding response missing results")
+            })?;
+        let mut data = Vec::with_capacity(results.len());
+        for (index, result) in results.iter().enumerate() {
+            let embedding = serde_json::from_value::<Vec<f32>>(
+                result.get("embedding").cloned().ok_or_else(|| {
+                    ProviderError::response_parsing("watsonx", "embedding result missing embedding")
+                })?,
+            )
+            .map_err(|error| ProviderError::response_parsing("watsonx", error.to_string()))?;
+            data.push(EmbeddingData {
+                object: "embedding".to_string(),
+                index: index as u32,
+                embedding,
+            });
+        }
+        let prompt_tokens = required_input_token_count(&response)?;
+        Ok(EmbeddingResponse {
+            object: "list".to_string(),
+            data,
+            model,
+            usage: Some(Usage::new(prompt_tokens, 0)),
+            embeddings: None,
+        })
+    }
+    async fn health_check(&self) -> HealthStatus {
+        HealthStatus::Unknown
+    }
+    async fn calculate_cost(
+        &self,
+        _model: &str,
+        _input: u32,
+        _output: u32,
+    ) -> Result<f64, ProviderError> {
+        Err(ProviderError::not_supported("watsonx", "runtime pricing"))
+    }
+    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
+        &["temperature", "max_tokens", "top_p", "stop"]
+    }
+    async fn map_openai_params(
+        &self,
+        params: HashMap<String, Value>,
+        _model: &str,
+    ) -> Result<HashMap<String, Value>, ProviderError> {
+        Ok(params)
+    }
+    async fn transform_request(
+        &self,
+        request: ChatRequest,
+        _context: RequestContext,
+    ) -> Result<Value, ProviderError> {
+        serde_json::to_value(request)
+            .map_err(|error| ProviderError::serialization("watsonx", error.to_string()))
+    }
+    async fn transform_response(
+        &self,
+        raw: &[u8],
+        _model: &str,
+        _request_id: &str,
+    ) -> Result<ChatResponse, ProviderError> {
+        serde_json::from_slice(raw)
+            .map_err(|error| ProviderError::response_parsing("watsonx", error.to_string()))
+    }
+    fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
+        Box::new(DefaultErrorMapper)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WatsonxRerankProvider(WatsonxProvider);
+
+#[async_trait]
+impl RerankProvider for WatsonxRerankProvider {
+    async fn rerank(&self, request: RerankRequest) -> Result<RerankResponse, GatewayError> {
+        let model = request
+            .model
+            .strip_prefix("watsonx/")
+            .unwrap_or(&request.model)
+            .to_string();
+        let mut body = serde_json::Map::new();
+        body.insert("query".to_string(), Value::String(request.query));
+        body.insert(
+            "inputs".to_string(),
+            Value::Array(
+                request
+                    .documents
+                    .iter()
+                    .map(|doc| Value::String(doc.get_text().to_string()))
+                    .collect(),
+            ),
+        );
+        if let Some(top_n) = request.top_n {
+            body.insert("top_n".to_string(), Value::from(top_n));
+        }
+        let response = self
+            .0
+            .post(
+                "/ml/v1/text/rerank",
+                self.0.native_body(model.clone(), body),
+            )
+            .await
+            .map_err(GatewayError::Provider)?;
+        parse_rerank(
+            "watsonx",
+            model,
+            response,
+            &request.documents,
+            request.return_documents.unwrap_or(true),
+        )
+    }
+    fn provider_name(&self) -> &'static str {
+        "watsonx"
+    }
+    fn supports_model(&self, model: &str) -> bool {
+        self.0.supports_model(model)
+    }
+    fn supported_models(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+}
+
+fn parse_rerank(
+    provider: &'static str,
+    model: String,
+    response: Value,
+    documents: &[RerankDocument],
+    return_documents: bool,
+) -> Result<RerankResponse, GatewayError> {
+    let raw = response
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            GatewayError::Provider(ProviderError::response_parsing(
+                provider,
+                "rerank response missing results",
+            ))
+        })?;
+    let mut results = Vec::with_capacity(raw.len());
+    for item in raw {
+        let index = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| {
+                GatewayError::Provider(ProviderError::response_parsing(
+                    provider,
+                    "rerank result missing index",
+                ))
+            })?;
+        let relevance_score = item
+            .get("score")
+            .or_else(|| item.get("relevance_score"))
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                GatewayError::Provider(ProviderError::response_parsing(
+                    provider,
+                    "rerank result missing score",
+                ))
+            })?;
+        let source_document = documents.get(index).cloned().ok_or_else(|| {
+            GatewayError::Provider(ProviderError::response_parsing(
+                provider,
+                "rerank result index is out of range",
+            ))
+        })?;
+        let document = if return_documents {
+            Some(source_document)
+        } else {
+            None
+        };
+        results.push(RerankResult {
+            index,
+            relevance_score,
+            document,
+        });
+    }
+    let total_tokens = required_input_token_count(&response).map_err(GatewayError::Provider)?;
+    Ok(RerankResponse {
+        id: response
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        results,
+        model,
+        usage: Some(RerankUsage {
+            total_tokens: Some(total_tokens),
+            ..Default::default()
+        }),
+        meta: HashMap::new(),
+    })
+}
+
+fn required_input_token_count(response: &Value) -> Result<u32, ProviderError> {
+    response
+        .get("input_token_count")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| {
+            ProviderError::response_parsing("watsonx", "response missing a valid input_token_count")
+        })
+}
+
+fn default_api_version() -> String {
+    "2024-05-31".to_string()
+}
+const fn default_timeout() -> u64 {
+    60
+}
+const fn default_retries() -> u32 {
+    2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn requires_exactly_one_governance_identity() {
+        let base = WatsonxConfig {
+            access_token: "token".to_string(),
+            project_id: None,
+            space_id: None,
+            region: "us-south".to_string(),
+            api_version: default_api_version(),
+            base_url: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
+            timeout: 60,
+            max_retries: 2,
+            models: Vec::new(),
+        };
+        assert!(base.validate().is_err());
+        assert!(
+            WatsonxConfig {
+                project_id: Some("project".to_string()),
+                ..base
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+    #[test]
+    fn region_builds_official_endpoint_and_rejects_injection() {
+        let base = WatsonxConfig {
+            access_token: "token".to_string(),
+            project_id: Some("project".to_string()),
+            space_id: None,
+            region: "us-south".to_string(),
+            api_version: default_api_version(),
+            base_url: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
+            timeout: 60,
+            max_retries: 2,
+            models: Vec::new(),
+        };
+        assert_eq!(
+            base.api_base().expect("valid region"),
+            "https://us-south.ml.cloud.ibm.com"
+        );
+        assert!(
+            WatsonxConfig {
+                region: "us-south/evil".to_string(),
+                ..base
+            }
+            .api_base()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn custom_endpoint_and_api_version_reject_url_injection() {
+        let base = WatsonxConfig {
+            access_token: "token".to_string(),
+            project_id: Some("project".to_string()),
+            space_id: None,
+            region: "us-south".to_string(),
+            api_version: default_api_version(),
+            base_url: None,
+            endpoint_access: ProviderEndpointAccess::PublicOnly,
+            timeout: 60,
+            max_retries: 2,
+            models: Vec::new(),
+        };
+        for endpoint in [
+            "https://user:password@watsonx.example.com",
+            "https://watsonx.example.com?tenant=other",
+            "https://watsonx.example.com#fragment",
+        ] {
+            assert!(
+                WatsonxConfig {
+                    base_url: Some(endpoint.to_string()),
+                    ..base.clone()
+                }
+                .api_base()
+                .is_err(),
+                "custom endpoint must reject {endpoint}"
+            );
+        }
+        for version in ["2025-1-01", "2025-02-30", "2025-01-01&other=value"] {
+            assert!(
+                WatsonxConfig {
+                    api_version: version.to_string(),
+                    ..base.clone()
+                }
+                .validate()
+                .is_err(),
+                "api_version must reject {version}"
+            );
+        }
+    }
+
+    #[test]
+    fn official_rerank_response_without_id_gets_internal_id() {
+        let documents = vec![
+            RerankDocument::from("first"),
+            RerankDocument::from("second"),
+        ];
+        let parsed = parse_rerank(
+            "watsonx",
+            "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+            serde_json::json!({
+                "model_id": "cross-encoder/ms-marco-minilm-l-12-v2",
+                "results": [{"index": 1, "score": 0.91}],
+                "created_at": "2026-08-30T00:00:00Z",
+                "input_token_count": 12
+            }),
+            &documents,
+            true,
+        )
+        .expect("official response shape should parse");
+
+        assert!(!parsed.id.is_empty());
+        assert_eq!(parsed.results[0].index, 1);
+        assert_eq!(parsed.usage.and_then(|usage| usage.total_tokens), Some(12));
+    }
+
+    fn assert_watsonx_rerank_response_parsing(error: GatewayError, expected_message: &str) {
+        match error {
+            GatewayError::Provider(ProviderError::ResponseParsing { provider, message }) => {
+                assert_eq!(provider, "watsonx");
+                assert!(
+                    message.contains(expected_message),
+                    "unexpected parsing error: {message}"
+                );
+            }
+            other => panic!("expected watsonx response parsing error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_rerank_success_payloads_are_provider_response_errors() {
+        let documents = vec![RerankDocument::from("first")];
+        for (response, expected_message) in [
+            (serde_json::json!({}), "rerank response missing results"),
+            (
+                serde_json::json!({"results": [{"score": 0.5}]}),
+                "rerank result missing index",
+            ),
+            (
+                serde_json::json!({"results": [{"index": 0}]}),
+                "rerank result missing score",
+            ),
+        ] {
+            let error = parse_rerank(
+                "watsonx",
+                "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+                response,
+                &documents,
+                true,
+            )
+            .expect_err("malformed upstream success payload must fail");
+            assert_watsonx_rerank_response_parsing(error, expected_message);
+        }
+    }
+
+    #[test]
+    fn missing_or_invalid_rerank_usage_is_a_provider_response_error() {
+        let documents = vec![RerankDocument::from("first")];
+        for input_token_count in [
+            None,
+            Some(serde_json::json!("12")),
+            Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let mut response = serde_json::json!({
+                "results": [{"index": 0, "score": 0.5}]
+            });
+            if let Some(value) = input_token_count {
+                response["input_token_count"] = value;
+            }
+            let error = parse_rerank(
+                "watsonx",
+                "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+                response,
+                &documents,
+                true,
+            )
+            .expect_err("official watsonx usage must be a u32 integer");
+            assert_watsonx_rerank_response_parsing(error, "input_token_count");
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_or_invalid_embedding_usage_is_a_provider_response_error() {
+        use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for input_token_count in [
+            None,
+            Some(serde_json::json!("12")),
+            Some(serde_json::json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .expect("mock listener should bind");
+            let address = listener.local_addr().expect("listener address");
+            let mut response = serde_json::json!({
+                "results": [{"embedding": [0.25, 0.75]}]
+            });
+            if let Some(value) = input_token_count {
+                response["input_token_count"] = value;
+            }
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("mock request");
+                let mut request = vec![0_u8; 4096];
+                let bytes_read = stream.read(&mut request).await.expect("read request");
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                assert!(
+                    request.starts_with("POST /ml/v1/text/embeddings?version=2024-05-31 HTTP/1.1"),
+                    "watsonx version must be encoded as one query pair: {request}"
+                );
+                let body = response.to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(reply.as_bytes())
+                    .await
+                    .expect("write response");
+            });
+            let provider = WatsonxProvider::new(WatsonxConfig {
+                access_token: "token".to_string(),
+                project_id: Some("project".to_string()),
+                space_id: None,
+                region: "us-south".to_string(),
+                api_version: default_api_version(),
+                base_url: Some(format!("http://{address}")),
+                endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+                timeout: 5,
+                max_retries: 0,
+                models: Vec::new(),
+            })
+            .expect("mock provider should build");
+            let error = provider
+                .embeddings(
+                    EmbeddingRequest {
+                        model: "slate".to_string(),
+                        input: EmbeddingInput::Text("hello".to_string()),
+                        user: None,
+                        encoding_format: None,
+                        dimensions: None,
+                        task_type: None,
+                        truncation: None,
+                    },
+                    RequestContext::default(),
+                )
+                .await
+                .expect_err("official watsonx usage must be a u32 integer");
+            server.await.expect("mock server should finish");
+            assert!(
+                matches!(
+                    error,
+                    ProviderError::ResponseParsing {
+                        provider: "watsonx",
+                        ref message
+                    } if message.contains("input_token_count")
+                ),
+                "unexpected embedding parsing error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn out_of_range_rerank_index_is_a_provider_response_error_without_documents() {
+        let documents = vec![RerankDocument::from("first")];
+        let error = parse_rerank(
+            "watsonx",
+            "cross-encoder/ms-marco-minilm-l-12-v2".to_string(),
+            serde_json::json!({"results": [{"index": 1, "score": 0.5}]}),
+            &documents,
+            false,
+        )
+        .expect_err("out-of-range upstream index must fail without returned documents");
+
+        assert_watsonx_rerank_response_parsing(error, "rerank result index is out of range");
+    }
+}

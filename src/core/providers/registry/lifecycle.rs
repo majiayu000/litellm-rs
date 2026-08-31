@@ -62,6 +62,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "ProviderType::BlackForestLabs dispatches to native asynchronous image endpoints",
     ),
     wire("cloudflare", "native Provider enum variant"),
+    wire("databricks", "typed Databricks Model Serving runtime"),
     wire("deepgram", "native audio Provider enum variant"),
     wire("elevenlabs", "native audio Provider enum variant"),
     providers_extended_wire(
@@ -101,11 +102,14 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     wire("openai", "native Provider enum variant"),
     wire("openai_like", "shared OpenAI-compatible runtime provider"),
+    wire("oci", "typed OCI compatible and native retrieval runtime"),
     internal("registry", "provider catalog and lifecycle infrastructure"),
     providers_extended_wire(
         "replicate",
         "ProviderType::Replicate dispatches to native prediction lifecycle paths when providers-extended is enabled",
     ),
+    wire("sagemaker", "typed SageMaker InvokeEndpoint runtime"),
+    wire("snowflake", "typed Snowflake Cortex runtime"),
     providers_extended_wire(
         "stability",
         "ProviderType::Stability dispatches to native v2beta image endpoints",
@@ -119,6 +123,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
     ),
+    wire("watsonx", "typed watsonx native inference runtime"),
     wire(
         "voyage",
         "ProviderType::Voyage dispatches to native embedding and rerank endpoints",

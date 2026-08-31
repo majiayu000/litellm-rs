@@ -189,6 +189,10 @@ into the enum, dispatch, registry metadata, and factory.
 | `azure` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / ✅ | passthrough / passthrough | SDK exposes Azure embeddings; SDK chat is not implemented. |
 | `azure_ai` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / – | `providers-extra` / `providers-extra` | `completion()` supports `azure_ai/` and `azure-ai/` routes when the native feature is enabled. |
 | `bedrock` | ✅ / ✅ | ✅ / – | – / – / – | – / – | SDK Bedrock and public `completion()` routing are not implemented. |
+| `databricks`, `snowflake` | passthrough / passthrough | – / – | – / – / – | – / – | Governed OpenAI-compatible chat/SSE runtimes with platform-specific identity and auth. |
+| `oci` | mode-dependent | mode-dependent / – | – / – / – | – / – | Compatible mode provides chat/SSE; IAM native mode provides embeddings and rerank. |
+| `watsonx` | ✅ / – | ✅ / – | – / – / – | – / – | Native chat, embeddings, and rerank. |
+| `sagemaker` | ✅ / – | – / – | – / – / – | – / – | InvokeEndpoint requires an explicit supported payload transformer. |
 | `mistral`, `cloudflare`, `cohere`, `voyage`, `vertex_ai`, `gemini`, `fal_ai`, `replicate`, `stability`, `black_forest_labs`, `ollama` | provider-specific | provider-specific | – / – / – | – / – | See `support_matrix.rs` for feature-gated HTTP support. Ollama retains its existing SDK stream-only path. |
 | `google` / SDK `Google` | – / – | – / – | – / – / – | – / – | Google/Gemini SDK chat is intentionally unsupported until a real adapter exists. |
 | Default catalog dynamic routes: `openrouter`, `deepseek`, `moonshot`, `minimax`, `zhipu`, `zai`, `together_ai`, `fireworks_ai`, `aiml`, `groq`, `xiaomi_mimo`, `xai` | passthrough / passthrough | – / – | – / – / – | ✅ / ✅ | OpenAI-compatible routes wired into default `completion()` routing. |
@@ -215,6 +219,11 @@ a gateway video route.
 | Azure OpenAI (`azure`) | native factory (`providers-extra`); OpenAILike fallback | ✅ | ✅ | ✅ | ✅ | – | Native Azure supports chat, streaming, embeddings, and image generation with `providers-extra`; otherwise the factory path uses OpenAILike chat/stream only. |
 | Azure AI Inference (`azure_ai`) | native factory (`providers-extra`); OpenAILike fallback | ✅ | ✅ | ✅ | ✅ | – | Native Azure AI supports chat, streaming, embeddings, and image generation with `providers-extra`; otherwise the factory path uses OpenAILike chat/stream only. |
 | AWS Bedrock (`bedrock`) | always | ✅ | ✅ | ✅ | helper API | – | Native AWS Bedrock runtime path with SigV4 signing. Use `openai_compatible` for Bedrock Access Gateway or other OpenAI-compatible proxies. |
+| Databricks Model Serving (`databricks`) | always | ✅ | ✅ | – | – | – | OpenAI-compatible chat/SSE with typed workspace and token configuration. |
+| Snowflake Cortex (`snowflake`) | always | ✅ | ✅ | – | – | – | OpenAI-compatible chat/SSE with typed account and token-type configuration. |
+| OCI Generative AI (`oci`) | always | ✅ | ✅ | ✅ | – | – | Compatible mode provides chat/SSE; IAM native mode provides embeddings and rerank. |
+| IBM watsonx.ai (`watsonx`) | always | ✅ | – | ✅ | – | – | Native chat, embeddings, and rerank with explicit project or space identity. |
+| Amazon SageMaker (`sagemaker`) | always | ✅ | – | – | – | – | SigV4 InvokeEndpoint; payload transformer is required and unknown schemas fail closed. |
 | Google Vertex AI (`vertex_ai`) | native factory (`providers-extra`) | ✅ | ✅ | ✅ | ✅ | – | Uses native Vertex auth and Google-specific URLs when `providers-extra` is enabled; otherwise explicitly unsupported. |
 | Google Gemini (`gemini`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native Google AI Studio Gemini auth; use `vertex_ai` for Vertex AI project/location credentials. |
 | Meta Llama API (`meta_llama`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |

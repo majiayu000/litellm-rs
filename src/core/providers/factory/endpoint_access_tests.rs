@@ -110,6 +110,20 @@ async fn invalid_or_implicit_private_endpoints_fail_closed() {
 }
 
 #[tokio::test]
+async fn enterprise_private_network_requires_an_explicit_endpoint() {
+    let config = ProviderConfig {
+        provider_type: "watsonx".to_string(),
+        api_key: "token".to_string(),
+        endpoint_access: PrivateNetwork,
+        ..Default::default()
+    };
+    let error = create_provider(config)
+        .await
+        .expect_err("enterprise private access must identify its endpoint");
+    assert!(error.to_string().contains("requires a base URL"), "{error}");
+}
+
+#[tokio::test]
 async fn azure_endpoint_aliases_reach_gateway_and_direct_factories() {
     for (provider_type, selector, key, endpoint) in [
         (

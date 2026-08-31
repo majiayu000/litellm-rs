@@ -119,8 +119,6 @@ impl OpenAILikeProvider {
             .map_err(|_| ProviderError::timeout("gemini_proxy", "Gemini response header timeout"))?
             .map_err(gemini_openai_like_transport_error)
     }
-
-    /// Create a new OpenAI-like provider
     pub async fn new(config: OpenAILikeConfig) -> Result<Self, OpenAILikeError> {
         Self::new_with_profile(
             config,
@@ -129,14 +127,26 @@ impl OpenAILikeProvider {
         )
         .await
     }
-
     pub(crate) async fn new_for_catalog(
         config: OpenAILikeConfig,
         capabilities: &'static [ProviderCapability],
     ) -> Result<Self, OpenAILikeError> {
         Self::new_with_profile(config, capabilities, OPENAI_LIKE_CATALOG_CAPABILITIES).await
     }
-
+    pub(crate) async fn new_for_catalog_no_redirect(
+        config: OpenAILikeConfig,
+        capabilities: &'static [ProviderCapability],
+    ) -> Result<Self, OpenAILikeError> {
+        let mut provider = Self::new_for_catalog(config, capabilities).await?;
+        provider.pool_manager = Arc::new(
+            GlobalPoolManager::new_for_provider_no_redirect(
+                PROVIDER_NAME,
+                provider.config.base.clone(),
+            )
+            .map_err(|error| OpenAILikeError::configuration(PROVIDER_NAME, error.to_string()))?,
+        );
+        Ok(provider)
+    }
     pub(crate) async fn new_openai_compatible(
         config: OpenAILikeConfig,
     ) -> Result<Self, OpenAILikeError> {
@@ -147,7 +157,6 @@ impl OpenAILikeProvider {
         )
         .await
     }
-
     async fn new_with_profile(
         config: OpenAILikeConfig,
         capabilities: &'static [ProviderCapability],
@@ -157,14 +166,12 @@ impl OpenAILikeProvider {
             .validate()
             .map_err(|e| OpenAILikeError::configuration(PROVIDER_NAME, e))?;
         Self::validate_capability_profile(capabilities, allowed_capabilities)?;
-
         let pool_manager = Arc::new(
             GlobalPoolManager::new_for_provider(PROVIDER_NAME, config.base.clone())
                 .map_err(|e| OpenAILikeError::configuration(PROVIDER_NAME, e.to_string()))?,
         );
         let model_registry = get_openai_like_registry();
         let provider_name = config.provider_name.clone();
-
         Ok(Self {
             pool_manager,
             config,
@@ -174,7 +181,6 @@ impl OpenAILikeProvider {
             model_identity: None,
         })
     }
-
     fn validate_capability_profile(
         capabilities: &'static [ProviderCapability],
         allowed_capabilities: &'static [ProviderCapability],
@@ -205,12 +211,10 @@ impl OpenAILikeProvider {
 
         Ok(())
     }
-
     pub async fn with_api_base(api_base: impl Into<String>) -> Result<Self, OpenAILikeError> {
         let config = OpenAILikeConfig::new(api_base).with_skip_api_key(true);
         Self::new(config).await
     }
-
     pub async fn with_api_key(
         api_base: impl Into<String>,
         api_key: impl Into<String>,
@@ -236,8 +240,7 @@ impl OpenAILikeProvider {
         let response = self
             .pool_manager
             .execute_request(&url, HttpMethod::POST, headers, body)
-            .await
-            .map_err(|e| OpenAILikeError::network(PROVIDER_NAME, e.to_string()))?;
+            .await?;
 
         let status = response.status();
         if !status.is_success() {

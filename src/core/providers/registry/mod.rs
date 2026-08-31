@@ -58,6 +58,12 @@ pub fn selector_skips_api_key(selector: &str) -> bool {
         || selector
             .parse::<super::provider_type::ProviderType>()
             .is_ok_and(|provider_type| {
-                matches!(provider_type, super::provider_type::ProviderType::Ollama)
+                matches!(
+                    provider_type,
+                    super::provider_type::ProviderType::Ollama
+                        | super::provider_type::ProviderType::Oci
+                        | super::provider_type::ProviderType::Watsonx
+                        | super::provider_type::ProviderType::SageMaker
+                )
             })
 }

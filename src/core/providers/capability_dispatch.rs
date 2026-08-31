@@ -105,6 +105,10 @@ impl Provider {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
             }
+            Provider::Enterprise(provider) => {
+                LLMProvider::supports_model(provider, model)
+                    && LLMProvider::supports_capability(provider, capability)
+            }
             #[cfg(feature = "providers-extended")]
             Provider::Stability(provider) => LLMProvider::models(provider)
                 .iter()

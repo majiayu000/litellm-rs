@@ -246,6 +246,7 @@ impl ProviderRequestBuilder {
 enum ProviderClientMode {
     Request,
     Streaming,
+    StreamingNoRedirect,
     NoRedirect,
 }
 
@@ -291,6 +292,16 @@ impl ProviderHttpClient {
             policy,
             Duration::from_secs(0),
             ProviderClientMode::Streaming,
+        )
+    }
+
+    pub fn streaming_no_redirect(
+        policy: ProviderEndpointPolicy,
+    ) -> Result<Self, ProviderHttpClientError> {
+        Self::cached(
+            policy,
+            Duration::from_secs(0),
+            ProviderClientMode::StreamingNoRedirect,
         )
     }
 
@@ -354,18 +365,23 @@ impl ProviderHttpClient {
     ) -> Result<Client, ProviderHttpClientError> {
         let config = HttpClientPoolConfig::default();
         let builder = match mode {
-            ProviderClientMode::Streaming => ClientBuilder::new()
-                .pool_max_idle_per_host(config.pool_max_idle_per_host)
-                .pool_idle_timeout(config.pool_idle_timeout)
-                .connect_timeout(config.connect_timeout)
-                .tcp_keepalive(config.tcp_keepalive)
-                .tcp_nodelay(true)
-                .user_agent(config.user_agent),
+            ProviderClientMode::Streaming | ProviderClientMode::StreamingNoRedirect => {
+                { ClientBuilder::new() }
+                    .pool_max_idle_per_host(config.pool_max_idle_per_host)
+                    .pool_idle_timeout(config.pool_idle_timeout)
+                    .connect_timeout(config.connect_timeout)
+                    .tcp_keepalive(config.tcp_keepalive)
+                    .tcp_nodelay(true)
+                    .user_agent(config.user_agent)
+            }
             ProviderClientMode::Request | ProviderClientMode::NoRedirect => {
                 create_client_builder_with_config(timeout, &config)
             }
         };
-        let redirect_policy = if mode == ProviderClientMode::NoRedirect {
+        let redirect_policy = if matches!(
+            mode,
+            ProviderClientMode::NoRedirect | ProviderClientMode::StreamingNoRedirect
+        ) {
             redirect::Policy::none()
         } else {
             provider_redirect_policy(policy.clone())
