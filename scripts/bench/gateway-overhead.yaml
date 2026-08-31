@@ -1,0 +1,82 @@
+schema_version: "1.0"
+
+server:
+  host: "127.0.0.1"
+  port: 18080
+  workers: 4
+  max_connections: 1024
+  dev_mode: false
+
+providers:
+  - name: "benchmark-vllm"
+    provider_type: "vllm"
+    api_key: ""
+    base_url: "http://127.0.0.1:18000/v1"
+    endpoint_access: private_network
+    rpm: 4294967295
+    tpm: 4294967295
+    max_concurrent_requests: 256
+    timeout: 10
+    max_retries: 0
+    models: ["benchmark-model"]
+    enabled: true
+
+router:
+  strategy: round_robin
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout: 60
+    min_requests: 10
+    success_threshold: 3
+  load_balancer:
+    health_check_enabled: false
+    sticky_sessions: false
+    session_timeout: 3600
+
+storage:
+  database:
+    url: "postgresql://127.0.0.1/litellm_benchmark_disabled"
+    max_connections: 1
+    connection_timeout: 1
+    ssl: false
+    enabled: false
+    auto_migrate: false
+  redis:
+    url: "redis://127.0.0.1:6379"
+    enabled: false
+    max_connections: 1
+    connection_timeout: 1
+    cluster: false
+  vector_db: null
+
+auth:
+  enable_jwt: false
+  enable_api_key: false
+  allow_anonymous: true
+
+monitoring:
+  metrics:
+    enabled: false
+  tracing:
+    enabled: false
+
+cache:
+  enabled: false
+
+rate_limit:
+  enabled: false
+
+guardrails:
+  enabled: false
+
+ip_access:
+  enabled: false
+
+enterprise:
+  enabled: false
+
+pricing:
+  source: embedded://model_prices_extended
+  allow_degraded: false
+  unpriced_model_policy: allow_unpriced
+  unpriced_fallback_cost_per_1k_tokens: 0.0
