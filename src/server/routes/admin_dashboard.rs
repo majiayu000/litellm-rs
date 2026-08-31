@@ -6,6 +6,7 @@ use actix_web::{HttpResponse, web};
 const INDEX_HTML: &str = include_str!("admin_dashboard/index.html");
 const APP_CSS: &str = include_str!("admin_dashboard/app.css");
 const APP_JS: &str = include_str!("admin_dashboard/app.js");
+const PROVIDER_HEALTH_JS: &str = include_str!("admin_dashboard/provider_health.js");
 const DASHBOARD_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
     connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; \
     form-action 'self'; frame-ancestors 'none'";
@@ -30,10 +31,18 @@ async fn javascript() -> HttpResponse {
     embedded_asset("text/javascript; charset=utf-8", APP_JS)
 }
 
+async fn provider_health_javascript() -> HttpResponse {
+    embedded_asset("text/javascript; charset=utf-8", PROVIDER_HEALTH_JS)
+}
+
 /// Register the exact dashboard asset routes.
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/admin/dashboard", web::get().to(dashboard))
         .route("/admin/dashboard/app.css", web::get().to(stylesheet))
+        .route(
+            "/admin/dashboard/provider-health.js",
+            web::get().to(provider_health_javascript),
+        )
         .route("/admin/dashboard/app.js", web::get().to(javascript));
 }
 
@@ -61,6 +70,11 @@ mod tests {
                 "/admin/dashboard/app.js",
                 "text/javascript; charset=utf-8",
                 "\"/auth/login\"",
+            ),
+            (
+                "/admin/dashboard/provider-health.js",
+                "text/javascript; charset=utf-8",
+                "createProviderHealthView",
             ),
         ];
 
@@ -121,19 +135,19 @@ mod tests {
         ] {
             assert!(APP_JS.contains(path), "missing API path {path}");
         }
-        for forbidden in [
-            "localStorage",
-            "sessionStorage",
-            "document.cookie",
-            "innerHTML",
-            "eval(",
-            "http://",
-            "https://",
-        ] {
-            assert!(
-                !APP_JS.contains(forbidden),
-                "unsafe asset token {forbidden}"
-            );
+        assert!(PROVIDER_HEALTH_JS.contains("\"/health/detailed\""));
+        for asset in [APP_JS, PROVIDER_HEALTH_JS] {
+            for forbidden in [
+                "localStorage",
+                "sessionStorage",
+                "document.cookie",
+                "innerHTML",
+                "eval(",
+                "http://",
+                "https://",
+            ] {
+                assert!(!asset.contains(forbidden), "unsafe asset token {forbidden}");
+            }
         }
         assert!(APP_JS.contains("AbortController"));
         assert!(APP_JS.contains("session.generation !== state.generation"));

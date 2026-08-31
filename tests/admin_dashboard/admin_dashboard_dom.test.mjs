@@ -10,6 +10,13 @@ const appSource = await readFile(
   new URL("../../src/server/routes/admin_dashboard/app.js", import.meta.url),
   "utf8",
 );
+const providerHealthSource = await readFile(
+  new URL(
+    "../../src/server/routes/admin_dashboard/provider_health.js",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const immediate = () => new Promise((resolve) => setImmediate(resolve));
 async function settle(turns = 8) {
   for (let index = 0; index < turns; index += 1) {
@@ -43,17 +50,37 @@ function apiResponse(data, status = 200) {
     { status, headers: { "Content-Type": "application/json" } },
   );
 }
+function healthResponse(data, status = 200) {
+  return new Response(JSON.stringify({ success: true, data }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 function dashboard(options = {}) {
   const {
     keys = [],
     teams = [],
     usageByTeam = new Map(),
+    health = {
+      status: "degraded",
+      reason: "no providers configured",
+      timestamp: "2026-08-31T01:00:00Z",
+      providers: {
+        aggregate: "not_configured",
+        healthy_providers: 0,
+        total_providers: 0,
+        enabled_providers: 0,
+        provider_details: [],
+      },
+    },
     handler,
   } = options;
-  const htmlWithoutScript = indexHtml.replace(
-    '<script src="/admin/dashboard/app.js" defer></script>',
-    "",
-  );
+  const htmlWithoutScript = indexHtml
+    .replace(
+      '<script src="/admin/dashboard/provider-health.js" defer></script>',
+      "",
+    )
+    .replace('<script src="/admin/dashboard/app.js" defer></script>', "");
   const dom = new JSDOM(htmlWithoutScript, {
     url: "https://gateway.test/admin/dashboard",
     runScripts: "outside-only",
@@ -155,6 +182,9 @@ function dashboard(options = {}) {
         }),
       );
     }
+    if (url.pathname === "/health/detailed" && call.method === "GET") {
+      return Promise.resolve(healthResponse(health, 503));
+    }
     const usageMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/usage$/);
     if (usageMatch && call.method === "GET") {
       const result = usageByTeam.get(decodeURIComponent(usageMatch[1]));
@@ -166,6 +196,7 @@ function dashboard(options = {}) {
     }
     throw new Error(`Unexpected request: ${call.method} ${call.path}`);
   };
+  window.eval(providerHealthSource);
   window.eval(appSource);
   return context;
 }
@@ -598,4 +629,198 @@ test("B6 late refresh/create/delete responses after logout restore no protected 
     window.document.getElementById("status-region").textContent,
     /^Signed out\./,
   );
+});
+
+test("B7 provider health refresh renders enabled and probe states from a 503 snapshot", { concurrency: false }, async (t) => {
+  const refreshedHealth = deferred();
+  let healthGets = 0;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/health/detailed" && call.method === "GET") {
+        healthGets += 1;
+        if (healthGets === 2) {
+          return refreshedHealth.promise;
+        }
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+
+  const tab = window.document.querySelector('[data-view="health"]');
+  assert.ok(tab, "provider health tab is missing");
+  tab.click();
+  const refresh = window.document.getElementById("refresh-health");
+  assert.equal(refresh.type, "button");
+  assert.match(refresh.textContent, /refresh/i);
+  refresh.click();
+  await waitFor(() => healthGets === 2, "provider health refresh was not requested");
+  assert.equal(refresh.disabled, true);
+
+  refreshedHealth.resolve(
+    healthResponse(
+      {
+        status: "degraded",
+        reason: "one or more providers unhealthy",
+        timestamp: "2026-08-31T02:03:04Z",
+        providers: {
+          aggregate: "degraded",
+          healthy_providers: 1,
+          total_providers: 4,
+          enabled_providers: 3,
+          provider_details: [
+            {
+              name: "openai",
+              status: "healthy",
+              last_check: "2026-08-31T02:03:00Z",
+              response_time_ms: 18,
+              error_message: null,
+            },
+            {
+              name: "anthropic",
+              status: "unknown",
+              last_check: null,
+              response_time_ms: null,
+              error_message: "upstream health has not been established yet",
+            },
+            {
+              name: "gemini",
+              status: "unhealthy",
+              last_check: "2026-08-31T02:02:30Z",
+              response_time_ms: null,
+              error_message: "probe failed",
+            },
+            {
+              name: "ollama",
+              status: "disabled",
+              last_check: null,
+              response_time_ms: null,
+              error_message: null,
+            },
+          ],
+        },
+      },
+      503,
+    ),
+  );
+  await waitFor(() => !refresh.disabled, "provider health refresh did not settle");
+
+  assert.match(window.document.getElementById("health-summary").textContent, /3 enabled/i);
+  assert.match(window.document.getElementById("health-summary").textContent, /1 healthy/i);
+  assert.match(window.document.getElementById("health-notice").textContent, /HTTP 503/i);
+  assert.match(window.document.getElementById("health-notice").textContent, /unknown/i);
+  const rows = rowText(window, "#health-body tr");
+  assert.equal(rows.length, 4);
+  assert.match(rows[0], /openai.*enabled.*healthy/i);
+  assert.match(rows[0], /8\/31\/2026|31\/8\/2026/);
+  assert.match(rows[1], /anthropic.*enabled.*unknown.*not probed/i);
+  assert.match(rows[2], /gemini.*enabled.*unhealthy.*probe failed/i);
+  assert.match(rows[3], /ollama.*disabled/i);
+});
+
+test("B8 provider health failures are explicit and clear stale health", { concurrency: false }, async (t) => {
+  let mode = "healthy";
+  const context = dashboard({
+    health: {
+      status: "healthy",
+      reason: "ok",
+      timestamp: "2026-08-31T01:00:00Z",
+      providers: {
+        aggregate: "healthy",
+        healthy_providers: 1,
+        total_providers: 1,
+        enabled_providers: 1,
+        provider_details: [
+          { name: "openai", status: "healthy", last_check: null },
+        ],
+      },
+    },
+    handler(call) {
+      if (call.url.pathname !== "/health/detailed" || call.method !== "GET") {
+        return undefined;
+      }
+      if (mode === "network") {
+        return Promise.reject(new Error("network offline"));
+      }
+      if (mode === "unauthorized") {
+        return apiResponse("expired", 401);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  window.document.querySelector('[data-view="health"]').click();
+  assert.equal(window.document.querySelectorAll("#health-body tr").length, 1);
+
+  mode = "network";
+  window.document.getElementById("refresh-health").click();
+  await waitFor(
+    () => /network offline/i.test(window.document.getElementById("health-notice").textContent),
+    "network failure was not shown in the health view",
+  );
+  assert.equal(window.document.querySelectorAll("#health-body tr").length, 0);
+  assert.match(window.document.getElementById("error-region").textContent, /network offline/i);
+
+  mode = "unauthorized";
+  window.document.getElementById("refresh-health").click();
+  await waitFor(
+    () => !window.document.getElementById("login-panel").hidden,
+    "401 did not expire the administrator session",
+  );
+  assert.equal(window.document.getElementById("dashboard-shell").hidden, true);
+  assert.equal(window.document.getElementById("health-summary").textContent, "");
+  assert.equal(window.document.getElementById("health-notice").textContent, "");
+  assert.equal(window.document.querySelectorAll("#health-body tr").length, 0);
+  assert.match(window.document.getElementById("error-region").textContent, /session expired/i);
+});
+
+test("B9 a late provider health response after logout cannot restore stale data", { concurrency: false }, async (t) => {
+  const lateHealth = deferred();
+  let healthGets = 0;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/health/detailed" && call.method === "GET") {
+        healthGets += 1;
+        if (healthGets === 2) {
+          return lateHealth.promise;
+        }
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  window.document.querySelector('[data-view="health"]').click();
+  window.document.getElementById("refresh-health").click();
+  await waitFor(() => healthGets === 2, "late provider health request was not pending");
+
+  window.document.getElementById("sign-out").click();
+  lateHealth.resolve(
+    healthResponse({
+      status: "healthy",
+      reason: "ok",
+      timestamp: "2026-08-31T03:00:00Z",
+      providers: {
+        aggregate: "healthy",
+        healthy_providers: 1,
+        total_providers: 1,
+        enabled_providers: 1,
+        provider_details: [
+          { name: "must-not-return", status: "healthy", last_check: null },
+        ],
+      },
+    }),
+  );
+  await settle(12);
+
+  assert.equal(window.document.getElementById("dashboard-shell").hidden, true);
+  assert.equal(window.document.getElementById("health-summary").textContent, "");
+  assert.equal(window.document.getElementById("health-notice").textContent, "");
+  assert.equal(window.document.querySelectorAll("#health-body tr").length, 0);
+  assert.doesNotMatch(window.document.body.textContent, /must-not-return/);
 });

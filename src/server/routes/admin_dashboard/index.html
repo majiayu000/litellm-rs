@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <title>LiteLLM-RS Admin</title>
   <link rel="stylesheet" href="/admin/dashboard/app.css">
+  <script src="/admin/dashboard/provider-health.js" defer></script>
   <script src="/admin/dashboard/app.js" defer></script>
 </head>
 <body>
@@ -47,6 +48,8 @@
                 aria-controls="teams-panel" aria-selected="false">Teams</button>
         <button class="tab" type="button" data-view="spend"
                 aria-controls="spend-panel" aria-selected="false">Spend</button>
+        <button class="tab" type="button" data-view="health"
+                aria-controls="health-panel" aria-selected="false">Provider health</button>
       </nav>
 
       <section id="keys-panel" class="panel" aria-labelledby="keys-title">
@@ -205,6 +208,36 @@
             No teams on the current page.
           </p>
         </div>
+      </section>
+
+      <section id="health-panel" class="panel" aria-labelledby="health-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Live gateway snapshot</p>
+            <h2 id="health-title">Provider health</h2>
+            <p>Enabled providers and the latest upstream probe evidence.</p>
+          </div>
+          <button id="refresh-health" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <p id="health-summary" class="health-summary"></p>
+        <p id="health-notice" class="health-notice" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <caption>Configured provider health from the gateway</caption>
+            <thead>
+              <tr>
+                <th scope="col">Provider</th>
+                <th scope="col">Availability</th>
+                <th scope="col">Probe</th>
+                <th scope="col">Last probe</th>
+                <th scope="col">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="health-body"></tbody>
+          </table>
+        </div>
+        <p id="health-empty" class="empty-state" hidden>No providers configured.</p>
       </section>
     </section>
   </main>
