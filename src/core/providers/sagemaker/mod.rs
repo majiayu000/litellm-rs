@@ -120,6 +120,7 @@ impl SageMakerConfig {
         if let Some(variant) = &self.target_variant {
             validate_request_header_value("sagemaker", "target_variant", variant)?;
         }
+        Self::validate_segment("sagemaker", "region", &self.region)?;
         Self::validate_segment("sagemaker", "endpoint_name", &self.endpoint_name)?;
         if self.target_model.as_deref().is_some_and(str::is_empty)
             || self.target_variant.as_deref().is_some_and(str::is_empty)
@@ -426,5 +427,17 @@ mod tests {
                 "custom endpoint must reject {endpoint}"
             );
         }
+    }
+
+    #[test]
+    fn custom_endpoint_still_requires_a_valid_signing_region() {
+        assert!(
+            SageMakerProvider::new(SageMakerConfig {
+                region: "us-east-1/injected".to_string(),
+                base_url: Some("https://sagemaker.example.com".to_string()),
+                ..config()
+            })
+            .is_err()
+        );
     }
 }

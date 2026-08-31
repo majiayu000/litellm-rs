@@ -107,7 +107,10 @@ impl SigV4Signer {
         // Build canonical headers string
         let canonical_headers_str = sorted_headers
             .iter()
-            .map(|(k, v)| format!("{}:{}", k.to_lowercase(), v.trim()))
+            .map(|(k, v)| {
+                let value = v.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
+                format!("{}:{value}", k.to_lowercase())
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -375,6 +378,47 @@ mod tests {
             .expect("custom endpoint should sign");
 
         assert_eq!(signed["host"], "example.com:8443");
+    }
+
+    #[test]
+    fn canonical_headers_collapse_sequential_whitespace() {
+        let signer = SigV4Signer::new_for_service(
+            "AKIATEST".to_string(),
+            "testsecret".to_string(),
+            None,
+            "us-east-1".to_string(),
+            "sagemaker",
+        );
+        let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let compact = HashMap::from([(
+            "x-amzn-sagemaker-target-model".to_string(),
+            "tenant model.tar.gz".to_string(),
+        )]);
+        let spaced = HashMap::from([(
+            "x-amzn-sagemaker-target-model".to_string(),
+            "tenant   model.tar.gz".to_string(),
+        )]);
+
+        let compact = signer
+            .sign_request(
+                "POST",
+                "https://example.com/invoke",
+                &compact,
+                "{}",
+                timestamp,
+            )
+            .expect("compact header should sign");
+        let spaced = signer
+            .sign_request(
+                "POST",
+                "https://example.com/invoke",
+                &spaced,
+                "{}",
+                timestamp,
+            )
+            .expect("spaced header should sign");
+
+        assert_eq!(compact["Authorization"], spaced["Authorization"]);
     }
 
     #[test]
