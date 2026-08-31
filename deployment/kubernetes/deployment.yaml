@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: litellm-gateway
     app.kubernetes.io/component: gateway
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: "0.6.0"
 spec:
   replicas: 3
   strategy:
@@ -23,20 +23,20 @@ spec:
       labels:
         app.kubernetes.io/name: litellm-gateway
         app.kubernetes.io/component: gateway
-        app.kubernetes.io/version: "0.1.0"
+        app.kubernetes.io/version: "0.6.0"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
         prometheus.io/path: "/metrics"
     spec:
-      serviceAccountName: litellm-gateway
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         fsGroup: 1001
       containers:
       - name: gateway
-        image: majiayu000/litellm-rs:0.1.0
+        # Replace with the immutable image promoted by your deployment pipeline.
+        image: litellm-rs:latest
         imagePullPolicy: IfNotPresent
         ports:
         - name: http
@@ -50,9 +50,6 @@ spec:
           value: "info"
         - name: RUST_BACKTRACE
           value: "1"
-        envFrom:
-        - secretRef:
-            name: litellm-gateway-secrets
         volumeMounts:
         - name: config
           mountPath: /app/config
@@ -76,7 +73,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /health
+            path: /health/ready
             port: http
           initialDelaySeconds: 5
           periodSeconds: 5

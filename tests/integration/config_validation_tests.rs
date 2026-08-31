@@ -66,6 +66,24 @@ mod tests {
         assert!(config.providers()[0].base_url.is_none());
     }
 
+    #[test]
+    fn test_kubernetes_configmap_matches_gateway_schema() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("deployment/kubernetes/configmap.yaml");
+        let content = fs::read_to_string(path).expect("Kubernetes ConfigMap should exist");
+        let manifest: serde_yml::Value =
+            serde_yml::from_str(&content).expect("ConfigMap should be valid YAML");
+        let gateway_yaml = manifest["data"]["gateway.yaml"]
+            .as_str()
+            .expect("ConfigMap data.gateway.yaml should be a string");
+        let gateway: GatewayConfig =
+            serde_yml::from_str(gateway_yaml).expect("embedded gateway config should deserialize");
+
+        Config { gateway }
+            .validate()
+            .expect("embedded gateway config should validate");
+    }
+
     /// Test that server port 0 fails validation
     #[test]
     fn test_gateway_config_port_zero() {

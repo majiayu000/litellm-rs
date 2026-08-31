@@ -5,4 +5,4 @@ metadata:
   labels:
     name: litellm-gateway
     app.kubernetes.io/name: litellm-gateway
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: "0.6.0"

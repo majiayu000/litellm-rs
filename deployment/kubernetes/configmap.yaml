@@ -8,91 +8,117 @@ metadata:
     app.kubernetes.io/component: config
 data:
   gateway.yaml: |
+    schema_version: "1.0"
+
     server:
       host: "0.0.0.0"
       port: 8000
       workers: 4
+      max_connections: 1000
       timeout: 30
       max_body_size: 10485760
-      
+      dev_mode: false
+
+    # This credential-free local profile lets the gateway boot before an
+    # external provider is configured. Replace it for production traffic.
     providers:
-      - name: "openai-primary"
-        provider_type: "openai"
-        enabled: true
-        weight: 100
-        config:
-          api_key: "${OPENAI_API_KEY}"
-          base_url: "https://api.openai.com/v1"
+      - name: "local-vllm"
+        provider_type: "vllm"
+        api_key: ""
+        weight: 1.0
+        priority: 0
+        rpm: 1000
+        tpm: 100000
+        max_concurrent_requests: 100
+        timeout: 30
+        max_retries: 3
         models:
-          - "gpt-4"
-          - "gpt-3.5-turbo"
-        health_check:
-          enabled: true
-          interval: 30
-          timeout: 10
-          retries: 3
-          
-      - name: "anthropic-backup"
-        provider_type: "anthropic"
+          - "local-model"
+        tags: ["local"]
         enabled: true
-        weight: 80
-        config:
-          api_key: "${ANTHROPIC_API_KEY}"
-          base_url: "https://api.anthropic.com"
-        models:
-          - "claude-3-opus-20240229"
-          - "claude-3-sonnet-20240229"
-          
+
     router:
-      strategy: "least_latency"
-      health_check_interval: 30
-      retry_attempts: 3
-      provider_timeout: 30
-      
-    auth:
-      jwt:
-        enabled: true
-        secret: "${JWT_SECRET}"
-        expiration: 3600
-      api_key:
-        enabled: true
-        header: "Authorization"
-      rbac:
-        enabled: true
-        default_role: "user"
-        
+      strategy: "round_robin"
+      circuit_breaker:
+        failure_threshold: 5
+        recovery_timeout: 60
+        min_requests: 10
+        success_threshold: 3
+      load_balancer:
+        health_check_enabled: false
+        sticky_sessions: false
+        session_timeout: 3600
+
     storage:
       database:
-        url: "${DATABASE_URL}"
-        max_connections: 10
-        connection_timeout: 30
-      redis:
-        url: "${REDIS_URL}"
+        url: "postgresql://localhost/litellm"
         max_connections: 10
         connection_timeout: 5
-        
-    caching:
-      memory:
-        enabled: true
-        max_size: 1000
-        ttl: 300
+        ssl: false
+        enabled: false
+        auto_migrate: false
       redis:
-        enabled: true
-        ttl: 3600
-        key_prefix: "gateway:"
-        
+        url: "redis://localhost:6379"
+        enabled: false
+        max_connections: 20
+        connection_timeout: 5
+        cluster: false
+      vector_db: null
+
+    auth:
+      enable_jwt: false
+      enable_api_key: true
+      jwt_secret: ""
+      jwt_expiration: 86400
+      api_key_header: "Authorization"
+      allow_anonymous: false
+      rbac:
+        enabled: false
+        default_role: "user"
+        admin_roles: ["admin", "superuser"]
+
     monitoring:
       metrics:
         enabled: true
         port: 9090
         path: "/metrics"
-      health:
-        enabled: true
-        path: "/health"
-      logging:
-        level: "info"
-        format: "json"
+        interval_seconds: 15
       tracing:
-        enabled: true
-        endpoint: "${JAEGER_ENDPOINT}"
-        service_name: "rust-litellm-gateway"
+        enabled: false
+        endpoint: null
+        service_name: "litellm-rs"
+        sampling_rate: 0.1
+        jaeger: null
+      health:
+        path: "/health"
+        detailed: true
+      logging: null
+
+    cache:
+      enabled: false
+      ttl: 3600
+      max_size: 1000
+      semantic_cache: false
+      similarity_threshold: 0.95
+
+    pricing:
+      source: "embedded://model_prices_extended"
+      allow_degraded: false
+      unpriced_model_policy: allow_unpriced
+      unpriced_fallback_cost_per_1k_tokens: 0.0
+
+    rate_limit:
+      enabled: true
+      strategy: token_bucket
+      default_rpm: 1000
+      default_tpm: 100000
+      requests_per_second: null
+      requests_per_minute: null
+      tokens_per_minute: null
+      burst_size: null
+
+    enterprise:
+      enabled: false
+      sso: null
+      audit_logging: false
+      advanced_analytics: false
