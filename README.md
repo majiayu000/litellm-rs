@@ -10,7 +10,7 @@ A high-performance Rust library and gateway for calling LLM APIs in an OpenAI-co
 
 - **60+ runtime-wired providers** - OpenAI, Anthropic, AWS Bedrock, Mistral, Cloudflare, plus 50+ OpenAI-compatible providers via the Tier 1 catalog. See [Provider Support](#provider-support) for the full matrix.
 - **OpenAI-Compatible API** - Drop-in replacement for OpenAI SDK
-- **High Performance** - 10,000+ requests/second, <10ms routing overhead
+- **Measured Performance** - Reproducible [gateway-overhead benchmark methodology](./docs/benchmarks/gateway-overhead.md)
 - **Intelligent Routing** - Load balancing, failover, cost optimization
 - **Gateway Controls** - Default-on prompt-injection guardrails, configured IP access, auth, rate limiting, deterministic caching, metrics, and health endpoints
 
@@ -334,10 +334,13 @@ while let Some(chunk) = stream.next().await {
 
 ## Performance
 
-- **Throughput**: 10,000+ requests/second
-- **Latency**: <10ms routing overhead
-- **Memory**: ~50MB base footprint
-- **Concurrency**: Fully async with Tokio
+Gateway throughput and latency claims require a dated raw artifact tied to an
+exact Git revision. See the [reproducible gateway-overhead benchmark
+methodology](./docs/benchmarks/gateway-overhead.md) for the fixed workload,
+commands, environment metadata, percentile reporting, and artifact format.
+
+The Criterion benchmarks under `benches/` measure in-process components; they
+must not be presented as end-to-end HTTP gateway throughput.
 
 ## Troubleshooting
 
