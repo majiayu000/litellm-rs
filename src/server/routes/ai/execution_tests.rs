@@ -225,6 +225,72 @@ async fn test_execute_with_selected_deployment_maps_provider_error() {
 }
 
 #[tokio::test]
+async fn native_media_mutations_fail_over_after_explicit_rate_limit_response() {
+    for capability in [
+        ProviderCapability::ImageGeneration,
+        ProviderCapability::ImageEdit,
+    ] {
+        let router = UnifiedRouter::new(RouterConfig {
+            routing_strategy: UnifiedRoutingStrategy::PriorityBased,
+            num_retries: 1,
+            ..Default::default()
+        });
+        for (deployment_id, priority) in [("image-primary", 0), ("image-secondary", 10)] {
+            let provider = Provider::OpenAI(
+                OpenAIProvider::with_api_key("sk-test-key")
+                    .await
+                    .expect("test provider should build"),
+            );
+            router.add_deployment(
+                Deployment::new(
+                    deployment_id.to_string(),
+                    provider,
+                    "gpt-image-1".to_string(),
+                    "image-model".to_string(),
+                )
+                .with_config(DeploymentConfig {
+                    priority,
+                    ..Default::default()
+                }),
+            );
+        }
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+
+        let result =
+            execute_with_selected_deployment(&router, "image-model", capability.clone(), {
+                let attempts = attempts.clone();
+                move |_provider, _model, deployment_id| {
+                    let attempts = attempts.clone();
+                    async move {
+                        attempts
+                            .lock()
+                            .expect("attempt lock")
+                            .push(deployment_id.clone());
+                        if deployment_id == "image-primary" {
+                            Err(ProviderError::api_error(
+                                "native-media",
+                                429,
+                                "rate limited",
+                            ))
+                        } else {
+                            Ok((deployment_id, 0))
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("explicit rate-limit response should fail over");
+
+        assert_eq!(result, "image-secondary", "{capability:?}");
+        assert_eq!(
+            attempts.lock().expect("attempt lock").as_slice(),
+            ["image-primary", "image-secondary"],
+            "{capability:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_execute_with_selected_deployment_excludes_provider_budget_failures() {
     let router = build_provider_budget_fallback_router().await;
     let attempts = Arc::new(Mutex::new(Vec::new()));

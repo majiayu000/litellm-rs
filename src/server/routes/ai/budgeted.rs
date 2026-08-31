@@ -247,6 +247,18 @@ impl BudgetedCall {
         }
     }
 
+    pub(super) fn reserve_for_call<Reserve>(
+        self,
+        reserve: Reserve,
+    ) -> Result<(BudgetReservations, BudgetContext), ProviderError>
+    where
+        Reserve: FnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
+    {
+        let context = self.context();
+        let reservations = self.reserve(reserve)?;
+        Ok((reservations, context))
+    }
+
     pub(super) async fn reserve_call_settle<T, Reserve, Call, CallFuture, Settle, SettleFuture>(
         self,
         reserve: Reserve,
@@ -335,7 +347,7 @@ impl BudgetReservations {
         (self.budget, self.key)
     }
 
-    fn cancel(&mut self) {
+    pub(super) fn cancel(&mut self) {
         if let Some(reservation) = self.budget.take() {
             reservation.cancel();
         }

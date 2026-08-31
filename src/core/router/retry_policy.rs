@@ -48,6 +48,16 @@ impl RetryContext {
         )
     }
 
+    pub fn unary_non_idempotent(attempt: u32, max_attempts: u32) -> Self {
+        Self::new(
+            RetryOperation::Unary,
+            StreamRetryStage::NotStreaming,
+            RequestIdempotency::NonIdempotent,
+            attempt,
+            max_attempts,
+        )
+    }
+
     pub fn stream_pre_output(attempt: u32, max_attempts: u32) -> Self {
         Self::new(
             RetryOperation::Streaming,
