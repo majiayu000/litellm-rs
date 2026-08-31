@@ -13,6 +13,10 @@ if [[ -z "$output_path" ]]; then
   echo "usage: $0 <artifact.json>" >&2
   exit 2
 fi
+if [[ -e "$output_path" || -L "$output_path" ]]; then
+  echo "benchmark artifact already exists: $output_path" >&2
+  exit 1
+fi
 
 for command in cargo curl git jq oha python3 rustc; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -22,15 +26,96 @@ for command in cargo curl git jq oha python3 rustc; do
 done
 
 oha_version=$(oha --version)
-if [[ "$oha_version" != *"$OHA_VERSION"* ]]; then
-  echo "oha $OHA_VERSION is required; found: $oha_version" >&2
+if [[ "$oha_version" != "oha $OHA_VERSION" ]]; then
+  echo "exact oha version 'oha $OHA_VERSION' is required; found: $oha_version" >&2
   exit 1
 fi
+
+for variable in \
+  RUSTFLAGS \
+  RUSTDOCFLAGS \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  CARGO_ENCODED_RUSTFLAGS \
+  CARGO_BUILD_RUSTC_WRAPPER \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
+  CARGO_BUILD_TARGET \
+  CARGO_INCREMENTAL; do
+  if [[ ${!variable+x} ]]; then
+    echo "build override is not allowed: $variable" >&2
+    exit 1
+  fi
+done
+while IFS='=' read -r variable _; do
+  case "$variable" in
+    CARGO_PROFILE_RELEASE_* | CARGO_TARGET_*_RUSTFLAGS | CARGO_TARGET_*_LINKER)
+      echo "build override is not allowed: $variable" >&2
+      exit 1
+      ;;
+  esac
+done < <(env)
 
 if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
   echo "benchmark evidence requires a clean Git worktree" >&2
   exit 1
 fi
+source_git_sha=$(git -C "$repo_root" rev-parse HEAD)
+readonly source_git_sha
+python_version=$(python3 -VV 2>&1)
+readonly python_version
+
+verify_source_unchanged() {
+  if [[ "$(git -C "$repo_root" rev-parse HEAD)" != "$source_git_sha" ]] ||
+    [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
+    echo "Git HEAD or worktree changed after the benchmark source was captured" >&2
+    return 1
+  fi
+}
+
+require_port_available() {
+  local port=$1
+  if ! python3 - "$port" <<'PY'
+import socket
+import sys
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(("127.0.0.1", int(sys.argv[1])))
+PY
+  then
+    echo "benchmark port is already in use: 127.0.0.1:$port" >&2
+    return 1
+  fi
+}
+
+wait_for_child_service() {
+  local pid=$1
+  local url=$2
+  local log_path=$3
+  local attempts=$4
+  local label=$5
+  local attempt
+
+  for ((attempt = 0; attempt < attempts; attempt += 1)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "$label process exited before becoming ready; log follows" >&2
+      sed -n '1,160p' "$log_path" >&2
+      return 1
+    fi
+    if curl --fail --silent "$url" >/dev/null; then
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "$label process exited during its readiness check; log follows" >&2
+        sed -n '1,160p' "$log_path" >&2
+        return 1
+      fi
+      return 0
+    fi
+    sleep 0.05
+  done
+
+  echo "$label failed to become ready; log follows" >&2
+  sed -n '1,160p' "$log_path" >&2
+  return 1
+}
 
 case "$(uname -s)" in
   Darwin)
@@ -56,9 +141,11 @@ fi
 tmp_dir=$(mktemp -d)
 mock_pid=""
 gateway_pid=""
+artifact_tmp=""
 cleanup() {
   if [[ -n "$gateway_pid" ]]; then kill "$gateway_pid" 2>/dev/null || true; fi
   if [[ -n "$mock_pid" ]]; then kill "$mock_pid" 2>/dev/null || true; fi
+  if [[ -n "$artifact_tmp" ]]; then rm -f "$artifact_tmp"; fi
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT INT TERM
@@ -71,31 +158,19 @@ cd "$repo_root"
 cargo build "${BUILD_FLAGS[@]}"
 target/release/gateway --config scripts/bench/gateway-overhead.yaml validate-config
 
+require_port_available 18000
 python3 scripts/bench/mock_openai.py >"$tmp_dir/mock.log" 2>&1 &
 mock_pid=$!
-for _ in {1..100}; do
-  if curl --fail --silent http://127.0.0.1:18000/health >/dev/null; then break; fi
-  sleep 0.05
-done
-if ! curl --fail --silent http://127.0.0.1:18000/health >/dev/null; then
-  echo "mock upstream failed to start; log follows" >&2
-  sed -n '1,120p' "$tmp_dir/mock.log" >&2
-  exit 1
-fi
+wait_for_child_service \
+  "$mock_pid" http://127.0.0.1:18000/health "$tmp_dir/mock.log" 100 "mock upstream"
 
+require_port_available 18080
 target/release/gateway \
   --config scripts/bench/gateway-overhead.yaml \
   --log-level error serve >"$tmp_dir/gateway.log" 2>&1 &
 gateway_pid=$!
-for _ in {1..200}; do
-  if curl --fail --silent http://127.0.0.1:18080/health >/dev/null; then break; fi
-  sleep 0.05
-done
-if ! curl --fail --silent http://127.0.0.1:18080/health >/dev/null; then
-  echo "gateway failed to start; log follows" >&2
-  sed -n '1,160p' "$tmp_dir/gateway.log" >&2
-  exit 1
-fi
+wait_for_child_service \
+  "$gateway_pid" http://127.0.0.1:18080/health "$tmp_dir/gateway.log" 200 gateway
 
 response_file="$tmp_dir/response.json"
 curl --fail --silent \
@@ -126,10 +201,12 @@ oha "${oha_args[@]}" \
 jq -e '.summary.successRate == 1 and (.errorDistribution | length == 0)' \
   "$tmp_dir/oha.json" >/dev/null
 
-mkdir -p "$(dirname "$output_path")"
+artifact_dir=$(dirname "$output_path")
+mkdir -p "$artifact_dir"
+artifact_tmp=$(mktemp "$artifact_dir/.gateway-overhead.XXXXXX")
 jq -n \
   --arg captured_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-  --arg git_sha "$(git rev-parse HEAD)" \
+  --arg git_sha "$source_git_sha" \
   --arg os_name "$(uname -s)" \
   --arg os_release "$(uname -r)" \
   --arg architecture "$(uname -m)" \
@@ -138,6 +215,7 @@ jq -n \
   --argjson memory_bytes "$memory_bytes" \
   --arg rust "$(rustc -Vv)" \
   --arg cargo "$(cargo -V)" \
+  --arg python "$python_version" \
   --arg oha "$oha_version" \
   --argjson concurrency "$CONCURRENCY" \
   --argjson warmup_seconds "$WARMUP_SECONDS" \
@@ -162,6 +240,7 @@ jq -n \
       os: {name: $os_name, release: $os_release, architecture: $architecture},
       rust: $rust,
       cargo: $cargo,
+      python: $python,
       oha: $oha
     },
     workload: {
@@ -184,13 +263,14 @@ jq -n \
       error_rate: (1 - $raw[0].summary.successRate)
     },
     oha_raw: $raw[0]
-  }' >"$output_path"
+  }' >"$artifact_tmp"
 
 jq -e '
   .source.git_sha and
   .environment.hardware.cpu_model and
   .environment.os.name and
   .environment.rust and
+  .environment.python and
   .workload.request_bytes and
   .workload.response_bytes and
   .results.requests_per_second and
@@ -198,7 +278,15 @@ jq -e '
   .results.latency_ms.p95 and
   .results.latency_ms.p99 and
   (.results.error_rate >= 0)
-' "$output_path" >/dev/null
+' "$artifact_tmp" >/dev/null
+
+verify_source_unchanged
+if ! ln "$artifact_tmp" "$output_path"; then
+  echo "benchmark artifact already exists: $output_path" >&2
+  exit 1
+fi
+rm -f "$artifact_tmp"
+artifact_tmp=""
 
 echo "wrote benchmark artifact: $output_path"
 jq '.results' "$output_path"

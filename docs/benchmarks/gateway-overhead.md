@@ -13,7 +13,8 @@ configuration so the result has one stated boundary.
 
 - macOS or Linux
 - the repository's Rust toolchain
-- `python3`, `curl`, and `jq`
+- `python3`, `curl`, and `jq` (`python3 -VV` is recorded because the mock is
+  part of the measured path)
 - [`oha` 1.16.0](https://github.com/hatoo/oha/releases/tag/v1.16.0)
 
 Install the pinned load-generator release and run from a clean checkout:
@@ -21,14 +22,16 @@ Install the pinned load-generator release and run from a clean checkout:
 ```bash
 cargo install oha --version 1.16.0 --locked
 scripts/bench/run_gateway_overhead.sh \
-  artifacts/benchmarks/gateway-overhead-$(date -u +%Y-%m-%d).json
+  artifacts/benchmarks/gateway-overhead-$(date -u +%Y-%m-%dT%H%M%SZ).json
 ```
 
 The script builds `gateway` with the recorded `build_flags` of `--release --bin
 gateway`, validates the benchmark config, starts the deterministic mock and
 gateway, runs a 10-second warmup, then measures for 60 seconds at concurrency
-64. It fails if the Git tree is dirty, the tool version differs, a service
-cannot start, or any request fails.
+64. It rejects unrecorded Cargo/Rust build overrides and fails if the Git tree
+or HEAD changes, the exact tool version differs, either benchmark port is
+already owned, a spawned service exits, the output artifact exists, or any
+request fails.
 
 Keep the load generator, gateway, and mock on an otherwise idle machine. Record
 every run rather than selecting the best result. For comparisons, use the same
@@ -73,6 +76,7 @@ below. `latency_ms` is end-to-end client-observed latency.
     "os": {"name": "Darwin", "release": "...", "architecture": "arm64"},
     "rust": "complete rustc -Vv output",
     "cargo": "cargo version",
+    "python": "complete python3 -VV output",
     "oha": "oha 1.16.0"
   },
   "workload": {

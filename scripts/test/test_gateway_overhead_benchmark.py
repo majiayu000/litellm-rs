@@ -6,7 +6,9 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import json
+import os
 import subprocess
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -29,6 +31,39 @@ def load_mock_module():
 
 
 class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
+    def run_preflight(
+        self,
+        *,
+        oha_version: str = "oha 1.16.0",
+        extra_env: dict[str, str] | None = None,
+        existing_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            bin_dir = temp_dir / "bin"
+            bin_dir.mkdir()
+            fake_oha = bin_dir / "oha"
+            fake_oha.write_text(
+                f"#!/bin/sh\nprintf '%s\\n' '{oha_version}'\n",
+                encoding="utf-8",
+            )
+            fake_oha.chmod(0o755)
+            output = temp_dir / "artifact.json"
+            if existing_output:
+                output.write_text("do not replace", encoding="utf-8")
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
+            if extra_env:
+                environment.update(extra_env)
+            return subprocess.run(
+                ["bash", str(RUNNER_PATH), str(output)],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
     def test_mock_upstream_returns_a_fixed_openai_response(self) -> None:
         module = load_mock_module()
         server = module.create_server("127.0.0.1", 0)
@@ -103,6 +138,28 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertIn("endpoint_access: private_network", config)
         self.assertIn("cache:\n  enabled: false", config)
         self.assertIn("rate_limit:\n  enabled: false", config)
+        self.assertIn("python", runner)
+        self.assertIn("python", methodology)
+        self.assertIn("python3 -VV", runner)
+        self.assertIn("kill -0", runner)
+        self.assertIn("source_git_sha", runner)
+        self.assertIn("CARGO_PROFILE_RELEASE_", runner)
+        self.assertIn("%Y-%m-%dT%H%M%SZ", methodology)
+
+    def test_runner_requires_the_exact_oha_release(self) -> None:
+        result = self.run_preflight(oha_version="oha 1.16.0-dev")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact oha version", result.stderr)
+
+    def test_runner_rejects_unrecorded_build_overrides(self) -> None:
+        result = self.run_preflight(extra_env={"RUSTFLAGS": "-C target-cpu=native"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("build override is not allowed: RUSTFLAGS", result.stderr)
+
+    def test_runner_refuses_an_existing_artifact(self) -> None:
+        result = self.run_preflight(existing_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("benchmark artifact already exists", result.stderr)
 
     def test_readme_does_not_make_unpublished_gateway_performance_claims(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
