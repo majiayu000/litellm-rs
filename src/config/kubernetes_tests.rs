@@ -45,4 +45,8 @@ fn kubernetes_manifests_match_runtime_contract() {
         deployment.pointer("/spec/template/spec/containers/0/image"),
         Some(&serde_json::json!("litellm-rs:latest"))
     );
+    assert_eq!(
+        deployment.pointer("/spec/template/spec/containers/0/imagePullPolicy"),
+        Some(&serde_json::json!("Always"))
+    );
 }

@@ -35,7 +35,7 @@ spec:
       - name: gateway
         # Replace with the immutable image promoted by your deployment pipeline.
         image: litellm-rs:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         ports:
         - name: http
           containerPort: 8000
