@@ -101,6 +101,8 @@ fn disabled_feature_gated_runtime_module_names() -> BTreeSet<&'static str> {
     for provider_type in [
         ProviderType::Cohere,
         ProviderType::FalAI,
+        ProviderType::Stability,
+        ProviderType::BlackForestLabs,
         ProviderType::Gemini,
         ProviderType::GitHubCopilot,
         ProviderType::Ollama,

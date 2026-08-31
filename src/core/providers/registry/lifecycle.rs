@@ -57,6 +57,10 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     internal("base", "shared provider infrastructure"),
     wire("bedrock", "native Provider enum variant"),
+    providers_extended_wire(
+        "black_forest_labs",
+        "ProviderType::BlackForestLabs dispatches to native asynchronous image endpoints",
+    ),
     wire("cloudflare", "native Provider enum variant"),
     wire("databricks", "typed Databricks Model Serving runtime"),
     wire("deepgram", "native audio Provider enum variant"),
@@ -106,6 +110,10 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
     wire("sagemaker", "typed SageMaker InvokeEndpoint runtime"),
     wire("snowflake", "typed Snowflake Cortex runtime"),
+    providers_extended_wire(
+        "stability",
+        "ProviderType::Stability dispatches to native v2beta image endpoints",
+    ),
     internal("thinking", "shared thinking/reasoning support"),
     stub(
         "v0",

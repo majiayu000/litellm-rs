@@ -1,4 +1,100 @@
 use super::*;
+use crate::core::net::ProviderEndpointAccess;
+use crate::core::types::context::RequestContext;
+use crate::core::types::image::ImageEditRequest;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+async fn read_full_request(socket: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = socket.read(&mut buffer).await.expect("request should read");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&request).into_owned()
+}
+
+fn image_edit_request() -> ImageEditRequest {
+    ImageEditRequest {
+        image: b"source-image".to_vec(),
+        mask: Some(b"mask-image".to_vec()),
+        prompt: "replace the sky".to_string(),
+        model: Some("gpt-image-1".to_string()),
+        n: Some(1),
+        size: Some("1024x1024".to_string()),
+        response_format: Some("b64_json".to_string()),
+        user: Some("test-user".to_string()),
+    }
+}
+
+async fn redirecting_image_edit_server(
+    status: u16,
+    reason: &'static str,
+) -> (String, tokio::task::JoinHandle<Option<String>>) {
+    let source = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("redirect source should bind");
+    let source_address = source.local_addr().expect("source address should exist");
+    let sink = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("redirect sink should bind");
+    let sink_address = sink.local_addr().expect("sink address should exist");
+    let server = tokio::spawn(async move {
+        let (mut source_socket, _) = source.accept().await.expect("edit request should arrive");
+        let _request = read_full_request(&mut source_socket).await;
+        source_socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status} {reason}\r\nLocation: http://{sink_address}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("redirect should write");
+
+        let Ok(Ok((mut sink_socket, _))) =
+            tokio::time::timeout(Duration::from_millis(250), sink.accept()).await
+        else {
+            return None;
+        };
+        let request = read_full_request(&mut sink_socket).await;
+        let body = r#"{"created":1,"data":[]}"#;
+        sink_socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("sink response should write");
+        Some(request)
+    });
+    (format!("http://{source_address}/v1"), server)
+}
 
 #[test]
 fn test_provider_enum_is_send_sync() {
@@ -146,4 +242,263 @@ async fn test_provider_supports_capability_for_optional_provider() {
     assert!(provider.supports_capability(&ProviderCapability::ChatCompletionStream));
     assert!(provider.supports_capability(&ProviderCapability::Embeddings));
     assert!(provider.supports_capability(&ProviderCapability::TextToSpeech));
+}
+
+#[tokio::test]
+async fn advertised_openai_image_edit_variants_dispatch_upstream() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("image edit listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener address should exist");
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_server = Arc::clone(&captured);
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("edit request should arrive");
+            let request = read_full_request(&mut socket).await;
+            captured_for_server
+                .lock()
+                .expect("capture lock")
+                .push(request);
+            let body = r#"{"created":1,"data":[{"b64_json":"edited"}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("response should write");
+        }
+    });
+
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test".to_string());
+    openai_config.base.api_base = Some(format!("http://{address}/v1"));
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize"),
+    );
+
+    let mut compatible_config = openai_like::OpenAILikeConfig::with_api_key(
+        format!("http://{address}/v1"),
+        "compatible-secret",
+    )
+    .with_model_prefix("custom/");
+    compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let compatible = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
+            .await
+            .expect("OpenAI-compatible provider should initialize"),
+    );
+
+    for provider in [&openai, &compatible] {
+        assert!(provider.supports_capability(&ProviderCapability::ImageEdit));
+        let mut request = image_edit_request();
+        request.model = Some("custom/gpt-image-1".to_string());
+        let response = provider
+            .edit_image(request, RequestContext::default())
+            .await
+            .expect("advertised image edit should dispatch upstream");
+        assert_eq!(response.data[0].b64_json.as_deref(), Some("edited"));
+    }
+    server.await.expect("image edit server should finish");
+
+    let captured = captured.lock().expect("capture lock");
+    assert_eq!(captured.len(), 2);
+    for request in captured.iter() {
+        assert!(request.starts_with("POST /v1/images/edits HTTP/1.1"));
+        assert!(request.contains("multipart/form-data; boundary="));
+        assert!(request.contains("name=\"image\""));
+        assert!(request.contains("source-image"));
+        assert!(request.contains("name=\"mask\""));
+        assert!(request.contains("mask-image"));
+        assert!(request.contains("name=\"prompt\""));
+        assert!(request.contains("replace the sky"));
+        assert!(request.contains("name=\"model\""));
+    }
+    assert!(captured[0].contains("custom/gpt-image-1"));
+    assert!(captured[1].contains("gpt-image-1"));
+    assert!(!captured[1].contains("custom/gpt-image-1"));
+}
+
+#[tokio::test]
+async fn credentialed_image_edits_do_not_follow_cross_origin_redirects() {
+    let (openai_base, openai_server) =
+        redirecting_image_edit_server(307, "Temporary Redirect").await;
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test".to_string());
+    openai_config.base.api_base = Some(openai_base);
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    openai_config.base.headers.insert(
+        "x-proxy-secret".to_string(),
+        "openai-placeholder".to_string(),
+    );
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize"),
+    );
+    let openai_result = openai
+        .edit_image(image_edit_request(), RequestContext::default())
+        .await;
+    let openai_sink_request = openai_server.await.expect("redirect server should finish");
+
+    let (compatible_base, compatible_server) =
+        redirecting_image_edit_server(308, "Permanent Redirect").await;
+    let mut compatible_config =
+        openai_like::OpenAILikeConfig::with_api_key(compatible_base, "compatible-placeholder");
+    compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    compatible_config.custom_headers.insert(
+        "x-proxy-secret".to_string(),
+        "compatible-placeholder".to_string(),
+    );
+    let compatible = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
+            .await
+            .expect("OpenAI-compatible provider should initialize"),
+    );
+    let compatible_result = compatible
+        .edit_image(image_edit_request(), RequestContext::default())
+        .await;
+    let compatible_sink_request = compatible_server
+        .await
+        .expect("redirect server should finish");
+
+    assert!(
+        matches!(
+            openai_result,
+            Err(ProviderError::ApiError { status: 307, .. })
+        ),
+        "{openai_result:?}"
+    );
+    assert!(openai_sink_request.is_none(), "OpenAI secret was replayed");
+    assert!(
+        matches!(
+            compatible_result,
+            Err(ProviderError::ApiError { status: 308, .. })
+        ),
+        "{compatible_result:?}"
+    );
+    assert!(
+        compatible_sink_request.is_none(),
+        "OpenAI-compatible secret was replayed"
+    );
+}
+
+#[tokio::test]
+async fn typed_image_edits_reject_successes_without_usable_images() {
+    let invalid_bodies = [
+        r#"{"created":1,"data":[]}"#,
+        r#"{"created":1,"data":[{}]}"#,
+        r#"{"created":1,"data":[{"url":"  ","b64_json":"\t"}]}"#,
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("invalid response listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener address should exist");
+    let server = tokio::spawn(async move {
+        for body in invalid_bodies.into_iter().cycle().take(6) {
+            let (mut socket, _) = listener.accept().await.expect("edit request should arrive");
+            let _request = read_full_request(&mut socket).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("invalid response should write");
+        }
+    });
+
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test".to_string());
+    openai_config.base.api_base = Some(format!("http://{address}/v1"));
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize"),
+    );
+    let mut compatible_config = openai_like::OpenAILikeConfig::with_api_key(
+        format!("http://{address}/v1"),
+        "compatible-placeholder",
+    );
+    compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let compatible = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(compatible_config)
+            .await
+            .expect("OpenAI-compatible provider should initialize"),
+    );
+
+    for provider in [&openai, &compatible] {
+        for _ in &invalid_bodies {
+            let error = provider
+                .edit_image(image_edit_request(), RequestContext::default())
+                .await
+                .expect_err("empty image edit success must be rejected");
+            assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+        }
+    }
+    server.await.expect("invalid response server should finish");
+}
+
+#[tokio::test]
+async fn typed_image_edits_reject_invalid_final_headers_before_io() {
+    let mut openai_config = openai::OpenAIConfig::default();
+    openai_config.base.api_key = Some("sk-test\nsecret".to_string());
+    openai_config.base.api_base = Some("http://127.0.0.1:1/v1".to_string());
+    openai_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let openai = Provider::OpenAI(
+        openai::OpenAIProvider::new(openai_config)
+            .await
+            .expect("OpenAI provider should initialize before adapter validation"),
+    );
+
+    let mut invalid_name = openai_like::OpenAILikeConfig::with_api_key(
+        "http://127.0.0.1:1/v1",
+        "compatible-placeholder",
+    );
+    invalid_name.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    invalid_name
+        .custom_headers
+        .insert("bad\nname".to_string(), "value".to_string());
+    let invalid_name = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(invalid_name)
+            .await
+            .expect("compatible provider should initialize before adapter validation"),
+    );
+
+    let mut invalid_value = openai_like::OpenAILikeConfig::with_api_key(
+        "http://127.0.0.1:1/v1",
+        "compatible-placeholder",
+    );
+    invalid_value.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    invalid_value
+        .custom_headers
+        .insert("x-route".to_string(), "bad\r\nvalue".to_string());
+    let invalid_value = Provider::OpenAILike(
+        openai_like::OpenAILikeProvider::new_openai_compatible(invalid_value)
+            .await
+            .expect("compatible provider should initialize before adapter validation"),
+    );
+
+    for provider in [&openai, &invalid_name, &invalid_value] {
+        let error = provider
+            .edit_image(image_edit_request(), RequestContext::default())
+            .await
+            .expect_err("invalid final headers must fail before network access");
+        assert!(matches!(error, ProviderError::Configuration { .. }));
+    }
 }

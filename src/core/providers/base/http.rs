@@ -150,6 +150,13 @@ impl BaseHttpClient {
         }
     }
 
+    #[cfg(feature = "providers-extended")]
+    pub(crate) fn request_error_may_have_been_dispatched(error: &reqwest::Error) -> bool {
+        !ProviderHttpClient::request_error_is_endpoint_policy(error)
+            && !error.is_builder()
+            && !error.is_connect()
+    }
+
     /// Create a policy-checked GET request builder.
     pub fn get<U: IntoUrl>(&self, url: U) -> Result<ProviderRequestBuilder, ProviderError> {
         self.request(Method::GET, url)
@@ -212,6 +219,16 @@ impl HttpErrorMapper {
             500..=599 => ProviderError::api_error(provider, status, message),
             _ => ProviderError::api_error(provider, status, message),
         }
+    }
+
+    /// Map a known error status when its response body could not be read.
+    #[cfg(feature = "providers-extended")]
+    pub(crate) fn map_status_without_body(provider: &'static str, status: u16) -> ProviderError {
+        Self::map_status_code(
+            provider,
+            status,
+            &format!("Provider returned HTTP {status}, but its error body was unavailable"),
+        )
     }
 
     /// Parse JSON error response.

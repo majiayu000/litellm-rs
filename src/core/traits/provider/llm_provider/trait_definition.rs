@@ -19,7 +19,7 @@ use crate::core::types::{
     context::RequestContext,
     embedding::EmbeddingRequest,
     health::HealthStatus,
-    image::ImageGenerationRequest,
+    image::{ImageEditRequest, ImageGenerationRequest},
     model::ModelInfo,
     model::ProviderCapability,
     responses::{ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse},
@@ -380,6 +380,18 @@ pub trait LLMProvider: Send + Sync + Debug + 'static {
         Err(ProviderError::not_supported(
             self.error_provider_name(),
             "image_generation",
+        ))
+    }
+
+    /// Edit an image through a provider-native image editing endpoint.
+    async fn image_edit(
+        &self,
+        _request: ImageEditRequest,
+        _context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        Err(ProviderError::not_supported(
+            self.error_provider_name(),
+            "image_edit",
         ))
     }
 

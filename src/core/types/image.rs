@@ -58,6 +58,25 @@ pub struct ImageGenerationRequest {
     pub user: Option<String>,
 }
 
+/// Unified image editing request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageEditRequest {
+    pub image: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mask: Option<Vec<u8>>,
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
 /// Audio transcription request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioTranscriptionRequest {

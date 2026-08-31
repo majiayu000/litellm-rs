@@ -166,6 +166,10 @@ fn expected_readme_tier2_row(entry: &ProviderRegistryEntry) -> Option<ExpectedRe
             "native factory (`providers-extended`)",
             ["–", "–", "–", "✅", "–"],
         )),
+        ProviderType::Stability | ProviderType::BlackForestLabs => Some(expected(
+            "native factory (`providers-extended`)",
+            ["–", "–", "–", "✅", "–"],
+        )),
         ProviderType::Replicate => Some(expected(
             "native factory (`providers-extended`)",
             ["✅", "✅", "–", "✅", "–"],

@@ -223,9 +223,6 @@ pub async fn create_provider(
     if !api_key.is_empty() {
         factory_config.insert("api_key".to_string(), Value::String(api_key.clone()));
     }
-    if let Some(value) = base_url.filter(|v| !v.is_empty()) {
-        factory_config.insert("base_url".to_string(), Value::String(value));
-    }
     if let Some(value) = api_version.filter(|v| !v.is_empty()) {
         factory_config.insert("api_version".to_string(), Value::String(value));
     }
@@ -247,9 +244,13 @@ pub async fn create_provider(
         );
     }
 
-    for (key, value) in settings {
-        factory_config.entry(key).or_insert(value);
-    }
+    endpoint_policy::merge_factory_endpoint_and_settings(
+        &mut factory_config,
+        &provider_type_enum,
+        base_url.as_deref().filter(|value| !value.is_empty()),
+        configured_endpoint,
+        &settings,
+    );
 
     if matches!(provider_type_enum, ProviderType::Cloudflare)
         && !factory_config.contains_key("api_token")

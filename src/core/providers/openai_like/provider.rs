@@ -1,7 +1,4 @@
 //! OpenAI-Like Provider Implementation
-//!
-//! Main provider implementation for any OpenAI-compatible API endpoint
-
 use futures::Stream;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -19,8 +16,9 @@ use crate::core::types::{
     chat::ChatRequest,
     context::RequestContext,
     health::HealthStatus,
+    image::ImageEditRequest,
     model::{ModelInfo, ProviderCapability},
-    responses::{ChatChunk, ChatResponse},
+    responses::{ChatChunk, ChatResponse, ImageGenerationResponse},
 };
 
 use super::{
@@ -688,9 +686,24 @@ impl LLMProvider for OpenAILikeProvider {
     {
         self.execute_chat_completion_stream(request).await
     }
-
+    async fn image_edit(
+        &self,
+        mut request: ImageEditRequest,
+        _context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        request.model = request
+            .model
+            .map(|model| self.config.get_effective_model(&model));
+        crate::core::providers::openai::execute_image_edit(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            request,
+            PROVIDER_NAME,
+        )
+        .await
+    }
     async fn health_check(&self) -> HealthStatus {
-        // Try to connect to the API base via pool_manager's client
         let url = format!("{}/models", self.config.get_api_base());
         match self
             .pool_manager
@@ -705,7 +718,6 @@ impl LLMProvider for OpenAILikeProvider {
             Err(_) => HealthStatus::Unhealthy,
         }
     }
-
     async fn calculate_cost(
         &self,
         model: &str,
@@ -737,26 +749,21 @@ impl LLMProvider for OpenAILikeProvider {
                 format!("pricing is unavailable for model '{model}'"),
             ));
         }
-
         let input_cost = model_info
             .input_cost_per_1k_tokens
             .map(|cost| (input_tokens as f64 / 1000.0) * cost)
             .unwrap_or(0.0);
-
         let output_cost = model_info
             .output_cost_per_1k_tokens
             .map(|cost| (output_tokens as f64 / 1000.0) * cost)
             .unwrap_or(0.0);
-
         Ok(input_cost + output_cost)
     }
-
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
         crate::core::providers::registry::catalog_policy::catalog_provider_supported_openai_params(
             &self.provider_name,
         )
     }
-
     async fn map_openai_params(
         &self,
         params: HashMap<String, Value>,
@@ -769,7 +776,6 @@ impl LLMProvider for OpenAILikeProvider {
             ),
         )
     }
-
     async fn transform_request(
         &self,
         request: ChatRequest,
@@ -777,7 +783,6 @@ impl LLMProvider for OpenAILikeProvider {
     ) -> Result<Value, ProviderError> {
         self.transform_chat_request(request)
     }
-
     async fn transform_response(
         &self,
         raw_response: &[u8],
@@ -788,7 +793,6 @@ impl LLMProvider for OpenAILikeProvider {
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
         self.transform_chat_response(response_value)
     }
-
     fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
         Box::new(OpenAILikeErrorMapper)
     }

@@ -32,9 +32,11 @@ impl Provider {
             #[cfg(feature = "providers-extra")]
             Provider::Azure(_) | Provider::AzureAI(_) => NativeHealthProbeSemantics::Unsupported,
             #[cfg(feature = "providers-extended")]
-            Provider::Ollama(_) | Provider::Cohere(_) | Provider::Replicate(_) => {
-                NativeHealthProbeSemantics::Unsupported
-            }
+            Provider::Ollama(_)
+            | Provider::Cohere(_)
+            | Provider::Replicate(_)
+            | Provider::Stability(_)
+            | Provider::BlackForestLabs(_) => NativeHealthProbeSemantics::Unsupported,
         }
     }
 

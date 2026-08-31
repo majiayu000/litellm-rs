@@ -11,7 +11,7 @@
 //! vector stores, realtime, advanced chat) were declared but never reached from
 //! any live code path and have been removed.
 
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use reqwest::multipart;
 use serde_json::Value;
 
@@ -19,10 +19,13 @@ use crate::core::audio::types::{
     SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
     TranslationResponse, format_to_content_type,
 };
-use crate::core::providers::base::{BaseHttpClient, HttpMethod, apply_provider_headers};
+use crate::core::providers::base::{
+    BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, HttpMethod, apply_provider_headers,
+};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::types::embedding::EmbeddingRequest;
-use crate::core::types::responses::EmbeddingResponse;
+use crate::core::types::image::ImageEditRequest;
+use crate::core::types::responses::{EmbeddingResponse, ImageGenerationResponse};
 
 use super::client::OpenAIProvider;
 use super::config::OpenAIFeature;
@@ -257,6 +260,84 @@ impl OpenAIProvider {
     }
 }
 
+pub(crate) async fn execute_image_edit(
+    base: BaseConfig,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    request: ImageEditRequest,
+    provider: &'static str,
+) -> Result<ImageGenerationResponse, OpenAIError> {
+    for (name, value) in &headers {
+        HeaderName::from_bytes(name.as_ref().as_bytes())
+            .map_err(|_| OpenAIError::configuration(provider, "invalid image edit header name"))?;
+        HeaderValue::from_str(value.as_ref())
+            .map_err(|_| OpenAIError::configuration(provider, "invalid image edit header value"))?;
+    }
+    let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
+    let mut form = multipart::Form::new()
+        .part(
+            "image",
+            multipart::Part::bytes(request.image).file_name("image.png"),
+        )
+        .text("prompt", request.prompt)
+        .optional_text("model", request.model)
+        .optional_text("n", request.n.map(|value| value.to_string()))
+        .optional_text("size", request.size)
+        .optional_text("response_format", request.response_format)
+        .optional_text("user", request.user);
+    if let Some(mask) = request.mask {
+        form = form.part("mask", multipart::Part::bytes(mask).file_name("mask.png"));
+    }
+    let response = apply_provider_headers(
+        client.post(format!("{}/images/edits", api_base.trim_end_matches('/')))?,
+        headers,
+    )
+    .multipart(form)
+    .send()
+    .await
+    .map_err(|error| client.map_preserved_request_error(error))?;
+    let status = response.status();
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(_) if !status.is_success() => {
+            return Err(HttpErrorMapper::map_status_code(
+                provider,
+                status.as_u16(),
+                &format!("Provider returned HTTP {status}, but its error body was unavailable"),
+            ));
+        }
+        Err(error) => return Err(client.map_preserved_request_error(error)),
+    };
+    if !status.is_success() {
+        return Err(HttpErrorMapper::map_status_code(
+            provider,
+            status.as_u16(),
+            &String::from_utf8_lossy(&bytes),
+        ));
+    }
+    let response: ImageGenerationResponse = serde_json::from_slice(&bytes).map_err(|error| {
+        OpenAIError::response_parsing(provider, format!("invalid image edit response: {error}"))
+    })?;
+    if response.data.is_empty()
+        || response.data.iter().any(|image| {
+            image
+                .url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+                && image
+                    .b64_json
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+        })
+    {
+        return Err(OpenAIError::response_parsing(
+            provider,
+            "image edit response did not contain usable image data",
+        ));
+    }
+    Ok(response)
+}
+
 fn transcription_form(request: TranscriptionRequest) -> multipart::Form {
     let form = audio_file_form(request.file, request.filename)
         .text("model", request.model)
@@ -342,6 +423,20 @@ mod tests {
     use super::super::config::OpenAIConfig;
     use super::*;
     use crate::core::net::ProviderEndpointAccess;
+
+    #[test]
+    fn credentialed_image_edit_client_explicitly_disables_redirects() {
+        let source = include_str!("api_methods.rs");
+        let image_edit = source
+            .split_once("pub(crate) async fn execute_image_edit")
+            .expect("image edit adapter should exist")
+            .1
+            .split_once("fn transcription_form")
+            .expect("image edit adapter should end before transcription helpers")
+            .0;
+
+        assert!(image_edit.contains("BaseHttpClient::new_for_provider_no_redirect"));
+    }
 
     #[tokio::test]
     async fn public_multipart_loopback_fails_before_connect() {

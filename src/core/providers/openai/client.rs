@@ -22,7 +22,7 @@ use crate::core::types::{
     context::RequestContext,
     embedding::EmbeddingRequest,
     health::HealthStatus,
-    image::ImageGenerationRequest,
+    image::{ImageEditRequest, ImageGenerationRequest},
     model::ModelInfo,
     model::ProviderCapability,
     responses::{ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse},
@@ -451,6 +451,21 @@ impl LLMProvider for OpenAIProvider {
             provider: "openai",
             message: e.to_string(),
         })
+    }
+
+    async fn image_edit(
+        &self,
+        request: ImageEditRequest,
+        _context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        super::execute_image_edit(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            request,
+            "openai",
+        )
+        .await
     }
 
     async fn audio_transcription(
