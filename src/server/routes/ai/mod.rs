@@ -30,6 +30,7 @@ mod responses;
 mod responses_stream;
 mod route_http;
 mod spend;
+mod stable_routes;
 mod stream_output_guardrail;
 mod token_policy;
 
@@ -116,31 +117,13 @@ fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usi
             .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())
             .app_data(openai_path_error_config())
+            .configure(stable_routes::configure)
             // Legacy text completions
             .route("/completions", web::post().to(completions))
             .route(
                 "/engines/{model_id}/completions",
                 web::post().to(engine_completions),
             )
-            // Chat completions
-            .route("/chat/completions", web::post().to(chat_completions))
-            // Responses API
-            .route("/responses", web::post().to(create_response))
-            .route("/responses/{response_id}", web::get().to(get_response))
-            .route(
-                "/responses/{response_id}",
-                web::delete().to(delete_response),
-            )
-            .route(
-                "/responses/{response_id}/cancel",
-                web::post().to(cancel_response),
-            )
-            .route(
-                "/responses/{response_id}/input_items",
-                web::get().to(list_response_input_items),
-            )
-            // Embeddings
-            .route("/embeddings", web::post().to(embeddings))
             .route(
                 "/engines/{model_id}/embeddings",
                 web::post().to(engine_embeddings),
@@ -181,17 +164,6 @@ fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usi
                 "/files/{file_id}/content",
                 web::get().to(files::get_file_content_http),
             )
-            // Image generation
-            .route("/images/generations", web::post().to(image_generations))
-            .route("/images/edits", web::post().to(image_edits))
-            .route("/images/variations", web::post().to(image_variations))
-            // Moderations
-            .route("/moderations", web::post().to(create_moderation))
-            // Rerank
-            .route("/rerank", web::post().to(rerank))
-            // Models
-            .route("/models", web::get().to(list_models))
-            .route("/models/{model_id}", web::get().to(get_model))
             .route(
                 "/models/{model}:generateContent",
                 web::post().to(gemini_generate_content_v1),
@@ -201,14 +173,7 @@ fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usi
                 web::post().to(gemini_stream_generate_content_v1),
             )
             .route("/engines", web::get().to(list_models))
-            .route("/engines/{model_id}", web::get().to(get_model))
-            // Audio (future implementation)
-            .route(
-                "/audio/transcriptions",
-                web::post().to(audio_transcriptions),
-            )
-            .route("/audio/translations", web::post().to(audio_translations))
-            .route("/audio/speech", web::post().to(audio_speech)),
+            .route("/engines/{model_id}", web::get().to(get_model)),
     );
     cfg.service(
         web::scope("/v1beta")
