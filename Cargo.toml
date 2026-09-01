@@ -19,6 +19,7 @@ include = [
     "config/model_prices_extended.json",
     "config/model_catalog_authority.json",
     "config/model_catalog_decisions.json",
+    "docs/openapi/inference.json",
     "migrations/**/*",
     ".github/workflows/*.yml",
     "build.rs",
