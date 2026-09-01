@@ -75,6 +75,46 @@ fn guardrail_input_projection_includes_only_visible_continuation_thinking() {
 }
 
 #[test]
+fn guardrail_masking_discards_stale_anthropic_text_ranges() {
+    use crate::core::providers::{AnthropicContentBlockOrder, ChatMessageContinuation};
+    use crate::core::types::anthropic_continuation::{
+        AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    };
+
+    let original = ChatCompletionRequest {
+        messages: vec![ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Text("Email user@example.com".to_string())),
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: None,
+        }],
+        ..Default::default()
+    };
+    let mut projected = original.clone();
+    projected.messages[0].content = Some(MessageContent::Text("Email [MASKED]".to_string()));
+    let continuation = ChatMessageContinuation::new()
+        .with_anthropic_thinking(AnthropicThinkingContent::new(vec![
+            AnthropicThinkingBlock::Thinking {
+                thinking: "visible reasoning".to_string(),
+                signature: AnthropicSignature::try_from("opaque signature").unwrap(),
+            },
+        ]))
+        .with_anthropic_block_order(vec![
+            AnthropicContentBlockOrder::Thinking { index: 0 },
+            AnthropicContentBlockOrder::Text { start: 0, end: 22 },
+        ]);
+
+    let sanitized = continuation_after_input_projection(&original, &projected, vec![continuation])
+        .expect("changed content should sanitize continuation metadata");
+
+    assert!(sanitized[0].anthropic_block_order().is_none());
+    assert!(sanitized[0].anthropic_thinking().is_some());
+}
+
+#[test]
 fn guardrail_projection_includes_visible_thinking_without_opaque_continuation_data() {
     use crate::core::providers::ChatMessageContinuation;
     use crate::core::types::anthropic_continuation::{

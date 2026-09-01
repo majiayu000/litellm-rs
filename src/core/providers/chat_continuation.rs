@@ -48,6 +48,11 @@ impl ChatMessageContinuation {
         self
     }
 
+    pub(crate) fn without_anthropic_block_order(mut self) -> Self {
+        self.anthropic_block_order = None;
+        self
+    }
+
     pub(crate) fn anthropic_thinking(&self) -> Option<&AnthropicThinkingContent> {
         self.extensions.anthropic_thinking()
     }

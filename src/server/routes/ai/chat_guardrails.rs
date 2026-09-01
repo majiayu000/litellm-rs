@@ -47,6 +47,44 @@ pub(super) fn guardrail_request_with_continuation(
     Ok(projected)
 }
 
+pub(super) fn continuation_after_input_projection(
+    original: &ChatCompletionRequest,
+    projected: &ChatCompletionRequest,
+    extensions: Vec<ChatMessageContinuation>,
+) -> Result<Vec<ChatMessageContinuation>, GatewayError> {
+    if original.messages.len() != projected.messages.len()
+        || original.messages.len() != extensions.len()
+    {
+        return Err(GatewayError::validation(
+            "chat message continuation length changed during guardrail projection",
+        ));
+    }
+
+    original
+        .messages
+        .iter()
+        .zip(&projected.messages)
+        .zip(extensions)
+        .map(|((before, after), extension)| {
+            let before = serde_json::to_value(&before.content).map_err(|cause| {
+                GatewayError::internal(format!(
+                    "failed to compare pre-guardrail continuation content: {cause}"
+                ))
+            })?;
+            let after = serde_json::to_value(&after.content).map_err(|cause| {
+                GatewayError::internal(format!(
+                    "failed to compare post-guardrail continuation content: {cause}"
+                ))
+            })?;
+            Ok(if before == after {
+                extension
+            } else {
+                extension.without_anthropic_block_order()
+            })
+        })
+        .collect()
+}
+
 fn append_guardrail_visible_thinking(
     message: &mut ChatMessage,
     extension: &ChatMessageContinuation,

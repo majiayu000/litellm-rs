@@ -35,7 +35,10 @@ mod chat_delta;
 use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
 #[path = "chat_guardrails.rs"]
 mod chat_guardrails;
-use chat_guardrails::{guardrail_request_with_continuation, guardrail_response_with_continuation};
+use chat_guardrails::{
+    continuation_after_input_projection, guardrail_request_with_continuation,
+    guardrail_response_with_continuation,
+};
 #[path = "chat_sse.rs"]
 pub(super) mod chat_sse;
 use chat_sse::format_sse_error;
@@ -186,8 +189,9 @@ pub(super) async fn handle_chat_completion_with_extensions(
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
-    let request =
-        Arc::new(crate::server::guardrails::apply_chat_input(state, request.as_ref()).await?);
+    let projected = crate::server::guardrails::apply_chat_input(state, request.as_ref()).await?;
+    let extensions = continuation_after_input_projection(request.as_ref(), &projected, extensions)?;
+    let request = Arc::new(projected);
     let guardrail_request = guardrail_request_with_continuation(request.as_ref(), &extensions)?;
     if extensions
         .iter()
