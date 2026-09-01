@@ -36,8 +36,8 @@ use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
 #[path = "chat_guardrails.rs"]
 mod chat_guardrails;
 use chat_guardrails::{
-    continuation_after_input_projection, guardrail_request_with_continuation,
-    guardrail_response_with_continuation,
+    continuation_after_input_projection, continuation_after_output_projection,
+    guardrail_request_with_continuation, guardrail_response_with_continuation,
 };
 #[path = "chat_sse.rs"]
 pub(super) mod chat_sse;
@@ -390,14 +390,14 @@ async fn handle_chat_completion_internal(
         ChatAttemptResponse::Provider(response) => response,
     };
     let (core_response, choice_extensions) = core_response.into_parts();
-    let response = crate::server::guardrails::apply_chat_output(
-        state,
-        &convert_core_chat_response(core_response),
-    )
-    .await
-    .inspect_err(|error| {
-        callback.fail(error.to_string(), "guardrail_output");
-    })?;
+    let original_response = convert_core_chat_response(core_response);
+    let response = crate::server::guardrails::apply_chat_output(state, &original_response)
+        .await
+        .inspect_err(|error| {
+            callback.fail(error.to_string(), "guardrail_output");
+        })?;
+    let choice_extensions =
+        continuation_after_output_projection(&original_response, &response, choice_extensions)?;
     let guardrail_response =
         match guardrail_response_with_continuation(&response, &choice_extensions) {
             Ok(projected) => projected,

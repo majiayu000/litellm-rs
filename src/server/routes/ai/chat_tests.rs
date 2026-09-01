@@ -115,6 +115,47 @@ fn guardrail_masking_discards_stale_anthropic_text_ranges() {
 }
 
 #[test]
+fn guardrail_output_masking_discards_stale_anthropic_text_ranges() {
+    use crate::core::models::openai::ChatChoice;
+    use crate::core::providers::{AnthropicContentBlockOrder, ChatMessageContinuation};
+
+    let message = |content: &str| ChatMessage {
+        role: MessageRole::Assistant,
+        content: Some(MessageContent::Text(content.to_string())),
+        name: None,
+        function_call: None,
+        tool_calls: None,
+        tool_call_id: None,
+        audio: None,
+    };
+    let response = |content: &str| ChatCompletionResponse {
+        id: "chatcmpl-test".to_string(),
+        object: "chat.completion".to_string(),
+        created: 0,
+        model: "test-model".to_string(),
+        system_fingerprint: None,
+        choices: vec![ChatChoice {
+            index: 0,
+            message: message(content),
+            logprobs: None,
+            finish_reason: Some("stop".to_string()),
+        }],
+        usage: None,
+    };
+    let continuation = ChatMessageContinuation::new()
+        .with_anthropic_block_order(vec![AnthropicContentBlockOrder::Text { start: 0, end: 22 }]);
+
+    let sanitized = continuation_after_output_projection(
+        &response("Email user@example.com"),
+        &response("Email [MASKED]"),
+        vec![continuation],
+    )
+    .expect("changed output content should sanitize continuation metadata");
+
+    assert!(sanitized[0].anthropic_block_order().is_none());
+}
+
+#[test]
 fn guardrail_projection_includes_visible_thinking_without_opaque_continuation_data() {
     use crate::core::providers::ChatMessageContinuation;
     use crate::core::types::anthropic_continuation::{
