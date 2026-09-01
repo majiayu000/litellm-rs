@@ -26,44 +26,109 @@ pub(crate) fn mask_responses_input_for_storage(
         ResponseInput::Items(items) => {
             for item in items {
                 match item {
-                    ResponseInputItem::Message(message) => match &mut message.content {
-                        ResponseInputContent::Text(text) => {
-                            super::mask_text(engine, text)?;
-                        }
-                        ResponseInputContent::Parts(parts) => {
-                            for part in parts {
-                                match part {
-                                    ResponseInputContentPart::InputText { text }
-                                    | ResponseInputContentPart::OutputText { text } => {
-                                        super::mask_text(engine, text)?;
+                    ResponseInputItem::Message(message) => {
+                        reject_identifiers(
+                            engine,
+                            [
+                                message.id.as_deref(),
+                                message.phase.as_deref(),
+                                message
+                                    .internal_chat_message_metadata_passthrough
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.turn_id.as_deref()),
+                            ],
+                        )?;
+                        match &mut message.content {
+                            ResponseInputContent::Text(text) => {
+                                super::mask_text(engine, text)?;
+                            }
+                            ResponseInputContent::Parts(parts) => {
+                                for part in parts {
+                                    match part {
+                                        ResponseInputContentPart::InputText { text }
+                                        | ResponseInputContentPart::OutputText { text } => {
+                                            super::mask_text(engine, text)?;
+                                        }
+                                        ResponseInputContentPart::InputImage {
+                                            image_url: Some(image_url),
+                                            detail,
+                                        } => {
+                                            reject_identifiers(engine, [detail.as_deref()])?;
+                                            super::mask_text(engine, image_url)?;
+                                        }
+                                        ResponseInputContentPart::InputAudio { audio_url } => {
+                                            super::mask_text(engine, audio_url)?;
+                                        }
+                                        ResponseInputContentPart::InputImage {
+                                            image_url: None,
+                                            detail,
+                                        } => {
+                                            reject_identifiers(engine, [detail.as_deref()])?;
+                                        }
                                     }
-                                    ResponseInputContentPart::InputImage {
-                                        image_url: Some(image_url),
-                                        ..
-                                    } => {
-                                        super::mask_text(engine, image_url)?;
-                                    }
-                                    ResponseInputContentPart::InputAudio { audio_url } => {
-                                        super::mask_text(engine, audio_url)?;
-                                    }
-                                    ResponseInputContentPart::InputImage {
-                                        image_url: None,
-                                        ..
-                                    } => {}
                                 }
                             }
                         }
-                    },
+                    }
                     ResponseInputItem::FunctionCall(call) => {
+                        reject_identifiers(
+                            engine,
+                            [
+                                call.id.as_deref(),
+                                Some(call.call_id.as_str()),
+                                Some(call.name.as_str()),
+                                call.namespace.as_deref(),
+                                call.status.as_deref(),
+                                call.internal_chat_message_metadata_passthrough
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.turn_id.as_deref()),
+                            ],
+                        )?;
                         reject_unprojectable_mask(engine, &call.arguments)?;
                     }
                     ResponseInputItem::CustomToolCall(call) => {
+                        reject_identifiers(
+                            engine,
+                            [
+                                call.id.as_deref(),
+                                Some(call.call_id.as_str()),
+                                Some(call.name.as_str()),
+                                call.namespace.as_deref(),
+                                call.status.as_deref(),
+                                call.internal_chat_message_metadata_passthrough
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.turn_id.as_deref()),
+                            ],
+                        )?;
                         reject_unprojectable_mask(engine, &call.input)?;
                     }
                     ResponseInputItem::FunctionCallOutput(output) => {
+                        reject_identifiers(
+                            engine,
+                            [
+                                output.id.as_deref(),
+                                Some(output.call_id.as_str()),
+                                output
+                                    .internal_chat_message_metadata_passthrough
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.turn_id.as_deref()),
+                            ],
+                        )?;
                         mask_tool_output(engine, &mut output.output)?;
                     }
                     ResponseInputItem::CustomToolCallOutput(output) => {
+                        reject_identifiers(
+                            engine,
+                            [
+                                output.id.as_deref(),
+                                Some(output.call_id.as_str()),
+                                output.name.as_deref(),
+                                output
+                                    .internal_chat_message_metadata_passthrough
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.turn_id.as_deref()),
+                            ],
+                        )?;
                         mask_tool_output(engine, &mut output.output)?;
                     }
                     ResponseInputItem::Unsupported(_) | ResponseInputItem::Unknown(_) => {}
@@ -108,6 +173,16 @@ fn reject_unprojectable_mask(engine: &GuardrailEngine, content: &str) -> Result<
     } else {
         Ok(())
     }
+}
+
+fn reject_identifiers<'a>(
+    engine: &GuardrailEngine,
+    identifiers: impl IntoIterator<Item = Option<&'a str>>,
+) -> Result<(), GatewayError> {
+    for identifier in identifiers.into_iter().flatten() {
+        reject_unprojectable_mask(engine, identifier)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -276,5 +351,42 @@ mod tests {
                 .map(String::as_str),
             Some("[MASKED]")
         );
+    }
+
+    #[test]
+    fn rejects_pii_in_responses_call_identifiers() {
+        for input in [
+            json!({
+                "type": "function_call",
+                "call_id": "user@example.com",
+                "name": "lookup",
+                "arguments": "{}"
+            }),
+            json!({
+                "type": "function_call_output",
+                "call_id": "user@example.com",
+                "output": "safe"
+            }),
+            json!({
+                "type": "custom_tool_call",
+                "call_id": "call-1",
+                "name": "user@example.com",
+                "input": "safe"
+            }),
+            json!({
+                "type": "custom_tool_call_output",
+                "call_id": "call-1",
+                "name": "user@example.com",
+                "output": "safe"
+            }),
+        ] {
+            let request: ResponsesApiRequest = serde_json::from_value(json!({
+                "model": "gpt-4o",
+                "input": [input]
+            }))
+            .expect("request should deserialize");
+
+            assert!(mask_responses_input_for_storage(&engine(), &request).is_err());
+        }
     }
 }

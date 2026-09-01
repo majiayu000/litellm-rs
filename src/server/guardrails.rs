@@ -3,6 +3,7 @@
 use crate::core::guardrails::{CheckResult, GuardrailEngine};
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentPart, MessageContent,
+    ToolChoice,
 };
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -91,6 +92,7 @@ async fn apply_input(
                 mask_text(engine, user)?;
             }
             mask_metadata(engine, projected.metadata.as_mut())?;
+            mask_provider_bound_fields(engine, &mut projected)?;
             let projected_payload = input_payload(engine, &projected)?;
             if mask_content(engine, &projected_payload, "input")?.is_some() {
                 Err(projection_error("input"))
@@ -131,12 +133,89 @@ fn input_payload(
     request: &ChatCompletionRequest,
 ) -> Result<String, GatewayError> {
     match input_scan::payload(request) {
-        Ok(content) => Ok(content),
+        Ok(mut content) => {
+            let extra = provider_bound_payload(request);
+            if !extra.is_empty() {
+                content.push('\n');
+                content.push_str(&extra);
+            }
+            Ok(content)
+        }
         Err(cause) if engine.config().fail_open && !pii_masking_enabled(engine) => {
             warn!(%cause, "Input guardrail projection failed open");
             Ok(String::new())
         }
         Err(cause) => Err(cause),
+    }
+}
+
+fn provider_bound_payload(request: &ChatCompletionRequest) -> String {
+    let mut fragments = Vec::new();
+    fragments.extend(request.stop.iter().flatten().cloned());
+    fragments.extend(request.modalities.iter().flatten().cloned());
+    fragments.extend(request.reasoning_effort.iter().cloned());
+    fragments.extend(request.service_tier.iter().cloned());
+    if let Some(audio) = request.audio.as_ref() {
+        fragments.push(audio.voice.clone());
+        fragments.push(audio.format.clone());
+    }
+    if let Some(format) = request.response_format.as_ref() {
+        fragments.push(format.format_type.clone());
+        fragments.extend(format.response_type.iter().cloned());
+        if let Some(schema) = format.json_schema.as_ref() {
+            collect_json_strings(schema, &mut fragments);
+        }
+    }
+    for value in [
+        request.prediction.as_ref(),
+        request.safety_settings.as_ref(),
+        request.cache_control.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        collect_json_strings(value, &mut fragments);
+    }
+    for (key, value) in &request.extra_body {
+        fragments.push(key.clone());
+        collect_json_strings(value, &mut fragments);
+    }
+    for message in &request.messages {
+        fragments.extend(message.tool_call_id.iter().cloned());
+        for call in message.tool_calls.iter().flatten() {
+            fragments.push(call.id.clone());
+            fragments.push(call.tool_type.clone());
+        }
+    }
+    if let Some(choice) = request.tool_choice.as_ref() {
+        match choice {
+            ToolChoice::None(value) | ToolChoice::Auto(value) | ToolChoice::Required(value) => {
+                fragments.push(value.clone());
+            }
+            ToolChoice::Specific(value) => {
+                fragments.push(value.tool_type.clone());
+                fragments.push(value.function.name.clone());
+            }
+        }
+    }
+    fragments.join("\n")
+}
+
+fn collect_json_strings(value: &serde_json::Value, fragments: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => fragments.push(text.clone()),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_json_strings(value, fragments);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for (key, value) in values {
+                fragments.push(key.clone());
+                collect_json_strings(value, fragments);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -228,6 +307,65 @@ fn mask_metadata(
             return Err(projection_error("input"));
         }
         mask_text(engine, value)?;
+    }
+    Ok(())
+}
+
+fn mask_provider_bound_fields(
+    engine: &GuardrailEngine,
+    request: &mut ChatCompletionRequest,
+) -> Result<(), GatewayError> {
+    for stop in request.stop.iter_mut().flatten() {
+        mask_text(engine, stop)?;
+    }
+    for value in [
+        request.prediction.as_mut(),
+        request.safety_settings.as_mut(),
+        request.cache_control.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        mask_json_value(engine, value)?;
+    }
+    if let Some(schema) = request
+        .response_format
+        .as_mut()
+        .and_then(|format| format.json_schema.as_mut())
+    {
+        mask_json_value(engine, schema)?;
+    }
+    for (key, value) in &mut request.extra_body {
+        if mask_content(engine, key, "extra_body key")?.is_some() {
+            return Err(projection_error("input"));
+        }
+        mask_json_value(engine, value)?;
+    }
+    Ok(())
+}
+
+fn mask_json_value(
+    engine: &GuardrailEngine,
+    value: &mut serde_json::Value,
+) -> Result<(), GatewayError> {
+    match value {
+        serde_json::Value::String(text) => {
+            mask_text(engine, text)?;
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                mask_json_value(engine, value)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for (key, value) in values {
+                if mask_content(engine, key, "JSON key")?.is_some() {
+                    return Err(projection_error("input"));
+                }
+                mask_json_value(engine, value)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -475,6 +613,29 @@ mod tests {
         let result = apply_input(&masking_engine(), &request).await;
 
         assert!(matches!(result, Err(GatewayError::BadRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn masking_rewrites_provider_bound_json_values() {
+        let mut request = request("safe");
+        request.prediction = Some(serde_json::json!({
+            "type": "content",
+            "content": "user@example.com"
+        }));
+        request.extra_body.insert(
+            "provider_extension".to_string(),
+            serde_json::json!({"owner": "second@example.com"}),
+        );
+
+        let guarded = apply_input(&masking_engine(), &request)
+            .await
+            .expect("provider-bound JSON values should be maskable");
+
+        assert_eq!(guarded.prediction.as_ref().unwrap()["content"], "[MASKED]");
+        assert_eq!(
+            guarded.extra_body["provider_extension"]["owner"],
+            "[MASKED]"
+        );
     }
 
     #[tokio::test]
