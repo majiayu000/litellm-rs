@@ -66,6 +66,8 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, error::InternalError, web};
 
+const STABLE_INFERENCE_OPENAPI: &str = include_str!("../../../../docs/openapi/inference.json");
+
 /// Configure AI API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     configure_routes_impl(cfg, None);
@@ -77,7 +79,15 @@ pub fn configure_routes_with_body_limit(cfg: &mut web::ServiceConfig, max_body_s
 }
 
 fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usize>) {
-    cfg.service(
+    cfg.route(
+        "/openapi.json",
+        web::get().to(|| async {
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .body(STABLE_INFERENCE_OPENAPI)
+        }),
+    )
+    .service(
         web::resource("/completions")
             .app_data(openai_json_error_config(max_body_size))
             .app_data(openai_query_error_config())

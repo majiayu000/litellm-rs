@@ -718,6 +718,7 @@ mod tests {
     }
 
     include!("http_cors_tests.rs");
+    include!("http_openapi_tests.rs");
     include!("http_validation_tests.rs");
 
     #[tokio::test]
