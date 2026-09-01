@@ -41,6 +41,46 @@ host, toolchain, workload, and power settings. The load generator and gateway
 share CPU in this baseline, so the result is reproducible local-system evidence,
 not an absolute gateway ceiling.
 
+## Pull-request regression reports
+
+The `Gateway overhead benchmark` workflow measures the pull request's current
+base SHA and GitHub's exact synthetic merge SHA sequentially on one
+`ubuntu-24.04` runner. This keeps intervening base-branch changes on both sides
+of the comparison. Both runs force `RUSTUP_TOOLCHAIN=1.96.1`, use oha 1.16.0,
+and use the deterministic mock above. Before measuring, the workflow requires
+the runner, mock, and benchmark config to be byte-identical in both checkouts;
+a pull request that changes the harness must validate that change separately
+instead of producing an incomparable regression report. The two raw artifacts
+and `comparison.json` are uploaded together, so a report remains tied to the
+commits and environment that produced it. The current base checkout's
+comparator owns validation, thresholds, and the verdict; only the pull request
+that first introduces the comparator uses the candidate copy when the base
+file does not yet exist.
+
+The initial policy is deliberately report-only. A measured regression exits the
+comparator with status 10, which the workflow renders as a warning and a job
+summary without blocking the pull request. Invalid JSON, mismatched workload or
+environment metadata, missing tools, build failures, and benchmark failures use
+a different nonzero status and fail the workflow. Missing capture timestamps or
+raw oha evidence, any non-200 response, any transport error, and any nonzero
+summary error rate also make the comparison invalid rather than passing as a
+performance result.
+
+The provisional noise allowance reports a regression when throughput drops by
+more than 10% or any recorded latency percentile (`p50`, `p95`, or `p99`)
+increases by more than 15%. These are alert thresholds, not published
+performance claims. Keep the base and candidate artifacts when investigating a
+warning; do not compare results from different environments.
+
+Promote the workflow to a blocking required check only after at least 20
+successful report-only comparisons have been collected, every warning in that
+sample has been immediately rerun against the same two SHAs, and the latest 10
+runs contain no benchmark/tool infrastructure failure. Before promotion,
+maintainers must review the reruns and adjust the provisional thresholds so a
+non-reproducing warning is not made blocking. Promotion is the small workflow
+change that stops accepting comparator status 10; evidence or tool failures are
+already blocking.
+
 ## Deterministic upstream boundary
 
 [`mock_openai.py`](../../scripts/bench/mock_openai.py) accepts only local HTTP
