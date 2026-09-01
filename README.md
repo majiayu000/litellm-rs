@@ -1,6 +1,9 @@
 # litellm-rs
 
-A high-performance Rust library and gateway for calling LLM APIs in an OpenAI-compatible format. Ships with 50+ built-in OpenAI-compatible providers plus first-class adapters for OpenAI, Anthropic, AWS Bedrock, Mistral, and Cloudflare.
+A high-performance self-hosted LLM gateway with a stable
+[OpenAI-compatible HTTP contract](./docs/openapi/inference.json). The
+`litellm-rs` crate is the gateway's reusable Rust kernel, with narrower
+support policies for runtime-backed APIs and legacy compatibility adapters.
 
 [![Crates.io](https://img.shields.io/crates/v/litellm-rs.svg)](https://crates.io/crates/litellm-rs)
 [![Documentation](https://docs.rs/litellm-rs/badge.svg)](https://docs.rs/litellm-rs)
@@ -9,25 +12,59 @@ A high-performance Rust library and gateway for calling LLM APIs in an OpenAI-co
 ## Features
 
 - **60+ runtime-wired providers** - OpenAI, Anthropic, AWS Bedrock, Mistral, Cloudflare, plus 50+ OpenAI-compatible providers via the Tier 1 catalog. See [Provider Support](#provider-support) for the full matrix.
-- **OpenAI-Compatible API** - Drop-in replacement for OpenAI SDK
+- **Stable OpenAI-Compatible API** - Versioned inference contract served at `GET /openapi.json`
 - **Measured Performance** - Reproducible [gateway-overhead benchmark methodology](./docs/benchmarks/gateway-overhead.md)
 - **Intelligent Routing** - Load balancing, failover, cost optimization
 - **Gateway Controls** - Default-on prompt-injection guardrails, configured IP access, auth, rate limiting, deterministic caching, metrics, and health endpoints
 
-## Quick Start (5 Minutes, API-Only Recommended)
+## Quick Start: Self-Hosted Gateway
 
-Most users use this project as a unified API library, not as a gateway server. Start with API-only mode first.
+Run the primary supported product from source:
+
+```bash
+git clone https://github.com/majiayu000/litellm-rs.git
+cd litellm-rs
+cp config/gateway.dev.yaml.example config/gateway.yaml
+cargo run --bin gateway
+```
+
+Or install the gateway binary:
+
+```bash
+cargo install litellm-rs --bin gateway
+mkdir -p config
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
+gateway
+```
+
+The development config starts without provider credentials or auth secrets and
+uses the local `vllm` catalog provider. Use
+`config/gateway.yaml.example` for production-style deployments with real
+provider keys and auth enabled. Default features include SQLite storage, which
+satisfies the gateway binary's `storage` requirement.
+
+The gateway serves its stable inference contract at `GET /openapi.json`; the
+versioned source is
+[`docs/openapi/inference.json`](./docs/openapi/inference.json).
+
+## Supported Product Surfaces
+
+| Surface | Support policy |
+| --- | --- |
+| Self-hosted HTTP gateway | Primary product. Stable inference routes follow the published OpenAPI contract; configured deployments expose their canonical `ProviderCapability`. |
+| Runtime-backed Rust APIs | Reusable gateway kernel. `LLMClient::from_runtime`, `DefaultRouter::from_runtime`, and runtime-configured `completion()` derive support from the selected deployment and fail unsupported capabilities with typed errors. |
+| Legacy SDK and selector adapters | Compatibility surfaces with narrower coverage. The [legacy adapter matrix](#legacy-adapter-matrix) is authoritative for these paths and is not a canonical runtime capability matrix. |
+
+## Rust Crate
 
 ```toml
 [dependencies]
-litellm-rs = { version = "0.5", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.6", default-features = false, features = ["lite"] }
 ```
 
-For crate users, no `make` is required.
+No `make` step is required for crate consumers.
 
-## Usage
-
-### As a Library (API Integration)
+### Library Example
 
 ```rust
 use litellm_rs::{completion, user_message, system_message};
@@ -48,33 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### As a Gateway Server
-
-#### Run from source repository
-
-```bash
-git clone https://github.com/majiayu000/litellm-rs.git
-cd litellm-rs
-cp config/gateway.dev.yaml.example config/gateway.yaml
-cargo run --bin gateway
-```
-
-#### Install binary and run
-
-```bash
-cargo install litellm-rs --bin gateway
-mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
-gateway
-```
-
-Notes:
-
-- `gateway` requires the `storage` feature at build time.
-- Default features include `sqlite`, so default `cargo run`/`cargo install` satisfy this requirement.
-- The development config starts without provider credentials or auth secrets and uses the local `vllm` catalog provider. Use `config/gateway.yaml.example` for production-style deployments with real provider keys and auth enabled.
-
-#### Router Configuration
+## Gateway Configuration
 
 The gateway router config maps these fields into the runtime router:
 
@@ -151,19 +162,19 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 ```toml
 # Full gateway with SQLite + Redis (default)
 [dependencies]
-litellm-rs = "0.5"
+litellm-rs = "0.6"
 
 # API-only - lightweight, no actix-web/argon2/aes-gcm/clap
 [dependencies]
-litellm-rs = { version = "0.5", default-features = false }
+litellm-rs = { version = "0.6", default-features = false }
 
 # API-only with metrics
 [dependencies]
-litellm-rs = { version = "0.5", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.6", default-features = false, features = ["lite"] }
 
 # Gateway modules in library context (not standalone gateway binary runtime)
 [dependencies]
-litellm-rs = { version = "0.5", default-features = false, features = ["gateway"] }
+litellm-rs = { version = "0.6", default-features = false, features = ["gateway"] }
 ```
 
 ## Provider Support
