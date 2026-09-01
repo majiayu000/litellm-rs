@@ -30,29 +30,31 @@ fn response(content: MessageContent) -> crate::core::models::openai::ChatComplet
 
 #[test]
 fn guarded_prompt_extracts_text_parts_without_original_fallback() {
-    let mut request = ChatCompletionRequest::default();
-    request.messages = vec![ChatMessage {
-        role: MessageRole::User,
-        content: Some(MessageContent::Parts(vec![
-            ContentPart::Text {
-                text: "first".to_string(),
-            },
-            ContentPart::ImageUrl {
-                image_url: crate::core::models::openai::ImageUrl {
-                    url: "https://example.com/image.png".to_string(),
-                    detail: None,
+    let request = ChatCompletionRequest {
+        messages: vec![ChatMessage {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(vec![
+                ContentPart::Text {
+                    text: "first".to_string(),
                 },
-            },
-            ContentPart::Text {
-                text: "second".to_string(),
-            },
-        ])),
-        name: None,
-        function_call: None,
-        tool_calls: None,
-        tool_call_id: None,
-        audio: None,
-    }];
+                ContentPart::ImageUrl {
+                    image_url: crate::core::models::openai::ImageUrl {
+                        url: "https://example.com/image.png".to_string(),
+                        detail: None,
+                    },
+                },
+                ContentPart::Text {
+                    text: "second".to_string(),
+                },
+            ])),
+            name: None,
+            function_call: None,
+            tool_calls: None,
+            tool_call_id: None,
+            audio: None,
+        }],
+        ..ChatCompletionRequest::default()
+    };
 
     assert_eq!(
         guarded_completion_prompt(&request).expect("text parts should project"),
