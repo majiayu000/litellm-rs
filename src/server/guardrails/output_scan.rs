@@ -69,11 +69,22 @@ fn collect_parts(parts: &[ContentPart], fragments: &mut Vec<String>) {
 
 fn collect_non_text_part(part: &ContentPart, fragments: &mut Vec<String>) {
     match part {
-        ContentPart::ImageUrl { image_url } => push(fragments, &image_url.url),
+        ContentPart::ImageUrl { image_url } => {
+            push(fragments, &image_url.url);
+            push_optional(fragments, image_url.detail.as_deref());
+        }
         ContentPart::Image {
-            image_url: Some(image_url),
-            ..
-        } => push(fragments, &image_url.url),
+            source,
+            detail,
+            image_url,
+        } => {
+            push(fragments, &source.media_type);
+            push_optional(fragments, detail.as_deref());
+            if let Some(image_url) = image_url {
+                push(fragments, &image_url.url);
+                push_optional(fragments, image_url.detail.as_deref());
+            }
+        }
         ContentPart::ToolResult {
             tool_use_id,
             content,
@@ -88,11 +99,16 @@ fn collect_non_text_part(part: &ContentPart, fragments: &mut Vec<String>) {
             collect_json_content(input, fragments);
         }
         ContentPart::Audio { audio } => push(fragments, &audio.format),
-        ContentPart::Text { .. }
-        | ContentPart::Image {
-            image_url: None, ..
+        ContentPart::Document {
+            source,
+            cache_control,
+        } => {
+            push(fragments, &source.media_type);
+            if let Some(cache_control) = cache_control {
+                push(fragments, &cache_control.cache_type);
+            }
         }
-        | ContentPart::Document { .. } => {}
+        ContentPart::Text { .. } => {}
     }
 }
 
@@ -137,7 +153,9 @@ fn push(fragments: &mut Vec<String>, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::models::openai::{AudioContent, DocumentSource, ImageSource, MessageRole};
+    use crate::core::models::openai::{
+        AudioContent, CacheControl, DocumentSource, ImageSource, MessageRole,
+    };
 
     fn message(parts: Vec<ContentPart>) -> ChatMessage {
         ChatMessage {
@@ -211,18 +229,20 @@ mod tests {
             },
             ContentPart::Image {
                 source: ImageSource {
-                    media_type: "image/png".to_string(),
+                    media_type: "image-media-marker".to_string(),
                     data: encoded.clone(),
                 },
-                detail: None,
+                detail: Some("image-detail-marker".to_string()),
                 image_url: None,
             },
             ContentPart::Document {
                 source: DocumentSource {
-                    media_type: "application/pdf".to_string(),
+                    media_type: "document-media-marker".to_string(),
                     data: encoded,
                 },
-                cache_control: None,
+                cache_control: Some(CacheControl {
+                    cache_type: "cache-marker".to_string(),
+                }),
             },
         ]);
         message.audio = Some(AudioContent {
@@ -235,7 +255,14 @@ mod tests {
 
         assert_eq!(
             fragments,
-            vec!["message-format-marker", "part-format-marker"]
+            vec![
+                "message-format-marker",
+                "part-format-marker",
+                "image-media-marker",
+                "image-detail-marker",
+                "document-media-marker",
+                "cache-marker"
+            ]
         );
     }
 }

@@ -11,10 +11,12 @@ use crate::core::models::openai::{
 };
 use crate::utils::error::gateway_error::GatewayError;
 
+type ScanResult = Result<(), GatewayError>;
+
 pub(super) fn payload(request: &ChatCompletionRequest) -> Result<String, GatewayError> {
     let mut fragments = Vec::new();
     for (message_index, message) in request.messages.iter().enumerate() {
-        collect_message(message_index, message, &mut fragments)?;
+        collect(message_index, message, &mut fragments)?;
     }
     if let Some(user) = request.user.as_deref() {
         push_fragment(&mut fragments, user);
@@ -37,11 +39,7 @@ pub(super) fn payload(request: &ChatCompletionRequest) -> Result<String, Gateway
     Ok(fragments.join(FRAGMENT_SEPARATOR))
 }
 
-fn collect_message(
-    message_index: usize,
-    message: &ChatMessage,
-    output: &mut Vec<String>,
-) -> Result<(), GatewayError> {
+fn collect(message_index: usize, message: &ChatMessage, output: &mut Vec<String>) -> ScanResult {
     let mut fragments = Vec::new();
     if let Some(name) = message.name.as_deref() {
         push_fragment(&mut fragments, name);
@@ -49,17 +47,15 @@ fn collect_message(
     if let Some(audio) = message.audio.as_ref() {
         push_fragment(&mut fragments, &audio.format);
     }
-
     match message.content.as_ref() {
         Some(MessageContent::Text(text)) => push_fragment(&mut fragments, text),
         Some(MessageContent::Parts(parts)) => {
-            for (part_index, part) in parts.iter().enumerate() {
-                collect_part(message_index, part_index, part, &mut fragments)?;
+            for (part_index, content_part) in parts.iter().enumerate() {
+                part(message_index, part_index, content_part, &mut fragments)?;
             }
         }
         None => {}
     }
-
     if let Some(call) = message.function_call.as_ref() {
         collect_function_call(call, &mut fragments);
     }
@@ -85,13 +81,8 @@ fn collect_function_definition(function: &Function, fragments: &mut Vec<String>)
     }
 }
 
-fn collect_part(
-    message_index: usize,
-    part_index: usize,
-    part: &ContentPart,
-    fragments: &mut Vec<String>,
-) -> Result<(), GatewayError> {
-    let label = format!("message.{message_index}.content.{part_index}");
+fn part(mi: usize, pi: usize, part: &ContentPart, fragments: &mut Vec<String>) -> ScanResult {
+    let label = format!("message.{mi}.content.{pi}");
     match part {
         ContentPart::Text { text } => push_fragment(fragments, text),
         ContentPart::Document { source, .. } => {
@@ -122,15 +113,27 @@ fn collect_part(
             push_fragment(fragments, name);
             push_json_value(fragments, input);
         }
-        ContentPart::ImageUrl { image_url } => push_fragment(fragments, &image_url.url),
+        ContentPart::ImageUrl { image_url } => {
+            push_fragment(fragments, &image_url.url);
+            if let Some(detail) = image_url.detail.as_deref() {
+                push_fragment(fragments, detail);
+            }
+        }
         ContentPart::Image {
-            image_url: Some(image_url),
-            ..
-        } => push_fragment(fragments, &image_url.url),
+            source,
+            detail,
+            image_url,
+        } => {
+            push_fragment(fragments, &source.media_type);
+            fragments.extend(detail.iter().filter(|text| !text.is_empty()).cloned());
+            if let Some(image_url) = image_url {
+                push_fragment(fragments, &image_url.url);
+                if let Some(detail) = image_url.detail.as_deref() {
+                    push_fragment(fragments, detail);
+                }
+            }
+        }
         ContentPart::Audio { audio } => push_fragment(fragments, &audio.format),
-        ContentPart::Image {
-            image_url: None, ..
-        } => {}
     }
     Ok(())
 }
@@ -166,7 +169,6 @@ fn push_function_arguments(fragments: &mut Vec<String>, text: &str) {
 fn best_effort_json_unescape(text: &str) -> String {
     let mut decoded = String::with_capacity(text.len());
     let mut remaining = text;
-
     while let Some(index) = remaining.find('\\') {
         decoded.push_str(&remaining[..index]);
         let escape = &remaining[index..];
@@ -174,7 +176,6 @@ fn best_effort_json_unescape(text: &str) -> String {
             decoded.push('\\');
             return decoded;
         };
-
         match next {
             b'"' => decoded.push('"'),
             b'\\' => decoded.push('\\'),
@@ -748,16 +749,16 @@ mod tests {
         let scanned = scan_message(message(Some(MessageContent::Parts(vec![
             ContentPart::ImageUrl {
                 image_url: ImageUrl {
-                    url: "https://example.invalid/image.png".to_string(),
-                    detail: None,
+                    url: "https://e/x".to_string(),
+                    detail: Some("url-detail".to_string()),
                 },
             },
             ContentPart::Image {
                 source: ImageSource {
-                    media_type: "image/png".to_string(),
+                    media_type: "image/media".to_string(),
                     data: STANDARD.encode("image"),
                 },
-                detail: None,
+                detail: Some("image-detail".to_string()),
                 image_url: None,
             },
             ContentPart::Audio {
@@ -773,8 +774,8 @@ mod tests {
             },
         ]))))
         .expect("out-of-scope carriers should not fail");
-
-        assert_eq!(scanned, "https://example.invalid/image.png\nwav\ncall");
+        let expected = "https://e/x\nurl-detail\nimage/media\nimage-detail\nwav\ncall";
+        assert_eq!(scanned, expected);
     }
 
     #[test]
@@ -790,9 +791,7 @@ mod tests {
         request
             .messages
             .push(message(Some(MessageContent::Text("safe".to_string()))));
-
         let scanned = payload(&request).expect("request metadata should be scannable");
-
         assert!(scanned.contains("user@example.com"));
         assert!(scanned.contains("second@example.com"));
         assert!(scanned.contains("third@example.com"));

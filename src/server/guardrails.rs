@@ -156,6 +156,12 @@ fn provider_bound_payload(request: &ChatCompletionRequest) -> String {
     fragments.extend(request.modalities.iter().flatten().cloned());
     fragments.extend(request.reasoning_effort.iter().cloned());
     fragments.extend(request.service_tier.iter().cloned());
+    fragments.extend(
+        request
+            .logit_bias
+            .iter()
+            .flat_map(|bias| bias.keys().cloned()),
+    );
     if let Some(audio) = request.audio.as_ref() {
         fragments.push(audio.voice.clone());
         fragments.push(audio.format.clone());
@@ -613,10 +619,10 @@ mod tests {
     #[tokio::test]
     async fn masking_rejects_numeric_pii_but_not_cross_boundary_fragments() {
         let mut numeric = request("safe");
-        numeric.extra_body.insert(
-            "provider_extension".to_string(),
-            serde_json::json!({"phone": 2125551234_u64}),
-        );
+        numeric.logit_bias = Some(std::collections::HashMap::from([(
+            "2125551234".to_string(),
+            1.0,
+        )]));
         assert!(matches!(
             apply_input(&masking_engine(), &numeric).await,
             Err(GatewayError::BadRequest(_))
