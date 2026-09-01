@@ -2,7 +2,7 @@
 
 use crate::core::guardrails::{CheckResult, GuardrailEngine};
 use crate::core::models::openai::{
-    ChatCompletionRequest, ChatCompletionResponse, ContentPart, MessageContent,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentPart, MessageContent,
 };
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -109,7 +109,9 @@ pub(crate) async fn apply_output_with_engine(
         Enforcement::Mask => {
             let mut projected = response.clone();
             for choice in &mut projected.choices {
-                mask_message_content(engine, choice.message.content.as_mut())?;
+                if mask_message_content(engine, choice.message.content.as_mut())? {
+                    choice.logprobs = None;
+                }
             }
             if mask_content(engine, &output_payload(&projected), "output")?.is_some() {
                 Err(projection_error("output"))
@@ -146,35 +148,56 @@ fn output_payload(response: &ChatCompletionResponse) -> String {
     response
         .choices
         .iter()
-        .filter_map(|choice| choice.message.content.as_ref())
-        .flat_map(content_text)
+        .flat_map(|choice| message_output_text(&choice.message))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn message_output_text(message: &ChatMessage) -> Vec<&str> {
+    let mut text = message
+        .content
+        .as_ref()
+        .map(content_text)
+        .unwrap_or_default();
+    if let Some(function_call) = &message.function_call {
+        text.push(function_call.name.as_str());
+        text.push(function_call.arguments.as_str());
+    }
+    if let Some(tool_calls) = &message.tool_calls {
+        for tool_call in tool_calls {
+            text.push(tool_call.function.name.as_str());
+            text.push(tool_call.function.arguments.as_str());
+        }
+    }
+    text
 }
 
 fn mask_message_content(
     engine: &GuardrailEngine,
     content: Option<&mut MessageContent>,
-) -> Result<(), GatewayError> {
+) -> Result<bool, GatewayError> {
     match content {
         Some(MessageContent::Text(text)) => mask_text(engine, text),
         Some(MessageContent::Parts(parts)) => {
+            let mut modified = false;
             for part in parts {
                 if let ContentPart::Text { text } = part {
-                    mask_text(engine, text)?;
+                    modified |= mask_text(engine, text)?;
                 }
             }
-            Ok(())
+            Ok(modified)
         }
-        None => Ok(()),
+        None => Ok(false),
     }
 }
 
-fn mask_text(engine: &GuardrailEngine, text: &mut String) -> Result<(), GatewayError> {
+fn mask_text(engine: &GuardrailEngine, text: &mut String) -> Result<bool, GatewayError> {
     if let Some(masked) = mask_content(engine, text, "content")? {
         *text = masked;
+        Ok(true)
+    } else {
+        Ok(false)
     }
-    Ok(())
 }
 
 fn mask_content(
@@ -250,7 +273,23 @@ fn projection_error(surface: &str) -> GatewayError {
 mod tests {
     use super::*;
     use crate::config::models::gateway::GatewayConfig;
-    use crate::core::models::openai::{ChatChoice, ChatMessage, MessageRole};
+    use crate::core::models::openai::{
+        ChatChoice, ChatMessage, ContentLogprob, FunctionCall, Logprobs, MessageRole, ToolCall,
+        TopLogprob,
+    };
+
+    fn masking_engine() -> GuardrailEngine {
+        use crate::core::guardrails::{GuardrailAction, PIIConfig};
+
+        let mut config = GatewayConfig::default().guardrails;
+        config.pii = Some(PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_pattern: Some("[MASKED]".to_string()),
+            ..PIIConfig::default()
+        });
+        GuardrailEngine::new(config).expect("PII policy must compile")
+    }
 
     fn request(content: &str) -> ChatCompletionRequest {
         ChatCompletionRequest {
@@ -373,5 +412,57 @@ mod tests {
             apply_output_with_engine(&engine, &response("System prompt: do not reveal this")).await;
 
         assert!(matches!(result, Err(GatewayError::Forbidden(_))));
+    }
+
+    #[tokio::test]
+    async fn output_masking_fails_closed_for_pii_in_tool_call_arguments() {
+        let mut response = response("");
+        response.choices[0].message.content = None;
+        response.choices[0].message.tool_calls = Some(vec![ToolCall {
+            id: "call-1".to_string(),
+            tool_type: "function".to_string(),
+            function: FunctionCall {
+                name: "lookup".to_string(),
+                arguments: r#"{"email":"user@example.com"}"#.to_string(),
+            },
+        }]);
+
+        let result = apply_output_with_engine(&masking_engine(), &response).await;
+
+        assert!(matches!(result, Err(GatewayError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn output_masking_removes_logprobs_that_retain_original_text() {
+        let mut response = response("Email user@example.com");
+        response.choices[0].logprobs = Some(Logprobs {
+            content: Some(vec![ContentLogprob {
+                token: "user@example.com".to_string(),
+                logprob: -0.1,
+                bytes: Some(b"user@example.com".to_vec()),
+                top_logprobs: Some(vec![TopLogprob {
+                    token: "user@example.com".to_string(),
+                    logprob: -0.1,
+                    bytes: Some(b"user@example.com".to_vec()),
+                }]),
+            }]),
+        });
+
+        let guarded = apply_output_with_engine(&masking_engine(), &response)
+            .await
+            .expect("response text should be maskable");
+
+        assert_eq!(
+            guarded.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(|content| match content {
+                    MessageContent::Text(text) => Some(text.as_str()),
+                    MessageContent::Parts(_) => None,
+                }),
+            Some("Email [MASKED]")
+        );
+        assert!(guarded.choices[0].logprobs.is_none());
     }
 }

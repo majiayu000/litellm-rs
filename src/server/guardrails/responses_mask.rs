@@ -16,12 +16,16 @@ pub(crate) fn mask_responses_input_for_storage(
 
     let mut projected = request.clone();
     match &mut projected.input {
-        ResponseInput::Text(text) => super::mask_text(engine, text)?,
+        ResponseInput::Text(text) => {
+            super::mask_text(engine, text)?;
+        }
         ResponseInput::Items(items) => {
             for item in items {
                 match item {
                     ResponseInputItem::Message(message) => match &mut message.content {
-                        ResponseInputContent::Text(text) => super::mask_text(engine, text)?,
+                        ResponseInputContent::Text(text) => {
+                            super::mask_text(engine, text)?;
+                        }
                         ResponseInputContent::Parts(parts) => {
                             for part in parts {
                                 match part {
@@ -59,7 +63,7 @@ fn mask_tool_output(
     output: &mut CodexToolOutput,
 ) -> Result<(), GatewayError> {
     match output {
-        CodexToolOutput::Text(text) => super::mask_text(engine, text),
+        CodexToolOutput::Text(text) => super::mask_text(engine, text).map(|_| ()),
         CodexToolOutput::ContentItems(items) => {
             for item in items {
                 if let CodexToolOutputContent::InputText { text } = item {
