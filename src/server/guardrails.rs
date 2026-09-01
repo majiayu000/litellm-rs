@@ -2,16 +2,18 @@
 
 use crate::core::guardrails::{CheckResult, GuardrailEngine};
 use crate::core::models::openai::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentPart, MessageContent,
-    ToolChoice,
+    ChatCompletionRequest, ChatCompletionResponse, ContentPart, MessageContent, ToolChoice,
 };
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use tracing::{error, warn};
 
 mod input_scan;
+mod output_scan;
 mod responses_mask;
 pub(crate) use responses_mask::mask_responses_input_for_storage;
+
+const FRAGMENT_SEPARATOR: &str = "\n---\n";
 
 pub(crate) async fn apply_chat_input(
     state: &AppState,
@@ -45,13 +47,8 @@ pub(crate) async fn ensure_chat_output_unmodified(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<(), GatewayError> {
-    match enforce(
-        state
-            .guardrails
-            .check_output(&output_payload(response))
-            .await,
-        "output",
-    )? {
+    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR)?;
+    match enforce(state.guardrails.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("output")),
     }
@@ -86,7 +83,7 @@ async fn apply_input(
         Enforcement::Mask => {
             let mut projected = request.clone();
             for message in &mut projected.messages {
-                mask_message_content(engine, message.content.as_mut())?;
+                mask_message_content(engine, message.content.as_mut(), "input")?;
             }
             if let Some(user) = projected.user.as_mut() {
                 mask_text(engine, user)?;
@@ -107,19 +104,23 @@ pub(crate) async fn apply_output_with_engine(
     engine: &GuardrailEngine,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    match enforce(
-        engine.check_output(&output_payload(response)).await,
-        "output",
-    )? {
+    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR)?;
+    match enforce(engine.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(response.clone()),
         Enforcement::Mask => {
             let mut projected = response.clone();
             for choice in &mut projected.choices {
-                if mask_message_content(engine, choice.message.content.as_mut())? {
+                if mask_message_content(engine, choice.message.content.as_mut(), "output")? {
                     choice.logprobs = None;
                 }
             }
-            if mask_content(engine, &output_payload(&projected), "output")?.is_some() {
+            if mask_content(
+                engine,
+                &output_scan::response_payload(&projected, FRAGMENT_SEPARATOR)?,
+                "output",
+            )?
+            .is_some()
+            {
                 Err(projection_error("output"))
             } else {
                 Ok(projected)
@@ -227,39 +228,10 @@ fn pii_masking_enabled(engine: &GuardrailEngine) -> bool {
         })
 }
 
-fn output_payload(response: &ChatCompletionResponse) -> String {
-    response
-        .choices
-        .iter()
-        .flat_map(|choice| message_output_text(&choice.message))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn message_output_text(message: &ChatMessage) -> Vec<&str> {
-    let mut text = message
-        .content
-        .as_ref()
-        .map(content_text)
-        .unwrap_or_default();
-    if let Some(function_call) = &message.function_call {
-        text.push(function_call.name.as_str());
-        text.push(function_call.arguments.as_str());
-    }
-    if let Some(tool_calls) = &message.tool_calls {
-        for tool_call in tool_calls {
-            text.push(tool_call.id.as_str());
-            text.push(tool_call.tool_type.as_str());
-            text.push(tool_call.function.name.as_str());
-            text.push(tool_call.function.arguments.as_str());
-        }
-    }
-    text
-}
-
 fn mask_message_content(
     engine: &GuardrailEngine,
     content: Option<&mut MessageContent>,
+    surface: &str,
 ) -> Result<bool, GatewayError> {
     match content {
         Some(MessageContent::Text(text)) => mask_text(engine, text),
@@ -278,6 +250,19 @@ fn mask_message_content(
                         ..
                     } => {
                         modified |= mask_text(engine, &mut image_url.url)?;
+                    }
+                    ContentPart::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } => {
+                        modified |= mask_text(engine, tool_use_id)?;
+                        modified |= mask_json_value(engine, content, surface)?;
+                    }
+                    ContentPart::ToolUse { id, name, input } => {
+                        modified |= mask_text(engine, id)?;
+                        modified |= mask_text(engine, name)?;
+                        modified |= mask_json_value(engine, input, surface)?;
                     }
                     _ => {}
                 }
@@ -328,20 +313,20 @@ fn mask_provider_bound_fields(
     .into_iter()
     .flatten()
     {
-        mask_json_value(engine, value)?;
+        mask_json_value(engine, value, "input")?;
     }
     if let Some(schema) = request
         .response_format
         .as_mut()
         .and_then(|format| format.json_schema.as_mut())
     {
-        mask_json_value(engine, schema)?;
+        mask_json_value(engine, schema, "input")?;
     }
     for (key, value) in &mut request.extra_body {
         if mask_content(engine, key, "extra_body key")?.is_some() {
             return Err(projection_error("input"));
         }
-        mask_json_value(engine, value)?;
+        mask_json_value(engine, value, "input")?;
     }
     Ok(())
 }
@@ -349,27 +334,29 @@ fn mask_provider_bound_fields(
 fn mask_json_value(
     engine: &GuardrailEngine,
     value: &mut serde_json::Value,
-) -> Result<(), GatewayError> {
+    surface: &str,
+) -> Result<bool, GatewayError> {
     match value {
-        serde_json::Value::String(text) => {
-            mask_text(engine, text)?;
-        }
+        serde_json::Value::String(text) => mask_text(engine, text),
         serde_json::Value::Array(values) => {
+            let mut modified = false;
             for value in values {
-                mask_json_value(engine, value)?;
+                modified |= mask_json_value(engine, value, surface)?;
             }
+            Ok(modified)
         }
         serde_json::Value::Object(values) => {
+            let mut modified = false;
             for (key, value) in values {
                 if mask_content(engine, key, "JSON key")?.is_some() {
-                    return Err(projection_error("input"));
+                    return Err(projection_error(surface));
                 }
-                mask_json_value(engine, value)?;
+                modified |= mask_json_value(engine, value, surface)?;
             }
+            Ok(modified)
         }
-        _ => {}
+        _ => Ok(false),
     }
-    Ok(())
 }
 
 fn mask_content(
@@ -381,24 +368,6 @@ fn mask_content(
         error!(%cause, surface, "Guardrail masking failed closed");
         GatewayError::Internal(format!("{surface} guardrail masking failed"))
     })
-}
-
-fn content_text(content: &MessageContent) -> Vec<&str> {
-    match content {
-        MessageContent::Text(text) => vec![text.as_str()],
-        MessageContent::Parts(parts) => parts
-            .iter()
-            .filter_map(|part| match part {
-                ContentPart::Text { text } => Some(text.as_str()),
-                ContentPart::ImageUrl { image_url } => Some(image_url.url.as_str()),
-                ContentPart::Image {
-                    image_url: Some(image_url),
-                    ..
-                } => Some(image_url.url.as_str()),
-                _ => None,
-            })
-            .collect(),
-    }
 }
 
 enum Enforcement {
@@ -685,6 +654,52 @@ mod tests {
         let result = apply_output_with_engine(&masking_engine(), &response).await;
 
         assert!(matches!(result, Err(GatewayError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn output_masking_rewrites_structured_tool_parts() {
+        let mut response = response("");
+        response.choices[0].message.content = Some(MessageContent::Parts(vec![
+            ContentPart::ToolUse {
+                id: "call-1".to_string(),
+                name: "lookup".to_string(),
+                input: serde_json::json!({"email": "user@example.com"}),
+            },
+            ContentPart::ToolResult {
+                tool_use_id: "call-1".to_string(),
+                content: serde_json::json!({"owner": "second@example.com"}),
+                is_error: None,
+            },
+        ]));
+
+        let guarded = apply_output_with_engine(&masking_engine(), &response)
+            .await
+            .expect("structured tool content should be maskable");
+        let Some(MessageContent::Parts(parts)) = guarded.choices[0].message.content.as_ref() else {
+            panic!("response should retain multipart content");
+        };
+        let ContentPart::ToolUse { input, .. } = &parts[0] else {
+            panic!("first part should remain tool use");
+        };
+        let ContentPart::ToolResult { content, .. } = &parts[1] else {
+            panic!("second part should remain tool result");
+        };
+
+        assert_eq!(input["email"], "[MASKED]");
+        assert_eq!(content["owner"], "[MASKED]");
+    }
+
+    #[tokio::test]
+    async fn output_fragments_do_not_form_cross_boundary_pii() {
+        let mut second = response("6789");
+        let mut response = response("123-45");
+        response.choices.push(second.choices.remove(0));
+
+        let guarded = apply_output_with_engine(&masking_engine(), &response)
+            .await
+            .expect("independent output fragments should remain independent");
+
+        assert_eq!(guarded.choices.len(), 2);
     }
 
     #[tokio::test]
