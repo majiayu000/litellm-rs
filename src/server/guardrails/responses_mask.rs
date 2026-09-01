@@ -33,7 +33,19 @@ pub(crate) fn mask_responses_input_for_storage(
                                     | ResponseInputContentPart::OutputText { text } => {
                                         super::mask_text(engine, text)?;
                                     }
-                                    _ => {}
+                                    ResponseInputContentPart::InputImage {
+                                        image_url: Some(image_url),
+                                        ..
+                                    } => {
+                                        super::mask_text(engine, image_url)?;
+                                    }
+                                    ResponseInputContentPart::InputAudio { audio_url } => {
+                                        super::mask_text(engine, audio_url)?;
+                                    }
+                                    ResponseInputContentPart::InputImage {
+                                        image_url: None,
+                                        ..
+                                    } => {}
                                 }
                             }
                         }
@@ -66,8 +78,19 @@ fn mask_tool_output(
         CodexToolOutput::Text(text) => super::mask_text(engine, text).map(|_| ()),
         CodexToolOutput::ContentItems(items) => {
             for item in items {
-                if let CodexToolOutputContent::InputText { text } = item {
-                    super::mask_text(engine, text)?;
+                match item {
+                    CodexToolOutputContent::InputText { text } => {
+                        super::mask_text(engine, text)?;
+                    }
+                    CodexToolOutputContent::InputImage { image_url, .. } => {
+                        super::mask_text(engine, image_url)?;
+                    }
+                    CodexToolOutputContent::InputAudio { audio_url } => {
+                        super::mask_text(engine, audio_url)?;
+                    }
+                    CodexToolOutputContent::EncryptedContent { encrypted_content } => {
+                        super::mask_text(engine, encrypted_content)?;
+                    }
                 }
             }
             Ok(())
@@ -162,5 +185,68 @@ mod tests {
         .expect("request should deserialize");
 
         assert!(mask_responses_input_for_storage(&engine(), &request).is_err());
+    }
+
+    #[test]
+    fn masks_non_text_message_parts_before_storage() {
+        let request: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "https://example.com/user@example.com"},
+                    {"type": "input_audio", "audio_url": "https://example.com/user@example.com"}
+                ]
+            }]
+        }))
+        .expect("request should deserialize");
+
+        let masked = mask_responses_input_for_storage(&engine(), &request)
+            .expect("Responses input should be maskable");
+        let serialized = serde_json::to_value(masked).expect("request should serialize");
+
+        assert_eq!(
+            serialized["input"][0]["content"][0]["image_url"],
+            "https://example.com/[MASKED]"
+        );
+        assert_eq!(
+            serialized["input"][0]["content"][1]["audio_url"],
+            "https://example.com/[MASKED]"
+        );
+    }
+
+    #[test]
+    fn masks_non_text_tool_outputs_before_storage() {
+        let request: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": [
+                    {"type": "input_image", "image_url": "https://example.com/user@example.com"},
+                    {"type": "input_audio", "audio_url": "https://example.com/user@example.com"},
+                    {"type": "encrypted_content", "encrypted_content": "user@example.com"}
+                ]
+            }]
+        }))
+        .expect("request should deserialize");
+
+        let masked = mask_responses_input_for_storage(&engine(), &request)
+            .expect("Responses input should be maskable");
+        let serialized = serde_json::to_value(masked).expect("request should serialize");
+
+        assert_eq!(
+            serialized["input"][0]["output"][0]["image_url"],
+            "https://example.com/[MASKED]"
+        );
+        assert_eq!(
+            serialized["input"][0]["output"][1]["audio_url"],
+            "https://example.com/[MASKED]"
+        );
+        assert_eq!(
+            serialized["input"][0]["output"][2]["encrypted_content"],
+            "[MASKED]"
+        );
     }
 }
