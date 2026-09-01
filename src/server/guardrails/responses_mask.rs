@@ -10,15 +10,21 @@ pub(crate) fn mask_responses_input_for_storage(
     engine: &GuardrailEngine,
     request: &ResponsesApiRequest,
 ) -> Result<ResponsesApiRequest, GatewayError> {
-    if !engine.input_checks_enabled() {
+    let input_checks_enabled = engine.input_checks_enabled();
+    let output_checks_enabled = engine.is_enabled() && engine.config().check_output;
+    if !input_checks_enabled && !output_checks_enabled {
         return Ok(request.clone());
     }
 
     let mut projected = request.clone();
+    super::mask_metadata(engine, projected.metadata.as_mut())?;
+    if !input_checks_enabled {
+        return Ok(projected);
+    }
     if let Some(user) = projected.user.as_mut() {
         super::mask_text(engine, user)?;
     }
-    super::mask_metadata(engine, projected.metadata.as_mut())?;
+    let will_store = request.store.unwrap_or(true);
     match &mut projected.input {
         ResponseInput::Text(text) => {
             super::mask_text(engine, text)?;
@@ -27,17 +33,19 @@ pub(crate) fn mask_responses_input_for_storage(
             for item in items {
                 match item {
                     ResponseInputItem::Message(message) => {
-                        reject_identifiers(
-                            engine,
-                            [
-                                message.id.as_deref(),
-                                message.phase.as_deref(),
-                                message
-                                    .internal_chat_message_metadata_passthrough
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.turn_id.as_deref()),
-                            ],
-                        )?;
+                        if will_store {
+                            reject_identifiers(
+                                engine,
+                                [
+                                    message.id.as_deref(),
+                                    message.phase.as_deref(),
+                                    message
+                                        .internal_chat_message_metadata_passthrough
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.turn_id.as_deref()),
+                                ],
+                            )?;
+                        }
                         match &mut message.content {
                             ResponseInputContent::Text(text) => {
                                 super::mask_text(engine, text)?;
@@ -73,62 +81,74 @@ pub(crate) fn mask_responses_input_for_storage(
                     ResponseInputItem::FunctionCall(call) => {
                         reject_identifiers(
                             engine,
-                            [
-                                call.id.as_deref(),
-                                Some(call.call_id.as_str()),
-                                Some(call.name.as_str()),
-                                call.namespace.as_deref(),
-                                call.status.as_deref(),
-                                call.internal_chat_message_metadata_passthrough
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.turn_id.as_deref()),
-                            ],
+                            [Some(call.call_id.as_str()), Some(call.name.as_str())],
                         )?;
+                        if will_store {
+                            reject_identifiers(
+                                engine,
+                                [
+                                    call.id.as_deref(),
+                                    call.namespace.as_deref(),
+                                    call.status.as_deref(),
+                                    call.internal_chat_message_metadata_passthrough
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.turn_id.as_deref()),
+                                ],
+                            )?;
+                        }
                         reject_unprojectable_mask(engine, &call.arguments)?;
                     }
                     ResponseInputItem::CustomToolCall(call) => {
                         reject_identifiers(
                             engine,
-                            [
-                                call.id.as_deref(),
-                                Some(call.call_id.as_str()),
-                                Some(call.name.as_str()),
-                                call.namespace.as_deref(),
-                                call.status.as_deref(),
-                                call.internal_chat_message_metadata_passthrough
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.turn_id.as_deref()),
-                            ],
+                            [Some(call.call_id.as_str()), Some(call.name.as_str())],
                         )?;
+                        if will_store {
+                            reject_identifiers(
+                                engine,
+                                [
+                                    call.id.as_deref(),
+                                    call.namespace.as_deref(),
+                                    call.status.as_deref(),
+                                    call.internal_chat_message_metadata_passthrough
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.turn_id.as_deref()),
+                                ],
+                            )?;
+                        }
                         reject_unprojectable_mask(engine, &call.input)?;
                     }
                     ResponseInputItem::FunctionCallOutput(output) => {
-                        reject_identifiers(
-                            engine,
-                            [
-                                output.id.as_deref(),
-                                Some(output.call_id.as_str()),
-                                output
-                                    .internal_chat_message_metadata_passthrough
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.turn_id.as_deref()),
-                            ],
-                        )?;
+                        reject_identifiers(engine, [Some(output.call_id.as_str())])?;
+                        if will_store {
+                            reject_identifiers(
+                                engine,
+                                [
+                                    output.id.as_deref(),
+                                    output
+                                        .internal_chat_message_metadata_passthrough
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.turn_id.as_deref()),
+                                ],
+                            )?;
+                        }
                         mask_tool_output(engine, &mut output.output)?;
                     }
                     ResponseInputItem::CustomToolCallOutput(output) => {
-                        reject_identifiers(
-                            engine,
-                            [
-                                output.id.as_deref(),
-                                Some(output.call_id.as_str()),
-                                output.name.as_deref(),
-                                output
-                                    .internal_chat_message_metadata_passthrough
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.turn_id.as_deref()),
-                            ],
-                        )?;
+                        reject_identifiers(engine, [Some(output.call_id.as_str())])?;
+                        if will_store {
+                            reject_identifiers(
+                                engine,
+                                [
+                                    output.id.as_deref(),
+                                    output.name.as_deref(),
+                                    output
+                                        .internal_chat_message_metadata_passthrough
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.turn_id.as_deref()),
+                                ],
+                            )?;
+                        }
                         mask_tool_output(engine, &mut output.output)?;
                     }
                     ResponseInputItem::Unsupported(_) | ResponseInputItem::Unknown(_) => {}
@@ -193,8 +213,9 @@ mod tests {
     use crate::core::models::openai::responses_api::ResponseInput;
     use serde_json::json;
 
-    fn engine() -> GuardrailEngine {
+    fn engine_with_input_checks(check_input: bool) -> GuardrailEngine {
         let mut config = GatewayConfig::default().guardrails;
+        config.check_input = check_input;
         config.pii = Some(PIIConfig {
             enabled: true,
             action: GuardrailAction::Mask,
@@ -202,6 +223,10 @@ mod tests {
             ..PIIConfig::default()
         });
         GuardrailEngine::new(config).expect("PII policy must compile")
+    }
+
+    fn engine() -> GuardrailEngine {
+        engine_with_input_checks(true)
     }
 
     #[test]
@@ -351,6 +376,40 @@ mod tests {
                 .map(String::as_str),
             Some("[MASKED]")
         );
+    }
+
+    #[test]
+    fn output_only_masking_still_masks_echoed_metadata() {
+        let request: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": "safe",
+            "metadata": {"owner": "user@example.com"}
+        }))
+        .expect("request should deserialize");
+
+        let masked = mask_responses_input_for_storage(&engine_with_input_checks(false), &request)
+            .expect("echoed metadata should be maskable");
+
+        assert_eq!(masked.metadata.unwrap()["owner"], "[MASKED]");
+    }
+
+    #[test]
+    fn storage_only_message_identifiers_are_ignored_when_store_is_false() {
+        let mut request: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": [{
+                "type": "message",
+                "id": "user@example.com",
+                "role": "user",
+                "content": "safe"
+            }],
+            "store": false
+        }))
+        .expect("request should deserialize");
+
+        assert!(mask_responses_input_for_storage(&engine(), &request).is_ok());
+        request.store = Some(true);
+        assert!(mask_responses_input_for_storage(&engine(), &request).is_err());
     }
 
     #[test]

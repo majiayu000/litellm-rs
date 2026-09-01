@@ -124,8 +124,8 @@ fn collect_part(
             image_url: Some(image_url),
             ..
         } => push_fragment(fragments, &image_url.url),
-        ContentPart::Audio { .. }
-        | ContentPart::Image {
+        ContentPart::Audio { audio } => push_fragment(fragments, &audio.format),
+        ContentPart::Image {
             image_url: None, ..
         } => {}
     }
@@ -774,7 +774,7 @@ mod tests {
         ]))))
         .expect("out-of-scope carriers should not fail");
 
-        assert_eq!(scanned, "https://example.invalid/image.png\ncall");
+        assert_eq!(scanned, "https://example.invalid/image.png\nwav\ncall");
     }
 
     #[test]
