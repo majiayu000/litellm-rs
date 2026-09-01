@@ -28,6 +28,9 @@ pub(super) fn response_payload(response: &ChatCompletionResponse, separator: &st
 fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
     push_optional(fragments, message.name.as_deref());
     push_optional(fragments, message.tool_call_id.as_deref());
+    if let Some(audio) = message.audio.as_ref() {
+        push(fragments, &audio.format);
+    }
     match message.content.as_ref() {
         Some(MessageContent::Text(text)) => push(fragments, text),
         Some(MessageContent::Parts(parts)) => {
@@ -52,8 +55,8 @@ fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
                         push(fragments, name);
                         collect_json_content(input, fragments);
                     }
-                    ContentPart::Audio { .. }
-                    | ContentPart::Image {
+                    ContentPart::Audio { audio } => push(fragments, &audio.format),
+                    ContentPart::Image {
                         image_url: None, ..
                     }
                     | ContentPart::Document { .. } => {}
@@ -163,11 +166,11 @@ mod tests {
     #[test]
     fn encoded_binary_parts_are_not_scanned_as_text() {
         let encoded = "2125551234==".to_string();
-        let message = message(vec![
+        let mut message = message(vec![
             ContentPart::Audio {
                 audio: AudioContent {
                     data: encoded.clone(),
-                    format: "wav".to_string(),
+                    format: "part-format-marker".to_string(),
                 },
             },
             ContentPart::Image {
@@ -186,10 +189,17 @@ mod tests {
                 cache_control: None,
             },
         ]);
+        message.audio = Some(AudioContent {
+            data: "top-level-encoded".to_string(),
+            format: "message-format-marker".to_string(),
+        });
         let mut fragments = Vec::new();
 
         collect_message(&message, &mut fragments);
 
-        assert!(fragments.is_empty());
+        assert_eq!(
+            fragments,
+            vec!["message-format-marker", "part-format-marker"]
+        );
     }
 }

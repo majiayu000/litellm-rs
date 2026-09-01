@@ -421,8 +421,8 @@ mod tests {
     use super::*;
     use crate::config::models::gateway::GatewayConfig;
     use crate::core::models::openai::{
-        ChatChoice, ChatMessage, ContentLogprob, FunctionCall, ImageUrl, Logprobs, MessageRole,
-        ToolCall, TopLogprob,
+        AudioContent, ChatChoice, ChatMessage, ContentLogprob, FunctionCall, ImageUrl, Logprobs,
+        MessageRole, ToolCall, TopLogprob,
     };
 
     fn masking_engine() -> GuardrailEngine {
@@ -668,6 +668,19 @@ mod tests {
                 arguments: "{}".to_string(),
             },
         }]);
+
+        let result = apply_output_with_engine(&masking_engine(), &response).await;
+
+        assert!(matches!(result, Err(GatewayError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn output_masking_fails_closed_for_pii_in_audio_format() {
+        let mut response = response("");
+        response.choices[0].message.audio = Some(AudioContent {
+            data: "encoded-audio".to_string(),
+            format: "user@example.com".to_string(),
+        });
 
         let result = apply_output_with_engine(&masking_engine(), &response).await;
 
