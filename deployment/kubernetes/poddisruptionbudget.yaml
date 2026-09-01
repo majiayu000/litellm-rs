@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: litellm-gateway
+  namespace: litellm-gateway
+  labels:
+    app.kubernetes.io/name: litellm-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  # Preserve capacity for multi-replica deployments without blocking
+  # voluntary disruption when operators override the Deployment to one replica.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: litellm-gateway
+      app.kubernetes.io/component: gateway
