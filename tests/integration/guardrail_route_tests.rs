@@ -538,7 +538,7 @@ mod tests {
                 .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
-        let image_url = "https://example.com/image.png";
+        let image_url = "https://example.com/third@example.com";
 
         let response = test::call_service(
             &app,
@@ -565,9 +565,51 @@ mod tests {
             let parts = requests[0]["messages"][0]["content"].as_array().unwrap();
             assert_eq!(parts.len(), 3);
             assert_eq!(parts[0]["text"], "Email [MASKED]");
-            assert_eq!(parts[1]["image_url"]["url"], image_url);
+            assert_eq!(parts[1]["image_url"]["url"], "https://example.com/[MASKED]");
             assert_eq!(parts[1]["image_url"]["detail"], "low");
             assert_eq!(parts[2]["text"], "or [MASKED]");
+        }
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn responses_pii_mask_is_applied_to_image_url_before_provider_execution() {
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_pii_mask(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "input": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_image",
+                            "image_url": "https://example.com/user@example.com",
+                            "detail": "low"
+                        }]
+                    }],
+                    "store": false
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        {
+            let requests = provider.requests.lock().unwrap();
+            let image_url = &requests[0]["messages"][0]["content"][0]["image_url"];
+            assert_eq!(image_url["url"], "https://example.com/[MASKED]");
+            assert_eq!(image_url["detail"], "low");
         }
         provider.stop_upstream().await;
     }

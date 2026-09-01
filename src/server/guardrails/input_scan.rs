@@ -102,7 +102,15 @@ fn collect_part(
             push_fragment(fragments, name);
             push_json_value(fragments, input);
         }
-        ContentPart::ImageUrl { .. } | ContentPart::Audio { .. } | ContentPart::Image { .. } => {}
+        ContentPart::ImageUrl { image_url } => push_fragment(fragments, &image_url.url),
+        ContentPart::Image {
+            image_url: Some(image_url),
+            ..
+        } => push_fragment(fragments, &image_url.url),
+        ContentPart::Audio { .. }
+        | ContentPart::Image {
+            image_url: None, ..
+        } => {}
     }
     Ok(())
 }
@@ -725,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn binary_parts_and_null_json_add_no_content() {
+    fn url_parts_are_scanned_while_binary_parts_and_null_json_are_ignored() {
         let scanned = scan_message(message(Some(MessageContent::Parts(vec![
             ContentPart::ImageUrl {
                 image_url: ImageUrl {
@@ -755,6 +763,6 @@ mod tests {
         ]))))
         .expect("out-of-scope carriers should not fail");
 
-        assert!(scanned.is_empty());
+        assert_eq!(scanned, "https://example.invalid/image.png");
     }
 }

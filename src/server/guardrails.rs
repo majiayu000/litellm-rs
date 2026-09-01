@@ -181,8 +181,20 @@ fn mask_message_content(
         Some(MessageContent::Parts(parts)) => {
             let mut modified = false;
             for part in parts {
-                if let ContentPart::Text { text } = part {
-                    modified |= mask_text(engine, text)?;
+                match part {
+                    ContentPart::Text { text } => {
+                        modified |= mask_text(engine, text)?;
+                    }
+                    ContentPart::ImageUrl { image_url } => {
+                        modified |= mask_text(engine, &mut image_url.url)?;
+                    }
+                    ContentPart::Image {
+                        image_url: Some(image_url),
+                        ..
+                    } => {
+                        modified |= mask_text(engine, &mut image_url.url)?;
+                    }
+                    _ => {}
                 }
             }
             Ok(modified)
@@ -218,6 +230,11 @@ fn content_text(content: &MessageContent) -> Vec<&str> {
             .iter()
             .filter_map(|part| match part {
                 ContentPart::Text { text } => Some(text.as_str()),
+                ContentPart::ImageUrl { image_url } => Some(image_url.url.as_str()),
+                ContentPart::Image {
+                    image_url: Some(image_url),
+                    ..
+                } => Some(image_url.url.as_str()),
                 _ => None,
             })
             .collect(),
@@ -274,8 +291,8 @@ mod tests {
     use super::*;
     use crate::config::models::gateway::GatewayConfig;
     use crate::core::models::openai::{
-        ChatChoice, ChatMessage, ContentLogprob, FunctionCall, Logprobs, MessageRole, ToolCall,
-        TopLogprob,
+        ChatChoice, ChatMessage, ContentLogprob, FunctionCall, ImageUrl, Logprobs, MessageRole,
+        ToolCall, TopLogprob,
     };
 
     fn masking_engine() -> GuardrailEngine {
@@ -464,5 +481,30 @@ mod tests {
             Some("Email [MASKED]")
         );
         assert!(guarded.choices[0].logprobs.is_none());
+    }
+
+    #[tokio::test]
+    async fn output_masking_rewrites_image_urls() {
+        let mut response = response("");
+        response.choices[0].message.content =
+            Some(MessageContent::Parts(vec![ContentPart::ImageUrl {
+                image_url: ImageUrl {
+                    url: "https://example.com/user@example.com".to_string(),
+                    detail: Some("low".to_string()),
+                },
+            }]));
+
+        let guarded = apply_output_with_engine(&masking_engine(), &response)
+            .await
+            .expect("response image URL should be maskable");
+
+        let Some(MessageContent::Parts(parts)) = guarded.choices[0].message.content.as_ref() else {
+            panic!("response should retain multipart content");
+        };
+        let ContentPart::ImageUrl { image_url } = &parts[0] else {
+            panic!("response should retain the image URL part");
+        };
+        assert_eq!(image_url.url, "https://example.com/[MASKED]");
+        assert_eq!(image_url.detail.as_deref(), Some("low"));
     }
 }
