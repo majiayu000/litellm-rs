@@ -118,7 +118,9 @@ pub async fn create_response(
     let storage_request = match crate::server::guardrails::mask_responses_input_for_storage(
         state.guardrails.as_ref(),
         &request,
-    ) {
+    )
+    .await
+    {
         Ok(request) => request,
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };

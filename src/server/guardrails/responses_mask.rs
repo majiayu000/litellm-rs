@@ -6,7 +6,7 @@ use crate::core::models::openai::responses_api::{
 use crate::core::types::codex::wire::{CodexToolOutput, CodexToolOutputContent};
 use crate::utils::error::gateway_error::GatewayError;
 
-pub(crate) fn mask_responses_input_for_storage(
+pub(crate) async fn mask_responses_input_for_storage(
     engine: &GuardrailEngine,
     request: &ResponsesApiRequest,
 ) -> Result<ResponsesApiRequest, GatewayError> {
@@ -16,6 +16,14 @@ pub(crate) fn mask_responses_input_for_storage(
         return Ok(request.clone());
     }
 
+    if output_checks_enabled && let Some(metadata) = request.metadata.as_ref() {
+        let content = metadata
+            .iter()
+            .flat_map(|(key, value)| [key.as_str(), value.as_str()])
+            .collect::<Vec<_>>()
+            .join(super::FRAGMENT_SEPARATOR);
+        super::enforce(engine.check_output(&content).await, "output")?;
+    }
     let mut projected = request.clone();
     super::mask_metadata(engine, projected.metadata.as_mut())?;
     if !input_checks_enabled {
@@ -24,7 +32,7 @@ pub(crate) fn mask_responses_input_for_storage(
     if let Some(user) = projected.user.as_mut() {
         super::mask_text(engine, user)?;
     }
-    let will_store = request.store.unwrap_or(true);
+    let will_store = request.store.unwrap_or(true) || request.background.unwrap_or(false);
     match &mut projected.input {
         ResponseInput::Text(text) => {
             super::mask_text(engine, text)?;
@@ -229,8 +237,8 @@ mod tests {
         engine_with_input_checks(true)
     }
 
-    #[test]
-    fn masks_plain_responses_input_before_storage() {
+    #[tokio::test]
+    async fn masks_plain_responses_input_before_storage() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": "Email user@example.com"
@@ -238,6 +246,7 @@ mod tests {
         .expect("request should deserialize");
 
         let masked = mask_responses_input_for_storage(&engine(), &request)
+            .await
             .expect("Responses input should be maskable");
 
         let ResponseInput::Text(input) = masked.input else {
@@ -246,8 +255,8 @@ mod tests {
         assert_eq!(input, "Email [MASKED]");
     }
 
-    #[test]
-    fn masks_structured_text_without_reordering_non_text_parts() {
+    #[tokio::test]
+    async fn masks_structured_text_without_reordering_non_text_parts() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": [{
@@ -262,6 +271,7 @@ mod tests {
         .expect("request should deserialize");
 
         let masked = mask_responses_input_for_storage(&engine(), &request)
+            .await
             .expect("Responses input should be maskable");
         let serialized = serde_json::to_value(masked).expect("request should serialize");
 
@@ -275,8 +285,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rejects_pii_in_unprojectable_function_arguments() {
+    #[tokio::test]
+    async fn rejects_pii_in_unprojectable_function_arguments() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": [{
@@ -288,11 +298,15 @@ mod tests {
         }))
         .expect("request should deserialize");
 
-        assert!(mask_responses_input_for_storage(&engine(), &request).is_err());
+        assert!(
+            mask_responses_input_for_storage(&engine(), &request)
+                .await
+                .is_err()
+        );
     }
 
-    #[test]
-    fn masks_non_text_message_parts_before_storage() {
+    #[tokio::test]
+    async fn masks_non_text_message_parts_before_storage() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": [{
@@ -307,6 +321,7 @@ mod tests {
         .expect("request should deserialize");
 
         let masked = mask_responses_input_for_storage(&engine(), &request)
+            .await
             .expect("Responses input should be maskable");
         let serialized = serde_json::to_value(masked).expect("request should serialize");
 
@@ -320,8 +335,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn masks_non_text_tool_outputs_before_storage() {
+    #[tokio::test]
+    async fn masks_non_text_tool_outputs_before_storage() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": [{
@@ -337,6 +352,7 @@ mod tests {
         .expect("request should deserialize");
 
         let masked = mask_responses_input_for_storage(&engine(), &request)
+            .await
             .expect("Responses input should be maskable");
         let serialized = serde_json::to_value(masked).expect("request should serialize");
 
@@ -354,8 +370,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn masks_responses_user_and_metadata_before_echo_or_storage() {
+    #[tokio::test]
+    async fn masks_responses_user_and_metadata_before_echo_or_storage() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": "safe",
@@ -365,6 +381,7 @@ mod tests {
         .expect("request should deserialize");
 
         let masked = mask_responses_input_for_storage(&engine(), &request)
+            .await
             .expect("Responses identity fields should be maskable");
 
         assert_eq!(masked.user.as_deref(), Some("[MASKED]"));
@@ -378,8 +395,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn output_only_masking_still_masks_echoed_metadata() {
+    #[tokio::test]
+    async fn output_policies_are_enforced_on_echoed_metadata() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": "safe",
@@ -388,13 +405,28 @@ mod tests {
         .expect("request should deserialize");
 
         let masked = mask_responses_input_for_storage(&engine_with_input_checks(false), &request)
+            .await
             .expect("echoed metadata should be maskable");
 
         assert_eq!(masked.metadata.unwrap()["owner"], "[MASKED]");
+
+        let mut config = GatewayConfig::default().guardrails;
+        config.check_input = false;
+        config.pii = Some(PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Block,
+            ..PIIConfig::default()
+        });
+        let blocking = GuardrailEngine::new(config).expect("PII policy must compile");
+        assert!(
+            mask_responses_input_for_storage(&blocking, &request)
+                .await
+                .is_err()
+        );
     }
 
-    #[test]
-    fn storage_only_message_identifiers_are_ignored_when_store_is_false() {
+    #[tokio::test]
+    async fn storage_only_message_identifiers_are_ignored_when_store_is_false() {
         let mut request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": [{
@@ -407,13 +439,28 @@ mod tests {
         }))
         .expect("request should deserialize");
 
-        assert!(mask_responses_input_for_storage(&engine(), &request).is_ok());
+        assert!(
+            mask_responses_input_for_storage(&engine(), &request)
+                .await
+                .is_ok()
+        );
+        request.background = Some(true);
+        assert!(
+            mask_responses_input_for_storage(&engine(), &request)
+                .await
+                .is_err()
+        );
+        request.background = None;
         request.store = Some(true);
-        assert!(mask_responses_input_for_storage(&engine(), &request).is_err());
+        assert!(
+            mask_responses_input_for_storage(&engine(), &request)
+                .await
+                .is_err()
+        );
     }
 
-    #[test]
-    fn rejects_pii_in_responses_call_identifiers() {
+    #[tokio::test]
+    async fn rejects_pii_in_responses_call_identifiers() {
         for input in [
             json!({
                 "type": "function_call",
@@ -445,7 +492,11 @@ mod tests {
             }))
             .expect("request should deserialize");
 
-            assert!(mask_responses_input_for_storage(&engine(), &request).is_err());
+            assert!(
+                mask_responses_input_for_storage(&engine(), &request)
+                    .await
+                    .is_err()
+            );
         }
     }
 }

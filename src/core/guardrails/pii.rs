@@ -43,6 +43,16 @@ impl PIIGuardrail {
         if !self.config.enabled || self.config.action != GuardrailAction::Mask {
             return Ok(());
         }
+        if self
+            .config
+            .mask_pattern
+            .as_ref()
+            .is_some_and(|pattern| pattern.trim().is_empty())
+        {
+            return Err(GuardrailError::Config(
+                "PII mask pattern must not be blank".to_string(),
+            ));
+        }
 
         let matches_mask = if let Some(pattern) = &self.config.mask_pattern {
             !self.detect(pattern).is_empty()
@@ -363,6 +373,23 @@ mod tests {
         };
 
         assert!(error.to_string().contains("must not match"));
+    }
+
+    #[test]
+    fn test_rejects_blank_mask_pattern() {
+        let config = PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_pattern: Some("  ".to_string()),
+            ..Default::default()
+        };
+
+        let error = match PIIGuardrail::new(config) {
+            Ok(_) => panic!("blank mask must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must not be blank"));
     }
 
     #[test]
