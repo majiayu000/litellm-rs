@@ -34,7 +34,31 @@ impl PIIGuardrail {
             }
         }
 
-        Ok(Self { config, patterns })
+        let guardrail = Self { config, patterns };
+        guardrail.validate_mask()?;
+        Ok(guardrail)
+    }
+
+    fn validate_mask(&self) -> GuardrailResult<()> {
+        if !self.config.enabled || self.config.action != GuardrailAction::Mask {
+            return Ok(());
+        }
+
+        let matches_mask = if let Some(pattern) = &self.config.mask_pattern {
+            !self.detect(pattern).is_empty()
+        } else {
+            (1..=64).any(|length| {
+                let replacement = self.config.mask_char.to_string().repeat(length);
+                !self.detect(&replacement).is_empty()
+            })
+        };
+        if matches_mask {
+            return Err(GuardrailError::Config(
+                "PII mask replacement must not match an enabled PII detector".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Get the regex pattern for a PII type
@@ -166,7 +190,7 @@ impl Guardrail for PIIGuardrail {
     }
 
     fn priority(&self) -> u32 {
-        20 // Run after moderation
+        6 // Run after local injection checks and before remote moderation
     }
 
     fn mask_content(&self, content: &str) -> GuardrailResult<Option<String>> {
@@ -322,6 +346,41 @@ mod tests {
 
         assert!(masked.contains("[REDACTED]"));
         assert!(!masked.contains("test@example.com"));
+    }
+
+    #[test]
+    fn test_rejects_self_matching_mask_pattern() {
+        let config = PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_pattern: Some("000-00-0000".to_string()),
+            ..Default::default()
+        };
+
+        let error = match PIIGuardrail::new(config) {
+            Ok(_) => panic!("self-matching mask must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must not match"));
+    }
+
+    #[test]
+    fn test_rejects_self_matching_mask_character() {
+        let config = PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_char: '0',
+            mask_pattern: None,
+            ..Default::default()
+        };
+
+        let error = match PIIGuardrail::new(config) {
+            Ok(_) => panic!("self-matching mask must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must not match"));
     }
 
     #[test]

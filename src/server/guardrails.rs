@@ -248,6 +248,8 @@ fn message_output_text(message: &ChatMessage) -> Vec<&str> {
     }
     if let Some(tool_calls) = &message.tool_calls {
         for tool_call in tool_calls {
+            text.push(tool_call.id.as_str());
+            text.push(tool_call.tool_type.as_str());
             text.push(tool_call.function.name.as_str());
             text.push(tool_call.function.arguments.as_str());
         }
@@ -659,6 +661,24 @@ mod tests {
             function: FunctionCall {
                 name: "lookup".to_string(),
                 arguments: r#"{"email":"user@example.com"}"#.to_string(),
+            },
+        }]);
+
+        let result = apply_output_with_engine(&masking_engine(), &response).await;
+
+        assert!(matches!(result, Err(GatewayError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn output_masking_fails_closed_for_pii_in_tool_call_id() {
+        let mut response = response("");
+        response.choices[0].message.content = None;
+        response.choices[0].message.tool_calls = Some(vec![ToolCall {
+            id: "user@example.com".to_string(),
+            tool_type: "function".to_string(),
+            function: FunctionCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
             },
         }]);
 
