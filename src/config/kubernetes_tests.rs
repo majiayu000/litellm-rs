@@ -49,4 +49,28 @@ fn kubernetes_manifests_match_runtime_contract() {
         deployment.pointer("/spec/template/spec/containers/0/imagePullPolicy"),
         Some(&serde_json::json!("Always"))
     );
+
+    let pdb = std::fs::read_to_string(manifest_dir.join("poddisruptionbudget.yaml")).unwrap();
+    let pdb: serde_json::Value = serde_yml::from_str(&pdb).unwrap();
+    assert_eq!(
+        pdb.pointer("/apiVersion"),
+        Some(&serde_json::json!("policy/v1"))
+    );
+    assert_eq!(
+        pdb.pointer("/metadata/namespace"),
+        deployment.pointer("/metadata/namespace")
+    );
+    assert_eq!(
+        pdb.pointer("/spec/selector"),
+        deployment.pointer("/spec/selector")
+    );
+    assert_eq!(
+        pdb.pointer("/spec/maxUnavailable"),
+        Some(&serde_json::json!(1)),
+        "one unavailable pod preserves availability with multiple replicas without blocking a single-replica override"
+    );
+    assert!(
+        pdb.pointer("/spec/minAvailable").is_none(),
+        "minAvailable would block voluntary disruption for a single replica"
+    );
 }
