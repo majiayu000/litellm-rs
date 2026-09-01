@@ -1,118 +1,135 @@
 use super::{
-    DEFAULT_CATALOG_RUNTIME_PROVIDERS, PROVIDER_CATALOG, ProviderRouteSurface, canonical_selector,
-    provider_type_registry, selector_has_matrix_entry, support_state_for_surface,
-    supports_provider_surface,
+    DEFAULT_CATALOG_RUNTIME_PROVIDERS, LegacyAdapterSurface, PROVIDER_CATALOG, canonical_selector,
+    legacy_adapter_availability, provider_type_registry, selector_has_legacy_adapter_entry,
+    supports_legacy_adapter,
 };
 use crate::core::providers::registry::{AuthType, get_definition};
 
 #[test]
-fn support_matrix_covers_registry_and_catalog_selectors() {
+fn legacy_adapter_matrix_is_distinct_from_canonical_runtime_capability() {
+    assert!(!supports_legacy_adapter(
+        "bedrock",
+        LegacyAdapterSurface::CompletionChat
+    ));
+
+    let readme = include_str!("../../../../README.md")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(readme.contains("### Legacy adapter matrix"));
+    assert!(readme.contains(
+        "Canonical runtime support is derived from the selected deployment's `ProviderCapability`"
+    ));
+}
+
+#[test]
+fn legacy_adapter_matrix_covers_registry_and_catalog_selectors() {
     for entry in provider_type_registry() {
         assert!(
-            selector_has_matrix_entry(entry.canonical_name),
-            "missing support matrix row for {}",
+            selector_has_legacy_adapter_entry(entry.canonical_name),
+            "missing legacy adapter matrix row for {}",
             entry.canonical_name
         );
     }
 
     for selector in PROVIDER_CATALOG.keys() {
         assert!(
-            selector_has_matrix_entry(selector),
-            "missing support matrix fallback for catalog selector {selector}"
+            selector_has_legacy_adapter_entry(selector),
+            "missing legacy adapter matrix fallback for catalog selector {selector}"
         );
     }
 }
 
 #[test]
-fn default_completion_catalog_routes_are_marked_supported() {
+fn default_catalog_legacy_completion_adapters_are_marked_supported() {
     for selector in DEFAULT_CATALOG_RUNTIME_PROVIDERS {
         assert!(
-            supports_provider_surface(selector, ProviderRouteSurface::CompletionChat),
-            "{selector} should support completion() chat"
+            supports_legacy_adapter(selector, LegacyAdapterSurface::CompletionChat),
+            "{selector} should have a legacy completion() chat adapter"
         );
         assert!(
-            supports_provider_surface(selector, ProviderRouteSurface::CompletionChatStream),
-            "{selector} should support completion() streaming"
+            supports_legacy_adapter(selector, LegacyAdapterSurface::CompletionChatStream),
+            "{selector} should have a legacy completion() streaming adapter"
         );
     }
 }
 
 #[test]
-fn sdk_matrix_rejects_google_chat_until_adapter_exists() {
-    assert!(supports_provider_surface(
+fn legacy_sdk_adapter_matrix_rejects_google_chat_until_adapter_exists() {
+    assert!(supports_legacy_adapter(
         "openai",
-        ProviderRouteSurface::SdkChat
+        LegacyAdapterSurface::SdkChat
     ));
-    assert!(supports_provider_surface(
+    assert!(supports_legacy_adapter(
         "anthropic",
-        ProviderRouteSurface::SdkChatStream
+        LegacyAdapterSurface::SdkChatStream
     ));
-    assert!(!supports_provider_surface(
+    assert!(!supports_legacy_adapter(
         "google",
-        ProviderRouteSurface::SdkChat
+        LegacyAdapterSurface::SdkChat
     ));
-    assert!(!supports_provider_surface(
+    assert!(!supports_legacy_adapter(
         "gemini",
-        ProviderRouteSurface::SdkChat
+        LegacyAdapterSurface::SdkChat
     ));
 }
 
 #[test]
-fn completion_matrix_matches_default_router_support() {
+fn legacy_completion_adapter_matrix_records_pre_runtime_routes() {
     for surface in [
-        ProviderRouteSurface::CompletionChat,
-        ProviderRouteSurface::CompletionChatStream,
+        LegacyAdapterSurface::CompletionChat,
+        LegacyAdapterSurface::CompletionChatStream,
     ] {
-        assert!(supports_provider_surface("azure", surface));
-        assert!(!supports_provider_surface("bedrock", surface));
+        assert!(supports_legacy_adapter("azure", surface));
+        assert!(!supports_legacy_adapter("bedrock", surface));
     }
     assert_eq!(
-        supports_provider_surface("azure_ai", ProviderRouteSurface::CompletionChat),
+        supports_legacy_adapter("azure_ai", LegacyAdapterSurface::CompletionChat),
         cfg!(feature = "providers-extra")
     );
 }
 
 #[test]
-fn catalog_fallback_is_http_chat_only() {
-    assert!(supports_provider_surface(
+fn catalog_legacy_adapter_fallback_is_http_chat_only() {
+    assert!(supports_legacy_adapter(
         "cerebras",
-        ProviderRouteSurface::HttpChat
+        LegacyAdapterSurface::HttpChat
     ));
-    assert!(supports_provider_surface(
+    assert!(supports_legacy_adapter(
         "cerebras",
-        ProviderRouteSurface::HttpChatStream
+        LegacyAdapterSurface::HttpChatStream
     ));
-    assert!(!supports_provider_surface(
+    assert!(!supports_legacy_adapter(
         "cerebras",
-        ProviderRouteSurface::CompletionChat
+        LegacyAdapterSurface::CompletionChat
     ));
-    assert!(!supports_provider_surface(
+    assert!(!supports_legacy_adapter(
         "cerebras",
-        ProviderRouteSurface::SdkChat
+        LegacyAdapterSurface::SdkChat
     ));
 }
 
 #[test]
 fn enterprise_rerank_routes_are_declared_explicitly() {
-    assert!(supports_provider_surface(
+    assert!(supports_legacy_adapter(
         "oci",
-        ProviderRouteSurface::HttpRerank
+        LegacyAdapterSurface::HttpRerank
     ));
-    assert!(supports_provider_surface(
+    assert!(supports_legacy_adapter(
         "watsonx",
-        ProviderRouteSurface::HttpRerank
+        LegacyAdapterSurface::HttpRerank
     ));
-    assert!(supports_provider_surface(
+    assert!(supports_legacy_adapter(
         "voyage",
-        ProviderRouteSurface::HttpRerank
+        LegacyAdapterSurface::HttpRerank
     ));
-    assert!(!supports_provider_surface(
+    assert!(!supports_legacy_adapter(
         "sagemaker",
-        ProviderRouteSurface::HttpRerank
+        LegacyAdapterSurface::HttpRerank
     ));
-    assert!(!supports_provider_surface(
+    assert!(!supports_legacy_adapter(
         "cerebras",
-        ProviderRouteSurface::HttpRerank
+        LegacyAdapterSurface::HttpRerank
     ));
 }
 
@@ -160,38 +177,38 @@ fn missing_text_provider_selectors_are_exact_http_only_catalog_routes() {
         assert!(definition.alternate_auth_env_vars.is_empty());
         assert!(!definition.skip_api_key);
         assert_eq!(definition.model_prefix, None);
-        assert!(supports_provider_surface(
+        assert!(supports_legacy_adapter(
             canonical,
-            ProviderRouteSurface::HttpChat
+            LegacyAdapterSurface::HttpChat
         ));
-        assert!(supports_provider_surface(
+        assert!(supports_legacy_adapter(
             canonical,
-            ProviderRouteSurface::HttpChatStream
+            LegacyAdapterSurface::HttpChatStream
         ));
         for unsupported in [
-            ProviderRouteSurface::HttpEmbeddings,
-            ProviderRouteSurface::HttpRerank,
-            ProviderRouteSurface::HttpImageGeneration,
-            ProviderRouteSurface::SdkChat,
-            ProviderRouteSurface::SdkChatStream,
-            ProviderRouteSurface::SdkEmbeddings,
-            ProviderRouteSurface::CompletionChat,
-            ProviderRouteSurface::CompletionChatStream,
+            LegacyAdapterSurface::HttpEmbeddings,
+            LegacyAdapterSurface::HttpRerank,
+            LegacyAdapterSurface::HttpImageGeneration,
+            LegacyAdapterSurface::SdkChat,
+            LegacyAdapterSurface::SdkChatStream,
+            LegacyAdapterSurface::SdkEmbeddings,
+            LegacyAdapterSurface::CompletionChat,
+            LegacyAdapterSurface::CompletionChatStream,
         ] {
-            assert!(!supports_provider_surface(canonical, unsupported));
+            assert!(!supports_legacy_adapter(canonical, unsupported));
         }
         for alias in aliases {
             assert_eq!(canonical_selector(alias), canonical);
             assert_eq!(
-                support_state_for_surface(alias, ProviderRouteSurface::HttpChat),
-                support_state_for_surface(canonical, ProviderRouteSurface::HttpChat)
+                legacy_adapter_availability(alias, LegacyAdapterSurface::HttpChat),
+                legacy_adapter_availability(canonical, LegacyAdapterSurface::HttpChat)
             );
         }
     }
 
     for wrong in ["ai-21", "huggingface_inference", "base-ten", "unknown"] {
         assert!(
-            !selector_has_matrix_entry(wrong),
+            !selector_has_legacy_adapter_entry(wrong),
             "{wrong} must fail closed"
         );
     }

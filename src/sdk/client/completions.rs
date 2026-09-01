@@ -5,8 +5,8 @@ use super::provider_payloads::{
     build_anthropic_request_body, build_openai_request_body, convert_anthropic_response,
     convert_messages_to_anthropic,
 };
-use super::routing::{sdk_provider_supports_surface, unsupported_sdk_surface_error};
-use crate::core::providers::registry::ProviderRouteSurface;
+use super::routing::{sdk_provider_has_legacy_adapter, unsupported_legacy_sdk_adapter_error};
+use crate::core::providers::registry::LegacyAdapterSurface;
 use crate::sdk::{errors::*, types::*};
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
@@ -106,10 +106,10 @@ impl LLMClient {
 
         debug!("Executing chat request with provider: {}", provider_id);
 
-        if !sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkChat) {
-            return Err(unsupported_sdk_surface_error(
+        if !sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkChat) {
+            return Err(unsupported_legacy_sdk_adapter_error(
                 provider,
-                ProviderRouteSurface::SdkChat,
+                LegacyAdapterSurface::SdkChat,
             ));
         }
 
@@ -140,10 +140,10 @@ impl LLMClient {
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
         let provider = self.provider_config(provider_id)?;
 
-        if !sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkChatStream) {
-            return Err(unsupported_sdk_surface_error(
+        if !sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkChatStream) {
+            return Err(unsupported_legacy_sdk_adapter_error(
                 provider,
-                ProviderRouteSurface::SdkChatStream,
+                LegacyAdapterSurface::SdkChatStream,
             ));
         }
 
@@ -508,9 +508,9 @@ impl LLMClient {
         provider: &crate::sdk::config::SdkProviderConfig,
         _request: SdkChatRequest,
     ) -> Result<ChatResponse> {
-        Err(unsupported_sdk_surface_error(
+        Err(unsupported_legacy_sdk_adapter_error(
             provider,
-            ProviderRouteSurface::SdkChat,
+            LegacyAdapterSurface::SdkChat,
         ))
     }
 }

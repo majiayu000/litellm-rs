@@ -388,7 +388,7 @@ fn resolve_model_info_for_provider(
     if normalized_provider == "openai_like" {
         let parsed = ModelIdRef::parse(model);
         if let Some(prefix) = parsed.provider()
-            && crate::core::providers::registry::selector_has_matrix_entry(prefix)
+            && crate::core::providers::registry::selector_has_legacy_adapter_entry(prefix)
         {
             let prefixed_provider = canonical_pricing_selector(prefix);
             if prefixed_provider != "openai_like" {

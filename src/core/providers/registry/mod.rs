@@ -30,9 +30,9 @@ pub use lifecycle::{
     provider_orphan_baseline,
 };
 pub use support_matrix::{
-    ProviderRouteSurface, ProviderSurfaceSupport, SurfaceSupport, canonical_selector,
-    provider_surface_matrix, selector_has_matrix_entry, support_state_for_surface,
-    supports_provider_surface,
+    LegacyAdapterAvailability, LegacyAdapterSurface, ProviderLegacyAdapterSupport,
+    canonical_selector, legacy_adapter_availability, legacy_adapter_matrix,
+    selector_has_legacy_adapter_entry, supports_legacy_adapter,
 };
 pub use types::{
     DEFAULT_CATALOG_RUNTIME_PROVIDERS, PROVIDER_TYPE_REGISTRY, ProviderDispatchKind,

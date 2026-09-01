@@ -2,7 +2,7 @@
 
 use super::llm_client::LLMClient;
 use super::types::{LoadBalancingStrategy, ProviderStats};
-use crate::core::providers::registry::{ProviderRouteSurface, supports_provider_surface};
+use crate::core::providers::registry::{LegacyAdapterSurface, supports_legacy_adapter};
 use crate::core::router::UnifiedRouter;
 use crate::core::router::UnifiedRoutingStrategy;
 use crate::core::router::deployment::DeploymentId;
@@ -32,12 +32,12 @@ impl LLMClient {
         }
 
         if let Some(provider) = self.default_enabled_provider() {
-            return if sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkChat) {
+            return if sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkChat) {
                 Ok(provider)
             } else {
-                Err(unsupported_sdk_surface_error(
+                Err(unsupported_legacy_sdk_adapter_error(
                     provider,
-                    ProviderRouteSurface::SdkChat,
+                    LegacyAdapterSurface::SdkChat,
                 ))
             };
         }
@@ -53,12 +53,13 @@ impl LLMClient {
         _messages: &[Message],
     ) -> Result<&crate::sdk::config::SdkProviderConfig> {
         if let Some(provider) = self.default_enabled_provider() {
-            return if sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkChatStream) {
+            return if sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkChatStream)
+            {
                 Ok(provider)
             } else {
-                Err(unsupported_sdk_surface_error(
+                Err(unsupported_legacy_sdk_adapter_error(
                     provider,
-                    ProviderRouteSurface::SdkChatStream,
+                    LegacyAdapterSurface::SdkChatStream,
                 ))
             };
         }
@@ -84,7 +85,7 @@ impl LoadBalancer {
             providers,
             stats,
             model,
-            ProviderRouteSurface::SdkChat,
+            LegacyAdapterSurface::SdkChat,
             supports_chat,
         )
         .await
@@ -100,7 +101,7 @@ impl LoadBalancer {
             providers,
             stats,
             None,
-            ProviderRouteSurface::SdkChatStream,
+            LegacyAdapterSurface::SdkChatStream,
             supports_stream,
         )
         .await
@@ -111,7 +112,7 @@ impl LoadBalancer {
         providers: &'a [SdkProviderConfig],
         stats: &Arc<RwLock<HashMap<String, ProviderStats>>>,
         model: Option<&str>,
-        surface: ProviderRouteSurface,
+        surface: LegacyAdapterSurface,
         supports_capability: impl Fn(&SdkProviderConfig) -> bool,
     ) -> Result<&'a SdkProviderConfig> {
         let model_candidates: Vec<&SdkProviderConfig> = providers
@@ -132,7 +133,7 @@ impl LoadBalancer {
 
         if enabled_providers.is_empty() {
             if let Some(provider) = model_candidates.first() {
-                return Err(unsupported_sdk_surface_error(provider, surface));
+                return Err(unsupported_legacy_sdk_adapter_error(provider, surface));
             }
 
             return match model {
@@ -205,18 +206,18 @@ impl LoadBalancer {
 }
 
 fn supports_chat(provider: &SdkProviderConfig) -> bool {
-    sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkChat)
+    sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkChat)
 }
 
 fn supports_stream(provider: &SdkProviderConfig) -> bool {
-    sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkChatStream)
+    sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkChatStream)
 }
 
-pub(crate) fn sdk_provider_supports_surface(
+pub(crate) fn sdk_provider_has_legacy_adapter(
     provider: &SdkProviderConfig,
-    surface: ProviderRouteSurface,
+    surface: LegacyAdapterSurface,
 ) -> bool {
-    supports_provider_surface(&sdk_provider_matrix_selector(provider), surface)
+    supports_legacy_adapter(&sdk_provider_matrix_selector(provider), surface)
 }
 
 pub(crate) fn sdk_provider_matrix_selector(provider: &SdkProviderConfig) -> String {
@@ -236,23 +237,23 @@ pub(crate) fn sdk_provider_matrix_selector(provider: &SdkProviderConfig) -> Stri
     .to_string()
 }
 
-pub(crate) fn unsupported_sdk_surface_error(
+pub(crate) fn unsupported_legacy_sdk_adapter_error(
     provider: &SdkProviderConfig,
-    surface: ProviderRouteSurface,
+    surface: LegacyAdapterSurface,
 ) -> SDKError {
     SDKError::NotSupported(format!(
         "SDK {} is not supported for provider '{}' ({:?})",
-        sdk_surface_name(surface),
+        legacy_sdk_adapter_name(surface),
         provider.id,
         provider.provider_type
     ))
 }
 
-fn sdk_surface_name(surface: ProviderRouteSurface) -> &'static str {
+fn legacy_sdk_adapter_name(surface: LegacyAdapterSurface) -> &'static str {
     match surface {
-        ProviderRouteSurface::SdkChat => "chat",
-        ProviderRouteSurface::SdkChatStream => "chat streaming",
-        ProviderRouteSurface::SdkEmbeddings => "embeddings",
+        LegacyAdapterSurface::SdkChat => "chat",
+        LegacyAdapterSurface::SdkChatStream => "chat streaming",
+        LegacyAdapterSurface::SdkEmbeddings => "embeddings",
         _ => "surface",
     }
 }

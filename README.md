@@ -178,17 +178,23 @@ alone does not make a third-party provider routeable; use the generic
 OpenAI-compatible path for compatible endpoints, or wire a code-based provider
 into the enum, dispatch, registry metadata, and factory.
 
-> The provider and route-surface matrices below are validated against the provider registry and Tier 1 catalog. The source of truth for Tier 1 entries is [`catalog.rs`](./src/core/providers/registry/catalog.rs); Tier 2 identity and dispatch metadata lives in [`src/core/providers/registry/types.rs`](./src/core/providers/registry/types.rs), with construction branches in [`src/core/providers/factory/registry.rs`](./src/core/providers/factory/registry.rs). Cross-surface support lives in [`src/core/providers/registry/support_matrix.rs`](./src/core/providers/registry/support_matrix.rs). Capability columns describe which endpoints this crate exposes for the provider — `passthrough` means an implemented crate endpoint forwards the call to the upstream OpenAI-compatible endpoint without per-provider transformation.
+> The provider and legacy adapter matrices below are validated against the provider registry and Tier 1 catalog. The source of truth for Tier 1 entries is [`catalog.rs`](./src/core/providers/registry/catalog.rs); Tier 2 identity and dispatch metadata lives in [`src/core/providers/registry/types.rs`](./src/core/providers/registry/types.rs), with construction branches in [`src/core/providers/factory/registry.rs`](./src/core/providers/factory/registry.rs). Legacy adapter availability lives in [`src/core/providers/registry/support_matrix.rs`](./src/core/providers/registry/support_matrix.rs). `passthrough` means a retained adapter forwards the call to the upstream OpenAI-compatible endpoint without per-provider transformation.
 
-### Route-surface matrix
+### Legacy adapter matrix
 
-| Selector class | HTTP chat / stream | HTTP embeddings / image | SDK chat / stream / embeddings | `completion()` chat / stream | Notes |
-|----------------|--------------------|--------------------------|--------------------------------|-------------------------------|-------|
+This matrix records selector-based compatibility adapters. It is not the
+capability source for `LLMClient::from_runtime`, `DefaultRouter::from_runtime`,
+or the free `completion()` functions. Canonical runtime support is derived from
+the selected deployment's `ProviderCapability`; unsupported capabilities fail
+closed with a typed provider error.
+
+| Legacy selector class | HTTP chat / stream adapter | HTTP embeddings / image adapter | SDK chat / stream / embeddings adapter | `completion()` chat / stream adapter | Notes |
+|-----------------------|----------------------------|---------------------------------|----------------------------------------|--------------------------------------|-------|
 | `openai` | ✅ / ✅ | ✅ / ✅ | ✅ / ✅ / ✅ | ✅ / ✅ | Reference provider across all current surfaces. |
 | `anthropic` | ✅ / ✅ | – / – | ✅ / ✅ / – | ✅ / ✅ | Native chat and streaming only. |
 | `azure` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / ✅ | passthrough / passthrough | SDK exposes Azure embeddings; SDK chat is not implemented. |
 | `azure_ai` | passthrough / passthrough | `providers-extra` / `providers-extra` | – / – / – | `providers-extra` / `providers-extra` | `completion()` supports `azure_ai/` and `azure-ai/` routes when the native feature is enabled. |
-| `bedrock` | ✅ / ✅ | ✅ / – | – / – / – | – / – | SDK Bedrock and public `completion()` routing are not implemented. |
+| `bedrock` | ✅ / ✅ | ✅ / – | – / – / – | – / – | No legacy SDK or `completion()` adapter. Configured canonical runtimes use the deployment's chat, stream, and embedding capabilities. |
 | `databricks`, `snowflake` | passthrough / passthrough | – / – | – / – / – | – / – | Governed OpenAI-compatible chat/SSE runtimes with platform-specific identity and auth. |
 | `oci` | mode-dependent | mode-dependent / – | – / – / – | – / – | Compatible mode provides chat/SSE; IAM native mode provides embeddings and rerank. |
 | `watsonx` | ✅ / – | ✅ / – | – / – / – | – / – | Native chat, embeddings, and rerank. |

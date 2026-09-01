@@ -1,11 +1,11 @@
 //! Embedding methods backed by core embedding capabilities.
 
 use super::llm_client::LLMClient;
-use super::routing::{sdk_provider_supports_surface, unsupported_sdk_surface_error};
+use super::routing::{sdk_provider_has_legacy_adapter, unsupported_legacy_sdk_adapter_error};
 use crate::core::embedding::{
     EmbeddingOptions as CoreEmbeddingOptions, embedding as core_embedding,
 };
-use crate::core::providers::registry::ProviderRouteSurface;
+use crate::core::providers::registry::LegacyAdapterSurface;
 use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
 use crate::utils::net::ClientUtils;
@@ -140,10 +140,10 @@ impl LLMClient {
     }
 
     fn ensure_embedding_supported(&self, provider: &SdkProviderConfig) -> Result<()> {
-        if !sdk_provider_supports_surface(provider, ProviderRouteSurface::SdkEmbeddings) {
-            return Err(unsupported_sdk_surface_error(
+        if !sdk_provider_has_legacy_adapter(provider, LegacyAdapterSurface::SdkEmbeddings) {
+            return Err(unsupported_legacy_sdk_adapter_error(
                 provider,
-                ProviderRouteSurface::SdkEmbeddings,
+                LegacyAdapterSurface::SdkEmbeddings,
             ));
         }
 
