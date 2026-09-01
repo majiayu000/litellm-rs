@@ -47,7 +47,7 @@ pub(crate) async fn ensure_chat_output_unmodified(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<(), GatewayError> {
-    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR)?;
+    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR);
     match enforce(state.guardrails.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("output")),
@@ -104,7 +104,7 @@ pub(crate) async fn apply_output_with_engine(
     engine: &GuardrailEngine,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR)?;
+    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR);
     match enforce(engine.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(response.clone()),
         Enforcement::Mask => {
@@ -116,7 +116,7 @@ pub(crate) async fn apply_output_with_engine(
             }
             if mask_content(
                 engine,
-                &output_scan::response_payload(&projected, FRAGMENT_SEPARATOR)?,
+                &output_scan::response_payload(&projected, FRAGMENT_SEPARATOR),
                 "output",
             )?
             .is_some()
@@ -137,7 +137,7 @@ fn input_payload(
         Ok(mut content) => {
             let extra = provider_bound_payload(request);
             if !extra.is_empty() {
-                content.push('\n');
+                content.push_str(FRAGMENT_SEPARATOR);
                 content.push_str(&extra);
             }
             Ok(content)
@@ -199,7 +199,7 @@ fn provider_bound_payload(request: &ChatCompletionRequest) -> String {
             }
         }
     }
-    fragments.join("\n")
+    fragments.join(FRAGMENT_SEPARATOR)
 }
 
 fn collect_json_strings(value: &serde_json::Value, fragments: &mut Vec<String>) {
@@ -216,7 +216,8 @@ fn collect_json_strings(value: &serde_json::Value, fragments: &mut Vec<String>) 
                 collect_json_strings(value, fragments);
             }
         }
-        _ => {}
+        serde_json::Value::Number(number) => fragments.push(number.to_string()),
+        serde_json::Value::Bool(_) | serde_json::Value::Null => {}
     }
 }
 
@@ -607,6 +608,23 @@ mod tests {
             guarded.extra_body["provider_extension"]["owner"],
             "[MASKED]"
         );
+    }
+
+    #[tokio::test]
+    async fn masking_rejects_numeric_pii_but_not_cross_boundary_fragments() {
+        let mut numeric = request("safe");
+        numeric.extra_body.insert(
+            "provider_extension".to_string(),
+            serde_json::json!({"phone": 2125551234_u64}),
+        );
+        assert!(matches!(
+            apply_input(&masking_engine(), &numeric).await,
+            Err(GatewayError::BadRequest(_))
+        ));
+
+        let mut split = request("123-45");
+        split.stop = Some(vec!["6789".to_string()]);
+        assert!(apply_input(&masking_engine(), &split).await.is_ok());
     }
 
     #[tokio::test]
