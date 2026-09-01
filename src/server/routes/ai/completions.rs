@@ -100,16 +100,36 @@ async fn completions_inner(
         .await;
     }
 
+    let chat_request = match crate::server::guardrails::apply_chat_input(
+        state.get_ref(),
+        &adapter_request.chat_request,
+    )
+    .await
+    {
+        Ok(request) => request,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
+    let masked_prompt = chat_request
+        .messages
+        .first()
+        .and_then(|message| message.content.as_ref())
+        .and_then(|content| match content {
+            MessageContent::Text(text) => Some(text.as_str()),
+            MessageContent::Parts(_) => None,
+        })
+        .unwrap_or(&adapter_request.prompt)
+        .to_string();
+
     match super::chat::handle_chat_completion_with_shared_state(
         state.get_ref(),
-        Arc::new(adapter_request.chat_request),
+        Arc::new(chat_request),
         context,
     )
     .await
     {
         Ok(response) => Ok(HttpResponse::Ok().json(completion_response_from_chat(
             response,
-            &adapter_request.prompt,
+            &masked_prompt,
             adapter_request.echo,
         ))),
         Err(error) => {

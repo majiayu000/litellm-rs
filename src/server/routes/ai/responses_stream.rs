@@ -63,12 +63,14 @@ pub(crate) async fn handle_streaming_response(
     chat_request.stream_options = Some(StreamOptions {
         include_usage: Some(true),
     });
-    let chat_request = Arc::new(chat_request);
-    if let Err(error) =
-        crate::server::guardrails::check_chat_input(state, chat_request.as_ref()).await
-    {
+    if let Err(error) = crate::server::guardrails::reject_unsupported_streaming_mask(state) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
+    let chat_request = match crate::server::guardrails::apply_chat_input(state, &chat_request).await
+    {
+        Ok(request) => Arc::new(request),
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
     let model_name = chat_request.model.clone();
     let resp_id = format!("resp_{}", uuid_v4_hex());
     let created_at = current_unix_ts();

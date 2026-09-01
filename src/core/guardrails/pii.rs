@@ -156,6 +156,14 @@ impl Guardrail for PIIGuardrail {
         20 // Run after moderation
     }
 
+    fn mask_content(&self, content: &str) -> GuardrailResult<Option<String>> {
+        if !self.is_enabled() || self.config.action != GuardrailAction::Mask {
+            return Ok(None);
+        }
+        let matches = self.detect(content);
+        Ok((!matches.is_empty()).then(|| self.mask(content, &matches)))
+    }
+
     async fn check_input(&self, content: &str) -> GuardrailResult<CheckResult> {
         if !self.is_enabled() {
             return Ok(CheckResult::pass());

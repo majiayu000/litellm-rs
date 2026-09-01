@@ -29,9 +29,13 @@ pub(super) async fn handle_streaming_chat_completion(
         request.model
     );
 
-    if let Err(error) = crate::server::guardrails::check_chat_input(state, request.as_ref()).await {
+    if let Err(error) = crate::server::guardrails::reject_unsupported_streaming_mask(state) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
+    let request = match crate::server::guardrails::apply_chat_input(state, request.as_ref()).await {
+        Ok(request) => Arc::new(request),
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
 
     let requested_model = request.model.clone();
     let client_requested_usage = request

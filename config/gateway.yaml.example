@@ -154,7 +154,7 @@ auth:
     default_role: "user"
     admin_roles: ["admin", "superuser"]
 
-# Content safety is enforced on LLM request input and output, including SSE.
+# Content safety is enforced on LLM request input and output.
 # Prompt-injection protection is enabled by default; this explicit switch is
 # the operational escape hatch for deployments that accept that risk.
 guardrails:
@@ -164,6 +164,13 @@ guardrails:
     action: block
     sensitivity: 0.7
     use_heuristics: true
+  # PII Mask rewrites canonical input and non-streaming output text. With
+  # check_output enabled, stream=true is rejected until streaming masking has
+  # a contract that cannot emit sensitive partial content.
+  # pii:
+  #   enabled: true
+  #   action: mask
+  #   mask_pattern: "[REDACTED]"
   check_input: true
   check_output: true
   # Streaming text is withheld for at most this many new characters per check.

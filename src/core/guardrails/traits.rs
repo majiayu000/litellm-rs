@@ -39,6 +39,11 @@ pub trait Guardrail: Send + Sync {
         self.check_input(content).await
     }
 
+    /// Apply this guardrail's configured mask without running unrelated checks.
+    fn mask_content(&self, _content: &str) -> GuardrailResult<Option<String>> {
+        Ok(None)
+    }
+
     /// Get the priority of this guardrail (lower = higher priority)
     ///
     /// Guardrails are executed in priority order. Default is 100.

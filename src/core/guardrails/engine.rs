@@ -124,6 +124,21 @@ impl GuardrailEngine {
         self.run_checks(content, CheckType::Output).await
     }
 
+    /// Apply configured masks while skipping policies that cannot mutate content.
+    pub(crate) fn mask_content(&self, content: &str) -> GuardrailResult<Option<String>> {
+        let mut masked = None;
+        for guardrail in &self.guardrails {
+            if !guardrail.is_enabled() {
+                continue;
+            }
+            let current = masked.as_deref().unwrap_or(content);
+            if let Some(next) = guardrail.mask_content(current)? {
+                masked = Some(next);
+            }
+        }
+        Ok(masked)
+    }
+
     /// Run all guardrail checks
     async fn run_checks(
         &self,
