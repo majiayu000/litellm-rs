@@ -71,8 +71,14 @@ jobs:
         id: comparison
         shell: bash
         run: |
+          comparator=baseline/scripts/bench/compare_gateway_overhead.py
+          if [[ ! -f "$comparator" ]]; then
+            echo "::notice::Bootstrapping the comparator because the base commit does not contain it"
+            comparator=candidate/scripts/bench/compare_gateway_overhead.py
+          fi
+
           set +e
-          python3 candidate/scripts/bench/compare_gateway_overhead.py \
+          python3 "$comparator" \
             baseline/artifacts/baseline.json \
             candidate/artifacts/candidate.json \
             candidate/artifacts/comparison.json

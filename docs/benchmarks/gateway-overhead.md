@@ -52,7 +52,10 @@ the runner, mock, and benchmark config to be byte-identical in both checkouts;
 a pull request that changes the harness must validate that change separately
 instead of producing an incomparable regression report. The two raw artifacts
 and `comparison.json` are uploaded together, so a report remains tied to the
-commits and environment that produced it.
+commits and environment that produced it. The current base checkout's
+comparator owns validation, thresholds, and the verdict; only the pull request
+that first introduces the comparator uses the candidate copy when the base
+file does not yet exist.
 
 The initial policy is deliberately report-only. A measured regression exits the
 comparator with status 10, which the workflow renders as a warning and a job
