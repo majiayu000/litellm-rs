@@ -41,11 +41,15 @@ jobs:
 
       - name: Measure exact base
         working-directory: baseline
-        run: scripts/bench/run_gateway_overhead.sh artifacts/baseline.json
+        run: |
+          unset CARGO_INCREMENTAL
+          scripts/bench/run_gateway_overhead.sh artifacts/baseline.json
 
       - name: Measure exact PR head
         working-directory: candidate
-        run: scripts/bench/run_gateway_overhead.sh artifacts/candidate.json
+        run: |
+          unset CARGO_INCREMENTAL
+          scripts/bench/run_gateway_overhead.sh artifacts/candidate.json
 
       - name: Compare measurements
         id: comparison

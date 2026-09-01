@@ -319,6 +319,7 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertIn("toolchain: 1.96.1", workflow)
         self.assertIn("cargo install oha --version 1.16.0 --locked", workflow)
         self.assertIn("run_gateway_overhead.sh", workflow)
+        self.assertEqual(workflow.count("unset CARGO_INCREMENTAL"), 2)
         self.assertIn("compare_gateway_overhead.py", workflow)
         self.assertIn("gateway-overhead-comparison", workflow)
         self.assertIn('if [[ "$comparison_status" == 10 ]]', workflow)
