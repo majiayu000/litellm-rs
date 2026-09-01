@@ -187,7 +187,7 @@ fn mask_tool_output(
                         super::mask_text(engine, audio_url)?;
                     }
                     CodexToolOutputContent::EncryptedContent { encrypted_content } => {
-                        super::mask_text(engine, encrypted_content)?;
+                        reject_unprojectable_mask(engine, encrypted_content)?;
                     }
                 }
             }
@@ -346,7 +346,7 @@ mod tests {
                 "output": [
                     {"type": "input_image", "image_url": "https://example.com/user@example.com"},
                     {"type": "input_audio", "audio_url": "https://example.com/user@example.com"},
-                    {"type": "encrypted_content", "encrypted_content": "user@example.com"}
+                    {"type": "encrypted_content", "encrypted_content": "opaque-ciphertext"}
                 ]
             }]
         }))
@@ -367,23 +367,24 @@ mod tests {
         );
         assert_eq!(
             serialized["input"][0]["output"][2]["encrypted_content"],
-            "[MASKED]"
+            "opaque-ciphertext"
         );
 
-        let unsafe_detail: ResponsesApiRequest = serde_json::from_value(json!({
-            "model": "gpt-4o",
-            "input": [{
-                "type": "function_call_output",
-                "call_id": "call-1",
-                "output": [{"type": "input_image", "image_url": "safe", "detail": "user@example.com"}]
-            }]
-        }))
-        .expect("request should deserialize");
-        assert!(
-            mask_responses_input_for_storage(&engine(), &unsafe_detail)
-                .await
-                .is_err()
-        );
+        for output in [
+            json!([{"type": "input_image", "image_url": "safe", "detail": "user@example.com"}]),
+            json!([{"type": "encrypted_content", "encrypted_content": "2125551234"}]),
+        ] {
+            let unsafe_request: ResponsesApiRequest = serde_json::from_value(json!({
+                "model": "gpt-4o",
+                "input": [{"type": "function_call_output", "call_id": "call-1", "output": output}]
+            }))
+            .expect("request should deserialize");
+            assert!(
+                mask_responses_input_for_storage(&engine(), &unsafe_request)
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]
