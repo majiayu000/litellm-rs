@@ -19,6 +19,8 @@ MOCK_PATH = REPO_ROOT / "scripts" / "bench" / "mock_openai.py"
 RUNNER_PATH = REPO_ROOT / "scripts" / "bench" / "run_gateway_overhead.sh"
 CONFIG_PATH = REPO_ROOT / "scripts" / "bench" / "gateway-overhead.yaml"
 METHODOLOGY_PATH = REPO_ROOT / "docs" / "benchmarks" / "gateway-overhead.md"
+COMPARATOR_PATH = REPO_ROOT / "scripts" / "bench" / "compare_gateway_overhead.py"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "gateway-overhead-benchmark.yml"
 
 
 def load_mock_module():
@@ -31,6 +33,84 @@ def load_mock_module():
 
 
 class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
+    def write_artifact(
+        self,
+        path: Path,
+        *,
+        git_sha: str,
+        requests_per_second: float = 1_000.0,
+        p50: float = 1.0,
+        p95: float = 2.0,
+        p99: float = 3.0,
+        concurrency: int = 64,
+    ) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "captured_at": "2026-09-01T00:00:00Z",
+                    "source": {
+                        "git_sha": git_sha,
+                        "git_dirty": False,
+                        "build_flags": ["--release", "--bin", "gateway"],
+                    },
+                    "environment": {
+                        "hardware": {
+                            "cpu_model": "test-cpu",
+                            "logical_cpus": 4,
+                            "memory_bytes": 8_000_000_000,
+                        },
+                        "os": {
+                            "name": "Linux",
+                            "release": "test-release",
+                            "architecture": "x86_64",
+                        },
+                        "rust": "rustc 1.96.1 test",
+                        "cargo": "cargo 1.96.1 test",
+                        "python": "Python 3.12 test",
+                        "oha": "oha 1.16.0",
+                    },
+                    "workload": {
+                        "concurrency": concurrency,
+                        "warmup_seconds": 10,
+                        "duration_seconds": 60,
+                        "request_bytes": 88,
+                        "response_bytes": 389,
+                        "protocol": "HTTP/1.1 keep-alive",
+                        "route": "POST /v1/chat/completions",
+                        "upstream": "deterministic local mock, fixed response, zero injected delay",
+                    },
+                    "results": {
+                        "requests_per_second": requests_per_second,
+                        "latency_ms": {"p50": p50, "p95": p95, "p99": p99},
+                        "error_rate": 0.0,
+                    },
+                    "oha_raw": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def run_comparison(
+        self,
+        baseline: Path,
+        candidate: Path,
+        report: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "python3",
+                str(COMPARATOR_PATH),
+                str(baseline),
+                str(candidate),
+                str(report),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def run_preflight(
         self,
         *,
@@ -187,6 +267,62 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertNotIn("10,000+ requests/second", readme)
         self.assertNotIn("<10ms routing overhead", readme)
         self.assertIn("docs/benchmarks/gateway-overhead.md", readme)
+
+    def test_comparator_writes_commit_bound_machine_readable_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            baseline = temp_dir / "baseline.json"
+            candidate = temp_dir / "candidate.json"
+            report = temp_dir / "comparison.json"
+            self.write_artifact(baseline, git_sha="a" * 40)
+            self.write_artifact(candidate, git_sha="b" * 40, requests_per_second=950.0)
+
+            result = self.run_comparison(baseline, candidate, report)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            comparison = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(comparison["verdict"], "pass")
+            self.assertEqual(comparison["baseline"]["git_sha"], "a" * 40)
+            self.assertEqual(comparison["candidate"]["git_sha"], "b" * 40)
+            self.assertEqual(
+                comparison["metrics"]["requests_per_second"]["change_fraction"],
+                -0.05,
+            )
+
+    def test_comparator_distinguishes_regression_from_invalid_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            baseline = temp_dir / "baseline.json"
+            candidate = temp_dir / "candidate.json"
+            report = temp_dir / "comparison.json"
+            self.write_artifact(baseline, git_sha="a" * 40)
+            self.write_artifact(candidate, git_sha="b" * 40, p95=2.5)
+
+            regression = self.run_comparison(baseline, candidate, report)
+
+            self.assertEqual(regression.returncode, 10, regression.stderr)
+            self.assertEqual(
+                json.loads(report.read_text(encoding="utf-8"))["verdict"],
+                "regression",
+            )
+
+            self.write_artifact(candidate, git_sha="b" * 40, concurrency=32)
+            invalid = self.run_comparison(baseline, candidate, report)
+            self.assertEqual(invalid.returncode, 2)
+            self.assertIn("workload mismatch", invalid.stderr)
+
+    def test_workflow_runs_exact_base_and_head_in_report_only_mode(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("github.event.pull_request.base.sha", workflow)
+        self.assertIn("github.event.pull_request.head.sha", workflow)
+        self.assertIn("toolchain: 1.96.1", workflow)
+        self.assertIn("cargo install oha --version 1.16.0 --locked", workflow)
+        self.assertIn("run_gateway_overhead.sh", workflow)
+        self.assertIn("compare_gateway_overhead.py", workflow)
+        self.assertIn("gateway-overhead-comparison", workflow)
+        self.assertIn('if [[ "$comparison_status" == 10 ]]', workflow)
+        self.assertIn('exit "$comparison_status"', workflow)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,91 @@
+name: Gateway overhead benchmark
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-overhead-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Compare base and PR head (report only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+          persist-credentials: false
+
+      - name: Check out exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # v1
+        with:
+          toolchain: 1.96.1
+
+      - name: Install pinned load generator
+        run: cargo install oha --version 1.16.0 --locked
+
+      - name: Measure exact base
+        working-directory: baseline
+        run: scripts/bench/run_gateway_overhead.sh artifacts/baseline.json
+
+      - name: Measure exact PR head
+        working-directory: candidate
+        run: scripts/bench/run_gateway_overhead.sh artifacts/candidate.json
+
+      - name: Compare measurements
+        id: comparison
+        shell: bash
+        run: |
+          set +e
+          python3 candidate/scripts/bench/compare_gateway_overhead.py \
+            baseline/artifacts/baseline.json \
+            candidate/artifacts/candidate.json \
+            candidate/artifacts/comparison.json
+          comparison_status=$?
+          set -e
+          if [[ "$comparison_status" == 10 ]]; then
+            echo "::warning::Measured gateway regression; report-only policy does not block this PR"
+          elif [[ "$comparison_status" != 0 ]]; then
+            exit "$comparison_status"
+          fi
+
+          jq -r '
+            "## Gateway overhead benchmark (report only)\n\n" +
+            "- Baseline: `" + .baseline.git_sha + "`\n" +
+            "- Candidate: `" + .candidate.git_sha + "`\n" +
+            "- Verdict: **" + .verdict + "**\n\n" +
+            "| Metric | Baseline | Candidate | Change | Status |\n" +
+            "| --- | ---: | ---: | ---: | --- |\n" +
+            ([.metrics | to_entries[] |
+              "| " + .key + " | " + (.value.baseline | tostring) +
+              " | " + (.value.candidate | tostring) +
+              " | " + ((.value.change_fraction * 100) | tostring) +
+              "% | " + .value.status + " |"] | join("\n"))
+          ' candidate/artifacts/comparison.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-overhead-comparison-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            baseline/artifacts/baseline.json
+            candidate/artifacts/candidate.json
+            candidate/artifacts/comparison.json
+          if-no-files-found: warn
+          retention-days: 30
