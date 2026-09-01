@@ -179,7 +179,8 @@ fn mask_tool_output(
                     CodexToolOutputContent::InputText { text } => {
                         super::mask_text(engine, text)?;
                     }
-                    CodexToolOutputContent::InputImage { image_url, .. } => {
+                    CodexToolOutputContent::InputImage { image_url, detail } => {
+                        reject_identifiers(engine, [detail.as_deref()])?;
                         super::mask_text(engine, image_url)?;
                     }
                     CodexToolOutputContent::InputAudio { audio_url } => {
@@ -367,6 +368,21 @@ mod tests {
         assert_eq!(
             serialized["input"][0]["output"][2]["encrypted_content"],
             "[MASKED]"
+        );
+
+        let unsafe_detail: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": [{"type": "input_image", "image_url": "safe", "detail": "user@example.com"}]
+            }]
+        }))
+        .expect("request should deserialize");
+        assert!(
+            mask_responses_input_for_storage(&engine(), &unsafe_detail)
+                .await
+                .is_err()
         );
     }
 
