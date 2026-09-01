@@ -57,6 +57,10 @@ fn kubernetes_manifests_match_runtime_contract() {
         Some(&serde_json::json!("policy/v1"))
     );
     assert_eq!(
+        pdb.pointer("/metadata/namespace"),
+        deployment.pointer("/metadata/namespace")
+    );
+    assert_eq!(
         pdb.pointer("/spec/selector"),
         deployment.pointer("/spec/selector")
     );
