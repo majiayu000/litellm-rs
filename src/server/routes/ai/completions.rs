@@ -109,29 +109,35 @@ async fn completions_inner(
         Ok(request) => request,
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
-    let masked_prompt = chat_request
-        .messages
-        .first()
-        .and_then(|message| message.content.as_ref())
-        .and_then(|content| match content {
-            MessageContent::Text(text) => Some(text.as_str()),
-            MessageContent::Parts(_) => None,
-        })
-        .unwrap_or(&adapter_request.prompt)
-        .to_string();
+    let masked_prompt = match guarded_completion_prompt(&chat_request) {
+        Ok(prompt) => prompt,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
 
-    match super::chat::handle_chat_completion_with_shared_state(
+    match super::chat::handle_chat_completion_after_input_guardrail(
         state.get_ref(),
         Arc::new(chat_request),
         context,
     )
     .await
     {
-        Ok(response) => Ok(HttpResponse::Ok().json(completion_response_from_chat(
-            response,
-            &masked_prompt,
-            adapter_request.echo,
-        ))),
+        Ok(response) => {
+            let response = if adapter_request.echo {
+                let echoed = chat_response_with_completion_echo(response, &masked_prompt);
+                match crate::server::guardrails::apply_output_with_engine(
+                    state.guardrails.as_ref(),
+                    &echoed,
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+                }
+            } else {
+                response
+            };
+            Ok(HttpResponse::Ok().json(completion_response_from_chat(response, "", false)))
+        }
         Err(error) => {
             error!("Completion error: {}", error);
             Ok(openai_errors::gateway_error_response(&error))
@@ -406,6 +412,40 @@ fn completion_response_from_chat(
     }
 }
 
+fn guarded_completion_prompt(request: &ChatCompletionRequest) -> Result<String, GatewayError> {
+    let content = request
+        .messages
+        .first()
+        .and_then(|message| message.content.as_ref())
+        .ok_or_else(|| {
+            GatewayError::internal(
+                "completion input guardrail projection produced no prompt content",
+            )
+        })?;
+    Ok(match content {
+        MessageContent::Text(text) => text.clone(),
+        MessageContent::Parts(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                crate::core::models::openai::ContentPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    })
+}
+
+fn chat_response_with_completion_echo(
+    mut response: crate::core::models::openai::ChatCompletionResponse,
+    prompt: &str,
+) -> crate::core::models::openai::ChatCompletionResponse {
+    for choice in &mut response.choices {
+        let text = completion_text_from_message(choice.message.content.as_ref(), prompt, true);
+        choice.message.content = Some(MessageContent::Text(text));
+    }
+    response
+}
+
 fn completion_chunk_from_core(
     chunk: types::responses::ChatChunk,
     echo_prefix: Option<&str>,
@@ -487,3 +527,7 @@ fn finish_reason_to_string(reason: types::responses::FinishReason) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+#[path = "completions_tests.rs"]
+mod tests;

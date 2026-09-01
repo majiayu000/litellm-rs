@@ -115,6 +115,13 @@ pub async fn create_response(
         };
         (request, input_extensions)
     };
+    let storage_request = match crate::server::guardrails::mask_responses_input_for_storage(
+        state.guardrails.as_ref(),
+        &request,
+    ) {
+        Ok(request) => request,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
 
     let turn = match build_responses_continuation_turn(&request, &input_extensions) {
         Ok(turn) => turn,
@@ -149,7 +156,7 @@ pub async fn create_response(
         Ok(lifecycle::handle_background_response(
             state.get_ref().clone(),
             chat_request,
-            request,
+            storage_request,
             context.as_ref().clone(),
             owner,
         ))
@@ -157,7 +164,7 @@ pub async fn create_response(
         super::responses_stream::handle_streaming_response(
             state.get_ref(),
             chat_request,
-            request,
+            storage_request,
             context,
             owner,
         )
@@ -168,7 +175,7 @@ pub async fn create_response(
             chat_request,
             chat_extensions,
             continuation_requested,
-            request,
+            storage_request,
             context.as_ref().clone(),
             owner,
         )

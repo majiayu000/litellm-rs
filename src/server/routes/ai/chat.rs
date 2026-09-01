@@ -4,8 +4,8 @@ use crate::core::models::openai::continuation::{
     ChatCompletionRequestWithExtensions, ChatCompletionResponseWithExtensions,
 };
 use crate::core::models::openai::{
-    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentLogprob,
-    ContentPart, Logprobs, MessageContent, MessageRole, Tool, ToolChoice, TopLogprob, Usage,
+    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, Logprobs, Tool,
+    ToolChoice, TopLogprob, Usage,
 };
 use crate::core::providers::{
     ChatContinuationRequest, ChatContinuationResponse, ChatMessageContinuation, ProviderError,
@@ -33,6 +33,9 @@ use super::openai_errors;
 #[path = "chat_delta.rs"]
 mod chat_delta;
 use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
+#[path = "chat_guardrails.rs"]
+mod chat_guardrails;
+use chat_guardrails::{guardrail_request_with_continuation, guardrail_response_with_continuation};
 #[path = "chat_sse.rs"]
 pub(super) mod chat_sse;
 use chat_sse::format_sse_error;
@@ -161,6 +164,13 @@ pub async fn handle_chat_completion_with_shared_state(
 ) -> Result<ChatCompletionResponse, GatewayError> {
     let request =
         Arc::new(crate::server::guardrails::apply_chat_input(state, request.as_ref()).await?);
+    handle_chat_completion_after_input_guardrail(state, request, context).await
+}
+pub(super) async fn handle_chat_completion_after_input_guardrail(
+    state: &AppState,
+    request: Arc<ChatCompletionRequest>,
+    context: SharedRequestContext,
+) -> Result<ChatCompletionResponse, GatewayError> {
     let extensions = vec![ChatMessageContinuation::new(); request.messages.len()];
     Ok(
         handle_chat_completion_internal(state, request, context, extensions, false)
@@ -178,11 +188,13 @@ pub(super) async fn handle_chat_completion_with_extensions(
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
     let request =
         Arc::new(crate::server::guardrails::apply_chat_input(state, request.as_ref()).await?);
-    crate::server::guardrails::ensure_chat_input_unmodified(
-        state,
-        &guardrail_request_with_continuation(request.as_ref(), &extensions)?,
-    )
-    .await?;
+    let guardrail_request = guardrail_request_with_continuation(request.as_ref(), &extensions)?;
+    if extensions
+        .iter()
+        .any(ChatMessageContinuation::has_visible_thinking)
+    {
+        crate::server::guardrails::ensure_chat_input_unmodified(state, &guardrail_request).await?;
+    }
     handle_chat_completion_internal(state, request, context, extensions, opt_in).await
 }
 async fn handle_chat_completion_internal(
@@ -390,8 +402,12 @@ async fn handle_chat_completion_internal(
                 return Err(error);
             }
         };
-    if let Err(error) =
-        crate::server::guardrails::ensure_chat_output_unmodified(state, &guardrail_response).await
+    if choice_extensions
+        .iter()
+        .any(ChatMessageContinuation::has_visible_thinking)
+        && let Err(error) =
+            crate::server::guardrails::ensure_chat_output_unmodified(state, &guardrail_response)
+                .await
     {
         callback.fail(error.to_string(), "guardrail_output");
         return Err(error);
@@ -407,69 +423,6 @@ async fn handle_chat_completion_internal(
     callback.complete_usage(response.usage.as_ref(), "success");
     ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
         .map_err(GatewayError::internal)
-}
-fn guardrail_response_with_continuation(
-    response: &ChatCompletionResponse,
-    choice_extensions: &[ChatMessageContinuation],
-) -> Result<ChatCompletionResponse, GatewayError> {
-    if response.choices.len() != choice_extensions.len() {
-        return Err(GatewayError::internal(format!(
-            "chat choice extensions length mismatch: expected {}, got {}",
-            response.choices.len(),
-            choice_extensions.len()
-        )));
-    }
-    let mut projected = response.clone();
-    for (choice, extension) in projected.choices.iter_mut().zip(choice_extensions) {
-        append_guardrail_visible_thinking(&mut choice.message, extension);
-    }
-    Ok(projected)
-}
-fn guardrail_request_with_continuation(
-    request: &ChatCompletionRequest,
-    message_extensions: &[ChatMessageContinuation],
-) -> Result<ChatCompletionRequest, GatewayError> {
-    if request.messages.len() != message_extensions.len() {
-        return Err(GatewayError::validation(format!(
-            "chat message extensions length mismatch: expected {}, got {}",
-            request.messages.len(),
-            message_extensions.len()
-        )));
-    }
-    let mut projected = request.clone();
-    for (message, extension) in projected.messages.iter_mut().zip(message_extensions) {
-        extension.validate().map_err(GatewayError::validation)?;
-        if !extension.is_empty() && message.role != MessageRole::Assistant {
-            return Err(GatewayError::validation(
-                "Anthropic continuation is only valid on assistant messages",
-            ));
-        }
-        append_guardrail_visible_thinking(message, extension);
-    }
-    Ok(projected)
-}
-fn append_guardrail_visible_thinking(
-    message: &mut ChatMessage,
-    extension: &ChatMessageContinuation,
-) {
-    let Some(visible) = extension
-        .anthropic_thinking()
-        .and_then(|thinking| thinking.as_text())
-    else {
-        return;
-    };
-    match &mut message.content {
-        Some(MessageContent::Text(content)) => {
-            if !content.is_empty() {
-                content.push('\n');
-            }
-            content.push_str(&visible);
-        }
-        Some(MessageContent::Parts(parts)) => parts.push(ContentPart::Text {
-            text: visible.into_owned(),
-        }),
-        None => message.content = Some(MessageContent::Text(visible.into_owned())),
-    }
 }
 pub(crate) fn build_core_chat_request(
     request: &ChatCompletionRequest,

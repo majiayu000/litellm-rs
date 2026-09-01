@@ -56,6 +56,12 @@ impl ChatMessageContinuation {
         self.anthropic_block_order.as_deref()
     }
 
+    pub(crate) fn has_visible_thinking(&self) -> bool {
+        self.anthropic_thinking()
+            .and_then(|thinking| thinking.as_text())
+            .is_some_and(|text| !text.is_empty())
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.anthropic_thinking()
             .is_none_or(|thinking| thinking.blocks().is_empty())

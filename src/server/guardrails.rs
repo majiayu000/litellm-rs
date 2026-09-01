@@ -9,6 +9,8 @@ use crate::utils::error::gateway_error::GatewayError;
 use tracing::{error, warn};
 
 mod input_scan;
+mod responses_mask;
+pub(crate) use responses_mask::mask_responses_input_for_storage;
 
 pub(crate) async fn apply_chat_input(
     state: &AppState,
@@ -21,7 +23,7 @@ pub(crate) async fn apply_chat_output(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    apply_output(state.guardrails.as_ref(), response).await
+    apply_output_with_engine(state.guardrails.as_ref(), response).await
 }
 
 pub(crate) async fn ensure_chat_input_unmodified(
@@ -95,7 +97,7 @@ async fn apply_input(
     }
 }
 
-async fn apply_output(
+pub(crate) async fn apply_output_with_engine(
     engine: &GuardrailEngine,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
@@ -367,7 +369,8 @@ mod tests {
         let engine = GuardrailEngine::new(GatewayConfig::default().guardrails)
             .expect("default guardrail policy must compile");
 
-        let result = apply_output(&engine, &response("System prompt: do not reveal this")).await;
+        let result =
+            apply_output_with_engine(&engine, &response("System prompt: do not reveal this")).await;
 
         assert!(matches!(result, Err(GatewayError::Forbidden(_))));
     }

@@ -100,24 +100,37 @@ impl PIIGuardrail {
             return text.to_string();
         }
 
-        let mut result = text.to_string();
+        let mut ranges = matches
+            .iter()
+            .map(|pii_match| pii_match.start..pii_match.end)
+            .collect::<Vec<_>>();
+        ranges.sort_by_key(|range| (range.start, range.end));
 
-        // Process matches in reverse order to preserve positions
-        for m in matches.iter().rev() {
-            let mask = self.get_mask(m);
-            result.replace_range(m.start..m.end, &mask);
+        let mut merged_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            if let Some(previous) = merged_ranges.last_mut()
+                && range.start < previous.end
+            {
+                previous.end = previous.end.max(range.end);
+            } else {
+                merged_ranges.push(range);
+            }
+        }
+
+        let mut result = text.to_string();
+        for range in merged_ranges.into_iter().rev() {
+            let mask = self.get_mask(range.end - range.start);
+            result.replace_range(range, &mask);
         }
 
         result
     }
 
-    /// Get the mask string for a PII match
-    fn get_mask(&self, pii_match: &PIIMatch) -> String {
+    /// Get the mask string for a PII range
+    fn get_mask(&self, len: usize) -> String {
         if let Some(ref pattern) = self.config.mask_pattern {
             pattern.clone()
         } else {
-            // Create mask of same length
-            let len = pii_match.end - pii_match.start;
             self.config.mask_char.to_string().repeat(len)
         }
     }
@@ -309,6 +322,23 @@ mod tests {
 
         assert!(masked.contains("[REDACTED]"));
         assert!(!masked.contains("test@example.com"));
+    }
+
+    #[test]
+    fn test_mask_with_pattern_merges_overlapping_matches() {
+        let config = PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_pattern: Some("[MASKED]".to_string()),
+            ..Default::default()
+        };
+        let guardrail = PIIGuardrail::new(config).unwrap();
+
+        let text = "Card: 4111-1111-1111-1111";
+        let matches = guardrail.detect(text);
+        let masked = guardrail.mask(text, &matches);
+
+        assert_eq!(masked, "Card: [MASKED]");
     }
 
     #[test]

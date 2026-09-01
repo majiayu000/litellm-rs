@@ -9,6 +9,24 @@ use crate::core::types::responses::{
 use crate::core::types::thinking::{ThinkingDelta, ThinkingUsage};
 
 #[test]
+fn guardrail_recheck_is_only_needed_for_visible_continuation_content() {
+    use crate::core::providers::ChatMessageContinuation;
+    use crate::core::types::anthropic_continuation::{
+        AnthropicSignature, AnthropicThinkingBlock, AnthropicThinkingContent,
+    };
+
+    assert!(!ChatMessageContinuation::new().has_visible_thinking());
+
+    let visible = ChatMessageContinuation::new().with_anthropic_thinking(
+        AnthropicThinkingContent::new(vec![AnthropicThinkingBlock::Thinking {
+            thinking: "visible guardrail phrase".to_string(),
+            signature: AnthropicSignature::try_from("opaque signature").unwrap(),
+        }]),
+    );
+    assert!(visible.has_visible_thinking());
+}
+
+#[test]
 fn guardrail_input_projection_includes_only_visible_continuation_thinking() {
     use crate::core::providers::ChatMessageContinuation;
     use crate::core::types::anthropic_continuation::{
