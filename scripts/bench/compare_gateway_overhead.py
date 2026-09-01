@@ -7,6 +7,7 @@ import json
 import math
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,14 @@ def validate_artifact(artifact: dict[str, Any], label: str) -> None:
     if artifact.get("schema_version") != 1:
         raise ComparisonError(f"{label} has an unsupported schema_version")
 
+    captured_at = artifact.get("captured_at")
+    if not isinstance(captured_at, str):
+        raise ComparisonError(f"{label}.captured_at must be a UTC timestamp")
+    try:
+        datetime.strptime(captured_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise ComparisonError(f"{label}.captured_at must be a UTC timestamp") from error
+
     source = required_mapping(artifact.get("source"), f"{label}.source")
     git_sha = source.get("git_sha")
     if not isinstance(git_sha, str) or SHA_PATTERN.fullmatch(git_sha) is None:
@@ -70,8 +79,30 @@ def validate_artifact(artifact: dict[str, Any], label: str) -> None:
     error_rate = results.get("error_rate")
     if isinstance(error_rate, bool) or not isinstance(error_rate, (int, float)):
         raise ComparisonError(f"{label}.results.error_rate must be numeric")
-    if not math.isfinite(float(error_rate)) or not 0 <= float(error_rate) <= 1:
-        raise ComparisonError(f"{label}.results.error_rate must be between zero and one")
+    if not math.isfinite(float(error_rate)) or float(error_rate) != 0:
+        raise ComparisonError(f"{label}.results.error_rate must be zero")
+
+    oha_raw = required_mapping(artifact.get("oha_raw"), f"{label}.oha_raw")
+    summary = required_mapping(oha_raw.get("summary"), f"{label}.oha_raw.summary")
+    success_rate = summary.get("successRate")
+    if isinstance(success_rate, bool) or not isinstance(success_rate, (int, float)):
+        raise ComparisonError(f"{label}.oha_raw.summary.successRate must be numeric")
+    if not math.isfinite(float(success_rate)) or float(success_rate) != 1:
+        raise ComparisonError(f"{label}.oha_raw.summary.successRate must be one")
+    error_distribution = required_mapping(
+        oha_raw.get("errorDistribution"),
+        f"{label}.oha_raw.errorDistribution",
+    )
+    if error_distribution:
+        raise ComparisonError(f"{label}.oha_raw.errorDistribution must be empty")
+    status_distribution = required_mapping(
+        oha_raw.get("statusCodeDistribution"),
+        f"{label}.oha_raw.statusCodeDistribution",
+    )
+    if set(status_distribution) != {"200"}:
+        raise ComparisonError(
+            f'{label}.oha_raw.statusCodeDistribution must contain only "200"'
+        )
 
 
 def change_fraction(baseline: float, candidate: float) -> float:
@@ -134,11 +165,11 @@ def compare(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, An
         "verdict": verdict,
         "baseline": {
             "git_sha": baseline["source"]["git_sha"],
-            "captured_at": baseline.get("captured_at"),
+            "captured_at": baseline["captured_at"],
         },
         "candidate": {
             "git_sha": candidate["source"]["git_sha"],
-            "captured_at": candidate.get("captured_at"),
+            "captured_at": candidate["captured_at"],
         },
         "policy": {
             "mode": "report_only",

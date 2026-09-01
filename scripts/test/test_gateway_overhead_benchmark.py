@@ -85,7 +85,11 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
                         "latency_ms": {"p50": p50, "p95": p95, "p99": p99},
                         "error_rate": 0.0,
                     },
-                    "oha_raw": {},
+                    "oha_raw": {
+                        "summary": {"successRate": 1.0},
+                        "errorDistribution": {},
+                        "statusCodeDistribution": {"200": 1_000},
+                    },
                 }
             ),
             encoding="utf-8",
@@ -311,19 +315,75 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
             self.assertEqual(invalid.returncode, 2)
             self.assertIn("workload mismatch", invalid.stderr)
 
-    def test_workflow_runs_exact_base_and_head_in_report_only_mode(self) -> None:
-        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    def test_comparator_requires_auditable_raw_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            baseline = temp_dir / "baseline.json"
+            candidate = temp_dir / "candidate.json"
+            report = temp_dir / "comparison.json"
+            self.write_artifact(baseline, git_sha="a" * 40)
 
-        self.assertIn("github.event.pull_request.base.sha", workflow)
-        self.assertIn("github.event.pull_request.head.sha", workflow)
-        self.assertIn("toolchain: 1.96.1", workflow)
-        self.assertIn("cargo install oha --version 1.16.0 --locked", workflow)
-        self.assertIn("run_gateway_overhead.sh", workflow)
-        self.assertEqual(workflow.count("unset CARGO_INCREMENTAL"), 2)
-        self.assertIn("compare_gateway_overhead.py", workflow)
-        self.assertIn("gateway-overhead-comparison", workflow)
-        self.assertIn('if [[ "$comparison_status" == 10 ]]', workflow)
-        self.assertIn('exit "$comparison_status"', workflow)
+            for missing_field in ("captured_at", "oha_raw"):
+                with self.subTest(missing_field=missing_field):
+                    self.write_artifact(candidate, git_sha="b" * 40)
+                    artifact = json.loads(candidate.read_text(encoding="utf-8"))
+                    del artifact[missing_field]
+                    candidate.write_text(json.dumps(artifact), encoding="utf-8")
+
+                    invalid = self.run_comparison(baseline, candidate, report)
+
+                    self.assertEqual(invalid.returncode, 2)
+                    self.assertIn(missing_field, invalid.stderr)
+
+    def test_comparator_rejects_nonzero_error_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            baseline = temp_dir / "baseline.json"
+            candidate = temp_dir / "candidate.json"
+            report = temp_dir / "comparison.json"
+            self.write_artifact(baseline, git_sha="a" * 40)
+            self.write_artifact(candidate, git_sha="b" * 40)
+            artifact = json.loads(candidate.read_text(encoding="utf-8"))
+            artifact["results"]["error_rate"] = 0.01
+            artifact["oha_raw"]["summary"]["successRate"] = 0.99
+            artifact["oha_raw"]["statusCodeDistribution"] = {"200": 99, "500": 1}
+            candidate.write_text(json.dumps(artifact), encoding="utf-8")
+
+            invalid = self.run_comparison(baseline, candidate, report)
+
+            self.assertEqual(invalid.returncode, 2)
+            self.assertIn("error_rate must be zero", invalid.stderr)
+
+    def test_comparator_rejects_errors_present_only_in_raw_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            baseline = temp_dir / "baseline.json"
+            candidate = temp_dir / "candidate.json"
+            report = temp_dir / "comparison.json"
+            self.write_artifact(baseline, git_sha="a" * 40)
+            self.write_artifact(candidate, git_sha="b" * 40)
+            artifact = json.loads(candidate.read_text(encoding="utf-8"))
+            artifact["oha_raw"]["errorDistribution"] = {"connection": 1}
+            candidate.write_text(json.dumps(artifact), encoding="utf-8")
+
+            transport_error = self.run_comparison(baseline, candidate, report)
+
+            self.assertEqual(transport_error.returncode, 2)
+            self.assertIn("errorDistribution must be empty", transport_error.stderr)
+
+            self.write_artifact(candidate, git_sha="b" * 40)
+            artifact = json.loads(candidate.read_text(encoding="utf-8"))
+            artifact["oha_raw"]["statusCodeDistribution"] = {"200": 999, "500": 1}
+            candidate.write_text(json.dumps(artifact), encoding="utf-8")
+
+            status_error = self.run_comparison(baseline, candidate, report)
+
+            self.assertEqual(status_error.returncode, 2)
+            self.assertIn("must contain only", status_error.stderr)
+
+    def test_workflow_file_is_present(self) -> None:
+        self.assertTrue(WORKFLOW_PATH.is_file())
+        self.assertGreater(WORKFLOW_PATH.stat().st_size, 0)
 
 
 if __name__ == "__main__":

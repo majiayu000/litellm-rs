@@ -43,17 +43,25 @@ not an absolute gateway ceiling.
 
 ## Pull-request regression reports
 
-The `Gateway overhead benchmark` workflow measures the pull request's exact
-base SHA and exact head SHA sequentially on one `ubuntu-24.04` runner. Both runs
-use Rust 1.96.1, oha 1.16.0, and the deterministic mock above. The two raw
-artifacts and `comparison.json` are uploaded together, so a report remains tied
-to the commits and environment that produced it.
+The `Gateway overhead benchmark` workflow measures the pull request's current
+base SHA and GitHub's exact synthetic merge SHA sequentially on one
+`ubuntu-24.04` runner. This keeps intervening base-branch changes on both sides
+of the comparison. Both runs force `RUSTUP_TOOLCHAIN=1.96.1`, use oha 1.16.0,
+and use the deterministic mock above. Before measuring, the workflow requires
+the runner, mock, and benchmark config to be byte-identical in both checkouts;
+a pull request that changes the harness must validate that change separately
+instead of producing an incomparable regression report. The two raw artifacts
+and `comparison.json` are uploaded together, so a report remains tied to the
+commits and environment that produced it.
 
 The initial policy is deliberately report-only. A measured regression exits the
 comparator with status 10, which the workflow renders as a warning and a job
 summary without blocking the pull request. Invalid JSON, mismatched workload or
 environment metadata, missing tools, build failures, and benchmark failures use
-a different nonzero status and fail the workflow.
+a different nonzero status and fail the workflow. Missing capture timestamps or
+raw oha evidence, any non-200 response, any transport error, and any nonzero
+summary error rate also make the comparison invalid rather than passing as a
+performance result.
 
 The provisional noise allowance reports a regression when throughput drops by
 more than 10% or any recorded latency percentile (`p50`, `p95`, or `p99`)
