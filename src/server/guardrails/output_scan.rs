@@ -33,36 +33,7 @@ fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
     }
     match message.content.as_ref() {
         Some(MessageContent::Text(text)) => push(fragments, text),
-        Some(MessageContent::Parts(parts)) => {
-            for part in parts {
-                match part {
-                    ContentPart::Text { text } => push(fragments, text),
-                    ContentPart::ImageUrl { image_url } => push(fragments, &image_url.url),
-                    ContentPart::Image {
-                        image_url: Some(image_url),
-                        ..
-                    } => push(fragments, &image_url.url),
-                    ContentPart::ToolResult {
-                        tool_use_id,
-                        content,
-                        ..
-                    } => {
-                        push(fragments, tool_use_id);
-                        collect_json_content(content, fragments);
-                    }
-                    ContentPart::ToolUse { id, name, input } => {
-                        push(fragments, id);
-                        push(fragments, name);
-                        collect_json_content(input, fragments);
-                    }
-                    ContentPart::Audio { audio } => push(fragments, &audio.format),
-                    ContentPart::Image {
-                        image_url: None, ..
-                    }
-                    | ContentPart::Document { .. } => {}
-                }
-            }
-        }
+        Some(MessageContent::Parts(parts)) => collect_parts(parts, fragments),
         None => {}
     }
     if let Some(call) = &message.function_call {
@@ -74,6 +45,54 @@ fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
         push(fragments, &call.tool_type);
         push(fragments, &call.function.name);
         collect_function_arguments(&call.function.arguments, fragments);
+    }
+}
+
+fn collect_parts(parts: &[ContentPart], fragments: &mut Vec<String>) {
+    let mut text_group = String::new();
+    for part in parts {
+        if let ContentPart::Text { text } = part {
+            if !text.is_empty() {
+                if !text_group.is_empty() {
+                    text_group.push('\n');
+                }
+                text_group.push_str(text);
+            }
+            continue;
+        }
+        push(fragments, &text_group);
+        text_group.clear();
+        collect_non_text_part(part, fragments);
+    }
+    push(fragments, &text_group);
+}
+
+fn collect_non_text_part(part: &ContentPart, fragments: &mut Vec<String>) {
+    match part {
+        ContentPart::ImageUrl { image_url } => push(fragments, &image_url.url),
+        ContentPart::Image {
+            image_url: Some(image_url),
+            ..
+        } => push(fragments, &image_url.url),
+        ContentPart::ToolResult {
+            tool_use_id,
+            content,
+            ..
+        } => {
+            push(fragments, tool_use_id);
+            collect_json_content(content, fragments);
+        }
+        ContentPart::ToolUse { id, name, input } => {
+            push(fragments, id);
+            push(fragments, name);
+            collect_json_content(input, fragments);
+        }
+        ContentPart::Audio { audio } => push(fragments, &audio.format),
+        ContentPart::Text { .. }
+        | ContentPart::Image {
+            image_url: None, ..
+        }
+        | ContentPart::Document { .. } => {}
     }
 }
 
@@ -161,6 +180,23 @@ mod tests {
         collect_message(&message, &mut fragments);
 
         assert!(fragments.iter().any(|value| value == "2125551234"));
+    }
+
+    #[test]
+    fn adjacent_text_parts_remain_contiguous_for_guardrail_matching() {
+        let message = message(vec![
+            ContentPart::Text {
+                text: "123-45".to_string(),
+            },
+            ContentPart::Text {
+                text: "6789".to_string(),
+            },
+        ]);
+        let mut fragments = Vec::new();
+
+        collect_message(&message, &mut fragments);
+
+        assert_eq!(fragments, vec!["123-45\n6789"]);
     }
 
     #[test]
