@@ -16,6 +16,15 @@ pub(super) fn payload(request: &ChatCompletionRequest) -> Result<String, Gateway
     for (message_index, message) in request.messages.iter().enumerate() {
         collect_message(message_index, message, &mut fragments)?;
     }
+    if let Some(user) = request.user.as_deref() {
+        push_fragment(&mut fragments, user);
+    }
+    if let Some(metadata) = request.metadata.as_ref() {
+        for (key, value) in metadata {
+            push_fragment(&mut fragments, key);
+            push_fragment(&mut fragments, value);
+        }
+    }
     if let Some(call) = request.function_call.as_ref() {
         collect_function_call(call, &mut fragments);
     }
@@ -764,5 +773,26 @@ mod tests {
         .expect("out-of-scope carriers should not fail");
 
         assert_eq!(scanned, "https://example.invalid/image.png");
+    }
+
+    #[test]
+    fn request_user_and_metadata_are_scanned() {
+        let mut request = ChatCompletionRequest {
+            user: Some("user@example.com".to_string()),
+            metadata: Some(std::collections::HashMap::from([
+                ("owner".to_string(), "second@example.com".to_string()),
+                ("third@example.com".to_string(), "value".to_string()),
+            ])),
+            ..ChatCompletionRequest::default()
+        };
+        request
+            .messages
+            .push(message(Some(MessageContent::Text("safe".to_string()))));
+
+        let scanned = payload(&request).expect("request metadata should be scannable");
+
+        assert!(scanned.contains("user@example.com"));
+        assert!(scanned.contains("second@example.com"));
+        assert!(scanned.contains("third@example.com"));
     }
 }

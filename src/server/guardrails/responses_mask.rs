@@ -15,6 +15,10 @@ pub(crate) fn mask_responses_input_for_storage(
     }
 
     let mut projected = request.clone();
+    if let Some(user) = projected.user.as_mut() {
+        super::mask_text(engine, user)?;
+    }
+    super::mask_metadata(engine, projected.metadata.as_mut())?;
     match &mut projected.input {
         ResponseInput::Text(text) => {
             super::mask_text(engine, text)?;
@@ -247,6 +251,30 @@ mod tests {
         assert_eq!(
             serialized["input"][0]["output"][2]["encrypted_content"],
             "[MASKED]"
+        );
+    }
+
+    #[test]
+    fn masks_responses_user_and_metadata_before_echo_or_storage() {
+        let request: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": "safe",
+            "user": "user@example.com",
+            "metadata": {"owner": "second@example.com"}
+        }))
+        .expect("request should deserialize");
+
+        let masked = mask_responses_input_for_storage(&engine(), &request)
+            .expect("Responses identity fields should be maskable");
+
+        assert_eq!(masked.user.as_deref(), Some("[MASKED]"));
+        assert_eq!(
+            masked
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("owner"))
+                .map(String::as_str),
+            Some("[MASKED]")
         );
     }
 }

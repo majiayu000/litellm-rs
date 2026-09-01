@@ -598,6 +598,8 @@ mod tests {
                             "detail": "low"
                         }]
                     }],
+                    "user": "user@example.com",
+                    "metadata": {"owner": "second@example.com"},
                     "store": false
                 }))
                 .to_request(),
@@ -605,11 +607,15 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["metadata"]["owner"], "[MASKED]");
         {
             let requests = provider.requests.lock().unwrap();
             let image_url = &requests[0]["messages"][0]["content"][0]["image_url"];
             assert_eq!(image_url["url"], "https://example.com/[MASKED]");
             assert_eq!(image_url["detail"], "low");
+            assert_eq!(requests[0]["user"], "[MASKED]");
+            assert_eq!(requests[0]["metadata"]["owner"], "[MASKED]");
         }
         provider.stop_upstream().await;
     }

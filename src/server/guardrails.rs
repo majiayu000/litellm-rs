@@ -87,6 +87,10 @@ async fn apply_input(
             for message in &mut projected.messages {
                 mask_message_content(engine, message.content.as_mut())?;
             }
+            if let Some(user) = projected.user.as_mut() {
+                mask_text(engine, user)?;
+            }
+            mask_metadata(engine, projected.metadata.as_mut())?;
             let projected_payload = input_payload(engine, &projected)?;
             if mask_content(engine, &projected_payload, "input")?.is_some() {
                 Err(projection_error("input"))
@@ -210,6 +214,22 @@ fn mask_text(engine: &GuardrailEngine, text: &mut String) -> Result<bool, Gatewa
     } else {
         Ok(false)
     }
+}
+
+fn mask_metadata(
+    engine: &GuardrailEngine,
+    metadata: Option<&mut std::collections::HashMap<String, String>>,
+) -> Result<(), GatewayError> {
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    for (key, value) in metadata {
+        if mask_content(engine, key, "metadata key")?.is_some() {
+            return Err(projection_error("input"));
+        }
+        mask_text(engine, value)?;
+    }
+    Ok(())
 }
 
 fn mask_content(
@@ -418,6 +438,43 @@ mod tests {
                 }),
             Some("email me at ****************")
         );
+    }
+
+    #[tokio::test]
+    async fn masking_rewrites_request_user_and_metadata_values() {
+        let mut request = request("safe");
+        request.user = Some("user@example.com".to_string());
+        request.metadata = Some(std::collections::HashMap::from([(
+            "owner".to_string(),
+            "second@example.com".to_string(),
+        )]));
+
+        let guarded = apply_input(&masking_engine(), &request)
+            .await
+            .expect("request identity fields should be maskable");
+
+        assert_eq!(guarded.user.as_deref(), Some("[MASKED]"));
+        assert_eq!(
+            guarded
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("owner"))
+                .map(String::as_str),
+            Some("[MASKED]")
+        );
+    }
+
+    #[tokio::test]
+    async fn masking_rejects_pii_in_metadata_keys() {
+        let mut request = request("safe");
+        request.metadata = Some(std::collections::HashMap::from([(
+            "user@example.com".to_string(),
+            "value".to_string(),
+        )]));
+
+        let result = apply_input(&masking_engine(), &request).await;
+
+        assert!(matches!(result, Err(GatewayError::BadRequest(_))));
     }
 
     #[tokio::test]
