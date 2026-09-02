@@ -63,9 +63,6 @@ pub(crate) async fn handle_streaming_response(
     chat_request.stream_options = Some(StreamOptions {
         include_usage: Some(true),
     });
-    if let Err(error) = crate::server::guardrails::reject_unsupported_streaming_mask(state) {
-        return Ok(openai_errors::gateway_error_response(&error));
-    }
     let chat_request = Arc::new(chat_request);
     let model_name = chat_request.model.clone();
     let resp_id = format!("resp_{}", uuid_v4_hex());

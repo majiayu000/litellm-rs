@@ -180,12 +180,12 @@ fn mask_message_content(
                         content,
                         ..
                     } => {
-                        modified |= mask_text(engine, tool_use_id)?;
+                        reject_structured_identifier(engine, tool_use_id, surface)?;
                         modified |= mask_json_value(engine, content, surface)?;
                     }
                     ContentPart::ToolUse { id, name, input } => {
-                        modified |= mask_text(engine, id)?;
-                        modified |= mask_text(engine, name)?;
+                        reject_structured_identifier(engine, id, surface)?;
+                        reject_structured_identifier(engine, name, surface)?;
                         modified |= mask_json_value(engine, input, surface)?;
                     }
                     _ => {}
@@ -195,6 +195,17 @@ fn mask_message_content(
         }
         None => Ok(false),
     }
+}
+
+fn reject_structured_identifier(
+    engine: &GuardrailEngine,
+    value: &str,
+    surface: &str,
+) -> Result<(), GatewayError> {
+    if mask_content(engine, value, "structured identifier")?.is_some() {
+        return Err(projection_error(surface));
+    }
+    Ok(())
 }
 
 fn mask_text(engine: &GuardrailEngine, text: &mut String) -> Result<bool, GatewayError> {
@@ -505,6 +516,34 @@ mod tests {
                 }),
             Some("email me at ****************")
         );
+    }
+    #[tokio::test]
+    async fn masking_rejects_pii_in_tool_protocol_identifiers() {
+        for part in [
+            ContentPart::ToolUse {
+                id: "2125551234".to_string(),
+                name: "lookup".to_string(),
+                input: serde_json::json!({"value": "safe"}),
+            },
+            ContentPart::ToolUse {
+                id: "call-1".to_string(),
+                name: "user@example.com".to_string(),
+                input: serde_json::json!({"value": "safe"}),
+            },
+            ContentPart::ToolResult {
+                tool_use_id: "2125551234".to_string(),
+                content: serde_json::json!({"value": "safe"}),
+                is_error: None,
+            },
+        ] {
+            let mut request = request("safe");
+            request.messages[0].content = Some(MessageContent::Parts(vec![part]));
+            let result = apply_input(&masking_engine(), &request).await;
+            assert!(
+                matches!(result, Err(GatewayError::BadRequest(_))),
+                "unexpected guardrail result: {result:?}"
+            );
+        }
     }
     #[tokio::test]
     async fn masking_rewrites_request_user_and_metadata_values() {

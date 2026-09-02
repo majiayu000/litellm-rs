@@ -101,6 +101,10 @@ pub async fn create_response(
         _ => {}
     }
 
+    if let Err(error) = input_guardrail::validate_delivery(state.get_ref(), &request) {
+        return Ok(openai_errors::gateway_error_response(&error));
+    }
+
     if let Err(error) = lifecycle::validate_storage_owner(&request, &owner) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
@@ -148,11 +152,6 @@ pub async fn create_response(
     }
 
     if request.background.unwrap_or(false) {
-        if request.stream.unwrap_or(false) {
-            return Ok(openai_errors::validation_error(
-                "background responses do not support stream=true",
-            ));
-        }
         Ok(lifecycle::handle_background_response(
             state.get_ref().clone(),
             chat_request,

@@ -24,6 +24,21 @@ pub(super) enum InputGuardrailError {
     Validation(String),
 }
 
+pub(super) fn validate_delivery(
+    state: &AppState,
+    request: &ResponsesApiRequest,
+) -> Result<(), GatewayError> {
+    if request.background.unwrap_or(false) && request.stream.unwrap_or(false) {
+        return Err(GatewayError::validation(
+            "background responses do not support stream=true",
+        ));
+    }
+    if request.stream.unwrap_or(false) {
+        crate::server::guardrails::reject_unsupported_streaming_mask(state)?;
+    }
+    Ok(())
+}
+
 pub(super) async fn apply(
     state: &AppState,
     request: ResponsesApiRequest,
