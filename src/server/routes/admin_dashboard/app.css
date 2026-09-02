@@ -9,6 +9,7 @@
   --accent-strong: #2343ac;
   --danger: #b42318;
   --healthy: #16794a;
+  --warning: #8a4f00;
   --focus: #ffb020;
   --shadow: 0 16px 45px rgb(23 34 56 / 10%);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -29,6 +30,7 @@
     --accent-strong: #abc0ff;
     --danger: #ff8a80;
     --healthy: #73d7a3;
+    --warning: #ffc66d;
     --focus: #ffd166;
     --shadow: 0 18px 50px rgb(0 0 0 / 28%);
   }
@@ -80,6 +82,13 @@ button.danger {
   border-color: var(--danger);
   color: var(--danger);
   background: transparent;
+}
+
+button.compact {
+  min-height: 2rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.5rem;
+  font-size: 0.82rem;
 }
 
 :focus-visible {
@@ -178,6 +187,12 @@ select {
   border-radius: 0.55rem;
   color: var(--text);
   background: var(--surface);
+}
+
+input[type="checkbox"] {
+  width: 1rem;
+  min-height: 1rem;
+  accent-color: var(--accent);
 }
 
 .tabs {
@@ -305,6 +320,71 @@ td code {
   gap: 1.25rem;
 }
 
+.budget-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.budget-grid h3 {
+  margin: 0 0 0.65rem;
+}
+
+.budget-actions {
+  display: flex;
+  min-width: 13rem;
+  gap: 0.45rem;
+}
+
+.budget-state {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 730;
+  text-transform: capitalize;
+}
+
+.budget-state[data-budget-state="ok"] {
+  color: var(--healthy);
+}
+
+.budget-state[data-budget-state="warning"] {
+  color: var(--warning);
+}
+
+.budget-state[data-budget-state="exceeded"] {
+  color: var(--danger);
+}
+
+.budget-state[data-budget-state="unknown"] {
+  color: var(--muted);
+}
+
+.input-suffix {
+  position: relative;
+}
+
+.input-suffix input {
+  padding-right: 2.2rem;
+}
+
+.input-suffix span {
+  position: absolute;
+  top: 50%;
+  right: 0.8rem;
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+
+.checkbox-row {
+  display: flex;
+  grid-column: 2;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+}
+
 .health-summary,
 .health-notice {
   margin: 0 0 1rem;
@@ -408,7 +488,8 @@ dialog pre {
   }
 
   .form-grid button,
-  .form-grid .field-help {
+  .form-grid .field-help,
+  .checkbox-row {
     grid-column: 1;
   }
 

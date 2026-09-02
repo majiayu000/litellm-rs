@@ -10,6 +10,10 @@ const appSource = await readFile(
   new URL("../../src/server/routes/admin_dashboard/app.js", import.meta.url),
   "utf8",
 );
+const budgetSource = await readFile(
+  new URL("../../src/server/routes/admin_dashboard/budget.js", import.meta.url),
+  "utf8",
+);
 const providerHealthSource = await readFile(
   new URL(
     "../../src/server/routes/admin_dashboard/provider_health.js",
@@ -60,6 +64,8 @@ function dashboard(options = {}) {
   const {
     keys = [],
     teams = [],
+    providerBudgets = [],
+    modelBudgets = [],
     usageByTeam = new Map(),
     health = {
       status: "degraded",
@@ -80,6 +86,7 @@ function dashboard(options = {}) {
       '<script src="/admin/dashboard/provider-health.js" defer></script>',
       "",
     )
+    .replace('<script src="/admin/dashboard/budget.js" defer></script>', "")
     .replace('<script src="/admin/dashboard/app.js" defer></script>', "");
   const dom = new JSDOM(htmlWithoutScript, {
     url: "https://gateway.test/admin/dashboard",
@@ -182,6 +189,16 @@ function dashboard(options = {}) {
         }),
       );
     }
+    if (url.pathname === "/v1/budget/providers" && call.method === "GET") {
+      return Promise.resolve(
+        apiResponse({ providers: providerBudgets, total: providerBudgets.length }),
+      );
+    }
+    if (url.pathname === "/v1/budget/models" && call.method === "GET") {
+      return Promise.resolve(
+        apiResponse({ models: modelBudgets, total: modelBudgets.length }),
+      );
+    }
     if (url.pathname === "/health/detailed" && call.method === "GET") {
       return Promise.resolve(healthResponse(health, 503));
     }
@@ -197,6 +214,7 @@ function dashboard(options = {}) {
     throw new Error(`Unexpected request: ${call.method} ${call.path}`);
   };
   window.eval(providerHealthSource);
+  window.eval(budgetSource);
   window.eval(appSource);
   return context;
 }
@@ -231,6 +249,15 @@ function fillKeyForm(window, name) {
   window.document.getElementById("key-models").value = "model-*";
   window.document.getElementById("key-endpoints").value =
     "/v1/chat/completions";
+}
+
+function fillBudgetForm(window, scope, name, maximum) {
+  window.document.getElementById("budget-scope").value = scope;
+  window.document.getElementById("budget-scope").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  window.document.getElementById("budget-name").value = name;
+  window.document.getElementById("budget-max").value = String(maximum);
 }
 
 async function assertCopyCleared(context) {
@@ -823,4 +850,260 @@ test("B9 a late provider health response after logout cannot restore stale data"
   assert.equal(window.document.getElementById("health-notice").textContent, "");
   assert.equal(window.document.querySelectorAll("#health-body tr").length, 0);
   assert.doesNotMatch(window.document.body.textContent, /must-not-return/);
+});
+
+test("B10 budget view renders limits and supports create and update", { concurrency: false }, async (t) => {
+  let providers = [
+    {
+      provider: "openai",
+      max_budget: 100,
+      current_spend: 25,
+      remaining: 75,
+      status: "ok",
+      reset_period: "monthly",
+      currency: "USD",
+      enabled: true,
+    },
+  ];
+  let models = [];
+  const saved = [];
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        return apiResponse({ providers, total: providers.length });
+      }
+      if (call.url.pathname === "/v1/budget/models" && call.method === "GET") {
+        return apiResponse({ models, total: models.length });
+      }
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "POST") {
+        const payload = JSON.parse(call.init.body);
+        saved.push(payload);
+        providers = [{
+          ...providers[0],
+          max_budget: payload.max_budget,
+          remaining: payload.max_budget - providers[0].current_spend,
+          reset_period: payload.reset_period,
+        }];
+        return apiResponse(providers[0], 201);
+      }
+      if (call.url.pathname === "/v1/budget/models" && call.method === "POST") {
+        const payload = JSON.parse(call.init.body);
+        saved.push(payload);
+        models = [{
+          model: payload.model,
+          max_budget: payload.max_budget,
+          current_spend: 0,
+          remaining: payload.max_budget,
+          status: "ok",
+          reset_period: payload.reset_period,
+          currency: payload.currency,
+          enabled: payload.enabled,
+        }];
+        return apiResponse(models[0], 201);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  window.document.querySelector('[data-view="budgets"]').click();
+
+  let providerRows = rowText(window, "#provider-budgets-body tr");
+  assert.equal(providerRows.length, 1);
+  assert.match(providerRows[0], /openai.*\$25\.00.*\$75\.00.*ok.*monthly/i);
+  assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 0);
+
+  window.document.querySelector("#provider-budgets-body button").click();
+  assert.equal(window.document.getElementById("budget-name").value, "openai");
+  window.document.getElementById("budget-max").value = "200";
+  const updateButton = submit(window, window.document.getElementById("budget-form"));
+  await waitFor(
+    () => !updateButton.disabled,
+    "provider budget update did not settle",
+  );
+  assert.match(
+    window.document.getElementById("status-region").textContent,
+    /provider budget saved/i,
+    window.document.getElementById("error-region").textContent,
+  );
+  assert.deepEqual(saved[0], {
+    provider: "openai",
+    max_budget: 200,
+    reset_period: "monthly",
+    soft_limit_percentage: 0.8,
+    currency: "USD",
+    enabled: true,
+  });
+  providerRows = rowText(window, "#provider-budgets-body tr");
+  assert.match(providerRows[0], /\$25\.00.*\$175\.00/);
+
+  fillBudgetForm(window, "model", "gpt-4o", 50);
+  window.document.getElementById("budget-reset-period").value = "weekly";
+  submit(window, window.document.getElementById("budget-form"));
+  await waitFor(
+    () => /model budget saved/i.test(window.document.getElementById("status-region").textContent),
+    "model budget create did not settle",
+  );
+  assert.equal(saved[1].model, "gpt-4o");
+  assert.equal(saved[1].max_budget, 50);
+  assert.match(rowText(window, "#model-budgets-body tr")[0], /gpt-4o.*\$0\.00.*\$50\.00.*weekly/i);
+});
+
+test("B11 rejected budget saves keep rendered state and expose server errors", { concurrency: false }, async (t) => {
+  const provider = {
+    provider: "anthropic",
+    max_budget: 80,
+    current_spend: 12,
+    remaining: 68,
+    status: "warning",
+    reset_period: "daily",
+    currency: "USD",
+    enabled: true,
+  };
+  let providerGets = 0;
+  const context = dashboard({
+    providerBudgets: [provider],
+    handler(call) {
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        providerGets += 1;
+      }
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "POST") {
+        return apiResponse("max_budget must be finite and greater than 0", 400);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  const before = rowText(window, "#provider-budgets-body tr");
+  fillBudgetForm(window, "provider", "anthropic", 90);
+  const save = submit(window, window.document.getElementById("budget-form"));
+  await waitFor(() => !save.disabled, "rejected budget save did not settle");
+
+  assert.deepEqual(rowText(window, "#provider-budgets-body tr"), before);
+  assert.equal(providerGets, 1, "a rejected mutation must not refresh or replace rows");
+  assert.match(window.document.getElementById("error-region").textContent, /max_budget/i);
+  assert.match(window.document.getElementById("status-region").textContent, /budget save failed/i);
+});
+
+test("B12 budget reset and delete require confirmation and update only after success", { concurrency: false }, async (t) => {
+  const resetRequest = deferred();
+  const deleteRequest = deferred();
+  let providers = [{
+    provider: "openai",
+    max_budget: 100,
+    current_spend: 40,
+    remaining: 60,
+    status: "ok",
+    reset_period: "monthly",
+    currency: "USD",
+    enabled: true,
+  }];
+  let models = [{
+    model: "gpt-4o",
+    max_budget: 30,
+    current_spend: 5,
+    remaining: 25,
+    status: "ok",
+    reset_period: "weekly",
+    currency: "USD",
+    enabled: true,
+  }];
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        return apiResponse({ providers, total: providers.length });
+      }
+      if (call.url.pathname === "/v1/budget/models" && call.method === "GET") {
+        return apiResponse({ models, total: models.length });
+      }
+      if (call.path === "/v1/budget/providers/openai/reset" && call.method === "POST") {
+        return resetRequest.promise;
+      }
+      if (call.path === "/v1/budget/models/gpt-4o" && call.method === "DELETE") {
+        return deleteRequest.promise;
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  const providerButtons = window.document.querySelectorAll("#provider-budgets-body button");
+  const modelButtons = window.document.querySelectorAll("#model-budgets-body button");
+  context.setConfirm(false);
+  providerButtons[1].click();
+  modelButtons[2].click();
+  await settle();
+  assert.equal(
+    context.calls.filter((call) => call.path.includes("/v1/budget/") && ["POST", "DELETE"].includes(call.method)).length,
+    0,
+  );
+
+  context.setConfirm(true);
+  providerButtons[1].click();
+  await waitFor(() => providerButtons[1].disabled, "reset request was not pending");
+  assert.match(rowText(window, "#provider-budgets-body tr")[0], /\$40\.00.*\$60\.00/);
+  providers = [{ ...providers[0], current_spend: 0, remaining: 100 }];
+  resetRequest.resolve(apiResponse(providers[0]));
+  await waitFor(
+    () => /\$0\.00.*\$100\.00/.test(rowText(window, "#provider-budgets-body tr")[0]),
+    "reset result was not rendered after refresh",
+  );
+
+  modelButtons[2].click();
+  await waitFor(() => modelButtons[2].disabled, "delete request was not pending");
+  assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 1);
+  models = [];
+  deleteRequest.resolve(apiResponse({ success: true }));
+  await waitFor(
+    () => window.document.querySelectorAll("#model-budgets-body tr").length === 0,
+    "deleted model remained after the successful refresh",
+  );
+});
+
+test("B13 a late budget mutation after logout cannot restore protected data", { concurrency: false }, async (t) => {
+  const lateSave = deferred();
+  let providerGets = 0;
+  const context = dashboard({
+    providerBudgets: [{
+      provider: "openai",
+      max_budget: 100,
+      current_spend: 10,
+      remaining: 90,
+      status: "ok",
+      reset_period: "monthly",
+      currency: "USD",
+      enabled: true,
+    }],
+    handler(call) {
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        providerGets += 1;
+      }
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "POST") {
+        return lateSave.promise;
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  fillBudgetForm(window, "provider", "must-not-return", 999);
+  submit(window, window.document.getElementById("budget-form"));
+  await waitFor(
+    () => context.calls.some((call) => call.url.pathname === "/v1/budget/providers" && call.method === "POST"),
+    "late budget save was not pending",
+  );
+  window.document.getElementById("sign-out").click();
+  lateSave.resolve(apiResponse({ provider: "must-not-return" }, 201));
+  await settle(12);
+
+  assert.equal(providerGets, 1, "a stale mutation must not trigger a follow-up list request");
+  assert.equal(window.document.querySelectorAll("#provider-budgets-body tr").length, 0);
+  assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 0);
+  assert.equal(window.document.getElementById("budget-name").value, "");
+  assert.doesNotMatch(window.document.body.textContent, /must-not-return|\$999/);
 });

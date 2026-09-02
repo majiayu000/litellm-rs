@@ -75,6 +75,7 @@ function resetProtectedState() {
   renderTeams();
   renderSpend();
   providerHealthView.reset();
+  budgetView.reset();
 }
 function endSession(message = "Signed out") {
   abortActiveRequests();
@@ -385,6 +386,10 @@ const providerHealthView = window.createProviderHealthView({
   setStatus,
   textCell,
 });
+const budgetView = window.createBudgetView({
+  apiRequest, beginBusy, byId, captureSession, clearError, createAction, endBusy,
+  ensureCurrent, reportRequestError, setStatus, textCell,
+});
 async function loadKeys(session = captureSession()) {
   const requestVersion = ++state.keyRequestVersion;
   const requestedPage = state.keyPage;
@@ -470,6 +475,7 @@ async function refreshDashboard() {
       loadKeys(session),
       loadTeams(session),
       providerHealthView.load(session),
+      budgetView.load(session),
     ]);
     ensureCurrent(session);
     await loadTeamUsage(session);
@@ -724,7 +730,7 @@ function showView(view) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const panel of ["keys", "teams", "spend", "health"]) {
+  for (const panel of ["keys", "teams", "spend", "budgets", "health"]) {
     byId(`${panel}-panel`).hidden = panel !== view;
   }
   if (view === "spend") {
