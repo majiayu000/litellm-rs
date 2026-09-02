@@ -774,4 +774,20 @@ fn optional_soft_limit_updates_resolve_inside_the_entry() {
         providers.get_provider_soft_limit_percentage("anthropic"),
         Some(0.6)
     );
+
+    providers.set_provider_limit_optional(
+        "openai",
+        ProviderLimitConfig::new(300.0, ResetPeriod::Daily),
+        Some(1.5),
+    );
+    assert_eq!(
+        providers.get_provider_usage("openai").unwrap().max_budget,
+        200.0
+    );
+    models.set_model_limit_optional(
+        "gpt-4o",
+        ModelLimitConfig::new(300.0, ResetPeriod::Daily),
+        Some(f64::NAN),
+    );
+    assert_eq!(models.get_model_usage("gpt-4o").unwrap().max_budget, 250.0);
 }

@@ -136,6 +136,9 @@ impl ProviderBudgetManager {
         mut config: ProviderLimitConfig,
         percentage: Option<f64>,
     ) {
+        if let Some(percentage) = percentage {
+            config.soft_limit_percentage = percentage;
+        }
         if !config.max_budget.is_finite() || config.max_budget <= 0.0 {
             warn!(
                 "Rejected invalid provider budget limit for '{}': {}",
@@ -503,6 +506,9 @@ impl ModelBudgetManager {
         mut config: ModelLimitConfig,
         percentage: Option<f64>,
     ) {
+        if let Some(percentage) = percentage {
+            config.soft_limit_percentage = percentage;
+        }
         if !config.max_budget.is_finite() || config.max_budget <= 0.0 {
             warn!(
                 "Rejected invalid model budget limit for '{}': {}",
