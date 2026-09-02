@@ -52,7 +52,8 @@ pub(crate) async fn mask_responses_input_for_storage(
                                         .as_ref()
                                         .and_then(|metadata| metadata.turn_id.as_deref()),
                                 ],
-                            )?;
+                            )
+                            .await?;
                         }
                         match &mut message.content {
                             ResponseInputContent::Text(text) => {
@@ -69,7 +70,7 @@ pub(crate) async fn mask_responses_input_for_storage(
                                             image_url: Some(image_url),
                                             detail,
                                         } => {
-                                            reject_identifiers(engine, [detail.as_deref()])?;
+                                            reject_identifiers(engine, [detail.as_deref()]).await?;
                                             super::mask_text(engine, image_url)?;
                                         }
                                         ResponseInputContentPart::InputAudio { audio_url } => {
@@ -79,7 +80,7 @@ pub(crate) async fn mask_responses_input_for_storage(
                                             image_url: None,
                                             detail,
                                         } => {
-                                            reject_identifiers(engine, [detail.as_deref()])?;
+                                            reject_identifiers(engine, [detail.as_deref()]).await?;
                                         }
                                     }
                                 }
@@ -90,7 +91,8 @@ pub(crate) async fn mask_responses_input_for_storage(
                         reject_identifiers(
                             engine,
                             [Some(call.call_id.as_str()), Some(call.name.as_str())],
-                        )?;
+                        )
+                        .await?;
                         if will_store {
                             reject_identifiers(
                                 engine,
@@ -102,15 +104,17 @@ pub(crate) async fn mask_responses_input_for_storage(
                                         .as_ref()
                                         .and_then(|metadata| metadata.turn_id.as_deref()),
                                 ],
-                            )?;
+                            )
+                            .await?;
                         }
-                        reject_unprojectable_mask(engine, &call.arguments)?;
+                        reject_unprojectable_mask(engine, &call.arguments).await?;
                     }
                     ResponseInputItem::CustomToolCall(call) => {
                         reject_identifiers(
                             engine,
                             [Some(call.call_id.as_str()), Some(call.name.as_str())],
-                        )?;
+                        )
+                        .await?;
                         if will_store {
                             reject_identifiers(
                                 engine,
@@ -122,12 +126,13 @@ pub(crate) async fn mask_responses_input_for_storage(
                                         .as_ref()
                                         .and_then(|metadata| metadata.turn_id.as_deref()),
                                 ],
-                            )?;
+                            )
+                            .await?;
                         }
-                        reject_unprojectable_mask(engine, &call.input)?;
+                        reject_unprojectable_mask(engine, &call.input).await?;
                     }
                     ResponseInputItem::FunctionCallOutput(output) => {
-                        reject_identifiers(engine, [Some(output.call_id.as_str())])?;
+                        reject_identifiers(engine, [Some(output.call_id.as_str())]).await?;
                         if will_store {
                             reject_identifiers(
                                 engine,
@@ -138,12 +143,13 @@ pub(crate) async fn mask_responses_input_for_storage(
                                         .as_ref()
                                         .and_then(|metadata| metadata.turn_id.as_deref()),
                                 ],
-                            )?;
+                            )
+                            .await?;
                         }
-                        mask_tool_output(engine, &mut output.output)?;
+                        mask_tool_output(engine, &mut output.output).await?;
                     }
                     ResponseInputItem::CustomToolCallOutput(output) => {
-                        reject_identifiers(engine, [Some(output.call_id.as_str())])?;
+                        reject_identifiers(engine, [Some(output.call_id.as_str())]).await?;
                         if will_store {
                             reject_identifiers(
                                 engine,
@@ -155,9 +161,10 @@ pub(crate) async fn mask_responses_input_for_storage(
                                         .as_ref()
                                         .and_then(|metadata| metadata.turn_id.as_deref()),
                                 ],
-                            )?;
+                            )
+                            .await?;
                         }
-                        mask_tool_output(engine, &mut output.output)?;
+                        mask_tool_output(engine, &mut output.output).await?;
                     }
                     ResponseInputItem::Unsupported(_) | ResponseInputItem::Unknown(_) => {}
                 }
@@ -167,7 +174,7 @@ pub(crate) async fn mask_responses_input_for_storage(
     Ok(projected)
 }
 
-fn mask_tool_output(
+async fn mask_tool_output(
     engine: &GuardrailEngine,
     output: &mut CodexToolOutput,
 ) -> Result<(), GatewayError> {
@@ -180,14 +187,14 @@ fn mask_tool_output(
                         super::mask_text(engine, text)?;
                     }
                     CodexToolOutputContent::InputImage { image_url, detail } => {
-                        reject_identifiers(engine, [detail.as_deref()])?;
+                        reject_identifiers(engine, [detail.as_deref()]).await?;
                         super::mask_text(engine, image_url)?;
                     }
                     CodexToolOutputContent::InputAudio { audio_url } => {
                         super::mask_text(engine, audio_url)?;
                     }
                     CodexToolOutputContent::EncryptedContent { encrypted_content } => {
-                        reject_unprojectable_mask(engine, encrypted_content)?;
+                        reject_unprojectable_mask(engine, encrypted_content).await?;
                     }
                 }
             }
@@ -196,20 +203,22 @@ fn mask_tool_output(
     }
 }
 
-fn reject_unprojectable_mask(engine: &GuardrailEngine, content: &str) -> Result<(), GatewayError> {
-    if super::mask_content(engine, content, "Responses input")?.is_some() {
-        Err(super::projection_error("input"))
-    } else {
-        Ok(())
+async fn reject_unprojectable_mask(
+    engine: &GuardrailEngine,
+    content: &str,
+) -> Result<(), GatewayError> {
+    match super::enforce(engine.check_input(content).await, "input")? {
+        super::Enforcement::Pass => Ok(()),
+        super::Enforcement::Mask => Err(super::projection_error("input")),
     }
 }
 
-fn reject_identifiers<'a>(
+async fn reject_identifiers<'a>(
     engine: &GuardrailEngine,
     identifiers: impl IntoIterator<Item = Option<&'a str>>,
 ) -> Result<(), GatewayError> {
     for identifier in identifiers.into_iter().flatten() {
-        reject_unprojectable_mask(engine, identifier)?;
+        reject_unprojectable_mask(engine, identifier).await?;
     }
     Ok(())
 }
@@ -236,6 +245,17 @@ mod tests {
 
     fn engine() -> GuardrailEngine {
         engine_with_input_checks(true)
+    }
+
+    fn blocking_engine(check_input: bool) -> GuardrailEngine {
+        let mut config = GatewayConfig::default().guardrails;
+        config.check_input = check_input;
+        config.pii = Some(PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Block,
+            ..PIIConfig::default()
+        });
+        GuardrailEngine::new(config).expect("PII policy must compile")
     }
 
     #[tokio::test]
@@ -427,14 +447,7 @@ mod tests {
 
         assert_eq!(masked.metadata.unwrap()["owner"], "[MASKED]");
 
-        let mut config = GatewayConfig::default().guardrails;
-        config.check_input = false;
-        config.pii = Some(PIIConfig {
-            enabled: true,
-            action: GuardrailAction::Block,
-            ..PIIConfig::default()
-        });
-        let blocking = GuardrailEngine::new(config).expect("PII policy must compile");
+        let blocking = blocking_engine(false);
         assert!(
             mask_responses_input_for_storage(&blocking, &request)
                 .await
@@ -471,6 +484,11 @@ mod tests {
         request.store = Some(true);
         assert!(
             mask_responses_input_for_storage(&engine(), &request)
+                .await
+                .is_err()
+        );
+        assert!(
+            mask_responses_input_for_storage(&blocking_engine(true), &request)
                 .await
                 .is_err()
         );

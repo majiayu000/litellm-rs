@@ -246,7 +246,7 @@ fn hex_value(digit: u8) -> Option<u8> {
     }
 }
 
-fn json_text_values(text: &str) -> Result<Vec<String>, serde_json::Error> {
+pub(super) fn json_text_values(text: &str) -> Result<Vec<String>, serde_json::Error> {
     let mut values = Vec::new();
     let mut deserializer = serde_json::Deserializer::from_str(text);
     JsonTextSeed(&mut values)
@@ -365,18 +365,18 @@ fn collect_json_text(value: &serde_json::Value, text: &mut Vec<String>) {
 }
 
 #[derive(Clone, Copy)]
-enum DocumentFormat {
+pub(super) enum DocumentFormat {
     PlainText,
     Json,
 }
 
-fn document_text(
+pub(super) fn document_text(
     source: &DocumentSource,
     label: &str,
 ) -> Result<(DocumentFormat, String), GatewayError> {
     let Some(format) = document_format(&source.media_type) else {
         return Err(GatewayError::BadRequest(format!(
-            "input guardrail cannot scan {label}: unsupported document media type `{}`",
+            "guardrail cannot scan {label}: unsupported document media type `{}`",
             source.media_type
         )));
     };
@@ -387,18 +387,18 @@ fn document_text(
         .collect::<Vec<_>>();
     let decoded = STANDARD.decode(cleaned).map_err(|cause| {
         GatewayError::BadRequest(format!(
-            "input guardrail cannot scan {label}: invalid base64 document data: {cause}"
+            "guardrail cannot scan {label}: invalid base64 document data: {cause}"
         ))
     })?;
     let text = String::from_utf8(decoded).map_err(|cause| {
         GatewayError::BadRequest(format!(
-            "input guardrail cannot scan {label}: document body is not valid UTF-8: {cause}"
+            "guardrail cannot scan {label}: document body is not valid UTF-8: {cause}"
         ))
     })?;
     Ok((format, text))
 }
 
-fn document_format(media_type: &str) -> Option<DocumentFormat> {
+pub(super) fn document_format(media_type: &str) -> Option<DocumentFormat> {
     let mut parts = media_type.split(';');
     let essence = parts.next()?.trim().to_ascii_lowercase();
     for parameter in parts {

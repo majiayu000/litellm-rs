@@ -1,13 +1,19 @@
 //! Output projection for guardrail checks.
 
+use crate::core::guardrails::GuardrailEngine;
 use crate::core::models::openai::{
     ChatCompletionResponse, ChatMessage, ContentPart, MessageContent,
 };
+use crate::utils::error::gateway_error::GatewayError;
 
-pub(super) fn response_payload(response: &ChatCompletionResponse, separator: &str) -> String {
+pub(super) fn response_payload(
+    engine: &GuardrailEngine,
+    response: &ChatCompletionResponse,
+) -> Result<String, GatewayError> {
     let mut fragments = Vec::new();
+    let scan_documents = engine.is_enabled() && engine.config().check_output;
     for choice in &response.choices {
-        collect_message(&choice.message, &mut fragments);
+        collect_message(&choice.message, &mut fragments, scan_documents)?;
         push_optional(&mut fragments, choice.finish_reason.as_deref());
         for logprob in choice
             .logprobs
@@ -22,10 +28,14 @@ pub(super) fn response_payload(response: &ChatCompletionResponse, separator: &st
             }
         }
     }
-    fragments.join(separator)
+    Ok(fragments.join(super::FRAGMENT_SEPARATOR))
 }
 
-fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
+fn collect_message(
+    message: &ChatMessage,
+    fragments: &mut Vec<String>,
+    scan_documents: bool,
+) -> Result<(), GatewayError> {
     push_optional(fragments, message.name.as_deref());
     push_optional(fragments, message.tool_call_id.as_deref());
     if let Some(audio) = message.audio.as_ref() {
@@ -33,7 +43,7 @@ fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
     }
     match message.content.as_ref() {
         Some(MessageContent::Text(text)) => push(fragments, text),
-        Some(MessageContent::Parts(parts)) => collect_parts(parts, fragments),
+        Some(MessageContent::Parts(parts)) => collect_parts(parts, fragments, scan_documents)?,
         None => {}
     }
     if let Some(call) = &message.function_call {
@@ -46,9 +56,14 @@ fn collect_message(message: &ChatMessage, fragments: &mut Vec<String>) {
         push(fragments, &call.function.name);
         collect_function_arguments(&call.function.arguments, fragments);
     }
+    Ok(())
 }
 
-fn collect_parts(parts: &[ContentPart], fragments: &mut Vec<String>) {
+fn collect_parts(
+    parts: &[ContentPart],
+    fragments: &mut Vec<String>,
+    scan_documents: bool,
+) -> Result<(), GatewayError> {
     let mut text_group = String::new();
     for part in parts {
         if let ContentPart::Text { text } = part {
@@ -62,12 +77,17 @@ fn collect_parts(parts: &[ContentPart], fragments: &mut Vec<String>) {
         }
         push(fragments, &text_group);
         text_group.clear();
-        collect_non_text_part(part, fragments);
+        collect_non_text_part(part, fragments, scan_documents)?;
     }
     push(fragments, &text_group);
+    Ok(())
 }
 
-fn collect_non_text_part(part: &ContentPart, fragments: &mut Vec<String>) {
+fn collect_non_text_part(
+    part: &ContentPart,
+    fragments: &mut Vec<String>,
+    scan_documents: bool,
+) -> Result<(), GatewayError> {
     match part {
         ContentPart::ImageUrl { image_url } => {
             push(fragments, &image_url.url);
@@ -107,9 +127,39 @@ fn collect_non_text_part(part: &ContentPart, fragments: &mut Vec<String>) {
             if let Some(cache_control) = cache_control {
                 push(fragments, &cache_control.cache_type);
             }
+            if scan_documents && is_textual_document(&source.media_type) {
+                let (format, text) = super::input_scan::document_text(source, "response document")
+                    .map_err(|cause| GatewayError::Internal(cause.to_string()))?;
+                match format {
+                    super::input_scan::DocumentFormat::PlainText => push(fragments, &text),
+                    super::input_scan::DocumentFormat::Json => {
+                        let values = super::input_scan::json_text_values(&text).map_err(|cause| {
+                            GatewayError::Internal(format!(
+                                "output guardrail cannot scan response document: invalid JSON document: {cause}"
+                            ))
+                        })?;
+                        fragments.extend(values);
+                    }
+                }
+            }
         }
         ContentPart::Text { .. } => {}
     }
+    Ok(())
+}
+
+fn is_textual_document(media_type: &str) -> bool {
+    let essence = media_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence.starts_with("text/")
+        || essence == "application/json"
+        || essence
+            .strip_prefix("application/")
+            .is_some_and(|subtype| subtype.ends_with("+json"))
 }
 
 fn collect_function_arguments(arguments: &str, fragments: &mut Vec<String>) {
@@ -153,9 +203,11 @@ fn push(fragments: &mut Vec<String>, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::models::gateway::GatewayConfig;
     use crate::core::models::openai::{
         AudioContent, CacheControl, DocumentSource, ImageSource, MessageRole,
     };
+    use base64::Engine as _;
 
     fn message(parts: Vec<ContentPart>) -> ChatMessage {
         ChatMessage {
@@ -167,6 +219,11 @@ mod tests {
             tool_call_id: None,
             audio: None,
         }
+    }
+
+    fn engine() -> GuardrailEngine {
+        GuardrailEngine::new(GatewayConfig::default().guardrails)
+            .expect("guardrail policy must compile")
     }
 
     #[test]
@@ -181,7 +238,7 @@ mod tests {
             usage: None,
         };
 
-        let payload = response_payload(&response, "\n---\n");
+        let payload = response_payload(&engine(), &response).expect("response should scan");
 
         assert!(payload.is_empty());
     }
@@ -195,7 +252,7 @@ mod tests {
         }]);
         let mut fragments = Vec::new();
 
-        collect_message(&message, &mut fragments);
+        collect_message(&message, &mut fragments, true).expect("message should scan");
 
         assert!(fragments.iter().any(|value| value == "2125551234"));
     }
@@ -212,7 +269,7 @@ mod tests {
         ]);
         let mut fragments = Vec::new();
 
-        collect_message(&message, &mut fragments);
+        collect_message(&message, &mut fragments, true).expect("message should scan");
 
         assert_eq!(fragments, vec!["123-45\n6789"]);
     }
@@ -251,7 +308,7 @@ mod tests {
         });
         let mut fragments = Vec::new();
 
-        collect_message(&message, &mut fragments);
+        collect_message(&message, &mut fragments, true).expect("message should scan");
 
         assert_eq!(
             fragments,
@@ -264,5 +321,46 @@ mod tests {
                 "cache-marker"
             ]
         );
+    }
+
+    #[test]
+    fn textual_document_bodies_are_decoded_and_scanned() {
+        let message = message(vec![
+            ContentPart::Document {
+                source: DocumentSource {
+                    media_type: "text/plain; charset=utf-8".to_string(),
+                    data: base64::engine::general_purpose::STANDARD.encode("plain-marker"),
+                },
+                cache_control: None,
+            },
+            ContentPart::Document {
+                source: DocumentSource {
+                    media_type: "application/problem+json".to_string(),
+                    data: base64::engine::general_purpose::STANDARD
+                        .encode(r#"{"field":"json-marker"}"#),
+                },
+                cache_control: None,
+            },
+        ]);
+        let mut fragments = Vec::new();
+
+        collect_message(&message, &mut fragments, true).expect("text documents should scan");
+
+        assert!(fragments.iter().any(|value| value == "plain-marker"));
+        assert!(fragments.iter().any(|value| value == "field"));
+        assert!(fragments.iter().any(|value| value == "json-marker"));
+    }
+
+    #[test]
+    fn invalid_textual_document_bodies_fail_closed() {
+        let message = message(vec![ContentPart::Document {
+            source: DocumentSource {
+                media_type: "text/plain".to_string(),
+                data: "not base64".to_string(),
+            },
+            cache_control: None,
+        }]);
+
+        assert!(collect_message(&message, &mut Vec::new(), true).is_err());
     }
 }

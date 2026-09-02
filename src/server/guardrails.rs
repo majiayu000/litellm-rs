@@ -47,7 +47,7 @@ pub(crate) async fn ensure_chat_output_unmodified(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<(), GatewayError> {
-    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR);
+    let content = output_scan::response_payload(state.guardrails.as_ref(), response)?;
     match enforce(state.guardrails.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("output")),
@@ -103,7 +103,7 @@ pub(crate) async fn apply_output_with_engine(
     engine: &GuardrailEngine,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    let content = output_scan::response_payload(response, FRAGMENT_SEPARATOR);
+    let content = output_scan::response_payload(engine, response)?;
     match enforce(engine.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(response.clone()),
         Enforcement::Mask => {
@@ -113,7 +113,7 @@ pub(crate) async fn apply_output_with_engine(
                     choice.logprobs = None;
                 }
             }
-            let projected_payload = output_scan::response_payload(&projected, FRAGMENT_SEPARATOR);
+            let projected_payload = output_scan::response_payload(engine, &projected)?;
             match enforce(engine.check_output(&projected_payload).await, "output")? {
                 Enforcement::Pass => Ok(projected),
                 Enforcement::Mask => Err(projection_error("output")),
