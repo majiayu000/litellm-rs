@@ -236,7 +236,7 @@
                    placeholder="openai">
             <label for="budget-max">Maximum budget</label>
             <input id="budget-max" name="max_budget" type="number" required
-                   min="0.0001" step="0.0001" inputmode="decimal">
+                   step="any" inputmode="decimal">
             <label for="budget-reset-period">Reset period</label>
             <select id="budget-reset-period" name="reset_period">
               <option value="daily">Daily</option>
@@ -247,10 +247,6 @@
             <label for="budget-currency">Currency</label>
             <select id="budget-currency" name="currency">
               <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-              <option value="GBP">GBP</option>
-              <option value="JPY">JPY</option>
-              <option value="CNY">CNY</option>
             </select>
             <label class="checkbox-row" for="budget-enabled">
               <input id="budget-enabled" name="enabled" type="checkbox" checked>

@@ -972,6 +972,12 @@ test("B15 disabled budgets render distinctly and edit keys can be cancelled", { 
   await signIn(context);
   const { window } = context;
 
+  assert.equal(window.document.getElementById("budget-max").step, "any");
+  assert.equal(window.document.getElementById("budget-max").hasAttribute("min"), false);
+  assert.deepEqual(
+    [...window.document.getElementById("budget-currency").options].map((option) => option.value),
+    ["USD"],
+  );
   const row = rowText(window, "#provider-budgets-body tr")[0];
   assert.match(row, /disabled/i);
   assert.doesNotMatch(row, /exceeded/i);
