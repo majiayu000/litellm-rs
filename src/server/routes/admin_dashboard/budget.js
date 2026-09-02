@@ -16,6 +16,8 @@ window.createBudgetView = function createBudgetView({
   let providers = [];
   let models = [];
   let requestVersion = 0;
+  let loaded = false;
+  let loadPromise = null;
 
   const scopeConfig = {
     provider: {
@@ -125,6 +127,8 @@ window.createBudgetView = function createBudgetView({
 
   function reset() {
     requestVersion += 1;
+    loaded = false;
+    loadPromise = null;
     providers = [];
     models = [];
     clearEditor();
@@ -150,6 +154,27 @@ window.createBudgetView = function createBudgetView({
     providers = providerData.providers;
     models = modelData.models;
     render();
+  }
+
+  function loadOnce() {
+    if (loaded || loadPromise) {
+      return loadPromise || Promise.resolve();
+    }
+    clearError();
+    setStatus("Loading budgets…");
+    const pending = load()
+      .then(() => {
+        loaded = true;
+        setStatus("Budgets loaded.");
+      })
+      .catch((error) => reportRequestError(error, "Budget load failed."));
+    loadPromise = pending;
+    void pending.finally(() => {
+      if (loadPromise === pending) {
+        loadPromise = null;
+      }
+    });
+    return pending;
   }
 
   async function refreshAfterMutation(session, successMessage) {
@@ -180,7 +205,22 @@ window.createBudgetView = function createBudgetView({
     byId("cancel-budget-edit").hidden = !editing;
   }
 
+  function setCurrency(currency) {
+    const select = byId("budget-currency");
+    select.querySelector("[data-preserved-currency]")?.remove();
+    const value = String(currency || "USD").toUpperCase();
+    if (![...select.options].some((option) => option.value === value)) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      option.dataset.preservedCurrency = "true";
+      select.append(option);
+    }
+    select.value = value;
+  }
+
   function clearEditor() {
+    byId("budget-currency").querySelector("[data-preserved-currency]")?.remove();
     byId("budget-form").reset();
     setEditMode(false);
     updateScopeLabel();
@@ -193,7 +233,7 @@ window.createBudgetView = function createBudgetView({
     byId("budget-name").value = budgetName(scope, budget);
     byId("budget-max").value = budget.max_budget;
     byId("budget-reset-period").value = budget.reset_period;
-    byId("budget-currency").value = String(budget.currency || "USD").toUpperCase();
+    setCurrency(budget.currency);
     byId("budget-enabled").checked = budget.enabled !== false;
     setEditMode(true);
     byId("budget-editor").open = true;
@@ -317,5 +357,5 @@ window.createBudgetView = function createBudgetView({
   );
   updateScopeLabel();
 
-  return { load, reset };
+  return { load, loadOnce, reset };
 };

@@ -475,7 +475,6 @@ async function refreshDashboard() {
       loadKeys(session),
       loadTeams(session),
       providerHealthView.load(session),
-      budgetView.load(session),
     ]);
     ensureCurrent(session);
     await loadTeamUsage(session);
@@ -735,6 +734,9 @@ function showView(view) {
   }
   if (view === "spend") {
     void refreshDashboard();
+  }
+  if (view === "budgets") {
+    void budgetView.loadOnce();
   }
 }
 byId("login-form").addEventListener("submit", (event) => void signIn(event));

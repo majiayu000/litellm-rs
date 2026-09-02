@@ -244,6 +244,15 @@ async function signIn(context) {
   );
 }
 
+async function openBudgets(context) {
+  const { window } = context;
+  window.document.querySelector('[data-view="budgets"]').click();
+  await waitFor(
+    () => window.document.getElementById("status-region").textContent === "Budgets loaded.",
+    "budget view did not load",
+  );
+}
+
 function fillKeyForm(window, name) {
   window.document.getElementById("key-name").value = name;
   window.document.getElementById("key-models").value = "model-*";
@@ -853,6 +862,7 @@ test("B9 a late provider health response after logout cannot restore stale data"
 });
 
 test("B10 budget view renders limits and supports create and update", { concurrency: false }, async (t) => {
+  let budgetGets = 0;
   let providers = [
     {
       provider: "openai",
@@ -870,9 +880,11 @@ test("B10 budget view renders limits and supports create and update", { concurre
   const context = dashboard({
     handler(call) {
       if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        budgetGets += 1;
         return apiResponse({ providers, total: providers.length });
       }
       if (call.url.pathname === "/v1/budget/models" && call.method === "GET") {
+        budgetGets += 1;
         return apiResponse({ models, total: models.length });
       }
       if (call.url.pathname === "/v1/budget/providers" && call.method === "POST") {
@@ -907,7 +919,12 @@ test("B10 budget view renders limits and supports create and update", { concurre
   t.after(() => context.window.close());
   await signIn(context);
   const { window } = context;
+  assert.equal(budgetGets, 0, "sign-in must not load unopened budget collections");
+  await openBudgets(context);
+  assert.equal(budgetGets, 2);
   window.document.querySelector('[data-view="budgets"]').click();
+  await settle();
+  assert.equal(budgetGets, 2, "reopening the loaded tab must not reload budgets");
 
   let providerRows = rowText(window, "#provider-budgets-body tr");
   assert.equal(providerRows.length, 1);
@@ -955,7 +972,7 @@ test("B10 budget view renders limits and supports create and update", { concurre
   assert.match(rowText(window, "#model-budgets-body tr")[0], /gpt-4o.*\$0\.00.*\$50\.00.*weekly/i);
 });
 
-test("B15 disabled budgets render distinctly and edit keys can be cancelled", { concurrency: false }, async (t) => {
+test("B15 disabled and legacy-currency budgets remain editable", { concurrency: false }, async (t) => {
   const context = dashboard({
     providerBudgets: [{
       provider: "openai",
@@ -964,13 +981,14 @@ test("B15 disabled budgets render distinctly and edit keys can be cancelled", { 
       remaining: 0,
       status: "exceeded",
       reset_period: "monthly",
-      currency: "USD",
+      currency: "EUR",
       enabled: false,
     }],
   });
   t.after(() => context.window.close());
   await signIn(context);
   const { window } = context;
+  await openBudgets(context);
 
   assert.equal(window.document.getElementById("budget-max").step, "any");
   assert.equal(window.document.getElementById("budget-max").hasAttribute("min"), false);
@@ -984,10 +1002,19 @@ test("B15 disabled budgets render distinctly and edit keys can be cancelled", { 
   window.document.querySelector("#provider-budgets-body button").click();
   assert.equal(window.document.getElementById("budget-scope").disabled, true);
   assert.equal(window.document.getElementById("budget-name").readOnly, true);
+  assert.equal(window.document.getElementById("budget-currency").value, "EUR");
+  assert.deepEqual(
+    [...window.document.getElementById("budget-currency").options].map((option) => option.value),
+    ["USD", "EUR"],
+  );
   window.document.getElementById("cancel-budget-edit").click();
   assert.equal(window.document.getElementById("budget-name").value, "");
   assert.equal(window.document.getElementById("budget-scope").disabled, false);
   assert.equal(window.document.getElementById("budget-name").readOnly, false);
+  assert.deepEqual(
+    [...window.document.getElementById("budget-currency").options].map((option) => option.value),
+    ["USD"],
+  );
 });
 
 test("B11 rejected budget saves keep rendered state and expose server errors", { concurrency: false }, async (t) => {
@@ -1017,6 +1044,7 @@ test("B11 rejected budget saves keep rendered state and expose server errors", {
   t.after(() => context.window.close());
   await signIn(context);
   const { window } = context;
+  await openBudgets(context);
   const before = rowText(window, "#provider-budgets-body tr");
   fillBudgetForm(window, "provider", "anthropic", 90);
   const save = submit(window, window.document.getElementById("budget-form"));
@@ -1071,6 +1099,7 @@ test("B12 budget reset and delete require confirmation and update only after suc
   t.after(() => context.window.close());
   await signIn(context);
   const { window } = context;
+  await openBudgets(context);
   const providerButtons = window.document.querySelectorAll("#provider-budgets-body button");
   const modelButtons = window.document.querySelectorAll("#model-budgets-body button");
   context.setConfirm(false);
@@ -1131,6 +1160,7 @@ test("B13 a late budget mutation after logout cannot restore protected data", { 
   t.after(() => context.window.close());
   await signIn(context);
   const { window } = context;
+  await openBudgets(context);
   fillBudgetForm(window, "provider", "must-not-return", 999);
   submit(window, window.document.getElementById("budget-form"));
   await waitFor(
@@ -1180,6 +1210,7 @@ test("B14 a committed mutation reports a later list refresh failure separately",
   t.after(() => context.window.close());
   await signIn(context);
   const { window } = context;
+  await openBudgets(context);
   const before = rowText(window, "#provider-budgets-body tr");
   fillBudgetForm(window, "provider", "openai", 200);
   const save = submit(window, window.document.getElementById("budget-form"));
