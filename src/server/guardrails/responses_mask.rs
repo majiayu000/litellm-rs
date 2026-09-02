@@ -1,7 +1,7 @@
 use crate::core::guardrails::GuardrailEngine;
 use crate::core::models::openai::responses_api::{
-    ResponseInput, ResponseInputContent, ResponseInputContentPart, ResponseInputItem,
-    ResponsesApiRequest,
+    ResponseFunctionDefinition, ResponseInput, ResponseInputContent, ResponseInputContentPart,
+    ResponseInputItem, ResponseTool, ResponsesApiRequest,
 };
 use crate::core::types::codex::wire::{CodexToolOutput, CodexToolOutputContent};
 use crate::utils::error::gateway_error::GatewayError;
@@ -33,15 +33,20 @@ pub(crate) async fn apply_responses_input(
     if !input_checks_enabled {
         return Ok(projected);
     }
-    let content = responses_payload(&projected, continuation)?;
+    let content = super::responses_scan::payload(&projected, continuation)?;
     match super::enforce(engine.check_input(&content).await, "input")? {
         super::Enforcement::Pass => return Ok(projected),
         super::Enforcement::Mask => {}
     }
     mask_metadata(engine, projected.metadata.as_mut())?;
+    if let Some(instructions) = projected.instructions.as_mut() {
+        mask_projectable_text(engine, instructions)?;
+    }
     if let Some(user) = projected.user.as_mut() {
         mask_projectable_text(engine, user)?;
     }
+    mask_tools(engine, projected.tools.as_mut())?;
+    mask_tools(engine, projected.additional_tools.as_mut())?;
     match &mut projected.input {
         ResponseInput::Text(text) => {
             mask_projectable_text(engine, text)?;
@@ -80,7 +85,7 @@ pub(crate) async fn apply_responses_input(
                                             mask_projectable_url(engine, image_url)?;
                                         }
                                         ResponseInputContentPart::InputAudio { audio_url } => {
-                                            mask_projectable_text(engine, audio_url)?;
+                                            mask_projectable_url(engine, audio_url)?;
                                         }
                                         ResponseInputContentPart::InputImage {
                                             image_url: None,
@@ -170,7 +175,7 @@ pub(crate) async fn apply_responses_input(
     }
     if super::mask_content(
         engine,
-        &responses_payload(&projected, continuation)?,
+        &super::responses_scan::payload(&projected, continuation)?,
         "input",
     )?
     .is_some()
@@ -186,87 +191,6 @@ async fn mask_responses_input_for_storage(
     request: &ResponsesApiRequest,
 ) -> Result<ResponsesApiRequest, GatewayError> {
     apply_responses_input(engine, request, None).await
-}
-
-fn responses_payload(
-    request: &ResponsesApiRequest,
-    continuation: Option<&crate::core::models::openai::ChatCompletionRequest>,
-) -> Result<String, GatewayError> {
-    let value = serde_json::to_value(request).map_err(|cause| {
-        GatewayError::Internal(format!(
-            "Responses guardrail could not project request for storage: {cause}"
-        ))
-    })?;
-    let mut fragments = Vec::new();
-    collect_json_projection(&value, &mut fragments);
-    collect_adjacent_text(request, &mut fragments);
-    if let Some(continuation) = continuation {
-        fragments.push(super::input_scan::payload(continuation)?);
-    }
-    Ok(fragments.join(super::FRAGMENT_SEPARATOR))
-}
-
-fn collect_json_projection(value: &serde_json::Value, fragments: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(text) => {
-            push_projection(fragments, &super::image_url::projected(text));
-            if let Ok(decoded) = serde_json::from_str(text) {
-                collect_json_projection(&decoded, fragments);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_json_projection(value, fragments);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for (key, value) in values {
-                push_projection(fragments, key);
-                collect_json_projection(value, fragments);
-            }
-        }
-        serde_json::Value::Number(number) => fragments.push(number.to_string()),
-        serde_json::Value::Bool(_) | serde_json::Value::Null => {}
-    }
-}
-
-fn collect_adjacent_text(request: &ResponsesApiRequest, fragments: &mut Vec<String>) {
-    let ResponseInput::Items(items) = &request.input else {
-        return;
-    };
-    for item in items {
-        let ResponseInputItem::Message(message) = item else {
-            continue;
-        };
-        let ResponseInputContent::Parts(parts) = &message.content else {
-            continue;
-        };
-        let mut adjacent = String::new();
-        for part in parts {
-            match part {
-                ResponseInputContentPart::InputText { text }
-                | ResponseInputContentPart::OutputText { text } => {
-                    if !text.is_empty() {
-                        if !adjacent.is_empty() {
-                            adjacent.push('\n');
-                        }
-                        adjacent.push_str(text);
-                    }
-                }
-                _ => {
-                    push_projection(fragments, &adjacent);
-                    adjacent.clear();
-                }
-            }
-        }
-        push_projection(fragments, &adjacent);
-    }
-}
-
-fn push_projection(fragments: &mut Vec<String>, text: &str) {
-    if !text.is_empty() {
-        fragments.push(text.to_string());
-    }
 }
 
 fn mask_tool_output(
@@ -286,7 +210,7 @@ fn mask_tool_output(
                         mask_projectable_url(engine, image_url)?;
                     }
                     CodexToolOutputContent::InputAudio { audio_url } => {
-                        mask_projectable_text(engine, audio_url)?;
+                        mask_projectable_url(engine, audio_url)?;
                     }
                     CodexToolOutputContent::EncryptedContent { encrypted_content } => {
                         reject_unprojectable_mask(engine, encrypted_content)?;
@@ -296,6 +220,45 @@ fn mask_tool_output(
             Ok(())
         }
     }
+}
+
+fn mask_tools(
+    engine: &GuardrailEngine,
+    tools: Option<&mut Vec<ResponseTool>>,
+) -> Result<(), GatewayError> {
+    for tool in tools.into_iter().flatten() {
+        match tool {
+            ResponseTool::Function(tool) => mask_function(engine, &mut tool.function)?,
+            ResponseTool::CodexFunction(function) => mask_function(engine, function)?,
+            ResponseTool::Custom(tool) => {
+                reject_unprojectable_mask(engine, &tool.name)?;
+                mask_projectable_text(engine, &mut tool.description)?;
+                super::mask_json_value(engine, &mut tool.format, "input")?;
+            }
+            ResponseTool::Unsupported(tool) | ResponseTool::Unknown(tool) => {
+                return Err(GatewayError::BadRequest(format!(
+                    "input guardrail cannot safely project Responses tool `{}`",
+                    tool.wire_type
+                )));
+            }
+            _ => return Err(super::projection_error("input")),
+        }
+    }
+    Ok(())
+}
+
+fn mask_function(
+    engine: &GuardrailEngine,
+    function: &mut ResponseFunctionDefinition,
+) -> Result<(), GatewayError> {
+    reject_unprojectable_mask(engine, &function.name)?;
+    if let Some(description) = function.description.as_mut() {
+        mask_projectable_text(engine, description)?;
+    }
+    if let Some(parameters) = function.parameters.as_mut() {
+        super::mask_json_value(engine, parameters, "input")?;
+    }
+    Ok(())
 }
 
 fn mask_projectable_url(engine: &GuardrailEngine, url: &mut String) -> Result<(), GatewayError> {
@@ -392,6 +355,19 @@ mod tests {
             panic!("plain input should remain plain input");
         };
         assert_eq!(input, "Email [MASKED]");
+
+        let encoded: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": "data:text/plain;base64,2125551234=="
+        }))
+        .expect("request should deserialize");
+        let masked = mask_responses_input_for_storage(&engine(), &encoded)
+            .await
+            .expect("plain data URL text should be maskable");
+        let ResponseInput::Text(input) = masked.input else {
+            panic!("plain data URL text should remain plain input");
+        };
+        assert!(!input.contains("2125551234"));
     }
 
     #[tokio::test]
@@ -556,7 +532,8 @@ mod tests {
                 "output": [
                     {"type": "input_image", "image_url": "https://example.com/user@example.com"},
                     {"type": "input_audio", "audio_url": "https://example.com/user@example.com"},
-                    {"type": "encrypted_content", "encrypted_content": "opaque-ciphertext"}
+                    {"type": "encrypted_content", "encrypted_content": "opaque-ciphertext"},
+                    {"type": "input_audio", "audio_url": "data:audio/wav;base64,2125551234=="}
                 ]
             }]
         }))
@@ -578,6 +555,10 @@ mod tests {
         assert_eq!(
             serialized["input"][0]["output"][2]["encrypted_content"],
             "opaque-ciphertext"
+        );
+        assert_eq!(
+            serialized["input"][0]["output"][3]["audio_url"],
+            "data:audio/wav;base64,2125551234=="
         );
 
         for output in [

@@ -2,7 +2,7 @@
 
 use crate::core::guardrails::{CheckResult, GuardrailEngine};
 use crate::core::models::openai::{
-    ChatCompletionRequest, ChatCompletionResponse, ContentPart, MessageContent, ToolChoice,
+    ChatCompletionRequest, ChatCompletionResponse, ContentPart, Function, MessageContent,
 };
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
@@ -12,10 +12,10 @@ mod image_url;
 mod input_scan;
 mod output_scan;
 mod responses_mask;
+mod responses_scan;
 pub(crate) use responses_mask::apply_responses_input;
 
 const FRAGMENT_SEPARATOR: &str = "\n---\n";
-
 pub(crate) async fn apply_chat_input(
     state: &AppState,
     request: &ChatCompletionRequest,
@@ -129,7 +129,7 @@ fn input_payload(
 ) -> Result<String, GatewayError> {
     match input_scan::payload(request) {
         Ok(mut content) => {
-            let extra = provider_bound_payload(request);
+            let extra = input_scan::provider::payload(request);
             if !extra.is_empty() {
                 content.push_str(FRAGMENT_SEPARATOR);
                 content.push_str(&extra);
@@ -141,83 +141,6 @@ fn input_payload(
             Ok(String::new())
         }
         Err(cause) => Err(cause),
-    }
-}
-
-fn provider_bound_payload(request: &ChatCompletionRequest) -> String {
-    let mut fragments = Vec::new();
-    fragments.extend(request.stop.iter().flatten().cloned());
-    fragments.extend(request.modalities.iter().flatten().cloned());
-    fragments.extend(request.reasoning_effort.iter().cloned());
-    fragments.extend(request.service_tier.iter().cloned());
-    fragments.extend(
-        request
-            .logit_bias
-            .iter()
-            .flat_map(|bias| bias.keys().cloned()),
-    );
-    if let Some(audio) = request.audio.as_ref() {
-        fragments.push(audio.voice.clone());
-        fragments.push(audio.format.clone());
-    }
-    if let Some(format) = request.response_format.as_ref() {
-        fragments.push(format.format_type.clone());
-        fragments.extend(format.response_type.iter().cloned());
-        if let Some(schema) = format.json_schema.as_ref() {
-            collect_json_strings(schema, &mut fragments);
-        }
-    }
-    for value in [
-        request.prediction.as_ref(),
-        request.safety_settings.as_ref(),
-        request.cache_control.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        collect_json_strings(value, &mut fragments);
-    }
-    for (key, value) in &request.extra_body {
-        fragments.push(key.clone());
-        collect_json_strings(value, &mut fragments);
-    }
-    for message in &request.messages {
-        fragments.extend(message.tool_call_id.iter().cloned());
-        for call in message.tool_calls.iter().flatten() {
-            fragments.push(call.id.clone());
-            fragments.push(call.tool_type.clone());
-        }
-    }
-    if let Some(choice) = request.tool_choice.as_ref() {
-        match choice {
-            ToolChoice::None(value) | ToolChoice::Auto(value) | ToolChoice::Required(value) => {
-                fragments.push(value.clone());
-            }
-            ToolChoice::Specific(value) => {
-                fragments.push(value.tool_type.clone());
-                fragments.push(value.function.name.clone());
-            }
-        }
-    }
-    fragments.join(FRAGMENT_SEPARATOR)
-}
-
-fn collect_json_strings(value: &serde_json::Value, fragments: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(text) => fragments.push(text.clone()),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_json_strings(value, fragments);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for (key, value) in values {
-                fragments.push(key.clone());
-                collect_json_strings(value, fragments);
-            }
-        }
-        serde_json::Value::Number(number) => fragments.push(number.to_string()),
-        serde_json::Value::Bool(_) | serde_json::Value::Null => {}
     }
 }
 
@@ -306,6 +229,12 @@ fn mask_provider_bound_fields(
     for stop in request.stop.iter_mut().flatten() {
         mask_text(engine, stop)?;
     }
+    for function in request.functions.iter_mut().flatten() {
+        mask_function_definition(engine, function)?;
+    }
+    for tool in request.tools.iter_mut().flatten() {
+        mask_function_definition(engine, &mut tool.function)?;
+    }
     for value in [
         request.prediction.as_mut(),
         request.safety_settings.as_mut(),
@@ -328,6 +257,22 @@ fn mask_provider_bound_fields(
             return Err(projection_error("input"));
         }
         mask_json_value(engine, value, "input")?;
+    }
+    Ok(())
+}
+
+fn mask_function_definition(
+    engine: &GuardrailEngine,
+    function: &mut Function,
+) -> Result<(), GatewayError> {
+    if mask_content(engine, &function.name, "function name")?.is_some() {
+        return Err(projection_error("input"));
+    }
+    if let Some(description) = function.description.as_mut() {
+        mask_text(engine, description)?;
+    }
+    if let Some(parameters) = function.parameters.as_mut() {
+        mask_json_value(engine, parameters, "input")?;
     }
     Ok(())
 }
@@ -607,6 +552,11 @@ mod tests {
             "provider_extension".to_string(),
             serde_json::json!({"owner": "second@example.com"}),
         );
+        request.functions = Some(vec![Function {
+            name: "lookup".to_string(),
+            description: Some("Email third@example.com".to_string()),
+            parameters: Some(serde_json::json!({"description": "fourth@example.com"})),
+        }]);
 
         let guarded = apply_input(&masking_engine(), &request)
             .await
@@ -615,6 +565,12 @@ mod tests {
         assert_eq!(guarded.prediction.as_ref().unwrap()["content"], "[MASKED]");
         assert_eq!(
             guarded.extra_body["provider_extension"]["owner"],
+            "[MASKED]"
+        );
+        let function = &guarded.functions.as_ref().unwrap()[0];
+        assert_eq!(function.description.as_deref(), Some("Email [MASKED]"));
+        assert_eq!(
+            function.parameters.as_ref().unwrap()["description"],
             "[MASKED]"
         );
     }

@@ -12,7 +12,7 @@ use crate::core::models::openai::{
 use crate::utils::error::gateway_error::GatewayError;
 
 mod parts;
-
+pub(super) mod provider;
 type ScanResult = Result<(), GatewayError>;
 
 pub(super) fn payload(request: &ChatCompletionRequest) -> Result<String, GatewayError> {
