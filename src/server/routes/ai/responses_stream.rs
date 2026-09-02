@@ -50,7 +50,7 @@ use responses_stream_support::{
 pub(crate) async fn handle_streaming_response(
     state: &AppState,
     mut chat_request: ChatCompletionRequest,
-    original: ResponsesApiRequest,
+    guarded_request: ResponsesApiRequest,
     context: SharedRequestContext,
     owner: Option<ResponseOwner>,
 ) -> ActixResult<HttpResponse> {
@@ -64,11 +64,6 @@ pub(crate) async fn handle_streaming_response(
         include_usage: Some(true),
     });
     let chat_request = Arc::new(chat_request);
-    if let Err(error) =
-        crate::server::guardrails::check_chat_input(state, chat_request.as_ref()).await
-    {
-        return Ok(openai_errors::gateway_error_response(&error));
-    }
     let model_name = chat_request.model.clone();
     let resp_id = format!("resp_{}", uuid_v4_hex());
     let created_at = current_unix_ts();
@@ -205,7 +200,13 @@ pub(crate) async fn handle_streaming_response(
                 let mut output_guardrail =
                     super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
 
-                let shell = make_shell(&resp_id, created_at, &model_name, "in_progress", &original);
+                let shell = make_shell(
+                    &resp_id,
+                    created_at,
+                    &model_name,
+                    "in_progress",
+                    &guarded_request,
+                );
                 if let Err(error) = emit(
                     &tx,
                     &ResponseStreamEvent::ResponseCreated {
@@ -520,7 +521,7 @@ pub(crate) async fn handle_streaming_response(
                                                 .and_then(|f| f.name.as_deref())
                                                 .unwrap_or("")
                                                 .to_string();
-                                            let custom = is_custom_tool(&original, &name);
+                                            let custom = is_custom_tool(&guarded_request, &name);
                                             let item_id = format!(
                                                 "{}_{}",
                                                 if custom { "ct" } else { "fc" },
@@ -558,7 +559,7 @@ pub(crate) async fn handle_streaming_response(
                                                 && state.name.is_empty()
                                             {
                                                 state.name.clone_from(n);
-                                                state.custom = is_custom_tool(&original, n);
+                                                state.custom = is_custom_tool(&guarded_request, n);
                                             }
                                             if let Some(args) = &fn_delta.arguments
                                                 && !args.is_empty()
@@ -716,8 +717,8 @@ pub(crate) async fn handle_streaming_response(
                     output: output_items,
                     usage,
                     error: None,
-                    previous_response_id: original.previous_response_id.clone(),
-                    metadata: original.metadata.clone(),
+                    previous_response_id: guarded_request.previous_response_id.clone(),
+                    metadata: guarded_request.metadata.clone(),
                 };
                 if let Err(error) = emit(
                     &tx,
@@ -738,7 +739,7 @@ pub(crate) async fn handle_streaming_response(
                     return_after_disconnect!();
                 }
 
-                store_response_if_requested(&original, &completed, owner);
+                store_response_if_requested(&guarded_request, &completed, owner);
                 settlement
                     .record_completion(budget_usage.as_ref(), saw_upstream_output)
                     .await;

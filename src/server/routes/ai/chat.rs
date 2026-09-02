@@ -4,8 +4,8 @@ use crate::core::models::openai::continuation::{
     ChatCompletionRequestWithExtensions, ChatCompletionResponseWithExtensions,
 };
 use crate::core::models::openai::{
-    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ContentLogprob,
-    ContentPart, Logprobs, MessageContent, MessageRole, Tool, ToolChoice, TopLogprob, Usage,
+    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ContentLogprob, Logprobs, Tool,
+    ToolChoice, TopLogprob, Usage,
 };
 use crate::core::providers::{
     ChatContinuationRequest, ChatContinuationResponse, ChatMessageContinuation, ProviderError,
@@ -14,9 +14,7 @@ use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
 };
 use crate::core::types::{
-    self,
-    chat::ChatRequest as CoreChatRequest,
-    context::{RequestContext, SharedRequestContext},
+    self, chat::ChatRequest as CoreChatRequest, context::SharedRequestContext,
     model::ProviderCapability,
 };
 use crate::server::state::AppState;
@@ -33,6 +31,12 @@ use super::openai_errors;
 #[path = "chat_delta.rs"]
 mod chat_delta;
 use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
+#[path = "chat_guardrails.rs"]
+mod chat_guardrails;
+use chat_guardrails::{
+    continuation_after_input_projection, continuation_after_output_projection,
+    guardrail_request_with_continuation, guardrail_response_with_continuation,
+};
 #[path = "chat_sse.rs"]
 pub(super) mod chat_sse;
 use chat_sse::format_sse_error;
@@ -146,31 +150,26 @@ fn continuation_budget_enabled(
                 .iter()
                 .any(|budget| budget.enabled && budget.model_name == model))
 }
-
-/// Handle chat completion with app state (UnifiedRouter only)
-pub async fn handle_chat_completion_with_state(
-    state: &AppState,
-    request: ChatCompletionRequest,
-    context: RequestContext,
-) -> Result<ChatCompletionResponse, GatewayError> {
-    handle_chat_completion_with_shared_state(state, Arc::new(request), Arc::new(context)).await
-}
-
-pub async fn handle_chat_completion_with_shared_state(
+pub(super) async fn handle_chat_completion_after_input_guardrail(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
     context: SharedRequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    crate::server::guardrails::check_chat_input(state, request.as_ref()).await?;
-    let extensions = vec![ChatMessageContinuation::new(); request.messages.len()];
-    Ok(
-        handle_chat_completion_internal(state, request, context, extensions, false)
-            .await?
-            .into_parts()
-            .0,
-    )
+    let (response, callback) =
+        handle_chat_completion_after_input_guardrail_deferred(state, request, context).await?;
+    callback.complete_usage(response.usage.as_ref(), "success");
+    Ok(response)
 }
-
+pub(super) async fn handle_chat_completion_after_input_guardrail_deferred(
+    state: &AppState,
+    request: Arc<ChatCompletionRequest>,
+    context: SharedRequestContext,
+) -> Result<(ChatCompletionResponse, CallbackLifecycle), GatewayError> {
+    let extensions = vec![ChatMessageContinuation::new(); request.messages.len()];
+    let (response, callback) =
+        handle_chat_completion_internal(state, request, context, extensions, false).await?;
+    Ok((response.into_parts().0, callback))
+}
 pub(super) async fn handle_chat_completion_with_extensions(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
@@ -178,18 +177,55 @@ pub(super) async fn handle_chat_completion_with_extensions(
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
+    let projected = crate::server::guardrails::apply_chat_input(state, request.as_ref()).await?;
+    let extensions = continuation_after_input_projection(request.as_ref(), &projected, extensions)?;
+    let request = Arc::new(projected);
     let guardrail_request = guardrail_request_with_continuation(request.as_ref(), &extensions)?;
-    crate::server::guardrails::check_chat_input(state, &guardrail_request).await?;
-    handle_chat_completion_internal(state, request, context, extensions, opt_in).await
+    if extensions
+        .iter()
+        .any(ChatMessageContinuation::has_visible_thinking)
+    {
+        crate::server::guardrails::ensure_chat_input_unmodified(state, &guardrail_request).await?;
+    }
+    handle_chat_completion_with_extensions_after_input_guardrail(
+        state, request, context, extensions, opt_in,
+    )
+    .await
 }
-
-async fn handle_chat_completion_internal(
+pub(super) async fn handle_chat_completion_with_extensions_after_input_guardrail(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
     context: SharedRequestContext,
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
+    let (response, callback) =
+        handle_chat_completion_internal(state, request, context, extensions, opt_in).await?;
+    callback.complete_usage(response.usage(), "success");
+    Ok(response)
+}
+
+pub(super) fn input_guardrail_request_with_extensions(
+    request: &ChatCompletionRequest,
+    extensions: &[ChatMessageContinuation],
+) -> Result<ChatCompletionRequest, GatewayError> {
+    guardrail_request_with_continuation(request, extensions)
+}
+
+pub(super) fn extensions_after_input_projection(
+    original: &ChatCompletionRequest,
+    projected: &ChatCompletionRequest,
+    extensions: Vec<ChatMessageContinuation>,
+) -> Result<Vec<ChatMessageContinuation>, GatewayError> {
+    continuation_after_input_projection(original, projected, extensions)
+}
+async fn handle_chat_completion_internal(
+    state: &AppState,
+    request: Arc<ChatCompletionRequest>,
+    context: SharedRequestContext,
+    extensions: Vec<ChatMessageContinuation>,
+    opt_in: bool,
+) -> Result<(ChatCompletionResponseWithExtensions, CallbackLifecycle), GatewayError> {
     let unified_router = &state.unified_router;
     let requested_model = request.model.clone();
     let core_request = ChatContinuationRequest::new(
@@ -210,7 +246,6 @@ async fn handle_chat_completion_internal(
     );
     let context_for_execution = Arc::clone(&context);
     let request_for_execution = Arc::clone(&request);
-
     let pricing_service = state.budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
     let key_manager = state.budgeted.key_manager();
@@ -220,7 +255,6 @@ async fn handle_chat_completion_internal(
     let budget_limits = state.budgeted.budget_limits();
     let has_continuation = core_request.has_continuation();
     let callback_for_execution = callback.clone();
-
     let core_response = match run_unary(
         unified_router,
         &requested_model,
@@ -364,18 +398,25 @@ async fn handle_chat_completion_internal(
             return Err(error);
         }
     };
-
     let core_response = match core_response {
         ChatAttemptResponse::Cached(cached) => {
-            crate::server::guardrails::check_chat_output(state, &cached).await?;
+            let cached = crate::server::guardrails::apply_chat_output(state, &cached).await?;
             let extensions = vec![ChatMessageContinuation::new(); cached.choices.len()];
-            return ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
-                .map_err(GatewayError::internal);
+            let response = ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
+                .map_err(GatewayError::internal)?;
+            return Ok((response, callback));
         }
         ChatAttemptResponse::Provider(response) => response,
     };
     let (core_response, choice_extensions) = core_response.into_parts();
-    let response = convert_core_chat_response(core_response);
+    let original_response = convert_core_chat_response(core_response);
+    let response = crate::server::guardrails::apply_chat_output(state, &original_response)
+        .await
+        .inspect_err(|error| {
+            callback.fail(error.to_string(), "guardrail_output");
+        })?;
+    let choice_extensions =
+        continuation_after_output_projection(&original_response, &response, choice_extensions)?;
     let guardrail_response =
         match guardrail_response_with_continuation(&response, &choice_extensions) {
             Ok(projected) => projected,
@@ -384,8 +425,12 @@ async fn handle_chat_completion_internal(
                 return Err(error);
             }
         };
-    if let Err(error) =
-        crate::server::guardrails::check_chat_output(state, &guardrail_response).await
+    if choice_extensions
+        .iter()
+        .any(ChatMessageContinuation::has_visible_thinking)
+        && let Err(error) =
+            crate::server::guardrails::ensure_chat_output_unmodified(state, &guardrail_response)
+                .await
     {
         callback.fail(error.to_string(), "guardrail_output");
         return Err(error);
@@ -398,78 +443,11 @@ async fn handle_chat_completion_internal(
         callback.fail(error.to_string(), "cache_error");
         return Err(error);
     }
-    callback.complete_usage(response.usage.as_ref(), "success");
-    ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
+    let response = ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
         .map_err(GatewayError::internal)
+        .inspect_err(|error| callback.fail(error.to_string(), "response_projection"))?;
+    Ok((response, callback))
 }
-
-fn guardrail_response_with_continuation(
-    response: &ChatCompletionResponse,
-    choice_extensions: &[ChatMessageContinuation],
-) -> Result<ChatCompletionResponse, GatewayError> {
-    if response.choices.len() != choice_extensions.len() {
-        return Err(GatewayError::internal(format!(
-            "chat choice extensions length mismatch: expected {}, got {}",
-            response.choices.len(),
-            choice_extensions.len()
-        )));
-    }
-
-    let mut projected = response.clone();
-    for (choice, extension) in projected.choices.iter_mut().zip(choice_extensions) {
-        append_guardrail_visible_thinking(&mut choice.message, extension);
-    }
-    Ok(projected)
-}
-
-fn guardrail_request_with_continuation(
-    request: &ChatCompletionRequest,
-    message_extensions: &[ChatMessageContinuation],
-) -> Result<ChatCompletionRequest, GatewayError> {
-    if request.messages.len() != message_extensions.len() {
-        return Err(GatewayError::validation(format!(
-            "chat message extensions length mismatch: expected {}, got {}",
-            request.messages.len(),
-            message_extensions.len()
-        )));
-    }
-    let mut projected = request.clone();
-    for (message, extension) in projected.messages.iter_mut().zip(message_extensions) {
-        extension.validate().map_err(GatewayError::validation)?;
-        if !extension.is_empty() && message.role != MessageRole::Assistant {
-            return Err(GatewayError::validation(
-                "Anthropic continuation is only valid on assistant messages",
-            ));
-        }
-        append_guardrail_visible_thinking(message, extension);
-    }
-    Ok(projected)
-}
-
-fn append_guardrail_visible_thinking(
-    message: &mut ChatMessage,
-    extension: &ChatMessageContinuation,
-) {
-    let Some(visible) = extension
-        .anthropic_thinking()
-        .and_then(|thinking| thinking.as_text())
-    else {
-        return;
-    };
-    match &mut message.content {
-        Some(MessageContent::Text(content)) => {
-            if !content.is_empty() {
-                content.push('\n');
-            }
-            content.push_str(&visible);
-        }
-        Some(MessageContent::Parts(parts)) => parts.push(ContentPart::Text {
-            text: visible.into_owned(),
-        }),
-        None => message.content = Some(MessageContent::Text(visible.into_owned())),
-    }
-}
-
 pub(crate) fn build_core_chat_request(
     request: &ChatCompletionRequest,
     model: String,
@@ -477,7 +455,6 @@ pub(crate) fn build_core_chat_request(
 ) -> Result<CoreChatRequest, GatewayError> {
     build_core_chat_request_with_stream_usage(request, model, stream, None)
 }
-
 pub(crate) fn build_core_chat_request_with_stream_usage(
     request: &ChatCompletionRequest,
     model: String,

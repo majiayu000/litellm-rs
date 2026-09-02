@@ -1,9 +1,10 @@
 //! OpenAI-compatible Responses API endpoint.
 
+#[cfg(test)]
+use crate::core::models::openai::continuation::map_responses_input_extensions;
 use crate::core::models::openai::continuation::{
     ResponsesApiRequestWithExtensions, ResponsesApiResponseWithExtensions,
     attach_responses_choice_extensions, build_responses_continuation_turn,
-    map_responses_input_extensions,
 };
 use crate::core::models::openai::messages::{
     ChatMessage, ContentPart, ImageUrl, MessageContent, MessageRole,
@@ -16,11 +17,12 @@ use crate::core::models::openai::responses_api::{
 };
 use crate::core::models::openai::tools::{Function, FunctionCall, Tool, ToolCall};
 use crate::core::providers::ChatMessageContinuation;
-use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
+use crate::core::types::codex::domain::{CodexTurn, CodexTurnItem};
 use crate::core::types::codex::wire::{CodexCustomToolCall, CodexToolOutput};
 use crate::core::types::responses::FinishReason;
 use crate::server::routes::ai::chat::{
-    handle_chat_completion_with_extensions, handle_chat_completion_with_state,
+    handle_chat_completion_after_input_guardrail,
+    handle_chat_completion_with_extensions_after_input_guardrail,
 };
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -30,6 +32,7 @@ use super::openai_errors;
 #[cfg(test)]
 #[path = "responses/codex_compat_tests.rs"]
 mod codex_compat_tests;
+mod input_guardrail;
 mod lifecycle;
 pub(crate) use lifecycle::{ResponseOwner, store_response_if_requested};
 pub use lifecycle::{cancel_response, delete_response, get_response, list_response_input_items};
@@ -98,6 +101,10 @@ pub async fn create_response(
         _ => {}
     }
 
+    if let Err(error) = input_guardrail::validate_delivery(state.get_ref(), &request) {
+        return Ok(openai_errors::gateway_error_response(&error));
+    }
+
     if let Err(error) = lifecycle::validate_storage_owner(&request, &owner) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
@@ -115,37 +122,36 @@ pub async fn create_response(
         };
         (request, input_extensions)
     };
-
-    let turn = match build_responses_continuation_turn(&request, &input_extensions) {
-        Ok(turn) => turn,
-        Err(CodexTurnError::UnsupportedFeature(feature)) => {
-            return Ok(openai_errors::unsupported_codex_feature(
-                &feature,
-                &request.model,
-            ));
+    let guarded = match input_guardrail::apply(
+        state.get_ref(),
+        request,
+        input_extensions,
+        continuation_requested,
+    )
+    .await
+    {
+        Ok(guarded) => guarded,
+        Err(input_guardrail::InputGuardrailError::Unsupported(feature, model)) => {
+            return Ok(openai_errors::unsupported_codex_feature(&feature, &model));
         }
-        Err(error) => return Ok(openai_errors::validation_error(error.to_string())),
+        Err(input_guardrail::InputGuardrailError::Validation(error)) => {
+            return Ok(openai_errors::validation_error(error));
+        }
+        Err(input_guardrail::InputGuardrailError::Guardrail(error)) => {
+            return Ok(openai_errors::gateway_error_response(&error));
+        }
     };
-    let chat_request = match build_chat_request_from_turn(&request, &turn) {
-        Ok(r) => r,
-        Err(e) => return Ok(openai_errors::validation_error(e)),
-    };
-    let chat_extensions =
-        match map_responses_input_extensions(&request, &chat_request, input_extensions) {
-            Ok(extensions) => extensions,
-            Err(error) => return Ok(openai_errors::validation_error(error)),
-        };
+    let input_guardrail::GuardedResponsesInput {
+        request,
+        chat_request,
+        chat_extensions,
+    } = guarded;
     #[cfg(test)]
     if req.headers().contains_key("x-codex-upstream-counter") {
         PROVIDER_DISPATCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     if request.background.unwrap_or(false) {
-        if request.stream.unwrap_or(false) {
-            return Ok(openai_errors::validation_error(
-                "background responses do not support stream=true",
-            ));
-        }
         Ok(lifecycle::handle_background_response(
             state.get_ref().clone(),
             chat_request,
@@ -181,13 +187,13 @@ async fn handle_sync_response(
     chat_request: ChatCompletionRequest,
     chat_extensions: Vec<ChatMessageContinuation>,
     has_continuation: bool,
-    original: ResponsesApiRequest,
+    request: ResponsesApiRequest,
     mut context: crate::core::types::context::RequestContext,
     owner: Option<lifecycle::ResponseOwner>,
 ) -> ActixResult<HttpResponse> {
     super::response_cache::bypass_chat_response_cache(&mut context);
     let result = if has_continuation {
-        handle_chat_completion_with_extensions(
+        handle_chat_completion_with_extensions_after_input_guardrail(
             state,
             std::sync::Arc::new(chat_request),
             std::sync::Arc::new(context),
@@ -197,13 +203,17 @@ async fn handle_sync_response(
         .await
         .map(|response| response.into_parts())
     } else {
-        handle_chat_completion_with_state(state, chat_request, context)
-            .await
-            .map(|response| (response, Vec::new()))
+        handle_chat_completion_after_input_guardrail(
+            state,
+            std::sync::Arc::new(chat_request),
+            std::sync::Arc::new(context),
+        )
+        .await
+        .map(|response| (response, Vec::new()))
     };
     match result {
         Ok((chat_resp, choice_extensions)) => {
-            let mut resp = convert_to_responses_api(chat_resp, &original);
+            let mut resp = convert_to_responses_api(chat_resp, &request);
             let output_extensions = match attach_responses_choice_extensions(
                 &mut resp,
                 choice_extensions,
@@ -212,7 +222,7 @@ async fn handle_sync_response(
                 Ok(extensions) => extensions,
                 Err(error) => return Ok(openai_errors::validation_error(error)),
             };
-            lifecycle::store_response_if_requested(&original, &resp, owner);
+            lifecycle::store_response_if_requested(&request, &resp, owner);
             match ResponsesApiResponseWithExtensions::from_parts(resp, output_extensions) {
                 Ok(response) => Ok(HttpResponse::Ok().json(response)),
                 Err(error) => Ok(openai_errors::validation_error(error)),

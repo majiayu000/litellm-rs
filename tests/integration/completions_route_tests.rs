@@ -237,6 +237,20 @@ mod tests {
         build_test_app_state_with_idle_timeout(base_url, None).await
     }
 
+    async fn build_output_guardrail_test_state(base_url: &str) -> AppState {
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.guardrails.check_input = false;
+        config.gateway.providers = vec![build_provider_config(base_url)];
+
+        GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway server should initialize for output guardrail tests")
+            .state()
+            .clone()
+    }
+
     async fn build_test_app_state_with_cache(base_url: &str) -> AppState {
         let mut config = Config::default();
         config.gateway.storage.database.enabled = false;

@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::{
     messages::MessageRole,
     requests::ChatCompletionRequest,
-    responses::ChatCompletionResponse,
+    responses::{ChatCompletionResponse, Usage},
     responses_api::{
         ResponseInput, ResponseInputItem, ResponseOutputItem, ResponsesApiRequest,
         ResponsesApiResponse,
@@ -120,6 +120,9 @@ impl ChatCompletionResponseWithExtensions {
 
     pub(crate) fn into_parts(self) -> (ChatCompletionResponse, Vec<ChatMessageContinuation>) {
         (self.response, self.choice_extensions)
+    }
+    pub(crate) fn usage(&self) -> Option<&Usage> {
+        self.response.usage.as_ref()
     }
 }
 

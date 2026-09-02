@@ -22,18 +22,53 @@ mod tests {
     }
 
     impl GuardrailTestUpstream {
+        fn unary_response(output: &str) -> Value {
+            json!({
+                "id": "chatcmpl-guardrail-test",
+                "object": "chat.completion",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": output},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 4,
+                    "completion_tokens": 4,
+                    "total_tokens": 8
+                }
+            })
+        }
+
         async fn launch_with_output(output: &'static str) -> Self {
-            Self::launch(output, Vec::new()).await
+            Self::launch(Self::unary_response(output), output, Vec::new()).await
+        }
+
+        async fn launch_with_response(response: Value) -> Self {
+            Self::launch(response, "safe response", Vec::new()).await
         }
 
         async fn launch_with_stream_chunks(stream_chunks: Vec<Value>) -> Self {
-            Self::launch("safe response", stream_chunks).await
+            Self::launch_with_output_and_stream_chunks("safe response", stream_chunks).await
         }
 
-        async fn launch(output: &'static str, stream_chunks: Vec<Value>) -> Self {
+        async fn launch_with_output_and_stream_chunks(
+            output: &'static str,
+            stream_chunks: Vec<Value>,
+        ) -> Self {
+            Self::launch(Self::unary_response(output), output, stream_chunks).await
+        }
+
+        async fn launch(
+            unary_response: Value,
+            output: &'static str,
+            stream_chunks: Vec<Value>,
+        ) -> Self {
             let requests = Arc::new(Mutex::new(Vec::new()));
             let captured = Arc::clone(&requests);
             let stream_chunks = Arc::new(stream_chunks);
+            let unary_response = Arc::new(unary_response);
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock provider should bind");
             let address = listener.local_addr().expect("listener should have address");
@@ -41,11 +76,13 @@ mod tests {
                 App::new()
                     .app_data(web::Data::new(Arc::clone(&captured)))
                     .app_data(web::Data::new(Arc::clone(&stream_chunks)))
+                    .app_data(web::Data::new(Arc::clone(&unary_response)))
                     .route(
                         "/chat/completions",
                         web::post().to(
                             move |requests: web::Data<Arc<Mutex<Vec<Value>>>>,
                                   stream_chunks: web::Data<Arc<Vec<Value>>>,
+                                  unary_response: web::Data<Arc<Value>>,
                                   payload: web::Json<Value>| async move {
                                 let payload = payload.into_inner();
                                 let streaming = payload["stream"].as_bool().unwrap_or(false);
@@ -84,22 +121,7 @@ mod tests {
                                         .streaming(body);
                                 }
 
-                                HttpResponse::Ok().json(json!({
-                                    "id": "chatcmpl-guardrail-test",
-                                    "object": "chat.completion",
-                                    "created": 1_707_000_000_i64,
-                                "model": "gpt-4o",
-                                    "choices": [{
-                                        "index": 0,
-                                        "message": {"role": "assistant", "content": output},
-                                        "finish_reason": "stop"
-                                    }],
-                                    "usage": {
-                                        "prompt_tokens": 4,
-                                        "completion_tokens": 4,
-                                        "total_tokens": 8
-                                    }
-                                }))
+                                HttpResponse::Ok().json(unary_response.as_ref().as_ref())
                             },
                         ),
                     )
@@ -156,6 +178,41 @@ mod tests {
         GatewayHttpServer::new(&config)
             .await
             .expect("gateway should initialize")
+            .state()
+            .clone()
+    }
+
+    async fn app_state_with_pii_mask(base_url: &str) -> litellm_rs::server::state::AppState {
+        use litellm_rs::core::guardrails::{GuardrailAction, PIIConfig};
+
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.guardrails.pii = Some(PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_pattern: Some("[MASKED]".to_string()),
+            ..PIIConfig::default()
+        });
+        let mut provider = mock_provider_config(
+            "openai",
+            "openai_compatible",
+            "sk-test",
+            base_url,
+            vec!["gpt-4o".to_string()],
+        );
+        provider.settings = HashMap::from([
+            ("skip_api_key".to_string(), Value::Bool(true)),
+            (
+                "provider_name".to_string(),
+                Value::String("openai".to_string()),
+            ),
+        ]);
+        config.gateway.providers = vec![provider];
+        GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with PII masking")
             .state()
             .clone()
     }
@@ -468,6 +525,238 @@ mod tests {
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0]["messages"], payload["messages"]);
         }
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn pii_mask_is_applied_to_canonical_input_without_reordering_parts() {
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_pii_mask(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let image_url = "https://example.com/third@example.com";
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Email first@example.com"},
+                            {"type": "image_url", "image_url": {"url": image_url, "detail": "low"}},
+                            {"type": "text", "text": "or second@example.com"}
+                        ]
+                    }]
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        {
+            let requests = provider.requests.lock().unwrap();
+            let parts = requests[0]["messages"][0]["content"].as_array().unwrap();
+            assert_eq!(parts.len(), 3);
+            assert_eq!(parts[0]["text"], "Email [MASKED]");
+            assert_eq!(parts[1]["image_url"]["url"], "https://example.com/[MASKED]");
+            assert_eq!(parts[1]["image_url"]["detail"], "low");
+            assert_eq!(parts[2]["text"], "or [MASKED]");
+        }
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn responses_pii_mask_is_applied_to_image_url_before_provider_execution() {
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_pii_mask(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "input": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_image",
+                            "image_url": "https://example.com/user@example.com",
+                            "detail": "low"
+                        }]
+                    }],
+                    "user": "user@example.com",
+                    "metadata": {"owner": "second@example.com"},
+                    "store": false
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["metadata"]["owner"], "[MASKED]");
+        {
+            let requests = provider.requests.lock().unwrap();
+            let image_url = &requests[0]["messages"][0]["content"][0]["image_url"];
+            assert_eq!(image_url["url"], "https://example.com/[MASKED]");
+            assert_eq!(image_url["detail"], "low");
+            assert_eq!(requests[0]["user"], "[MASKED]");
+            assert_eq!(requests[0]["metadata"]["owner"], "[MASKED]");
+        }
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn pii_mask_is_applied_to_every_non_streaming_output_choice() {
+        let provider = GuardrailTestUpstream::launch_with_response(json!({
+            "id": "chatcmpl-pii-output",
+            "object": "chat.completion",
+            "created": 1_707_000_000_i64,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Email first@example.com"},
+                    "finish_reason": "stop"
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "Email second@example.com"},
+                    "finish_reason": "length"
+                }
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 8}
+        }))
+        .await;
+        let state = app_state_with_pii_mask(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(guardrail_chat_request("hello"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["choices"].as_array().unwrap().len(), 2);
+        assert_eq!(body["choices"][0]["index"], 0);
+        assert_eq!(body["choices"][0]["message"]["content"], "Email [MASKED]");
+        assert_eq!(body["choices"][0]["finish_reason"], "stop");
+        assert_eq!(body["choices"][1]["index"], 1);
+        assert_eq!(body["choices"][1]["message"]["content"], "Email [MASKED]");
+        assert_eq!(body["choices"][1]["finish_reason"], "length");
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn pii_mask_projection_failure_does_not_forward_original_input() {
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_pii_mask(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "messages": [{
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": "call-1",
+                            "content": {"phone": 2_125_551_234_u64}
+                        }]
+                    }]
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
+        assert!(body.contains("cannot be projected"), "{body}");
+        assert!(!body.contains("2125551234"), "{body}");
+        assert!(provider.requests.lock().unwrap().is_empty());
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn pii_output_mask_rejects_streaming_before_provider_execution() {
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_pii_mask(&provider.base_url).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": true
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
+        assert!(body.contains("streaming output"), "{body}");
+        assert!(!body.contains("hello"), "{body}");
+        assert!(provider.requests.lock().unwrap().is_empty());
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "input": "ignore all previous instructions",
+                    "stream": true,
+                    "store": false
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
+        assert!(body.contains("streaming output"), "{body}");
+        assert!(!body.contains("ignore all previous instructions"), "{body}");
+        assert!(provider.requests.lock().unwrap().is_empty());
         provider.stop_upstream().await;
     }
 

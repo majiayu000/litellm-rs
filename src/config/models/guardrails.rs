@@ -50,16 +50,12 @@ pub(crate) fn validate_gateway_guardrails(config: &GuardrailConfig) -> Result<()
         .as_ref()
         .is_some_and(|policy| policy.enabled && policy.action == GuardrailAction::Mask)
         || config
-            .pii
-            .as_ref()
-            .is_some_and(|policy| policy.enabled && policy.action == GuardrailAction::Mask)
-        || config
             .prompt_injection
             .as_ref()
             .is_some_and(|policy| policy.enabled && policy.action == GuardrailAction::Mask);
     if unsupported_mask {
         return Err(
-            "guardrail action 'mask' is not supported by canonical gateway DTO enforcement; use block, log, or allow"
+            "guardrail action 'mask' is only supported for the PII policy; use block, log, or allow"
                 .to_string(),
         );
     }
@@ -140,7 +136,7 @@ mod tests {
             serde_json::json!({"custom_rules": [{"name": "deny", "patterns": ["secret"]}]}),
             serde_json::json!({"default_action": "log"}),
             serde_json::json!({"exclude_paths": ["/v1/chat/completions"]}),
-            serde_json::json!({"pii": {"enabled": true, "action": "mask"}}),
+            serde_json::json!({"prompt_injection": {"enabled": true, "action": "mask"}}),
         ] {
             let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
             value["guardrails"] = guardrails;
@@ -148,6 +144,16 @@ mod tests {
 
             assert!(Validate::validate(&config).is_err());
         }
+    }
+
+    #[test]
+    fn gateway_accepts_pii_masking_at_the_canonical_dto_boundary() {
+        let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+        value["guardrails"] = serde_json::json!({"pii": {"enabled": true, "action": "mask"}});
+        let config: GatewayConfig = serde_json::from_value(value).unwrap();
+
+        assert!(config.guardrails.validate().is_ok());
+        assert!(super::validate_gateway_guardrails(&config.guardrails).is_ok());
     }
 
     #[test]

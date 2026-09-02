@@ -124,6 +124,21 @@ impl GuardrailEngine {
         self.run_checks(content, CheckType::Output).await
     }
 
+    /// Apply configured masks while skipping policies that cannot mutate content.
+    pub(crate) fn mask_content(&self, content: &str) -> GuardrailResult<Option<String>> {
+        let mut masked = None;
+        for guardrail in &self.guardrails {
+            if !guardrail.is_enabled() {
+                continue;
+            }
+            let current = masked.as_deref().unwrap_or(content);
+            if let Some(next) = guardrail.mask_content(current)? {
+                masked = Some(next);
+            }
+        }
+        Ok(masked)
+    }
+
     /// Run all guardrail checks
     async fn run_checks(
         &self,
@@ -131,6 +146,7 @@ impl GuardrailEngine {
         check_type: CheckType,
     ) -> GuardrailResult<CheckResult> {
         let mut combined_result = CheckResult::pass();
+        let mut current_content = content.to_string();
 
         for guardrail in &self.guardrails {
             if !guardrail.is_enabled() {
@@ -144,8 +160,8 @@ impl GuardrailEngine {
             );
 
             let result = match check_type {
-                CheckType::Input => guardrail.check_input(content).await,
-                CheckType::Output => guardrail.check_output(content).await,
+                CheckType::Input => guardrail.check_input(&current_content).await,
+                CheckType::Output => guardrail.check_output(&current_content).await,
             };
 
             match result {
@@ -161,6 +177,10 @@ impl GuardrailEngine {
                         // Merge and return immediately for blocking
                         combined_result = combined_result.merge(check_result);
                         return Ok(combined_result);
+                    }
+
+                    if let Some(modified_content) = &check_result.modified_content {
+                        current_content.clone_from(modified_content);
                     }
 
                     // Merge results

@@ -4,6 +4,7 @@ use self::config::{GuardrailConfig, OpenAIModerationConfig, PIIConfig, PromptInj
 use self::engine::GuardrailEngine;
 use self::types::{GuardrailAction, PIIType};
 use super::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // ============================================================================
 // Integration Tests
@@ -51,8 +52,78 @@ async fn test_full_guardrail_pipeline() {
 }
 
 #[tokio::test]
+async fn pii_is_masked_before_remote_moderation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock moderation listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("mock moderation listener should have an address");
+    let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("mock moderation server should accept request");
+        let mut request = vec![0_u8; 4096];
+        let length = stream
+            .read(&mut request)
+            .await
+            .expect("mock moderation server should read request");
+        request.truncate(length);
+        request_sender
+            .send(String::from_utf8_lossy(&request).into_owned())
+            .expect("moderation request receiver should remain active");
+
+        let body = r#"{"id":"modr-test","model":"test","results":[{"flagged":false,"categories":{},"category_scores":{}}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("mock moderation server should write response");
+    });
+
+    let engine = GuardrailEngine::new(GuardrailConfig {
+        enabled: true,
+        pii: Some(PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_pattern: Some("[REDACTED]".to_string()),
+            ..Default::default()
+        }),
+        openai_moderation: Some(OpenAIModerationConfig {
+            enabled: true,
+            api_key: Some("test-key".to_string()),
+            base_url: format!("http://{address}"),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .expect("guardrail engine should initialize");
+
+    let result = engine
+        .check_input("Contact user@example.com")
+        .await
+        .expect("guardrail pipeline should succeed");
+    let request = request_receiver
+        .await
+        .expect("mock moderation request should be captured");
+
+    assert_eq!(
+        result.modified_content.as_deref(),
+        Some("Contact [REDACTED]")
+    );
+    assert!(request.contains("Contact [REDACTED]"));
+    assert!(!request.contains("user@example.com"));
+}
+
+#[tokio::test]
 async fn test_guardrail_priority_order() {
-    // Prompt injection has higher priority (5) than PII (20)
+    // Prompt injection has higher priority (5) than PII (6)
     // So injection should be checked first
     let config = GuardrailConfig {
         enabled: true,

@@ -21,7 +21,7 @@ use super::{CompletionAdapterRequest, chunk_has_text_delta, completion_chunk_fro
 
 pub(super) async fn handle_streaming_completion(
     state: &AppState,
-    adapter_request: CompletionAdapterRequest,
+    mut adapter_request: CompletionAdapterRequest,
     context: SharedRequestContext,
 ) -> ActixResult<HttpResponse> {
     info!(
@@ -29,10 +29,24 @@ pub(super) async fn handle_streaming_completion(
         adapter_request.chat_request.model
     );
 
-    let request = Arc::new(adapter_request.chat_request);
-    if let Err(error) = crate::server::guardrails::check_chat_input(state, request.as_ref()).await {
+    if let Err(error) = crate::server::guardrails::reject_unsupported_streaming_mask(state) {
         return Ok(openai_errors::gateway_error_response(&error));
     }
+    let masked =
+        match crate::server::guardrails::apply_chat_input(state, &adapter_request.chat_request)
+            .await
+        {
+            Ok(request) => request,
+            Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+        };
+    if let Some(crate::core::models::openai::MessageContent::Text(prompt)) = masked
+        .messages
+        .first()
+        .and_then(|message| message.content.as_ref())
+    {
+        adapter_request.prompt = prompt.clone();
+    }
+    let request = Arc::new(masked);
     let requested_model = request.model.clone();
 
     let core_request = match chat::build_core_chat_request_with_stream_usage(
