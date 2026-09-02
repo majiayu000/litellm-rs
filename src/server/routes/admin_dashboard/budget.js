@@ -18,6 +18,7 @@ window.createBudgetView = function createBudgetView({
   let requestVersion = 0;
   let loaded = false;
   let loadPromise = null;
+  let editingKey = null;
 
   const scopeConfig = {
     provider: {
@@ -220,6 +221,7 @@ window.createBudgetView = function createBudgetView({
   }
 
   function clearEditor() {
+    editingKey = null;
     byId("budget-currency").querySelector("[data-preserved-currency]")?.remove();
     byId("budget-form").reset();
     setEditMode(false);
@@ -228,6 +230,7 @@ window.createBudgetView = function createBudgetView({
 
   function editBudget(scope, budget) {
     const form = byId("budget-form");
+    editingKey = { scope, name: budgetName(scope, budget) };
     byId("budget-scope").value = scope;
     updateScopeLabel();
     byId("budget-name").value = budgetName(scope, budget);
@@ -251,9 +254,9 @@ window.createBudgetView = function createBudgetView({
     const session = captureSession();
     clearError();
     try {
-      const scope = byId("budget-scope").value;
+      const scope = editingKey?.scope || byId("budget-scope").value;
       const config = configFor(scope);
-      const name = byId("budget-name").value.trim();
+      const name = editingKey?.name || byId("budget-name").value.trim();
       const payload = {
         [config.field]: name,
         max_budget: Number(byId("budget-max").value),

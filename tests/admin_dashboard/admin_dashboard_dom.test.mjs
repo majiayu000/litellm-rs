@@ -865,7 +865,7 @@ test("B10 budget view renders limits and supports create and update", { concurre
   let budgetGets = 0;
   let providers = [
     {
-      provider: "openai",
+      provider: " openai ",
       max_budget: 100,
       current_spend: 25,
       remaining: 75,
@@ -932,7 +932,7 @@ test("B10 budget view renders limits and supports create and update", { concurre
   assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 0);
 
   window.document.querySelector("#provider-budgets-body button").click();
-  assert.equal(window.document.getElementById("budget-name").value, "openai");
+  assert.equal(window.document.getElementById("budget-name").value, " openai ");
   assert.equal(window.document.getElementById("budget-scope").disabled, true);
   assert.equal(window.document.getElementById("budget-name").readOnly, true);
   assert.equal(window.document.getElementById("cancel-budget-edit").hidden, false);
@@ -948,7 +948,7 @@ test("B10 budget view renders limits and supports create and update", { concurre
     window.document.getElementById("error-region").textContent,
   );
   assert.deepEqual(saved[0], {
-    provider: "openai",
+    provider: " openai ",
     max_budget: 200,
     reset_period: "monthly",
     currency: "USD",
@@ -1176,6 +1176,10 @@ test("B13 a late budget mutation after logout cannot restore protected data", { 
   assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 0);
   assert.equal(window.document.getElementById("budget-name").value, "");
   assert.doesNotMatch(window.document.body.textContent, /must-not-return|\$999/);
+  await signIn(context);
+  assert.equal(providerGets, 1, "reauthentication on Keys must not reload budgets");
+  assert.equal(window.document.getElementById("keys-panel").hidden, false);
+  assert.equal(window.document.getElementById("budgets-panel").hidden, true);
 });
 
 test("B14 a committed mutation reports a later list refresh failure separately", { concurrency: false }, async (t) => {

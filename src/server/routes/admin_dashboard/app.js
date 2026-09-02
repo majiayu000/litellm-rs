@@ -85,6 +85,7 @@ function endSession(message = "Signed out") {
   state.adminName = null;
   state.busy.clear();
   resetProtectedState();
+  showView("keys");
   loginPanel.hidden = false;
   dashboardShell.hidden = true;
   byId("sign-out").hidden = true;
