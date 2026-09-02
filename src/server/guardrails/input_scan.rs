@@ -118,7 +118,7 @@ fn part(mi: usize, pi: usize, part: &ContentPart, fragments: &mut Vec<String>) -
             push_json_value(fragments, input);
         }
         ContentPart::ImageUrl { image_url } => {
-            push_fragment(fragments, &image_url.url);
+            push_fragment(fragments, super::image_url::scannable(&image_url.url));
             if let Some(detail) = image_url.detail.as_deref() {
                 push_fragment(fragments, detail);
             }
@@ -131,7 +131,7 @@ fn part(mi: usize, pi: usize, part: &ContentPart, fragments: &mut Vec<String>) -
             push_fragment(fragments, &source.media_type);
             fragments.extend(detail.iter().filter(|text| !text.is_empty()).cloned());
             if let Some(image_url) = image_url {
-                push_fragment(fragments, &image_url.url);
+                push_fragment(fragments, super::image_url::scannable(&image_url.url));
                 if let Some(detail) = image_url.detail.as_deref() {
                     push_fragment(fragments, detail);
                 }

@@ -5,8 +5,22 @@ use crate::core::models::openai::{
     ChatCompletionResponse, ChatMessage, ContentPart, MessageContent,
 };
 use crate::utils::error::gateway_error::GatewayError;
+use tracing::warn;
 
 pub(super) fn response_payload(
+    engine: &GuardrailEngine,
+    response: &ChatCompletionResponse,
+) -> Result<String, GatewayError> {
+    match try_response_payload(engine, response) {
+        Err(cause) if engine.config().fail_open && !super::pii_masking_enabled(engine) => {
+            warn!(%cause, "Output guardrail projection failed open");
+            Ok(String::new())
+        }
+        result => result,
+    }
+}
+
+fn try_response_payload(
     engine: &GuardrailEngine,
     response: &ChatCompletionResponse,
 ) -> Result<String, GatewayError> {
@@ -90,7 +104,7 @@ fn collect_non_text_part(
 ) -> Result<(), GatewayError> {
     match part {
         ContentPart::ImageUrl { image_url } => {
-            push(fragments, &image_url.url);
+            push(fragments, super::image_url::scannable(&image_url.url));
             push_optional(fragments, image_url.detail.as_deref());
         }
         ContentPart::Image {
@@ -101,7 +115,7 @@ fn collect_non_text_part(
             push(fragments, &source.media_type);
             push_optional(fragments, detail.as_deref());
             if let Some(image_url) = image_url {
-                push(fragments, &image_url.url);
+                push(fragments, super::image_url::scannable(&image_url.url));
                 push_optional(fragments, image_url.detail.as_deref());
             }
         }
@@ -205,7 +219,7 @@ mod tests {
     use super::*;
     use crate::config::models::gateway::GatewayConfig;
     use crate::core::models::openai::{
-        AudioContent, CacheControl, DocumentSource, ImageSource, MessageRole,
+        AudioContent, CacheControl, ChatChoice, DocumentSource, ImageSource, MessageRole,
     };
     use base64::Engine as _;
 
@@ -362,5 +376,34 @@ mod tests {
         }]);
 
         assert!(collect_message(&message, &mut Vec::new(), true).is_err());
+    }
+
+    #[test]
+    fn invalid_textual_documents_honor_non_masking_fail_open() {
+        let mut config = GatewayConfig::default().guardrails;
+        config.fail_open = true;
+        let engine = GuardrailEngine::new(config).expect("guardrail policy must compile");
+        let response = ChatCompletionResponse {
+            id: "chatcmpl-test".to_string(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: "test-model".to_string(),
+            system_fingerprint: None,
+            choices: vec![ChatChoice {
+                index: 0,
+                message: message(vec![ContentPart::Document {
+                    source: DocumentSource {
+                        media_type: "text/plain".to_string(),
+                        data: "not base64".to_string(),
+                    },
+                    cache_control: None,
+                }]),
+                logprobs: None,
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: None,
+        };
+
+        assert_eq!(response_payload(&engine, &response).unwrap(), "");
     }
 }

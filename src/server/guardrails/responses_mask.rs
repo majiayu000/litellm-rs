@@ -61,7 +61,7 @@ pub(crate) async fn mask_responses_input_for_storage(
                                 mask_projectable_text(engine, text).await?;
                             }
                             ResponseInputContent::Parts(parts) => {
-                                for part in parts {
+                                for part in &mut *parts {
                                     match part {
                                         ResponseInputContentPart::InputText { text }
                                         | ResponseInputContentPart::OutputText { text } => {
@@ -72,7 +72,7 @@ pub(crate) async fn mask_responses_input_for_storage(
                                             detail,
                                         } => {
                                             reject_identifiers(engine, [detail.as_deref()]).await?;
-                                            mask_projectable_text(engine, image_url).await?;
+                                            mask_projectable_url(engine, image_url).await?;
                                         }
                                         ResponseInputContentPart::InputAudio { audio_url } => {
                                             mask_projectable_text(engine, audio_url).await?;
@@ -85,6 +85,7 @@ pub(crate) async fn mask_responses_input_for_storage(
                                         }
                                     }
                                 }
+                                reject_adjacent_text_matches(engine, parts).await?;
                             }
                         }
                     }
@@ -189,7 +190,7 @@ async fn mask_tool_output(
                     }
                     CodexToolOutputContent::InputImage { image_url, detail } => {
                         reject_identifiers(engine, [detail.as_deref()]).await?;
-                        mask_projectable_text(engine, image_url).await?;
+                        mask_projectable_url(engine, image_url).await?;
                     }
                     CodexToolOutputContent::InputAudio { audio_url } => {
                         mask_projectable_text(engine, audio_url).await?;
@@ -202,6 +203,40 @@ async fn mask_tool_output(
             Ok(())
         }
     }
+}
+
+async fn mask_projectable_url(
+    engine: &GuardrailEngine,
+    url: &mut String,
+) -> Result<(), GatewayError> {
+    match super::enforce(
+        engine.check_input(super::image_url::scannable(url)).await,
+        "input",
+    )? {
+        super::Enforcement::Pass => Ok(()),
+        super::Enforcement::Mask => {
+            super::image_url::mask(engine, url)?;
+            reject_unprojectable_mask(engine, super::image_url::scannable(url)).await
+        }
+    }
+}
+
+async fn reject_adjacent_text_matches(
+    engine: &GuardrailEngine,
+    parts: &[ResponseInputContentPart],
+) -> Result<(), GatewayError> {
+    let mut adjacent = String::new();
+    for part in parts {
+        match part {
+            ResponseInputContentPart::InputText { text }
+            | ResponseInputContentPart::OutputText { text } => adjacent.push_str(text),
+            _ => {
+                reject_unprojectable_mask(engine, &adjacent).await?;
+                adjacent.clear();
+            }
+        }
+    }
+    reject_unprojectable_mask(engine, &adjacent).await
 }
 
 async fn mask_projectable_text(
@@ -323,6 +358,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adjacent_text_matches_fail_closed_before_storage() {
+        let request: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "123-45"},
+                    {"type": "input_text", "text": "6789"}
+                ]
+            }],
+            "background": true
+        }))
+        .expect("request should deserialize");
+
+        assert!(
+            mask_responses_input_for_storage(&engine(), &request)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn masks_structured_text_without_reordering_non_text_parts() {
         let request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
@@ -381,7 +439,8 @@ mod tests {
                 "role": "user",
                 "content": [
                     {"type": "input_image", "image_url": "https://example.com/user@example.com"},
-                    {"type": "input_audio", "audio_url": "https://example.com/user@example.com"}
+                    {"type": "input_audio", "audio_url": "https://example.com/user@example.com"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,2125551234=="}
                 ]
             }]
         }))
@@ -399,6 +458,10 @@ mod tests {
         assert_eq!(
             serialized["input"][0]["content"][1]["audio_url"],
             "https://example.com/[MASKED]"
+        );
+        assert_eq!(
+            serialized["input"][0]["content"][2]["image_url"],
+            "data:image/png;base64,2125551234=="
         );
     }
 

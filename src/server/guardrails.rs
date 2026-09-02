@@ -8,6 +8,7 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use tracing::{error, warn};
 
+mod image_url;
 mod input_scan;
 mod output_scan;
 mod responses_mask;
@@ -243,13 +244,13 @@ fn mask_message_content(
                         modified |= mask_text(engine, text)?;
                     }
                     ContentPart::ImageUrl { image_url } => {
-                        modified |= mask_text(engine, &mut image_url.url)?;
+                        modified |= image_url::mask(engine, &mut image_url.url)?;
                     }
                     ContentPart::Image {
                         image_url: Some(image_url),
                         ..
                     } => {
-                        modified |= mask_text(engine, &mut image_url.url)?;
+                        modified |= image_url::mask(engine, &mut image_url.url)?;
                     }
                     ContentPart::ToolResult {
                         tool_use_id,
