@@ -262,24 +262,21 @@ pub async fn set_provider_budget(
         )));
     }
 
-    let soft_limit_percentage = request.soft_limit_percentage.unwrap_or_else(|| {
-        budget_limits
-            .providers
-            .get_provider_soft_limit_percentage(&request.provider)
-            .unwrap_or_else(default_soft_limit_percentage)
-    });
-
     let config = ProviderLimitConfig {
         max_budget: request.max_budget,
         reset_period: request.reset_period,
-        soft_limit_percentage,
+        soft_limit_percentage: request
+            .soft_limit_percentage
+            .unwrap_or_else(default_soft_limit_percentage),
         currency: request.currency,
         enabled: request.enabled,
     };
 
-    budget_limits
-        .providers
-        .set_provider_limit(&request.provider, config);
+    budget_limits.providers.set_provider_limit_optional(
+        &request.provider,
+        config,
+        request.soft_limit_percentage,
+    );
 
     info!(
         "Set provider budget for '{}': ${:.2} ({})",
@@ -518,22 +515,21 @@ pub async fn set_model_budget(
         )));
     }
 
-    let soft_limit_percentage = request.soft_limit_percentage.unwrap_or_else(|| {
-        budget_limits
-            .models
-            .get_model_soft_limit_percentage(&request.model)
-            .unwrap_or_else(default_soft_limit_percentage)
-    });
-
     let config = ModelLimitConfig {
         max_budget: request.max_budget,
         reset_period: request.reset_period,
-        soft_limit_percentage,
+        soft_limit_percentage: request
+            .soft_limit_percentage
+            .unwrap_or_else(default_soft_limit_percentage),
         currency: request.currency,
         enabled: request.enabled,
     };
 
-    budget_limits.models.set_model_limit(&request.model, config);
+    budget_limits.models.set_model_limit_optional(
+        &request.model,
+        config,
+        request.soft_limit_percentage,
+    );
 
     info!(
         "Set model budget for '{}': ${:.2} ({})",

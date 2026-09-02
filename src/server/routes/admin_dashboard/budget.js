@@ -270,8 +270,8 @@ window.createBudgetView = function createBudgetView({
         session,
       );
       ensureCurrent(session);
-      await refreshAfterMutation(session, `${config.label} budget saved.`);
       clearEditor();
+      await refreshAfterMutation(session, `${config.label} budget saved.`);
     } catch (error) {
       if (error?.name !== "AbortError") {
         reportRequestError(error, "Budget save failed.");

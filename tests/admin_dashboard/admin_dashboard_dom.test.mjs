@@ -1231,3 +1231,52 @@ test("B14 a committed mutation reports a later list refresh failure separately",
     /provider budget saved.*budget list refresh failed.*budget list unavailable/i,
   );
 });
+
+test("B16 a committed save clears edit state before a superseded refresh settles", { concurrency: false }, async (t) => {
+  const provider = {
+    provider: "openai", max_budget: 100, current_spend: 10, remaining: 90,
+    status: "ok", reset_period: "monthly", currency: "USD", enabled: true,
+  };
+  const providerRefresh = deferred();
+  const modelRefresh = deferred();
+  let providerGets = 0;
+  let modelGets = 0;
+  const context = dashboard({
+    providerBudgets: [provider],
+    handler(call) {
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        providerGets += 1;
+        if (providerGets === 2) return providerRefresh.promise;
+      }
+      if (call.url.pathname === "/v1/budget/models" && call.method === "GET") {
+        modelGets += 1;
+        if (modelGets === 2) return modelRefresh.promise;
+      }
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "POST") {
+        return apiResponse({ ...provider, max_budget: 200 }, 201);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openBudgets(context);
+  window.document.querySelector("#provider-budgets-body button").click();
+  window.document.getElementById("budget-max").value = "200";
+  submit(window, window.document.getElementById("budget-form"));
+  await waitFor(() => providerGets === 2 && modelGets === 2, "post-save refresh was not pending");
+
+  assert.equal(window.document.getElementById("budget-name").value, "");
+  assert.equal(window.document.getElementById("budget-scope").disabled, false);
+  assert.equal(window.document.getElementById("budget-name").readOnly, false);
+  window.document.getElementById("refresh-budgets").click();
+  await waitFor(() => providerGets === 3 && modelGets === 3, "manual refresh did not supersede save refresh");
+  providerRefresh.resolve(apiResponse({ providers: [provider], total: 1 }));
+  modelRefresh.resolve(apiResponse({ models: [], total: 0 }));
+  await settle();
+
+  assert.equal(window.document.getElementById("budget-name").value, "");
+  assert.equal(window.document.getElementById("budget-scope").disabled, false);
+  assert.equal(window.document.getElementById("budget-name").readOnly, false);
+});

@@ -739,3 +739,39 @@ fn test_provider_budget_manager_concurrent_access() {
     assert_eq!(usage.current_spend, 1000.0);
     assert_eq!(usage.request_count, 1000);
 }
+
+#[test]
+fn optional_soft_limit_updates_resolve_inside_the_entry() {
+    let providers = ProviderBudgetManager::new();
+    let mut provider = ProviderLimitConfig::new(100.0, ResetPeriod::Monthly);
+    provider.soft_limit_percentage = 0.5;
+    providers.set_provider_limit("openai", provider);
+    providers.set_provider_limit_optional(
+        "openai",
+        ProviderLimitConfig::new(200.0, ResetPeriod::Weekly),
+        None,
+    );
+    assert_eq!(
+        providers.get_provider_soft_limit_percentage("openai"),
+        Some(0.5)
+    );
+
+    let models = ModelBudgetManager::new();
+    let mut model = ModelLimitConfig::new(100.0, ResetPeriod::Monthly);
+    model.soft_limit_percentage = 0.75;
+    models.set_model_limit("gpt-4o", model);
+    models.set_model_limit_optional(
+        "gpt-4o",
+        ModelLimitConfig::new(250.0, ResetPeriod::Daily),
+        None,
+    );
+    assert_eq!(models.get_model_soft_limit_percentage("gpt-4o"), Some(0.75));
+
+    let mut new_provider = ProviderLimitConfig::new(50.0, ResetPeriod::Daily);
+    new_provider.soft_limit_percentage = 0.6;
+    providers.set_provider_limit_optional("anthropic", new_provider, None);
+    assert_eq!(
+        providers.get_provider_soft_limit_percentage("anthropic"),
+        Some(0.6)
+    );
+}

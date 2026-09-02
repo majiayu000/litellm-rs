@@ -72,6 +72,7 @@ mod provider_limits;
 mod provider_reservations;
 mod tracker;
 mod types;
+mod unified_limits;
 
 #[cfg(test)]
 mod manager_tests;
@@ -98,7 +99,7 @@ pub use middleware::{
     BudgetCheckMiddleware, BudgetCheckMiddlewareService, BudgetMiddleware, BudgetMiddlewareService,
     BudgetRecorder, BudgetRecorderExt,
 };
-pub use provider_limits::{ModelBudgetManager, ProviderBudgetManager, UnifiedBudgetLimits};
+pub use provider_limits::{ModelBudgetManager, ProviderBudgetManager};
 pub use provider_reservations::{
     ModelBudgetReservation, ProviderBudgetReservation, UnifiedBudgetReservation,
 };
@@ -108,6 +109,7 @@ pub use types::{
     BudgetStatus, Currency, ModelBudget, ModelUsageStats, ProviderBudget, ProviderUsageStats,
     ResetPeriod,
 };
+pub use unified_limits::UnifiedBudgetLimits;
 
 const BUDGET_AMOUNT_SCALE: f64 = 1_000_000_000.0;
 
