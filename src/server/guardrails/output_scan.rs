@@ -106,7 +106,7 @@ fn collect_non_text_part(
 ) -> Result<(), GatewayError> {
     match part {
         ContentPart::ImageUrl { image_url } => {
-            push(fragments, super::image_url::scannable(&image_url.url));
+            push(fragments, &super::image_url::projected(&image_url.url));
             push_optional(fragments, image_url.detail.as_deref());
         }
         ContentPart::Image {
@@ -117,7 +117,7 @@ fn collect_non_text_part(
             push(fragments, &source.media_type);
             push_optional(fragments, detail.as_deref());
             if let Some(image_url) = image_url {
-                push(fragments, super::image_url::scannable(&image_url.url));
+                push(fragments, &super::image_url::projected(&image_url.url));
                 push_optional(fragments, image_url.detail.as_deref());
             }
         }

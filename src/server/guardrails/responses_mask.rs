@@ -209,7 +209,7 @@ fn responses_payload(
 fn collect_json_projection(value: &serde_json::Value, fragments: &mut Vec<String>) {
     match value {
         serde_json::Value::String(text) => {
-            push_projection(fragments, super::image_url::scannable(text));
+            push_projection(fragments, &super::image_url::projected(text));
             if let Ok(decoded) = serde_json::from_str(text) {
                 collect_json_projection(&decoded, fragments);
             }
@@ -299,7 +299,7 @@ fn mask_tool_output(
 }
 
 fn mask_projectable_url(engine: &GuardrailEngine, url: &mut String) -> Result<(), GatewayError> {
-    super::image_url::mask(engine, url)?;
+    super::image_url::mask(engine, url, "input")?;
     Ok(())
 }
 

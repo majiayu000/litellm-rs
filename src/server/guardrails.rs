@@ -244,13 +244,13 @@ fn mask_message_content(
                         modified |= mask_text(engine, text)?;
                     }
                     ContentPart::ImageUrl { image_url } => {
-                        modified |= image_url::mask(engine, &mut image_url.url)?;
+                        modified |= image_url::mask(engine, &mut image_url.url, surface)?;
                     }
                     ContentPart::Image {
                         image_url: Some(image_url),
                         ..
                     } => {
-                        modified |= image_url::mask(engine, &mut image_url.url)?;
+                        modified |= image_url::mask(engine, &mut image_url.url, surface)?;
                     }
                     ContentPart::ToolResult {
                         tool_use_id,
