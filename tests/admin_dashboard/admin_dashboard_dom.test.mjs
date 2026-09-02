@@ -931,7 +931,6 @@ test("B10 budget view renders limits and supports create and update", { concurre
     provider: "openai",
     max_budget: 200,
     reset_period: "monthly",
-    soft_limit_percentage: 0.8,
     currency: "USD",
     enabled: true,
   });
@@ -1106,4 +1105,53 @@ test("B13 a late budget mutation after logout cannot restore protected data", { 
   assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 0);
   assert.equal(window.document.getElementById("budget-name").value, "");
   assert.doesNotMatch(window.document.body.textContent, /must-not-return|\$999/);
+});
+
+test("B14 a committed mutation reports a later list refresh failure separately", { concurrency: false }, async (t) => {
+  const provider = {
+    provider: "openai",
+    max_budget: 100,
+    current_spend: 10,
+    remaining: 90,
+    status: "ok",
+    reset_period: "monthly",
+    currency: "USD",
+    enabled: true,
+  };
+  let providerGets = 0;
+  let saves = 0;
+  const context = dashboard({
+    providerBudgets: [provider],
+    handler(call) {
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "GET") {
+        providerGets += 1;
+        if (providerGets === 2) {
+          return apiResponse("budget list unavailable", 503);
+        }
+      }
+      if (call.url.pathname === "/v1/budget/providers" && call.method === "POST") {
+        saves += 1;
+        return apiResponse({ ...provider, max_budget: 200 }, 201);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  const before = rowText(window, "#provider-budgets-body tr");
+  fillBudgetForm(window, "provider", "openai", 200);
+  const save = submit(window, window.document.getElementById("budget-form"));
+  await waitFor(() => !save.disabled, "committed save did not settle");
+
+  assert.equal(saves, 1);
+  assert.deepEqual(rowText(window, "#provider-budgets-body tr"), before);
+  assert.match(
+    window.document.getElementById("status-region").textContent,
+    /provider budget saved.*refresh failed/i,
+  );
+  assert.match(
+    window.document.getElementById("error-region").textContent,
+    /provider budget saved.*budget list refresh failed.*budget list unavailable/i,
+  );
 });

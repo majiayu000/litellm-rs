@@ -244,12 +244,6 @@
               <option value="monthly" selected>Monthly</option>
               <option value="never">Never</option>
             </select>
-            <label for="budget-soft-limit">Warning threshold</label>
-            <div class="input-suffix">
-              <input id="budget-soft-limit" name="soft_limit_percentage"
-                     type="number" required min="0" max="100" step="1" value="80">
-              <span aria-hidden="true">%</span>
-            </div>
             <label for="budget-currency">Currency</label>
             <select id="budget-currency" name="currency">
               <option value="USD">USD</option>
@@ -262,8 +256,8 @@
               <input id="budget-enabled" name="enabled" type="checkbox" checked>
               Enforce this budget
             </label>
-            <p class="field-help">Saving an existing scope updates it. The warning
-              threshold is submitted explicitly because the list API does not return it.</p>
+            <p class="field-help">Saving an existing scope updates its settings
+              without resetting accrued spend or its warning threshold.</p>
             <button type="submit">Save budget</button>
           </form>
         </details>

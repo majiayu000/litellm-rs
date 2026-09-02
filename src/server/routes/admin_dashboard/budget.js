@@ -147,6 +147,21 @@ window.createBudgetView = function createBudgetView({
     render();
   }
 
+  async function refreshAfterMutation(session, successMessage) {
+    try {
+      await load(session);
+      setStatus(successMessage);
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw error;
+      }
+      reportRequestError(
+        new Error(`${successMessage} Budget list refresh failed: ${error.message}`),
+        `${successMessage} Budget list refresh failed.`,
+      );
+    }
+  }
+
   function updateScopeLabel() {
     const scope = byId("budget-scope").value;
     const config = configFor(scope);
@@ -185,7 +200,6 @@ window.createBudgetView = function createBudgetView({
         [config.field]: name,
         max_budget: Number(byId("budget-max").value),
         reset_period: byId("budget-reset-period").value,
-        soft_limit_percentage: Number(byId("budget-soft-limit").value) / 100,
         currency: byId("budget-currency").value,
         enabled: byId("budget-enabled").checked,
       };
@@ -195,10 +209,9 @@ window.createBudgetView = function createBudgetView({
         session,
       );
       ensureCurrent(session);
-      await load(session);
+      await refreshAfterMutation(session, `${config.label} budget saved.`);
       form.reset();
       updateScopeLabel();
-      setStatus(`${config.label} budget saved.`);
     } catch (error) {
       if (error?.name !== "AbortError") {
         reportRequestError(error, "Budget save failed.");
@@ -227,8 +240,7 @@ window.createBudgetView = function createBudgetView({
         session,
       );
       ensureCurrent(session);
-      await load(session);
-      setStatus(`${config.label} budget reset.`);
+      await refreshAfterMutation(session, `${config.label} budget reset.`);
     } catch (error) {
       reportRequestError(error, "Budget reset failed.");
     } finally {
@@ -255,8 +267,7 @@ window.createBudgetView = function createBudgetView({
         session,
       );
       ensureCurrent(session);
-      await load(session);
-      setStatus(`${config.label} budget deleted.`);
+      await refreshAfterMutation(session, `${config.label} budget deleted.`);
     } catch (error) {
       reportRequestError(error, "Budget deletion failed.");
     } finally {

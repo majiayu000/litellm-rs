@@ -149,12 +149,20 @@ impl ProviderBudgetManager {
         budget.currency = config.currency;
         budget.enabled = config.enabled;
 
+        let reserved = self
+            .reserved_spend
+            .remove(provider)
+            .map(|(_, amount)| amount)
+            .unwrap_or_else(BudgetAmount::zero);
+        if let Some(previous) = self.budgets.get(provider) {
+            budget.current_spend = committed_spend(previous.current_spend, reserved);
+        }
+
         info!(
             "Setting provider budget limit for '{}': ${:.2} ({})",
             provider, config.max_budget, config.reset_period
         );
 
-        self.reserved_spend.remove(provider);
         let snapshot = self.snapshot_for(&budget);
         self.budgets.insert(provider.to_string(), budget);
         self.request_counts.entry(provider.to_string()).or_default();
@@ -177,6 +185,11 @@ impl ProviderBudgetManager {
     }
     pub fn has_provider_limit(&self, provider: &str) -> bool {
         self.budgets.contains_key(provider)
+    }
+    pub fn get_provider_soft_limit_percentage(&self, provider: &str) -> Option<f64> {
+        self.budgets
+            .get(provider)
+            .map(|budget| budget.soft_limit / budget.max_budget)
     }
     pub fn check_provider_budget(&self, provider: &str) -> BudgetStatus {
         if !self.is_enabled() {
@@ -488,12 +501,20 @@ impl ModelBudgetManager {
         budget.currency = config.currency;
         budget.enabled = config.enabled;
 
+        let reserved = self
+            .reserved_spend
+            .remove(model)
+            .map(|(_, amount)| amount)
+            .unwrap_or_else(BudgetAmount::zero);
+        if let Some(previous) = self.budgets.get(model) {
+            budget.current_spend = committed_spend(previous.current_spend, reserved);
+        }
+
         info!(
             "Setting model budget limit for '{}': ${:.2} ({})",
             model, config.max_budget, config.reset_period
         );
 
-        self.reserved_spend.remove(model);
         let snapshot = self.snapshot_for(&budget);
         self.budgets.insert(model.to_string(), budget);
         self.request_counts.entry(model.to_string()).or_default();
@@ -516,6 +537,11 @@ impl ModelBudgetManager {
     }
     pub fn has_model_limit(&self, model: &str) -> bool {
         self.budgets.contains_key(model)
+    }
+    pub fn get_model_soft_limit_percentage(&self, model: &str) -> Option<f64> {
+        self.budgets
+            .get(model)
+            .map(|budget| budget.soft_limit / budget.max_budget)
     }
     pub fn check_model_budget(&self, model: &str) -> BudgetStatus {
         if !self.is_enabled() {

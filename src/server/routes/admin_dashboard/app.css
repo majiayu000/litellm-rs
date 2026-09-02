@@ -361,22 +361,6 @@ td code {
   color: var(--muted);
 }
 
-.input-suffix {
-  position: relative;
-}
-
-.input-suffix input {
-  padding-right: 2.2rem;
-}
-
-.input-suffix span {
-  position: absolute;
-  top: 50%;
-  right: 0.8rem;
-  color: var(--muted);
-  transform: translateY(-50%);
-}
-
 .checkbox-row {
   display: flex;
   grid-column: 2;

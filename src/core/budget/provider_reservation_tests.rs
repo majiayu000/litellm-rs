@@ -301,7 +301,7 @@ fn overlapping_reservation_persistence_excludes_other_temporary_holds() {
 }
 
 #[test]
-fn replacing_limits_drops_stale_outstanding_holds() {
+fn replacing_limits_preserves_committed_spend_and_drops_stale_outstanding_holds() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let limits = UnifiedBudgetLimits::with_persistence(tx);
     limits.providers.set_provider_limit(
@@ -311,6 +311,14 @@ fn replacing_limits_drops_stale_outstanding_holds() {
     limits
         .models
         .set_model_limit("gpt-4", ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
+    assert_eq!(
+        limits.providers.record_provider_spend("openai", 6.0),
+        Some(BudgetStatus::Ok)
+    );
+    assert_eq!(
+        limits.models.record_model_spend("gpt-4", 6.0),
+        Some(BudgetStatus::Ok)
+    );
     while rx.try_recv().is_ok() {}
 
     let reservation = limits.reserve_spend("openai", "gpt-4", 10.0).unwrap();
@@ -337,12 +345,12 @@ fn replacing_limits_drops_stale_outstanding_holds() {
     assert!(
         replacement_snapshots
             .iter()
-            .any(|(_, name, current_spend)| name == "openai" && *current_spend == 0.0)
+            .any(|(_, name, current_spend)| name == "openai" && *current_spend == 6.0)
     );
     assert!(
         replacement_snapshots
             .iter()
-            .any(|(_, name, current_spend)| name == "gpt-4" && *current_spend == 0.0)
+            .any(|(_, name, current_spend)| name == "gpt-4" && *current_spend == 6.0)
     );
 
     assert_eq!(
@@ -355,7 +363,7 @@ fn replacing_limits_drops_stale_outstanding_holds() {
             .get_provider_usage("openai")
             .unwrap()
             .current_spend,
-        4.0
+        10.0
     );
     assert_eq!(
         limits
@@ -363,7 +371,7 @@ fn replacing_limits_drops_stale_outstanding_holds() {
             .get_model_usage("gpt-4")
             .unwrap()
             .current_spend,
-        4.0
+        10.0
     );
 }
 
