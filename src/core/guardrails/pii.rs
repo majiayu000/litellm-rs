@@ -53,6 +53,11 @@ impl PIIGuardrail {
                 "PII mask pattern must not be blank".to_string(),
             ));
         }
+        if self.config.mask_pattern.is_none() && self.config.mask_char.is_whitespace() {
+            return Err(GuardrailError::Config(
+                "PII mask character must not be whitespace".to_string(),
+            ));
+        }
 
         let matches_mask = if let Some(pattern) = &self.config.mask_pattern {
             !self.detect(pattern).is_empty()
@@ -390,6 +395,24 @@ mod tests {
         };
 
         assert!(error.to_string().contains("must not be blank"));
+    }
+
+    #[test]
+    fn test_rejects_whitespace_mask_character() {
+        let config = PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Mask,
+            mask_char: ' ',
+            mask_pattern: None,
+            ..Default::default()
+        };
+
+        let error = match PIIGuardrail::new(config) {
+            Ok(_) => panic!("whitespace mask character must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must not be whitespace"));
     }
 
     #[test]

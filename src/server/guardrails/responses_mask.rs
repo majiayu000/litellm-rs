@@ -25,17 +25,18 @@ pub(crate) async fn mask_responses_input_for_storage(
         super::enforce(engine.check_output(&content).await, "output")?;
     }
     let mut projected = request.clone();
-    super::mask_metadata(engine, projected.metadata.as_mut())?;
     if !input_checks_enabled {
+        super::mask_metadata(engine, projected.metadata.as_mut())?;
         return Ok(projected);
     }
+    mask_metadata(engine, projected.metadata.as_mut()).await?;
     if let Some(user) = projected.user.as_mut() {
-        super::mask_text(engine, user)?;
+        mask_projectable_text(engine, user).await?;
     }
     let will_store = request.store.unwrap_or(true) || request.background.unwrap_or(false);
     match &mut projected.input {
         ResponseInput::Text(text) => {
-            super::mask_text(engine, text)?;
+            mask_projectable_text(engine, text).await?;
         }
         ResponseInput::Items(items) => {
             for item in items {
@@ -57,24 +58,24 @@ pub(crate) async fn mask_responses_input_for_storage(
                         }
                         match &mut message.content {
                             ResponseInputContent::Text(text) => {
-                                super::mask_text(engine, text)?;
+                                mask_projectable_text(engine, text).await?;
                             }
                             ResponseInputContent::Parts(parts) => {
                                 for part in parts {
                                     match part {
                                         ResponseInputContentPart::InputText { text }
                                         | ResponseInputContentPart::OutputText { text } => {
-                                            super::mask_text(engine, text)?;
+                                            mask_projectable_text(engine, text).await?;
                                         }
                                         ResponseInputContentPart::InputImage {
                                             image_url: Some(image_url),
                                             detail,
                                         } => {
                                             reject_identifiers(engine, [detail.as_deref()]).await?;
-                                            super::mask_text(engine, image_url)?;
+                                            mask_projectable_text(engine, image_url).await?;
                                         }
                                         ResponseInputContentPart::InputAudio { audio_url } => {
-                                            super::mask_text(engine, audio_url)?;
+                                            mask_projectable_text(engine, audio_url).await?;
                                         }
                                         ResponseInputContentPart::InputImage {
                                             image_url: None,
@@ -179,19 +180,19 @@ async fn mask_tool_output(
     output: &mut CodexToolOutput,
 ) -> Result<(), GatewayError> {
     match output {
-        CodexToolOutput::Text(text) => super::mask_text(engine, text).map(|_| ()),
+        CodexToolOutput::Text(text) => mask_projectable_text(engine, text).await,
         CodexToolOutput::ContentItems(items) => {
             for item in items {
                 match item {
                     CodexToolOutputContent::InputText { text } => {
-                        super::mask_text(engine, text)?;
+                        mask_projectable_text(engine, text).await?;
                     }
                     CodexToolOutputContent::InputImage { image_url, detail } => {
                         reject_identifiers(engine, [detail.as_deref()]).await?;
-                        super::mask_text(engine, image_url)?;
+                        mask_projectable_text(engine, image_url).await?;
                     }
                     CodexToolOutputContent::InputAudio { audio_url } => {
-                        super::mask_text(engine, audio_url)?;
+                        mask_projectable_text(engine, audio_url).await?;
                     }
                     CodexToolOutputContent::EncryptedContent { encrypted_content } => {
                         reject_unprojectable_mask(engine, encrypted_content).await?;
@@ -201,6 +202,30 @@ async fn mask_tool_output(
             Ok(())
         }
     }
+}
+
+async fn mask_projectable_text(
+    engine: &GuardrailEngine,
+    content: &mut String,
+) -> Result<(), GatewayError> {
+    match super::enforce(engine.check_input(content).await, "input")? {
+        super::Enforcement::Pass => Ok(()),
+        super::Enforcement::Mask => {
+            super::mask_text(engine, content)?;
+            reject_unprojectable_mask(engine, content).await
+        }
+    }
+}
+
+async fn mask_metadata(
+    engine: &GuardrailEngine,
+    metadata: Option<&mut std::collections::HashMap<String, String>>,
+) -> Result<(), GatewayError> {
+    for (key, value) in metadata.into_iter().flatten() {
+        reject_unprojectable_mask(engine, key).await?;
+        mask_projectable_text(engine, value).await?;
+    }
+    Ok(())
 }
 
 async fn reject_unprojectable_mask(
@@ -274,6 +299,27 @@ mod tests {
             panic!("plain input should remain plain input");
         };
         assert_eq!(input, "Email [MASKED]");
+    }
+
+    #[tokio::test]
+    async fn blocking_policies_run_before_projectable_input_is_returned_for_storage() {
+        for input in [
+            json!("user@example.com"),
+            json!([{"type": "message", "role": "user", "content": "user@example.com"}]),
+        ] {
+            let request: ResponsesApiRequest = serde_json::from_value(json!({
+                "model": "gpt-4o",
+                "input": input,
+                "background": true
+            }))
+            .expect("request should deserialize");
+
+            assert!(
+                mask_responses_input_for_storage(&blocking_engine(true), &request)
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]
