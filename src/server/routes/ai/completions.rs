@@ -114,14 +114,14 @@ async fn completions_inner(
         Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
     };
 
-    match super::chat::handle_chat_completion_after_input_guardrail(
+    match super::chat::handle_chat_completion_after_input_guardrail_deferred(
         state.get_ref(),
         Arc::new(chat_request),
         context,
     )
     .await
     {
-        Ok(response) => {
+        Ok((response, callback)) => {
             let response = if adapter_request.echo {
                 let echoed = chat_response_with_completion_echo(response, &masked_prompt);
                 match crate::server::guardrails::apply_output_with_engine(
@@ -131,11 +131,15 @@ async fn completions_inner(
                 .await
                 {
                     Ok(response) => response,
-                    Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+                    Err(error) => {
+                        callback.fail(error.to_string(), "guardrail_output");
+                        return Ok(openai_errors::gateway_error_response(&error));
+                    }
                 }
             } else {
                 response
             };
+            callback.complete_usage(response.usage.as_ref(), "success");
             Ok(HttpResponse::Ok().json(completion_response_from_chat(response, "", false)))
         }
         Err(error) => {

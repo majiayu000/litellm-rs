@@ -155,13 +155,20 @@ pub(super) async fn handle_chat_completion_after_input_guardrail(
     request: Arc<ChatCompletionRequest>,
     context: SharedRequestContext,
 ) -> Result<ChatCompletionResponse, GatewayError> {
+    let (response, callback) =
+        handle_chat_completion_after_input_guardrail_deferred(state, request, context).await?;
+    callback.complete_usage(response.usage.as_ref(), "success");
+    Ok(response)
+}
+pub(super) async fn handle_chat_completion_after_input_guardrail_deferred(
+    state: &AppState,
+    request: Arc<ChatCompletionRequest>,
+    context: SharedRequestContext,
+) -> Result<(ChatCompletionResponse, CallbackLifecycle), GatewayError> {
     let extensions = vec![ChatMessageContinuation::new(); request.messages.len()];
-    Ok(
-        handle_chat_completion_internal(state, request, context, extensions, false)
-            .await?
-            .into_parts()
-            .0,
-    )
+    let (response, callback) =
+        handle_chat_completion_internal(state, request, context, extensions, false).await?;
+    Ok((response.into_parts().0, callback))
 }
 pub(super) async fn handle_chat_completion_with_extensions(
     state: &AppState,
@@ -192,7 +199,10 @@ pub(super) async fn handle_chat_completion_with_extensions_after_input_guardrail
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
-    handle_chat_completion_internal(state, request, context, extensions, opt_in).await
+    let (response, callback) =
+        handle_chat_completion_internal(state, request, context, extensions, opt_in).await?;
+    callback.complete_usage(response.usage(), "success");
+    Ok(response)
 }
 
 pub(super) fn input_guardrail_request_with_extensions(
@@ -215,7 +225,7 @@ async fn handle_chat_completion_internal(
     context: SharedRequestContext,
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
-) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
+) -> Result<(ChatCompletionResponseWithExtensions, CallbackLifecycle), GatewayError> {
     let unified_router = &state.unified_router;
     let requested_model = request.model.clone();
     let core_request = ChatContinuationRequest::new(
@@ -392,8 +402,9 @@ async fn handle_chat_completion_internal(
         ChatAttemptResponse::Cached(cached) => {
             let cached = crate::server::guardrails::apply_chat_output(state, &cached).await?;
             let extensions = vec![ChatMessageContinuation::new(); cached.choices.len()];
-            return ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
-                .map_err(GatewayError::internal);
+            let response = ChatCompletionResponseWithExtensions::from_parts(cached, extensions)
+                .map_err(GatewayError::internal)?;
+            return Ok((response, callback));
         }
         ChatAttemptResponse::Provider(response) => response,
     };
@@ -432,9 +443,10 @@ async fn handle_chat_completion_internal(
         callback.fail(error.to_string(), "cache_error");
         return Err(error);
     }
-    callback.complete_usage(response.usage.as_ref(), "success");
-    ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
+    let response = ChatCompletionResponseWithExtensions::from_parts(response, choice_extensions)
         .map_err(GatewayError::internal)
+        .inspect_err(|error| callback.fail(error.to_string(), "response_projection"))?;
+    Ok((response, callback))
 }
 pub(crate) fn build_core_chat_request(
     request: &ChatCompletionRequest,

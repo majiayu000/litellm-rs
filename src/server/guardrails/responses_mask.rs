@@ -18,10 +18,7 @@ pub(crate) async fn apply_responses_input(
     }
 
     let mut projected = request.clone();
-    if output_checks_enabled
-        && !input_checks_enabled
-        && let Some(metadata) = request.metadata.as_ref()
-    {
+    if output_checks_enabled && let Some(metadata) = request.metadata.as_ref() {
         let content = metadata
             .iter()
             .flat_map(|(key, value)| [key.as_str(), value.as_str()])
@@ -621,6 +618,18 @@ mod tests {
         let blocking = blocking_engine(false);
         assert!(
             mask_responses_input_for_storage(&blocking, &request)
+                .await
+                .is_err()
+        );
+
+        let output_leak: ResponsesApiRequest = serde_json::from_value(json!({
+            "model": "gpt-4o",
+            "input": "safe",
+            "metadata": {"note": "system prompt: secret"}
+        }))
+        .expect("request should deserialize");
+        assert!(
+            mask_responses_input_for_storage(&engine(), &output_leak)
                 .await
                 .is_err()
         );

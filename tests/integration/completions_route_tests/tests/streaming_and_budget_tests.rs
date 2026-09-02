@@ -528,6 +528,49 @@ async fn test_completions_streaming_response_sends_sse_and_done() {
 }
 
 #[tokio::test]
+async fn completion_echo_guardrail_failure_emits_error_callback() {
+    let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = build_callback_runtime(Arc::clone(&events)).await;
+    let state = build_output_guardrail_test_state(&mock_server.base_url)
+        .await
+        .with_callbacks(runtime.dispatcher());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/completions")
+            .set_json(json!({
+                "model": "gpt-4o",
+                "prompt": "system prompt: secret",
+                "echo": true
+            }))
+            .to_request(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    runtime
+        .shutdown()
+        .await
+        .expect("callback runtime should drain");
+    let events = events
+        .lock()
+        .expect("callback events should not be poisoned")
+        .clone();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0], RecordedCallback::Start(_)));
+    assert!(matches!(events[1], RecordedCallback::Error(_)));
+    mock_server.shutdown().await;
+}
+
+#[tokio::test]
 async fn test_completions_success_records_budget_spend() {
     let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
     let state = build_test_app_state(&mock_server.base_url).await;
