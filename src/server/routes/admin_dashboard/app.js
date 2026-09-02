@@ -75,6 +75,7 @@ function resetProtectedState() {
   renderTeams();
   renderSpend();
   providerHealthView.reset();
+  budgetView.reset();
 }
 function endSession(message = "Signed out") {
   abortActiveRequests();
@@ -84,6 +85,7 @@ function endSession(message = "Signed out") {
   state.adminName = null;
   state.busy.clear();
   resetProtectedState();
+  showView("keys");
   loginPanel.hidden = false;
   dashboardShell.hidden = true;
   byId("sign-out").hidden = true;
@@ -384,6 +386,10 @@ const providerHealthView = window.createProviderHealthView({
   reportRequestError,
   setStatus,
   textCell,
+});
+const budgetView = window.createBudgetView({
+  apiRequest, beginBusy, byId, captureSession, clearError, createAction, endBusy,
+  ensureCurrent, reportRequestError, setStatus, textCell,
 });
 async function loadKeys(session = captureSession()) {
   const requestVersion = ++state.keyRequestVersion;
@@ -724,11 +730,14 @@ function showView(view) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const panel of ["keys", "teams", "spend", "health"]) {
+  for (const panel of ["keys", "teams", "spend", "budgets", "health"]) {
     byId(`${panel}-panel`).hidden = panel !== view;
   }
   if (view === "spend") {
     void refreshDashboard();
+  }
+  if (view === "budgets") {
+    void budgetView.loadOnce();
   }
 }
 byId("login-form").addEventListener("submit", (event) => void signIn(event));

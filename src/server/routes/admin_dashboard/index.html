@@ -7,6 +7,7 @@
   <title>LiteLLM-RS Admin</title>
   <link rel="stylesheet" href="/admin/dashboard/app.css">
   <script src="/admin/dashboard/provider-health.js" defer></script>
+  <script src="/admin/dashboard/budget.js" defer></script>
   <script src="/admin/dashboard/app.js" defer></script>
 </head>
 <body>
@@ -48,6 +49,8 @@
                 aria-controls="teams-panel" aria-selected="false">Teams</button>
         <button class="tab" type="button" data-view="spend"
                 aria-controls="spend-panel" aria-selected="false">Spend</button>
+        <button class="tab" type="button" data-view="budgets"
+                aria-controls="budgets-panel" aria-selected="false">Budgets</button>
         <button class="tab" type="button" data-view="health"
                 aria-controls="health-panel" aria-selected="false">Provider health</button>
       </nav>
@@ -207,6 +210,102 @@
           <p id="team-spend-empty" class="empty-state" hidden>
             No teams on the current page.
           </p>
+        </div>
+      </section>
+
+      <section id="budgets-panel" class="panel" aria-labelledby="budgets-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Cost controls</p>
+            <h2 id="budgets-title">Provider and model budgets</h2>
+            <p>Set enforced gateway limits and monitor remaining spend.</p>
+          </div>
+          <button id="refresh-budgets" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <details id="budget-editor" class="create-card">
+          <summary>Create or update a budget</summary>
+          <form id="budget-form" class="form-grid">
+            <label for="budget-scope">Scope</label>
+            <select id="budget-scope" name="scope">
+              <option value="provider">Provider</option>
+              <option value="model">Model</option>
+            </select>
+            <label id="budget-name-label" for="budget-name">Provider name</label>
+            <input id="budget-name" name="name" required maxlength="240"
+                   placeholder="openai">
+            <label for="budget-max">Maximum budget</label>
+            <input id="budget-max" name="max_budget" type="number" required
+                   step="any" inputmode="decimal">
+            <label for="budget-reset-period">Reset period</label>
+            <select id="budget-reset-period" name="reset_period">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly" selected>Monthly</option>
+              <option value="never">Never</option>
+            </select>
+            <label for="budget-currency">Currency</label>
+            <select id="budget-currency" name="currency">
+              <option value="USD">USD</option>
+            </select>
+            <label class="checkbox-row" for="budget-enabled">
+              <input id="budget-enabled" name="enabled" type="checkbox" checked>
+              Enforce this budget
+            </label>
+            <p class="field-help">Saving an existing scope updates its settings
+              without resetting accrued spend or its warning threshold.</p>
+            <button type="submit">Save budget</button>
+            <button id="cancel-budget-edit" class="secondary" type="button" hidden>
+              Cancel edit
+            </button>
+          </form>
+        </details>
+
+        <div class="budget-grid">
+          <div>
+            <h3>Providers</h3>
+            <div class="table-wrap">
+              <table>
+                <caption>Provider budget limits</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Provider</th>
+                    <th scope="col">Current</th>
+                    <th scope="col">Remaining</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Reset</th>
+                    <th scope="col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="provider-budgets-body"></tbody>
+              </table>
+            </div>
+            <p id="provider-budgets-empty" class="empty-state" hidden>
+              No provider budgets configured.
+            </p>
+          </div>
+          <div>
+            <h3>Models</h3>
+            <div class="table-wrap">
+              <table>
+                <caption>Model budget limits</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Model</th>
+                    <th scope="col">Current</th>
+                    <th scope="col">Remaining</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Reset</th>
+                    <th scope="col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="model-budgets-body"></tbody>
+              </table>
+            </div>
+            <p id="model-budgets-empty" class="empty-state" hidden>
+              No model budgets configured.
+            </p>
+          </div>
         </div>
       </section>
 

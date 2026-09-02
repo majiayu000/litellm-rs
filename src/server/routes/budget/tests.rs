@@ -15,7 +15,7 @@ fn provider_request(provider: &str, max_budget: f64) -> SetProviderBudgetRequest
         provider: provider.to_string(),
         max_budget,
         reset_period: ResetPeriod::Monthly,
-        soft_limit_percentage: 0.8,
+        soft_limit_percentage: Some(0.8),
         currency: Currency::USD,
         enabled: true,
     }
@@ -26,7 +26,7 @@ fn model_request(model: &str, max_budget: f64) -> SetModelBudgetRequest {
         model: model.to_string(),
         max_budget,
         reset_period: ResetPeriod::Monthly,
-        soft_limit_percentage: 0.8,
+        soft_limit_percentage: Some(0.8),
         currency: Currency::USD,
         enabled: true,
     }
@@ -255,6 +255,82 @@ async fn test_list_model_budgets() {
         .to_request();
     let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
     assert!(resp.status().is_success());
+}
+
+#[actix_web::test]
+async fn omitted_soft_limit_preserves_existing_budget_state() {
+    let budget_limits = seeded_budget_limits();
+    let mut provider_config = ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly);
+    provider_config.soft_limit_percentage = 0.5;
+    budget_limits
+        .providers
+        .set_provider_limit("openai", provider_config);
+    let mut model_config = ModelLimitConfig::new(500.0, ResetPeriod::Monthly);
+    model_config.soft_limit_percentage = 0.75;
+    budget_limits.models.set_model_limit("gpt-4", model_config);
+    budget_limits
+        .providers
+        .record_provider_spend("openai", 25.0);
+    budget_limits.models.record_model_spend("gpt-4", 10.0);
+    let admin = make_test_user(UserRole::Admin);
+    let app = test::init_service(
+        App::new()
+            .wrap_fn(move |req, srv| {
+                req.extensions_mut().insert::<User>(admin.clone());
+                srv.call(req)
+            })
+            .app_data(web::Data::new(Arc::clone(&budget_limits)))
+            .configure(configure_budget_routes),
+    )
+    .await;
+
+    for (path, body) in [
+        (
+            "/v1/budget/providers",
+            serde_json::json!({
+                "provider": "openai",
+                "max_budget": 200.0,
+                "reset_period": "weekly"
+            }),
+        ),
+        (
+            "/v1/budget/models",
+            serde_json::json!({
+                "model": "gpt-4",
+                "max_budget": 150.0,
+                "reset_period": "daily"
+            }),
+        ),
+    ] {
+        let request = test::TestRequest::post()
+            .uri(path)
+            .set_json(body)
+            .to_request();
+        let response = test::call_service(&app, request).await;
+        assert_eq!(response.status(), 201, "{path}");
+    }
+
+    let provider = budget_limits
+        .providers
+        .get_provider_usage("openai")
+        .unwrap();
+    assert_eq!(provider.current_spend, 25.0);
+    assert_eq!(provider.max_budget, 200.0);
+    assert_eq!(
+        budget_limits
+            .providers
+            .get_provider_soft_limit_percentage("openai"),
+        Some(0.5)
+    );
+    let model = budget_limits.models.get_model_usage("gpt-4").unwrap();
+    assert_eq!(model.current_spend, 10.0);
+    assert_eq!(model.max_budget, 150.0);
+    assert_eq!(
+        budget_limits
+            .models
+            .get_model_soft_limit_percentage("gpt-4"),
+        Some(0.75)
+    );
 }
 
 #[actix_web::test]

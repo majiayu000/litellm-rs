@@ -16,6 +16,7 @@ use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult, web};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -30,8 +31,8 @@ pub struct SetProviderBudgetRequest {
     #[serde(default = "default_reset_period")]
     pub reset_period: ResetPeriod,
     /// Soft limit percentage (0.0 to 1.0)
-    #[serde(default = "default_soft_limit_percentage")]
-    pub soft_limit_percentage: f64,
+    #[serde(default)]
+    pub soft_limit_percentage: Option<f64>,
     /// Currency
     #[serde(default)]
     pub currency: Currency,
@@ -63,8 +64,8 @@ pub struct SetModelBudgetRequest {
     #[serde(default = "default_reset_period")]
     pub reset_period: ResetPeriod,
     /// Soft limit percentage (0.0 to 1.0)
-    #[serde(default = "default_soft_limit_percentage")]
-    pub soft_limit_percentage: f64,
+    #[serde(default)]
+    pub soft_limit_percentage: Option<f64>,
     /// Currency
     #[serde(default)]
     pub currency: Currency,
@@ -241,7 +242,6 @@ pub async fn set_provider_budget(
         return Ok(forbidden);
     }
 
-    // Validate request
     if request.provider.trim().is_empty() {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
             "Provider name cannot be empty".to_string(),
@@ -254,9 +254,9 @@ pub async fn set_provider_budget(
         )));
     }
 
-    if !request.soft_limit_percentage.is_finite()
-        || request.soft_limit_percentage < 0.0
-        || request.soft_limit_percentage > 1.0
+    if request
+        .soft_limit_percentage
+        .is_some_and(|percentage| !percentage.is_finite() || !(0.0..=1.0).contains(&percentage))
     {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
             "soft_limit_percentage must be finite and between 0.0 and 1.0".to_string(),
@@ -266,21 +266,24 @@ pub async fn set_provider_budget(
     let config = ProviderLimitConfig {
         max_budget: request.max_budget,
         reset_period: request.reset_period,
-        soft_limit_percentage: request.soft_limit_percentage,
+        soft_limit_percentage: request
+            .soft_limit_percentage
+            .unwrap_or_else(default_soft_limit_percentage),
         currency: request.currency,
         enabled: request.enabled,
     };
 
-    budget_limits
-        .providers
-        .set_provider_limit(&request.provider, config);
+    budget_limits.providers.set_provider_limit_optional(
+        &request.provider,
+        config,
+        request.soft_limit_percentage,
+    );
 
     info!(
         "Set provider budget for '{}': ${:.2} ({})",
         request.provider, request.max_budget, request.reset_period
     );
 
-    // Return the created/updated budget
     match budget_limits
         .providers
         .get_provider_usage(&request.provider)
@@ -317,15 +320,17 @@ pub async fn list_provider_budgets(
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
 ) -> ActixResult<HttpResponse> {
     let usage_list = budget_limits.providers.list_provider_usage();
+    let budgets: HashMap<_, _> = budget_limits
+        .providers
+        .list_provider_budgets()
+        .into_iter()
+        .map(|budget| (budget.provider_name.clone(), budget))
+        .collect();
 
     let providers: Vec<ProviderBudgetResponse> = usage_list
         .into_iter()
         .map(|usage| {
-            // Get the budget to get currency and enabled status
-            let budgets = budget_limits.providers.list_provider_budgets();
-            let budget = budgets
-                .iter()
-                .find(|b| b.provider_name == usage.provider_name);
+            let budget = budgets.get(&usage.provider_name);
 
             ProviderBudgetResponse {
                 provider: usage.provider_name,
@@ -493,7 +498,6 @@ pub async fn set_model_budget(
         return Ok(forbidden);
     }
 
-    // Validate request
     if request.model.trim().is_empty() {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
             "Model name cannot be empty".to_string(),
@@ -506,9 +510,9 @@ pub async fn set_model_budget(
         )));
     }
 
-    if !request.soft_limit_percentage.is_finite()
-        || request.soft_limit_percentage < 0.0
-        || request.soft_limit_percentage > 1.0
+    if request
+        .soft_limit_percentage
+        .is_some_and(|percentage| !percentage.is_finite() || !(0.0..=1.0).contains(&percentage))
     {
         return Ok(HttpResponse::BadRequest().json(ApiResponse::<()>::error(
             "soft_limit_percentage must be finite and between 0.0 and 1.0".to_string(),
@@ -518,19 +522,24 @@ pub async fn set_model_budget(
     let config = ModelLimitConfig {
         max_budget: request.max_budget,
         reset_period: request.reset_period,
-        soft_limit_percentage: request.soft_limit_percentage,
+        soft_limit_percentage: request
+            .soft_limit_percentage
+            .unwrap_or_else(default_soft_limit_percentage),
         currency: request.currency,
         enabled: request.enabled,
     };
 
-    budget_limits.models.set_model_limit(&request.model, config);
+    budget_limits.models.set_model_limit_optional(
+        &request.model,
+        config,
+        request.soft_limit_percentage,
+    );
 
     info!(
         "Set model budget for '{}': ${:.2} ({})",
         request.model, request.max_budget, request.reset_period
     );
 
-    // Return the created/updated budget
     match budget_limits.models.get_model_usage(&request.model) {
         Some(usage) => {
             let response = ModelBudgetResponse {
@@ -564,12 +573,17 @@ pub async fn list_model_budgets(
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
 ) -> ActixResult<HttpResponse> {
     let usage_list = budget_limits.models.list_model_usage();
+    let budgets: HashMap<_, _> = budget_limits
+        .models
+        .list_model_budgets()
+        .into_iter()
+        .map(|budget| (budget.model_name.clone(), budget))
+        .collect();
 
     let models: Vec<ModelBudgetResponse> = usage_list
         .into_iter()
         .map(|usage| {
-            let budgets = budget_limits.models.list_model_budgets();
-            let budget = budgets.iter().find(|b| b.model_name == usage.model_name);
+            let budget = budgets.get(&usage.model_name);
 
             ModelBudgetResponse {
                 model: usage.model_name,
@@ -762,7 +776,6 @@ pub async fn get_budget_summary(
 pub fn configure_budget_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/v1/budget")
-            // Provider budget routes
             .route("/providers", web::post().to(set_provider_budget))
             .route("/providers", web::get().to(list_provider_budgets))
             .route("/providers/{name}", web::get().to(get_provider_budget))
@@ -774,13 +787,11 @@ pub fn configure_budget_routes(cfg: &mut web::ServiceConfig) {
                 "/providers/{name}/reset",
                 web::post().to(reset_provider_budget),
             )
-            // Model budget routes
             .route("/models", web::post().to(set_model_budget))
             .route("/models", web::get().to(list_model_budgets))
             .route("/models/{name}", web::get().to(get_model_budget))
             .route("/models/{name}", web::delete().to(delete_model_budget))
             .route("/models/{name}/reset", web::post().to(reset_model_budget))
-            // Summary
             .route("/summary", web::get().to(get_budget_summary)),
     );
 }
