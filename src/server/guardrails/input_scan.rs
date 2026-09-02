@@ -89,6 +89,7 @@ fn part(mi: usize, pi: usize, part: &ContentPart, fragments: &mut Vec<String>) -
             source,
             cache_control,
         } => {
+            push_fragment(fragments, &source.media_type);
             fragments.extend(cache_control.iter().map(|value| value.cache_type.clone()));
             let label = format!("{label}.document");
             let (format, text) = document_text(source, &label)?;
@@ -659,13 +660,13 @@ mod tests {
         let scanned = scan_message(message(Some(MessageContent::Parts(vec![
             document("text/plain; charset=utf-8", STANDARD.encode("plain-marker")),
             document(
-                "application/atom+json",
+                "application/10.0.0.1+json",
                 STANDARD.encode(r#"{"value":"json-marker"}"#),
             ),
         ]))))
         .expect("supported text documents should decode");
         assert!(scanned.contains("plain-marker"));
-        assert!(scanned.contains("json-marker"));
+        assert!(scanned.contains("10.0.0.1") && scanned.contains("json-marker"));
     }
 
     #[test]
