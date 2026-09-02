@@ -37,8 +37,10 @@ fn try_response_payload(
             .flatten()
         {
             push(&mut fragments, &logprob.token);
+            push_bytes(&mut fragments, logprob.bytes.as_deref());
             for top in logprob.top_logprobs.iter().flatten() {
                 push(&mut fragments, &top.token);
+                push_bytes(&mut fragments, top.bytes.as_deref());
             }
         }
     }
@@ -214,12 +216,21 @@ fn push(fragments: &mut Vec<String>, text: &str) {
     }
 }
 
+fn push_bytes(fragments: &mut Vec<String>, bytes: Option<&[u8]>) {
+    if let Some(bytes) = bytes
+        && let Ok(text) = std::str::from_utf8(bytes)
+    {
+        push(fragments, text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::models::gateway::GatewayConfig;
     use crate::core::models::openai::{
-        AudioContent, CacheControl, ChatChoice, DocumentSource, ImageSource, MessageRole,
+        AudioContent, CacheControl, ChatChoice, ContentLogprob, DocumentSource, ImageSource,
+        Logprobs, MessageRole, TopLogprob,
     };
     use base64::Engine as _;
 
@@ -286,6 +297,40 @@ mod tests {
         collect_message(&message, &mut fragments, true).expect("message should scan");
 
         assert_eq!(fragments, vec!["123-45\n6789"]);
+    }
+
+    #[test]
+    fn textual_logprob_bytes_are_scanned() {
+        let response = ChatCompletionResponse {
+            id: "chatcmpl-test".to_string(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: "test-model".to_string(),
+            system_fingerprint: None,
+            choices: vec![ChatChoice {
+                index: 0,
+                message: message(Vec::new()),
+                logprobs: Some(Logprobs {
+                    content: Some(vec![ContentLogprob {
+                        token: "safe".to_string(),
+                        logprob: -0.1,
+                        bytes: Some(b"2125551234".to_vec()),
+                        top_logprobs: Some(vec![TopLogprob {
+                            token: "safe-top".to_string(),
+                            logprob: -0.2,
+                            bytes: Some(b"second@example.com".to_vec()),
+                        }]),
+                    }]),
+                }),
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+
+        let payload = response_payload(&engine(), &response).expect("response should scan");
+
+        assert!(payload.contains("2125551234"));
+        assert!(payload.contains("second@example.com"));
     }
 
     #[test]
