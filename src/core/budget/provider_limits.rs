@@ -143,28 +143,32 @@ impl ProviderBudgetManager {
             );
             return;
         }
-        let mut budget = ProviderBudget::new(provider, config.max_budget);
-        budget.soft_limit = config.max_budget * config.soft_limit_percentage;
-        budget.reset_period = config.reset_period;
-        budget.currency = config.currency;
-        budget.enabled = config.enabled;
-
-        let reserved = self
-            .reserved_spend
-            .remove(provider)
-            .map(|(_, amount)| amount)
-            .unwrap_or_else(BudgetAmount::zero);
-        if let Some(previous) = self.budgets.get(provider) {
-            budget.current_spend = committed_spend(previous.current_spend, reserved);
-        }
-
         info!(
             "Setting provider budget limit for '{}': ${:.2} ({})",
             provider, config.max_budget, config.reset_period
         );
-
-        let snapshot = self.snapshot_for(&budget);
-        self.budgets.insert(provider.to_string(), budget);
+        let snapshot = match self.budgets.entry(provider.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                let budget = entry.get_mut();
+                budget.max_budget = config.max_budget;
+                budget.soft_limit = config.max_budget * config.soft_limit_percentage;
+                budget.reset_period = config.reset_period;
+                budget.currency = config.currency;
+                budget.enabled = config.enabled;
+                budget.updated_at = chrono::Utc::now();
+                self.snapshot_for(budget)
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let mut budget = ProviderBudget::new(provider, config.max_budget);
+                budget.soft_limit = config.max_budget * config.soft_limit_percentage;
+                budget.reset_period = config.reset_period;
+                budget.currency = config.currency;
+                budget.enabled = config.enabled;
+                let snapshot = self.snapshot_for(&budget);
+                entry.insert(budget);
+                snapshot
+            }
+        };
         self.request_counts.entry(provider.to_string()).or_default();
         self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
     }
@@ -495,28 +499,32 @@ impl ModelBudgetManager {
             );
             return;
         }
-        let mut budget = ModelBudget::new(model, config.max_budget);
-        budget.soft_limit = config.max_budget * config.soft_limit_percentage;
-        budget.reset_period = config.reset_period;
-        budget.currency = config.currency;
-        budget.enabled = config.enabled;
-
-        let reserved = self
-            .reserved_spend
-            .remove(model)
-            .map(|(_, amount)| amount)
-            .unwrap_or_else(BudgetAmount::zero);
-        if let Some(previous) = self.budgets.get(model) {
-            budget.current_spend = committed_spend(previous.current_spend, reserved);
-        }
-
         info!(
             "Setting model budget limit for '{}': ${:.2} ({})",
             model, config.max_budget, config.reset_period
         );
-
-        let snapshot = self.snapshot_for(&budget);
-        self.budgets.insert(model.to_string(), budget);
+        let snapshot = match self.budgets.entry(model.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                let budget = entry.get_mut();
+                budget.max_budget = config.max_budget;
+                budget.soft_limit = config.max_budget * config.soft_limit_percentage;
+                budget.reset_period = config.reset_period;
+                budget.currency = config.currency;
+                budget.enabled = config.enabled;
+                budget.updated_at = chrono::Utc::now();
+                self.snapshot_for(budget)
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let mut budget = ModelBudget::new(model, config.max_budget);
+                budget.soft_limit = config.max_budget * config.soft_limit_percentage;
+                budget.reset_period = config.reset_period;
+                budget.currency = config.currency;
+                budget.enabled = config.enabled;
+                let snapshot = self.snapshot_for(&budget);
+                entry.insert(budget);
+                snapshot
+            }
+        };
         self.request_counts.entry(model.to_string()).or_default();
         self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
     }

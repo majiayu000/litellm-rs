@@ -301,7 +301,7 @@ fn overlapping_reservation_persistence_excludes_other_temporary_holds() {
 }
 
 #[test]
-fn replacing_limits_preserves_committed_spend_and_drops_stale_outstanding_holds() {
+fn replacing_limits_preserves_reset_epoch_and_outstanding_holds() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let limits = UnifiedBudgetLimits::with_persistence(tx);
     limits.providers.set_provider_limit(
@@ -322,13 +322,23 @@ fn replacing_limits_preserves_committed_spend_and_drops_stale_outstanding_holds(
     while rx.try_recv().is_ok() {}
 
     let reservation = limits.reserve_spend("openai", "gpt-4", 10.0).unwrap();
+    let provider_reset_at = limits
+        .providers
+        .get_provider_usage("openai")
+        .unwrap()
+        .last_reset_at;
+    let model_reset_at = limits
+        .models
+        .get_model_usage("gpt-4")
+        .unwrap()
+        .last_reset_at;
     limits.providers.set_provider_limit(
         "openai",
-        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        ProviderLimitConfig::new(200.0, ResetPeriod::Monthly),
     );
     limits
         .models
-        .set_model_limit("gpt-4", ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
+        .set_model_limit("gpt-4", ModelLimitConfig::new(200.0, ResetPeriod::Monthly));
 
     let mut replacement_snapshots = Vec::new();
     for _ in 0..2 {
@@ -352,6 +362,14 @@ fn replacing_limits_preserves_committed_spend_and_drops_stale_outstanding_holds(
             .iter()
             .any(|(_, name, current_spend)| name == "gpt-4" && *current_spend == 6.0)
     );
+    let provider_usage = limits.providers.get_provider_usage("openai").unwrap();
+    assert_eq!(provider_usage.current_spend, 16.0);
+    assert_eq!(provider_usage.max_budget, 200.0);
+    assert_eq!(provider_usage.last_reset_at, provider_reset_at);
+    let model_usage = limits.models.get_model_usage("gpt-4").unwrap();
+    assert_eq!(model_usage.current_spend, 16.0);
+    assert_eq!(model_usage.max_budget, 200.0);
+    assert_eq!(model_usage.last_reset_at, model_reset_at);
 
     assert_eq!(
         reservation.settle(4.0).unwrap(),
