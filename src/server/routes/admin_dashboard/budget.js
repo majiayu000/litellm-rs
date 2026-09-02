@@ -58,10 +58,10 @@ window.createBudgetView = function createBudgetView({
         style: "currency",
         currency: unit,
         minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
+        maximumFractionDigits: 9,
       }).format(amount);
     } catch {
-      return `${unit} ${amount.toFixed(4)}`;
+      return `${unit} ${amount.toFixed(9)}`;
     }
   }
 
@@ -327,6 +327,9 @@ window.createBudgetView = function createBudgetView({
         session,
       );
       ensureCurrent(session);
+      if (editingKey?.scope === scope && editingKey.name === name) {
+        clearEditor();
+      }
       await refreshAfterMutation(session, `${config.label} budget deleted.`);
     } catch (error) {
       reportRequestError(error, "Budget deletion failed.");

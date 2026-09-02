@@ -976,9 +976,9 @@ test("B15 disabled and legacy-currency budgets remain editable", { concurrency: 
   const context = dashboard({
     providerBudgets: [{
       provider: "openai",
-      max_budget: 100,
-      current_spend: 100,
-      remaining: 0,
+      max_budget: 0.000003,
+      current_spend: 0.000001,
+      remaining: 0.000002,
       status: "exceeded",
       reset_period: "monthly",
       currency: "EUR",
@@ -999,6 +999,7 @@ test("B15 disabled and legacy-currency budgets remain editable", { concurrency: 
   const row = rowText(window, "#provider-budgets-body tr")[0];
   assert.match(row, /disabled/i);
   assert.doesNotMatch(row, /exceeded/i);
+  assert.match(row, /0\.000001.*0\.000002/);
   window.document.querySelector("#provider-budgets-body button").click();
   assert.equal(window.document.getElementById("budget-scope").disabled, true);
   assert.equal(window.document.getElementById("budget-name").readOnly, true);
@@ -1059,6 +1060,8 @@ test("B11 rejected budget saves keep rendered state and expose server errors", {
 test("B12 budget reset and delete require confirmation and update only after success", { concurrency: false }, async (t) => {
   const resetRequest = deferred();
   const deleteRequest = deferred();
+  const modelDeleteRefresh = deferred();
+  let modelGets = 0;
   let providers = [{
     provider: "openai",
     max_budget: 100,
@@ -1085,6 +1088,10 @@ test("B12 budget reset and delete require confirmation and update only after suc
         return apiResponse({ providers, total: providers.length });
       }
       if (call.url.pathname === "/v1/budget/models" && call.method === "GET") {
+        modelGets += 1;
+        if (modelGets === 3) {
+          return modelDeleteRefresh.promise;
+        }
         return apiResponse({ models, total: models.length });
       }
       if (call.path === "/v1/budget/providers/openai/reset" && call.method === "POST") {
@@ -1122,11 +1129,19 @@ test("B12 budget reset and delete require confirmation and update only after suc
     "reset result was not rendered after refresh",
   );
 
-  modelButtons[2].click();
-  await waitFor(() => modelButtons[2].disabled, "delete request was not pending");
+  const currentModelButtons = window.document.querySelectorAll("#model-budgets-body button");
+  currentModelButtons[0].click();
+  assert.equal(window.document.getElementById("budget-name").value, "gpt-4o");
+  currentModelButtons[2].click();
+  await waitFor(() => currentModelButtons[2].disabled, "delete request was not pending");
   assert.equal(window.document.querySelectorAll("#model-budgets-body tr").length, 1);
   models = [];
   deleteRequest.resolve(apiResponse({ success: true }));
+  await waitFor(() => modelGets === 3, "delete refresh was not pending");
+  assert.equal(window.document.getElementById("budget-name").value, "");
+  assert.equal(window.document.getElementById("budget-scope").disabled, false);
+  assert.equal(window.document.getElementById("budget-name").readOnly, false);
+  modelDeleteRefresh.resolve(apiResponse({ models, total: 0 }));
   await waitFor(
     () => window.document.querySelectorAll("#model-budgets-body tr").length === 0,
     "deleted model remained after the successful refresh",

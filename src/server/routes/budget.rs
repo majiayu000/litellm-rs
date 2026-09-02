@@ -16,6 +16,7 @@ use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result as ActixResult, web};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -319,14 +320,17 @@ pub async fn list_provider_budgets(
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
 ) -> ActixResult<HttpResponse> {
     let usage_list = budget_limits.providers.list_provider_usage();
+    let budgets: HashMap<_, _> = budget_limits
+        .providers
+        .list_provider_budgets()
+        .into_iter()
+        .map(|budget| (budget.provider_name.clone(), budget))
+        .collect();
 
     let providers: Vec<ProviderBudgetResponse> = usage_list
         .into_iter()
         .map(|usage| {
-            let budgets = budget_limits.providers.list_provider_budgets();
-            let budget = budgets
-                .iter()
-                .find(|b| b.provider_name == usage.provider_name);
+            let budget = budgets.get(&usage.provider_name);
 
             ProviderBudgetResponse {
                 provider: usage.provider_name,
@@ -569,12 +573,17 @@ pub async fn list_model_budgets(
     budget_limits: web::Data<Arc<UnifiedBudgetLimits>>,
 ) -> ActixResult<HttpResponse> {
     let usage_list = budget_limits.models.list_model_usage();
+    let budgets: HashMap<_, _> = budget_limits
+        .models
+        .list_model_budgets()
+        .into_iter()
+        .map(|budget| (budget.model_name.clone(), budget))
+        .collect();
 
     let models: Vec<ModelBudgetResponse> = usage_list
         .into_iter()
         .map(|usage| {
-            let budgets = budget_limits.models.list_model_budgets();
-            let budget = budgets.iter().find(|b| b.model_name == usage.model_name);
+            let budget = budgets.get(&usage.model_name);
 
             ModelBudgetResponse {
                 model: usage.model_name,
