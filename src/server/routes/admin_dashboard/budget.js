@@ -62,10 +62,13 @@ window.createBudgetView = function createBudgetView({
     }
   }
 
-  function statusCell(status) {
-    const value = ["ok", "warning", "exceeded"].includes(status)
-      ? status
-      : "unknown";
+  function statusCell(status, enabled) {
+    let value = "disabled";
+    if (enabled) {
+      value = ["ok", "warning", "exceeded"].includes(status)
+        ? status
+        : "unknown";
+    }
     const cell = document.createElement("td");
     const badge = document.createElement("span");
     badge.className = "budget-state";
@@ -102,7 +105,10 @@ window.createBudgetView = function createBudgetView({
           textCell(budgetName(scope, budget)),
           textCell(formatAmount(budget.current_spend, budget.currency)),
           textCell(formatAmount(budget.remaining, budget.currency)),
-          statusCell(String(budget.status || "").toLowerCase()),
+          statusCell(
+            String(budget.status || "").toLowerCase(),
+            budget.enabled !== false,
+          ),
           textCell(budget.reset_period),
           actionsCell(scope, budget),
         );
@@ -121,8 +127,7 @@ window.createBudgetView = function createBudgetView({
     requestVersion += 1;
     providers = [];
     models = [];
-    byId("budget-form").reset();
-    updateScopeLabel();
+    clearEditor();
     render();
   }
 
@@ -169,6 +174,18 @@ window.createBudgetView = function createBudgetView({
     byId("budget-name").placeholder = scope === "provider" ? "openai" : "gpt-4o";
   }
 
+  function setEditMode(editing) {
+    byId("budget-scope").disabled = editing;
+    byId("budget-name").readOnly = editing;
+    byId("cancel-budget-edit").hidden = !editing;
+  }
+
+  function clearEditor() {
+    byId("budget-form").reset();
+    setEditMode(false);
+    updateScopeLabel();
+  }
+
   function editBudget(scope, budget) {
     const form = byId("budget-form");
     byId("budget-scope").value = scope;
@@ -178,6 +195,7 @@ window.createBudgetView = function createBudgetView({
     byId("budget-reset-period").value = budget.reset_period;
     byId("budget-currency").value = String(budget.currency || "USD").toUpperCase();
     byId("budget-enabled").checked = budget.enabled !== false;
+    setEditMode(true);
     byId("budget-editor").open = true;
     form.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
     byId("budget-max").focus();
@@ -210,8 +228,7 @@ window.createBudgetView = function createBudgetView({
       );
       ensureCurrent(session);
       await refreshAfterMutation(session, `${config.label} budget saved.`);
-      form.reset();
-      updateScopeLabel();
+      clearEditor();
     } catch (error) {
       if (error?.name !== "AbortError") {
         reportRequestError(error, "Budget save failed.");
@@ -294,6 +311,7 @@ window.createBudgetView = function createBudgetView({
 
   byId("budget-scope").addEventListener("change", updateScopeLabel);
   byId("budget-form").addEventListener("submit", (event) => void saveBudget(event));
+  byId("cancel-budget-edit").addEventListener("click", clearEditor);
   byId("refresh-budgets").addEventListener("click", (event) =>
     void refresh(event.currentTarget),
   );

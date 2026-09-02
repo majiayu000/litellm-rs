@@ -916,6 +916,9 @@ test("B10 budget view renders limits and supports create and update", { concurre
 
   window.document.querySelector("#provider-budgets-body button").click();
   assert.equal(window.document.getElementById("budget-name").value, "openai");
+  assert.equal(window.document.getElementById("budget-scope").disabled, true);
+  assert.equal(window.document.getElementById("budget-name").readOnly, true);
+  assert.equal(window.document.getElementById("cancel-budget-edit").hidden, false);
   window.document.getElementById("budget-max").value = "200";
   const updateButton = submit(window, window.document.getElementById("budget-form"));
   await waitFor(
@@ -934,6 +937,9 @@ test("B10 budget view renders limits and supports create and update", { concurre
     currency: "USD",
     enabled: true,
   });
+  assert.equal(window.document.getElementById("budget-scope").disabled, false);
+  assert.equal(window.document.getElementById("budget-name").readOnly, false);
+  assert.equal(window.document.getElementById("cancel-budget-edit").hidden, true);
   providerRows = rowText(window, "#provider-budgets-body tr");
   assert.match(providerRows[0], /\$25\.00.*\$175\.00/);
 
@@ -947,6 +953,35 @@ test("B10 budget view renders limits and supports create and update", { concurre
   assert.equal(saved[1].model, "gpt-4o");
   assert.equal(saved[1].max_budget, 50);
   assert.match(rowText(window, "#model-budgets-body tr")[0], /gpt-4o.*\$0\.00.*\$50\.00.*weekly/i);
+});
+
+test("B15 disabled budgets render distinctly and edit keys can be cancelled", { concurrency: false }, async (t) => {
+  const context = dashboard({
+    providerBudgets: [{
+      provider: "openai",
+      max_budget: 100,
+      current_spend: 100,
+      remaining: 0,
+      status: "exceeded",
+      reset_period: "monthly",
+      currency: "USD",
+      enabled: false,
+    }],
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+
+  const row = rowText(window, "#provider-budgets-body tr")[0];
+  assert.match(row, /disabled/i);
+  assert.doesNotMatch(row, /exceeded/i);
+  window.document.querySelector("#provider-budgets-body button").click();
+  assert.equal(window.document.getElementById("budget-scope").disabled, true);
+  assert.equal(window.document.getElementById("budget-name").readOnly, true);
+  window.document.getElementById("cancel-budget-edit").click();
+  assert.equal(window.document.getElementById("budget-name").value, "");
+  assert.equal(window.document.getElementById("budget-scope").disabled, false);
+  assert.equal(window.document.getElementById("budget-name").readOnly, false);
 });
 
 test("B11 rejected budget saves keep rendered state and expose server errors", { concurrency: false }, async (t) => {

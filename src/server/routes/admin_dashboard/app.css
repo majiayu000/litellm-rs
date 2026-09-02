@@ -357,7 +357,8 @@ td code {
   color: var(--danger);
 }
 
-.budget-state[data-budget-state="unknown"] {
+.budget-state[data-budget-state="unknown"],
+.budget-state[data-budget-state="disabled"] {
   color: var(--muted);
 }
 
