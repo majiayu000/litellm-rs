@@ -4,7 +4,7 @@ use crate::core::models::openai::responses_api::{
     ResponseOutputContent, ResponseOutputItem, ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::types::codex::wire::CodexFunctionCall;
-use crate::server::routes::ai::chat::handle_chat_completion_with_state;
+use crate::server::routes::ai::chat::handle_chat_completion_after_input_guardrail;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -148,7 +148,7 @@ pub async fn list_response_input_items(
 pub(super) fn handle_background_response(
     state: AppState,
     chat_request: ChatCompletionRequest,
-    original: ResponsesApiRequest,
+    guarded_request: ResponsesApiRequest,
     mut context: crate::core::types::context::RequestContext,
     owner: Option<ResponseOwner>,
 ) -> HttpResponse {
@@ -157,13 +157,13 @@ pub(super) fn handle_background_response(
             "background responses require an authenticated owner",
         );
     };
-    let response = queued_background_response(&original);
+    let response = queued_background_response(&guarded_request);
     let response_id = response.id.clone();
     insert_stored_response(
         response_id.clone(),
         StoredResponse {
             response: response.clone(),
-            input: original.input.clone(),
+            input: guarded_request.input.clone(),
             background: true,
             owner,
         },
@@ -175,11 +175,17 @@ pub(super) fn handle_background_response(
             response_id: response_id.clone(),
         };
         set_background_status(&response_id, "in_progress");
-        match handle_chat_completion_with_state(&state, chat_request, context).await {
+        match handle_chat_completion_after_input_guardrail(
+            &state,
+            std::sync::Arc::new(chat_request),
+            std::sync::Arc::new(context),
+        )
+        .await
+        {
             Ok(chat_resp) => {
-                let mut response = convert_to_responses_api(chat_resp, &original);
+                let mut response = convert_to_responses_api(chat_resp, &guarded_request);
                 response.id = response_id.clone();
-                finish_background_response(&response_id, original.input.clone(), response);
+                finish_background_response(&response_id, guarded_request.input.clone(), response);
             }
             Err(error) => {
                 error!("Background Responses API error: {}", error);

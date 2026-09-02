@@ -14,9 +14,7 @@ use crate::core::streaming::types::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
 };
 use crate::core::types::{
-    self,
-    chat::ChatRequest as CoreChatRequest,
-    context::{RequestContext, SharedRequestContext},
+    self, chat::ChatRequest as CoreChatRequest, context::SharedRequestContext,
     model::ProviderCapability,
 };
 use crate::server::state::AppState;
@@ -152,23 +150,6 @@ fn continuation_budget_enabled(
                 .iter()
                 .any(|budget| budget.enabled && budget.model_name == model))
 }
-/// Handle chat completion with app state (UnifiedRouter only)
-pub async fn handle_chat_completion_with_state(
-    state: &AppState,
-    request: ChatCompletionRequest,
-    context: RequestContext,
-) -> Result<ChatCompletionResponse, GatewayError> {
-    handle_chat_completion_with_shared_state(state, Arc::new(request), Arc::new(context)).await
-}
-pub async fn handle_chat_completion_with_shared_state(
-    state: &AppState,
-    request: Arc<ChatCompletionRequest>,
-    context: SharedRequestContext,
-) -> Result<ChatCompletionResponse, GatewayError> {
-    let request =
-        Arc::new(crate::server::guardrails::apply_chat_input(state, request.as_ref()).await?);
-    handle_chat_completion_after_input_guardrail(state, request, context).await
-}
 pub(super) async fn handle_chat_completion_after_input_guardrail(
     state: &AppState,
     request: Arc<ChatCompletionRequest>,
@@ -199,7 +180,34 @@ pub(super) async fn handle_chat_completion_with_extensions(
     {
         crate::server::guardrails::ensure_chat_input_unmodified(state, &guardrail_request).await?;
     }
+    handle_chat_completion_with_extensions_after_input_guardrail(
+        state, request, context, extensions, opt_in,
+    )
+    .await
+}
+pub(super) async fn handle_chat_completion_with_extensions_after_input_guardrail(
+    state: &AppState,
+    request: Arc<ChatCompletionRequest>,
+    context: SharedRequestContext,
+    extensions: Vec<ChatMessageContinuation>,
+    opt_in: bool,
+) -> Result<ChatCompletionResponseWithExtensions, GatewayError> {
     handle_chat_completion_internal(state, request, context, extensions, opt_in).await
+}
+
+pub(super) fn input_guardrail_request_with_extensions(
+    request: &ChatCompletionRequest,
+    extensions: &[ChatMessageContinuation],
+) -> Result<ChatCompletionRequest, GatewayError> {
+    guardrail_request_with_continuation(request, extensions)
+}
+
+pub(super) fn extensions_after_input_projection(
+    original: &ChatCompletionRequest,
+    projected: &ChatCompletionRequest,
+    extensions: Vec<ChatMessageContinuation>,
+) -> Result<Vec<ChatMessageContinuation>, GatewayError> {
+    continuation_after_input_projection(original, projected, extensions)
 }
 async fn handle_chat_completion_internal(
     state: &AppState,

@@ -12,7 +12,7 @@ mod image_url;
 mod input_scan;
 mod output_scan;
 mod responses_mask;
-pub(crate) use responses_mask::mask_responses_input_for_storage;
+pub(crate) use responses_mask::apply_responses_input;
 
 const FRAGMENT_SEPARATOR: &str = "\n---\n";
 

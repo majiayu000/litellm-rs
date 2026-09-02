@@ -6,9 +6,10 @@ use crate::core::models::openai::responses_api::{
 use crate::core::types::codex::wire::{CodexToolOutput, CodexToolOutputContent};
 use crate::utils::error::gateway_error::GatewayError;
 
-pub(crate) async fn mask_responses_input_for_storage(
+pub(crate) async fn apply_responses_input(
     engine: &GuardrailEngine,
     request: &ResponsesApiRequest,
+    continuation: Option<&crate::core::models::openai::ChatCompletionRequest>,
 ) -> Result<ResponsesApiRequest, GatewayError> {
     let input_checks_enabled = engine.input_checks_enabled();
     let output_checks_enabled = engine.is_enabled() && engine.config().check_output;
@@ -16,9 +17,11 @@ pub(crate) async fn mask_responses_input_for_storage(
         return Ok(request.clone());
     }
 
-    let will_store = request.store.unwrap_or(true) || request.background.unwrap_or(false);
     let mut projected = request.clone();
-    if output_checks_enabled && let Some(metadata) = request.metadata.as_ref() {
+    if output_checks_enabled
+        && !input_checks_enabled
+        && let Some(metadata) = request.metadata.as_ref()
+    {
         let content = metadata
             .iter()
             .flat_map(|(key, value)| [key.as_str(), value.as_str()])
@@ -27,10 +30,10 @@ pub(crate) async fn mask_responses_input_for_storage(
         super::enforce(engine.check_output(&content).await, "output")?;
         super::mask_metadata(engine, projected.metadata.as_mut())?;
     }
-    if !input_checks_enabled || !will_store {
+    if !input_checks_enabled {
         return Ok(projected);
     }
-    let content = storage_payload(&projected)?;
+    let content = responses_payload(&projected, continuation)?;
     match super::enforce(engine.check_input(&content).await, "input")? {
         super::Enforcement::Pass => return Ok(projected),
         super::Enforcement::Mask => {}
@@ -155,18 +158,40 @@ pub(crate) async fn mask_responses_input_for_storage(
                         )?;
                         mask_tool_output(engine, &mut output.output)?;
                     }
-                    ResponseInputItem::Unsupported(_) | ResponseInputItem::Unknown(_) => {}
+                    ResponseInputItem::Unsupported(item) | ResponseInputItem::Unknown(item) => {
+                        return Err(GatewayError::BadRequest(format!(
+                            "input guardrail cannot safely project structured Responses item `{}`",
+                            item.wire_type
+                        )));
+                    }
                 }
             }
         }
     }
-    if super::mask_content(engine, &storage_payload(&projected)?, "input")?.is_some() {
+    if super::mask_content(
+        engine,
+        &responses_payload(&projected, continuation)?,
+        "input",
+    )?
+    .is_some()
+    {
         return Err(super::projection_error("input"));
     }
     Ok(projected)
 }
 
-fn storage_payload(request: &ResponsesApiRequest) -> Result<String, GatewayError> {
+#[cfg(test)]
+async fn mask_responses_input_for_storage(
+    engine: &GuardrailEngine,
+    request: &ResponsesApiRequest,
+) -> Result<ResponsesApiRequest, GatewayError> {
+    apply_responses_input(engine, request, None).await
+}
+
+fn responses_payload(
+    request: &ResponsesApiRequest,
+    continuation: Option<&crate::core::models::openai::ChatCompletionRequest>,
+) -> Result<String, GatewayError> {
     let value = serde_json::to_value(request).map_err(|cause| {
         GatewayError::Internal(format!(
             "Responses guardrail could not project request for storage: {cause}"
@@ -175,6 +200,9 @@ fn storage_payload(request: &ResponsesApiRequest) -> Result<String, GatewayError
     let mut fragments = Vec::new();
     collect_json_projection(&value, &mut fragments);
     collect_adjacent_text(request, &mut fragments);
+    if let Some(continuation) = continuation {
+        fragments.push(super::input_scan::payload(continuation)?);
+    }
     Ok(fragments.join(super::FRAGMENT_SEPARATOR))
 }
 
@@ -618,7 +646,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_only_message_identifiers_are_ignored_when_store_is_false() {
+    async fn unprojectable_message_identifiers_fail_closed_for_every_delivery_mode() {
         let mut request: ResponsesApiRequest = serde_json::from_value(json!({
             "model": "gpt-4o",
             "input": [{
@@ -634,7 +662,7 @@ mod tests {
         assert!(
             mask_responses_input_for_storage(&engine(), &request)
                 .await
-                .is_ok()
+                .is_err()
         );
         request.background = Some(true);
         assert!(
