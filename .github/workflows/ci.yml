@@ -34,6 +34,7 @@ jobs:
       - name: Audit pricing and catalog authority
         run: |
           python3 -m unittest discover -s scripts/test -p 'test_sync_litellm_pricing.py'
+          python3 -m unittest discover -s scripts/test -p 'test_gateway_overhead_benchmark.py'
           python3 scripts/sync_litellm_pricing.py \
             --source-catalog config/model_prices_extended.json \
             --check
