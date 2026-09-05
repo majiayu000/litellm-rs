@@ -30,12 +30,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::AbortHandle;
 
 const GROUP: &str = "conformance-chat";
 const REWRITE_UPSTREAM: &str = "gpt-4o-mini";
 const NON_STREAM_UPSTREAM: &str = "gpt-5.4-pro";
 const STREAM_FALLBACK_UPSTREAM: &str = "gpt-4o";
 const MISSING_MODEL: &str = "missing-conformance-model";
+const AUDIO_ONLY: &str = "audio-only";
+const NO_STREAM_MODEL: &str = "non-stream-only";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ErrorKind {
@@ -262,26 +265,69 @@ async fn handle_conn(mut socket: TcpStream, ctl: Arc<MockCtl>) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{chunk}"
             );
             let _ = socket.write_all(headers.as_bytes()).await;
-            let _ = tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = socket.flush().await;
+            // Keep the stream open until the client drops it. Do not substitute a
+            // short timeout that would close the connection while the caller is
+            // still supposed to be hanging.
+            wait_for_client_disconnect(&mut socket).await;
         }
     }
 }
 
-async fn spawn_mock(ctl: Arc<MockCtl>) -> String {
+async fn wait_for_client_disconnect(socket: &mut TcpStream) {
+    let mut buf = [0_u8; 8];
+    loop {
+        match socket.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+}
+
+struct MockServer {
+    addr: String,
+    accept: AbortHandle,
+    connections: Arc<Mutex<Vec<AbortHandle>>>,
+}
+
+impl MockServer {
+    fn stop(&self) {
+        self.accept.abort();
+        let handles: Vec<_> = std::mem::take(&mut *self.connections.lock().unwrap());
+        for handle in handles {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for MockServer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+async fn spawn_mock(ctl: Arc<MockCtl>) -> MockServer {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("mock should bind");
-    let addr = listener.local_addr().expect("mock address");
-    tokio::spawn(async move {
+    let addr = listener.local_addr().expect("mock address").to_string();
+    let connections = Arc::new(Mutex::new(Vec::new()));
+    let connection_handles = connections.clone();
+    let accept = tokio::spawn(async move {
         loop {
             let Ok((socket, _)) = listener.accept().await else {
                 break;
             };
             let ctl = ctl.clone();
-            tokio::spawn(async move { handle_conn(socket, ctl).await });
+            let task = tokio::spawn(async move { handle_conn(socket, ctl).await });
+            connection_handles.lock().unwrap().push(task.abort_handle());
         }
     });
-    addr.to_string()
+    MockServer {
+        addr,
+        accept: accept.abort_handle(),
+        connections,
+    }
 }
 
 fn restore_deployments(router: &UnifiedRouter) {
@@ -402,7 +448,32 @@ fn regroup(router: &UnifiedRouter) {
         &non_stream.model,
         &ProviderCapability::ChatCompletionStream
     ));
-    router.set_model_list(vec![non_chat, rewrite, non_stream, fallback]);
+    let mut audio_only = Deployment::new(
+        "audio-only".into(),
+        factory_provider(router, "non-chat"),
+        "nova-3".into(),
+        AUDIO_ONLY.into(),
+    );
+    audio_only.config = with_priority(0);
+    assert!(
+        !audio_only
+            .provider
+            .supports_capability_for_model(&audio_only.model, &ProviderCapability::ChatCompletion)
+    );
+    let mut no_stream = Deployment::new(
+        "no-stream-only".into(),
+        factory_provider(router, "non-stream-chat"),
+        NON_STREAM_UPSTREAM.into(),
+        NO_STREAM_MODEL.into(),
+    );
+    no_stream.config = with_priority(0);
+    assert!(!no_stream.provider.supports_capability_for_model(
+        &no_stream.model,
+        &ProviderCapability::ChatCompletionStream
+    ));
+    router.set_model_list(vec![
+        non_chat, rewrite, non_stream, fallback, audio_only, no_stream,
+    ]);
 }
 
 fn sdk_messages() -> Vec<SdkMessage> {
@@ -431,6 +502,37 @@ fn map_http(status: StatusCode, body: &Value) -> ErrorKind {
         }
         (408 | 504, ..) | (_, _, "timeout") => ErrorKind::Timeout,
         _ => ErrorKind::Other,
+    }
+}
+
+fn sse_reports_error(text: &str) -> bool {
+    if text.contains("event: error") {
+        return true;
+    }
+    text.lines().any(|line| {
+        let Some(data) = line.strip_prefix("data: ") else {
+            return false;
+        };
+        serde_json::from_str::<Value>(data)
+            .ok()
+            .and_then(|value| value.get("error").cloned())
+            .is_some()
+    })
+}
+
+fn classify_http_stream(status: StatusCode, bytes: &[u8]) -> Result<(), ErrorKind> {
+    let text = String::from_utf8_lossy(bytes);
+    if !status.is_success() {
+        let body: Value = serde_json::from_slice(bytes).unwrap_or(json!({}));
+        return Err(map_http(status, &body));
+    }
+    if sse_reports_error(&text) || text.contains("not-json") {
+        return Err(ErrorKind::StreamFailed);
+    }
+    if text.contains("data: [DONE]") {
+        Ok(())
+    } else {
+        Err(ErrorKind::StreamFailed)
     }
 }
 
@@ -507,7 +609,8 @@ fn prepare(ctl: &MockCtl, router: &UnifiedRouter, binding: &RuntimeBinding) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_sdk_and_completion_chat_entries_conform() {
     let ctl = MockCtl::new();
-    let addr = spawn_mock(ctl.clone()).await;
+    let mock = spawn_mock(ctl.clone()).await;
+    let addr = mock.addr.clone();
     let base = |id: &str| format!("http://{addr}/{id}/v1");
 
     let mut config = Config::default();
@@ -612,15 +715,28 @@ async fn http_sdk_and_completion_chat_entries_conform() {
             ..Case::happy(GROUP)
         },
         Case {
-            name: "unary_no_capability",
+            name: "unary_unknown_model",
             expected: vec![],
             ..Case::happy(MISSING_MODEL)
+        },
+        Case {
+            name: "stream_unknown_model",
+            stream: true,
+            expected: vec![],
+            ..Case::happy(MISSING_MODEL)
+        },
+        Case {
+            name: "unary_no_capability",
+            expected: vec![],
+            expect_err: Some(ErrorKind::InvalidRequest),
+            ..Case::happy(AUDIO_ONLY)
         },
         Case {
             name: "stream_no_capability",
             stream: true,
             expected: vec![],
-            ..Case::happy(MISSING_MODEL)
+            expect_err: Some(ErrorKind::InvalidRequest),
+            ..Case::happy(NO_STREAM_MODEL)
         },
         Case {
             name: "stream_mid_fail",
@@ -628,7 +744,6 @@ async fn http_sdk_and_completion_chat_entries_conform() {
             setup: set_mid_fail,
             expected: vec![rewrite.clone()],
             expect_err: Some(ErrorKind::StreamFailed),
-            compare: false,
             ..Case::happy(GROUP)
         },
         Case {
@@ -644,6 +759,7 @@ async fn http_sdk_and_completion_chat_entries_conform() {
     for case in cases {
         run_case(&app, &ctl, &router, &binding, case).await;
     }
+    mock.stop();
 }
 
 struct Case {
@@ -708,13 +824,13 @@ async fn run_case(
         drive_completion(ctl, case.model, case.stream, case.drop_after_start).await;
     wait_idle(router).await;
     assert_eq!(http.attempts, case.expected, "{} http attempts", case.name);
-    if case.expected.is_empty() {
+    if case.expected.is_empty() && case.expect_err.is_none() {
         assert!(
             matches!(
                 http.result,
                 Err(ErrorKind::ModelNotFound | ErrorKind::InvalidRequest)
             ),
-            "{} http error {:?}",
+            "{} unknown-model http error {:?}",
             case.name,
             http.result
         );
@@ -735,10 +851,6 @@ async fn run_case(
             "{} completion attempts",
             case.name
         );
-        if matches!(case.expect_err, Some(ErrorKind::StreamFailed)) {
-            assert_eq!(sdk_out.result, Err(ErrorKind::StreamFailed));
-            assert_eq!(completion_out.result, Err(ErrorKind::StreamFailed));
-        }
     }
 }
 
@@ -843,17 +955,10 @@ async fn stream_http(
         return outcome_ok(ctl.take_attempts());
     }
     let bytes = test::read_body(resp).await;
-    let text = String::from_utf8_lossy(&bytes);
     let attempts = ctl.take_attempts();
-    if status.is_success() {
-        if text.contains("event: error") || text.contains("not-json") {
-            outcome_err(attempts, ErrorKind::StreamFailed)
-        } else {
-            outcome_ok(attempts)
-        }
-    } else {
-        let body: Value = serde_json::from_slice(&bytes).unwrap_or(json!({}));
-        outcome_err(attempts, map_http(status, &body))
+    match classify_http_stream(status, &bytes) {
+        Ok(()) => outcome_ok(attempts),
+        Err(kind) => outcome_err(attempts, kind),
     }
 }
 
