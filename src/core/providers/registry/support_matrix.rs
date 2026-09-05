@@ -233,7 +233,7 @@ pub static LEGACY_ADAPTER_MATRIX: &[ProviderLegacyAdapterSupport] = &[
     row(
         "openai_compatible",
         [P, P, P, P, U, U, U, S, S],
-        "HTTP chat/embeddings/image generation and completion() OpenAI-compatible passthrough.",
+        "HTTP chat/embeddings/image generation/audio and completion() OpenAI-compatible passthrough.",
     ),
     row(
         "sdk_custom",

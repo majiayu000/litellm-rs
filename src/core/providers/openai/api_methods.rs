@@ -34,10 +34,6 @@ use super::error_mapper::OpenAIErrorMapper;
 
 /// Additional OpenAI-specific API methods
 impl OpenAIProvider {
-    fn multipart_client(&self) -> Result<BaseHttpClient, OpenAIError> {
-        BaseHttpClient::new_for_provider("openai", self.config.base.clone())
-    }
-
     /// Generate embeddings
     pub async fn embeddings(
         &self,
@@ -154,25 +150,14 @@ impl OpenAIProvider {
             });
         }
 
-        let form = transcription_form(request);
-        let url = format!("{}/audio/transcriptions", self.config.get_api_base());
-        let response = apply_provider_headers(
-            self.multipart_client()?.post(url)?,
+        execute_audio_transcription(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
             self.get_request_headers(),
+            request,
+            "openai",
         )
-        .multipart(form)
-        .send()
         .await
-        .map_err(|e| OpenAIError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
-
-        let response_bytes = read_success_response_bytes(response).await?;
-        serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
-            provider: "openai",
-            message: e.to_string(),
-        })
     }
 
     /// Translate audio through OpenAI's `/audio/translations` endpoint.
@@ -187,25 +172,14 @@ impl OpenAIProvider {
             });
         }
 
-        let form = translation_form(request);
-        let url = format!("{}/audio/translations", self.config.get_api_base());
-        let response = apply_provider_headers(
-            self.multipart_client()?.post(url)?,
+        execute_audio_translation(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
             self.get_request_headers(),
+            request,
+            "openai",
         )
-        .multipart(form)
-        .send()
         .await
-        .map_err(|e| OpenAIError::Network {
-            provider: "openai",
-            message: e.to_string(),
-        })?;
-
-        let response_bytes = read_success_response_bytes(response).await?;
-        serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
-            provider: "openai",
-            message: e.to_string(),
-        })
     }
 
     /// Generate speech through OpenAI's `/audio/speech` endpoint.
@@ -220,43 +194,14 @@ impl OpenAIProvider {
             });
         }
 
-        let response_format = request.response_format.clone();
-        let body = serde_json::json!({
-            "model": request.model,
-            "input": request.input,
-            "voice": request.voice,
-            "response_format": request.response_format,
-            "speed": request.speed,
-        });
-        let url = format!("{}/audio/speech", self.config.get_api_base());
-        let response = self
-            .pool_manager
-            .execute_request(
-                &url,
-                HttpMethod::POST,
-                self.get_request_headers(),
-                Some(body),
-            )
-            .await
-            .map_err(|e| OpenAIError::Network {
-                provider: "openai",
-                message: e.to_string(),
-            })?;
-
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                format_to_content_type(response_format.as_deref().unwrap_or("mp3")).to_string()
-            });
-        let response_bytes = read_success_response_bytes(response).await?;
-
-        Ok(SpeechResponse {
-            audio: response_bytes.to_vec(),
-            content_type,
-        })
+        execute_text_to_speech(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            request,
+            "openai",
+        )
+        .await
     }
 }
 
@@ -336,6 +281,149 @@ pub(crate) async fn execute_image_edit(
         ));
     }
     Ok(response)
+}
+
+pub(crate) async fn execute_audio_transcription(
+    base: BaseConfig,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    request: TranscriptionRequest,
+    provider: &'static str,
+) -> Result<TranscriptionResponse, OpenAIError> {
+    let bytes = execute_audio_multipart(
+        base,
+        headers,
+        provider,
+        format!("{}/audio/transcriptions", api_base.trim_end_matches('/')),
+        "audio transcription",
+        transcription_form(request),
+    )
+    .await?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        OpenAIError::response_parsing(provider, format!("invalid transcription response: {error}"))
+    })
+}
+
+pub(crate) async fn execute_audio_translation(
+    base: BaseConfig,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    request: TranslationRequest,
+    provider: &'static str,
+) -> Result<TranslationResponse, OpenAIError> {
+    let bytes = execute_audio_multipart(
+        base,
+        headers,
+        provider,
+        format!("{}/audio/translations", api_base.trim_end_matches('/')),
+        "audio translation",
+        translation_form(request),
+    )
+    .await?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        OpenAIError::response_parsing(provider, format!("invalid translation response: {error}"))
+    })
+}
+
+pub(crate) async fn execute_text_to_speech(
+    base: BaseConfig,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    request: SpeechRequest,
+    provider: &'static str,
+) -> Result<SpeechResponse, OpenAIError> {
+    validate_outbound_headers(&headers, provider, "speech")?;
+    let response_format = request.response_format.clone();
+    let body = serde_json::json!({
+        "model": request.model,
+        "input": request.input,
+        "voice": request.voice,
+        "response_format": request.response_format,
+        "speed": request.speed,
+    });
+    let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
+    let response = apply_provider_headers(
+        client.post(format!("{}/audio/speech", api_base.trim_end_matches('/')))?,
+        headers,
+    )
+    .json(&body)
+    .send()
+    .await
+    .map_err(|error| client.map_preserved_request_error(error))?;
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format_to_content_type(response_format.as_deref().unwrap_or("mp3")).to_string()
+        });
+    let audio = read_mapped_response_bytes(&client, response, provider).await?;
+    Ok(SpeechResponse {
+        audio,
+        content_type,
+    })
+}
+
+async fn execute_audio_multipart(
+    base: BaseConfig,
+    headers: Vec<HeaderPair>,
+    provider: &'static str,
+    url: String,
+    operation: &str,
+    form: multipart::Form,
+) -> Result<Vec<u8>, OpenAIError> {
+    validate_outbound_headers(&headers, provider, operation)?;
+    let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
+    let response = apply_provider_headers(client.post(url)?, headers)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| client.map_preserved_request_error(error))?;
+    read_mapped_response_bytes(&client, response, provider).await
+}
+
+fn validate_outbound_headers(
+    headers: &[HeaderPair],
+    provider: &'static str,
+    operation: &str,
+) -> Result<(), OpenAIError> {
+    for (name, value) in headers {
+        HeaderName::from_bytes(name.as_ref().as_bytes()).map_err(|_| {
+            OpenAIError::configuration(provider, format!("invalid {operation} header name"))
+        })?;
+        HeaderValue::from_str(value.as_ref()).map_err(|_| {
+            OpenAIError::configuration(provider, format!("invalid {operation} header value"))
+        })?;
+    }
+    Ok(())
+}
+
+async fn read_mapped_response_bytes(
+    client: &BaseHttpClient,
+    response: reqwest::Response,
+    provider: &'static str,
+) -> Result<Vec<u8>, OpenAIError> {
+    let status = response.status();
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(_) if !status.is_success() => {
+            return Err(HttpErrorMapper::map_status_code(
+                provider,
+                status.as_u16(),
+                &format!("Provider returned HTTP {status}, but its error body was unavailable"),
+            ));
+        }
+        Err(error) => return Err(client.map_preserved_request_error(error)),
+    };
+    if !status.is_success() {
+        return Err(HttpErrorMapper::map_status_code(
+            provider,
+            status.as_u16(),
+            &String::from_utf8_lossy(&bytes),
+        ));
+    }
+    Ok(bytes.to_vec())
 }
 
 fn transcription_form(request: TranscriptionRequest) -> multipart::Form {
@@ -436,6 +524,22 @@ mod tests {
             .0;
 
         assert!(image_edit.contains("BaseHttpClient::new_for_provider_no_redirect"));
+    }
+
+    #[test]
+    fn credentialed_audio_clients_explicitly_disable_redirects() {
+        let source = include_str!("api_methods.rs");
+        let audio = source
+            .split_once("pub(crate) async fn execute_audio_transcription")
+            .expect("audio transcription adapter should exist")
+            .1
+            .split_once("fn transcription_form")
+            .expect("audio adapters should end before transcription helpers")
+            .0;
+
+        assert!(audio.contains("pub(crate) async fn execute_audio_translation"));
+        assert!(audio.contains("pub(crate) async fn execute_text_to_speech"));
+        assert!(audio.contains("BaseHttpClient::new_for_provider_no_redirect"));
     }
 
     #[tokio::test]

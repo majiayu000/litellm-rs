@@ -6,6 +6,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::core::audio::types::{
+    SpeechRequest, SpeechResponse, TranscriptionRequest, TranscriptionResponse, TranslationRequest,
+    TranslationResponse,
+};
 use crate::core::providers::base::{
     GlobalPoolManager, HeaderPair, HttpMethod, header_owned, read_streaming_error_body,
 };
@@ -44,6 +48,9 @@ pub(crate) static OPENAI_COMPATIBLE_PROXY_CAPABILITIES: &[ProviderCapability] = 
     ProviderCapability::ImageGeneration,
     ProviderCapability::ImageEdit,
     ProviderCapability::ImageVariation,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+    ProviderCapability::TextToSpeech,
     ProviderCapability::Moderation,
     ProviderCapability::ToolCalling,
     ProviderCapability::FunctionCalling,
@@ -802,6 +809,54 @@ impl LLMProvider for OpenAILikeProvider {
             .model
             .map(|model| self.config.get_effective_model(&model));
         crate::core::providers::openai::execute_image_edit(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            request,
+            PROVIDER_NAME,
+        )
+        .await
+    }
+
+    async fn audio_transcription(
+        &self,
+        mut request: TranscriptionRequest,
+        _context: RequestContext,
+    ) -> Result<TranscriptionResponse, ProviderError> {
+        request.model = self.rewrite_request_model(&request.model);
+        crate::core::providers::openai::execute_audio_transcription(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            request,
+            PROVIDER_NAME,
+        )
+        .await
+    }
+
+    async fn audio_translation(
+        &self,
+        mut request: TranslationRequest,
+        _context: RequestContext,
+    ) -> Result<TranslationResponse, ProviderError> {
+        request.model = self.rewrite_request_model(&request.model);
+        crate::core::providers::openai::execute_audio_translation(
+            self.config.base.clone(),
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            request,
+            PROVIDER_NAME,
+        )
+        .await
+    }
+
+    async fn text_to_speech(
+        &self,
+        mut request: SpeechRequest,
+        _context: RequestContext,
+    ) -> Result<SpeechResponse, ProviderError> {
+        request.model = self.rewrite_request_model(&request.model);
+        crate::core::providers::openai::execute_text_to_speech(
             self.config.base.clone(),
             &self.config.get_api_base(),
             self.get_request_headers(),

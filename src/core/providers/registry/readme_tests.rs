@@ -146,7 +146,7 @@ fn expected_readme_tier2_row(entry: &ProviderRegistryEntry) -> Option<ExpectedRe
         ProviderType::SageMaker => Some(expected("always", ["✅", "–", "–", "–", "–"])),
         ProviderType::OpenAICompatible => Some(expected(
             "always",
-            ["✅", "✅", "passthrough", "passthrough", "–"],
+            ["✅", "✅", "passthrough", "passthrough", "passthrough"],
         )),
         ProviderType::Azure | ProviderType::AzureAI => Some(expected(
             "native factory (`providers-extra`); OpenAILike fallback",
