@@ -502,6 +502,7 @@ impl Router {
 
 impl RuntimeHandle {
     /// Select and reserve a capable deployment from this handle's pinned generation.
+    #[allow(dead_code)]
     pub(crate) fn select_deployment_lease_for_capability_typed(
         &self,
         model_name: &str,

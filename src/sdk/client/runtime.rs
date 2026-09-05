@@ -89,18 +89,22 @@ impl LLMClient {
         let core_request = sdk_request_to_core(&model, request)?;
         let context = RequestContext::new();
         let handle = self.runtime_handle()?;
-        let lease = handle
-            .select_deployment_lease_for_capability_typed(
+        let (stream, lease) = handle
+            .execute_stream_with_selected_deployment_capability_typed(
                 &model,
                 &ProviderCapability::ChatCompletionStream,
+                move |deployment| {
+                    let mut request = core_request.clone();
+                    let context = context.clone();
+                    async move {
+                        request.model = deployment.model.clone();
+                        deployment
+                            .provider
+                            .chat_completion_stream(request, context)
+                            .await
+                    }
+                },
             )
-            .map_err(SDKError::from)?;
-        let deployment = lease.clone_deployment();
-        let mut core_request = core_request;
-        core_request.model = deployment.model.clone();
-        let stream = deployment
-            .provider
-            .chat_completion_stream(core_request, context)
             .await
             .map_err(SDKError::from)?;
 

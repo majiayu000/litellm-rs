@@ -10,6 +10,7 @@ use super::execution::{
 };
 use super::fallback::{ExecutionResult, FallbackType};
 use super::retry_policy::{RetryContext, RetryPolicy};
+use super::selection::DeploymentLease;
 use super::unified::Router;
 use super::{RoutingSnapshot, RuntimeHandle};
 use crate::core::providers::unified_provider::ProviderError;
@@ -78,28 +79,28 @@ impl Router {
         let mut attempt = 1;
         let mut last_error = None;
         let mut excluded_budget_deployments = HashSet::new();
+        let mut tried_deployments = HashSet::new();
 
         while attempt <= max_attempts {
             let start = std::time::Instant::now();
 
-            // Try to select a deployment
-            let selected = match capability {
-                Some(capability) => self
-                    .select_deployment_lease_for_capability_matching_in_snapshot(
-                        snapshot,
-                        model_name,
-                        capability,
-                        |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
-                    ),
-                None => self.select_deployment_lease_matching_in_snapshot(
-                    snapshot,
-                    model_name,
-                    |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
-                ),
-            };
-            let deployment_lease = match selected {
+            let deployment_lease = match self.select_retry_candidate(
+                snapshot,
+                model_name,
+                capability,
+                &excluded_budget_deployments,
+                &mut tried_deployments,
+            ) {
                 Ok(lease) => lease,
                 Err(router_err) => {
+                    if matches!(
+                        &router_err,
+                        RouterError::UnsupportedCapability { .. }
+                            | RouterError::NoAvailableDeployment(_)
+                    ) && let Some(err) = last_error.clone()
+                    {
+                        return Err((err, attempt));
+                    }
                     if !excluded_budget_deployments.is_empty()
                         && let Some(err) = last_error.clone()
                     {
@@ -166,6 +167,7 @@ impl Router {
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
                         );
+                        tried_deployments.insert(deployment_id);
                         drop(deployment_lease);
                         last_error = Some(err);
                         attempt += 1;
@@ -197,6 +199,163 @@ impl Router {
             }),
             max_attempts,
         ))
+    }
+
+    fn select_retry_candidate(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        capability: Option<&ProviderCapability>,
+        excluded_budget_deployments: &HashSet<String>,
+        tried_deployments: &mut HashSet<String>,
+    ) -> Result<DeploymentLease, RouterError> {
+        let select = |prefer_untried: bool| {
+            let is_candidate = |deployment: &Deployment| {
+                !excluded_budget_deployments.contains(deployment.id.as_str())
+                    && (!prefer_untried || !tried_deployments.contains(deployment.id.as_str()))
+            };
+            match capability {
+                Some(capability) => self
+                    .select_deployment_lease_for_capability_matching_in_snapshot(
+                        snapshot,
+                        model_name,
+                        capability,
+                        is_candidate,
+                    ),
+                None => self.select_deployment_lease_matching_in_snapshot(
+                    snapshot,
+                    model_name,
+                    is_candidate,
+                ),
+            }
+        };
+
+        match select(true) {
+            Ok(lease) => Ok(lease),
+            Err(err)
+                if !tried_deployments.is_empty()
+                    && matches!(
+                        err,
+                        RouterError::UnsupportedCapability { .. }
+                            | RouterError::NoAvailableDeployment(_)
+                    ) =>
+            {
+                match select(false) {
+                    Ok(lease) => {
+                        tried_deployments.clear();
+                        Ok(lease)
+                    }
+                    Err(fallback_err) => Err(fallback_err),
+                }
+            }
+            other => other,
+        }
+    }
+
+    async fn execute_stream_with_retry_inner<T, F, Fut>(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        capability: &ProviderCapability,
+        operation: F,
+    ) -> Result<(T, DeploymentLease), ProviderError>
+    where
+        F: Fn(Arc<Deployment>) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    {
+        let max_attempts = self.config.num_retries + 1;
+        let mut attempt = 1;
+        let mut last_operation_error = None;
+        let mut excluded_budget_deployments = HashSet::new();
+        let mut tried_deployments = HashSet::new();
+
+        while attempt <= max_attempts {
+            let deployment_lease = match self.select_retry_candidate(
+                snapshot,
+                model_name,
+                Some(capability),
+                &excluded_budget_deployments,
+                &mut tried_deployments,
+            ) {
+                Ok(lease) => lease,
+                Err(router_err) => {
+                    if matches!(
+                        &router_err,
+                        RouterError::UnsupportedCapability { .. }
+                            | RouterError::NoAvailableDeployment(_)
+                    ) && let Some(err) = last_operation_error.clone()
+                    {
+                        return Err(err);
+                    }
+
+                    let provider_err = router_error_to_provider_error(router_err);
+                    let retry_decision = RetryPolicy.decide(
+                        &self.config,
+                        &provider_err,
+                        RetryContext::stream_pre_output(attempt, max_attempts),
+                    );
+                    if retry_decision.should_retry {
+                        attempt += 1;
+                        if let Some(delay) = retry_decision.delay {
+                            tokio::time::sleep(delay).await;
+                        }
+                        continue;
+                    }
+
+                    return Err(last_operation_error.unwrap_or(provider_err));
+                }
+            };
+            let selected_deployment = deployment_lease.clone_deployment();
+            let deployment_id = selected_deployment.id.clone();
+
+            match operation.clone()(selected_deployment.clone()).await {
+                Ok(stream) => return Ok((stream, deployment_lease)),
+                Err(err) => {
+                    if retryable_budget_scope(&err).is_some() {
+                        excluded_budget_deployments.insert(deployment_id);
+                        drop(deployment_lease);
+                        last_operation_error = Some(err);
+                        continue;
+                    }
+
+                    let retry_decision = RetryPolicy.decide_for_deployment(
+                        &self.config,
+                        &selected_deployment.config,
+                        &err,
+                        RetryContext::stream_pre_output(attempt, max_attempts),
+                    );
+                    if retry_decision.should_retry {
+                        self.record_failure_with_reason_for_deployment(
+                            deployment_lease.deployment(),
+                            CooldownReason::ConsecutiveFailures,
+                        );
+                        tried_deployments.insert(deployment_id);
+                        drop(deployment_lease);
+                        last_operation_error = Some(err);
+                        attempt += 1;
+                        if let Some(delay) = retry_decision.delay {
+                            tokio::time::sleep(delay).await;
+                        }
+                        continue;
+                    }
+
+                    let cooldown_reason = infer_cooldown_reason(&err);
+                    self.record_failure_with_reason_for_deployment(
+                        deployment_lease.deployment(),
+                        cooldown_reason,
+                    );
+                    drop(deployment_lease);
+                    return Err(err);
+                }
+            }
+        }
+
+        Err(
+            last_operation_error.unwrap_or_else(|| ProviderError::Other {
+                provider: "router",
+                message: "Unknown error during streaming retry".to_string(),
+            }),
+        )
     }
 
     /// Execute a request for a single model with retry logic, constrained to
@@ -486,6 +645,27 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 Some(capability),
+                operation,
+            )
+            .await
+    }
+
+    pub(crate) async fn execute_stream_with_selected_deployment_capability_typed<T, F, Fut>(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+        operation: F,
+    ) -> Result<(T, DeploymentLease), ProviderError>
+    where
+        F: Fn(Arc<Deployment>) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    {
+        self.binding
+            .router
+            .execute_stream_with_retry_inner(
+                self.snapshot.as_ref(),
+                model_name,
+                capability,
                 operation,
             )
             .await
