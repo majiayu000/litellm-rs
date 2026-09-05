@@ -17,7 +17,7 @@ use crate::core::types::{
     context::RequestContext,
     embedding::EmbeddingRequest,
     health::HealthStatus,
-    image::ImageEditRequest,
+    image::{ImageEditRequest, ImageGenerationRequest},
     model::{ModelInfo, ProviderCapability},
     responses::{ChatChunk, ChatResponse, EmbeddingResponse, ImageGenerationResponse},
 };
@@ -41,6 +41,7 @@ pub(crate) static OPENAI_COMPATIBLE_PROXY_CAPABILITIES: &[ProviderCapability] = 
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
     ProviderCapability::ImageEdit,
     ProviderCapability::ImageVariation,
     ProviderCapability::Moderation,
@@ -310,6 +311,49 @@ impl OpenAILikeProvider {
     ) -> Result<EmbeddingResponse, OpenAILikeError> {
         request.model = self.rewrite_request_model(&request.model);
         let url = format!("{}/embeddings", self.config.get_api_base());
+        let headers = self.get_request_headers();
+        let body = Some(
+            serde_json::to_value(&request)
+                .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?,
+        );
+
+        let response = self
+            .pool_manager
+            .execute_request(&url, HttpMethod::POST, headers, body)
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.map_err(|error| {
+                self.map_error_response(
+                    status.as_u16(),
+                    &format!("failed to read upstream error body: {error}"),
+                )
+            })?;
+            return Err(self.map_error_response(status.as_u16(), &body));
+        }
+
+        let response_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| OpenAILikeError::network(PROVIDER_NAME, e.to_string()))?;
+
+        serde_json::from_slice(&response_bytes)
+            .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))
+    }
+
+    async fn execute_image_generation(
+        &self,
+        mut request: ImageGenerationRequest,
+    ) -> Result<ImageGenerationResponse, OpenAILikeError> {
+        request.model = match request.model {
+            Some(model) => Some(self.rewrite_request_model(&model)),
+            None => self
+                .model_identity
+                .as_ref()
+                .map(|binding| binding.identity().wire_model().to_string()),
+        };
+        let url = format!("{}/images/generations", self.config.get_api_base());
         let headers = self.get_request_headers();
         let body = Some(
             serde_json::to_value(&request)
@@ -739,6 +783,14 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<EmbeddingResponse, ProviderError> {
         self.execute_embeddings(request).await
+    }
+
+    async fn image_generation(
+        &self,
+        request: ImageGenerationRequest,
+        _context: RequestContext,
+    ) -> Result<ImageGenerationResponse, ProviderError> {
+        self.execute_image_generation(request).await
     }
 
     async fn image_edit(
