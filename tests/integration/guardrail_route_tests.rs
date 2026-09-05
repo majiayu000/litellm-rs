@@ -142,8 +142,13 @@ mod tests {
         }
 
         async fn stop_upstream(self) {
-            self.handle.stop(true).await;
-            let _ = self.task.await;
+            if tokio::time::timeout(Duration::from_secs(2), self.handle.stop(false))
+                .await
+                .is_err()
+            {
+                self.task.abort();
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(2), self.task).await;
         }
     }
 
