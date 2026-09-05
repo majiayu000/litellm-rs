@@ -402,7 +402,8 @@ td code {
 }
 
 .health-state[data-health-state="unknown"],
-.health-state[data-health-state="disabled"] {
+.health-state[data-health-state="disabled"],
+.health-state[data-health-state="degraded"] {
   color: var(--muted);
 }
 

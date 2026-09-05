@@ -75,6 +75,7 @@ function resetProtectedState() {
   renderTeams();
   renderSpend();
   providerHealthView.reset();
+  routingInventoryView.reset();
   budgetView.reset();
 }
 function endSession(message = "Signed out") {
@@ -387,6 +388,16 @@ const providerHealthView = window.createProviderHealthView({
   setStatus,
   textCell,
 });
+const routingInventoryView = window.createRoutingInventoryView({
+  apiRequest,
+  byId,
+  captureSession,
+  clearError,
+  ensureCurrent,
+  reportRequestError,
+  setStatus,
+  textCell,
+});
 const budgetView = window.createBudgetView({
   apiRequest, beginBusy, byId, captureSession, clearError, createAction, endBusy,
   ensureCurrent, reportRequestError, setStatus, textCell,
@@ -476,6 +487,7 @@ async function refreshDashboard() {
       loadKeys(session),
       loadTeams(session),
       providerHealthView.load(session),
+      routingInventoryView.load(session),
     ]);
     ensureCurrent(session);
     await loadTeamUsage(session);
@@ -730,7 +742,7 @@ function showView(view) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const panel of ["keys", "teams", "spend", "budgets", "health"]) {
+  for (const panel of ["keys", "teams", "spend", "budgets", "health", "routing"]) {
     byId(`${panel}-panel`).hidden = panel !== view;
   }
   if (view === "spend") {
