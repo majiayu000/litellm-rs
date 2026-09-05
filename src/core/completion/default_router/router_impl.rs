@@ -78,17 +78,22 @@ pub(super) async fn complete_stream_with_runtime_handle(
     let mut chat_request = convert_to_chat_completion_request(model, chat_messages, options)?;
     chat_request.stream = true;
     let context = RequestContext::new();
-    let lease = handle
-        .select_deployment_lease_for_capability_typed(
+    let (stream, lease) = handle
+        .execute_stream_with_selected_deployment_capability_typed(
             model,
             &ProviderCapability::ChatCompletionStream,
+            move |deployment| {
+                let mut request = chat_request.clone();
+                let context = context.clone();
+                async move {
+                    request.model = deployment.model.clone();
+                    deployment
+                        .provider
+                        .chat_completion_stream(request, context)
+                        .await
+                }
+            },
         )
-        .map_err(GatewayError::from)?;
-    let deployment = lease.clone_deployment();
-    chat_request.model = deployment.model.clone();
-    let stream = deployment
-        .provider
-        .chat_completion_stream(chat_request, context)
         .await
         .map_err(GatewayError::from)?;
 
