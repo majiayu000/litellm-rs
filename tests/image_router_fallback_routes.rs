@@ -373,7 +373,7 @@ mod tests {
         .await;
         add_raw_image_alias_pricing(&state, "image-alias", "gpt-image-1-mini");
         state
-            .unified_router
+            .unified_router()
             .add_model_alias("public-image", "image-alias")
             .expect("runtime image alias should install");
         let api_key = api_key_with_allowed_models(&["public-image"]);

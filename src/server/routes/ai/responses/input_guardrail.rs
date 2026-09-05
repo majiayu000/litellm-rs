@@ -52,7 +52,7 @@ pub(super) async fn apply(
         .transpose()
         .map_err(InputGuardrailError::Guardrail)?;
     let request = crate::server::guardrails::apply_responses_input(
-        state.guardrails.as_ref(),
+        state.guardrails().as_ref(),
         &request,
         continuation.as_ref(),
     )

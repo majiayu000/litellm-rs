@@ -27,7 +27,7 @@ pub(super) async fn routing_inventory(
         return Ok(forbidden);
     }
 
-    let snapshot = state.unified_router.load_routing_snapshot();
+    let snapshot = state.unified_router().load_routing_snapshot();
     let cfg = state.config.load();
     Ok(HttpResponse::Ok().json(build_inventory(&snapshot, cfg.providers())))
 }
@@ -577,7 +577,7 @@ mod tests {
     #[actix_web::test]
     async fn inventory_redacts_secrets_and_raw_config() {
         let state = test_state(base_test_config(true)).await;
-        state.unified_router.add_deployment(
+        state.unified_router().add_deployment(
             openai_deployment("secret-dep", "gpt-4", "gpt-4-turbo")
                 .await
                 .with_config(DeploymentConfig {
@@ -645,13 +645,13 @@ mod tests {
         primary.config.rpm_limit = Some(100);
         primary.config.tpm_limit = Some(1_000);
         let secondary = openai_deployment("openai-b", "gpt-4", "gpt-4-turbo").await;
-        state.unified_router.add_deployment(primary);
-        state.unified_router.add_deployment(secondary);
+        state.unified_router().add_deployment(primary);
+        state.unified_router().add_deployment(secondary);
         state
-            .unified_router
+            .unified_router()
             .add_model_alias("gpt4", "gpt-4")
             .expect("alias");
-        state.unified_router.record_success("openai-a", 25, 1_000);
+        state.unified_router().record_success("openai-a", 25, 1_000);
 
         let app = admin_app(state, Some(make_test_user(UserRole::Admin)), None).await;
         let (status, body) = get_inventory(&app).await;
@@ -675,10 +675,10 @@ mod tests {
     async fn inventory_preserves_snapshot_model_order() {
         let state = test_state(base_test_config(true)).await;
         state
-            .unified_router
+            .unified_router()
             .add_deployment(openai_deployment("dep-zeta", "zeta", "zeta").await);
         state
-            .unified_router
+            .unified_router()
             .add_deployment(openai_deployment("dep-alpha", "alpha", "alpha").await);
 
         let app = admin_app(state, Some(make_test_user(UserRole::Admin)), None).await;
@@ -700,10 +700,10 @@ mod tests {
         let state = test_state(base_test_config(true)).await;
         let unknown = openai_deployment("dep-unknown", "gpt-4", "gpt-4-turbo").await;
         let unhealthy = openai_deployment("dep-unhealthy", "gpt-4", "gpt-4-turbo").await;
-        state.unified_router.add_deployment(unknown);
-        state.unified_router.add_deployment(unhealthy);
+        state.unified_router().add_deployment(unknown);
+        state.unified_router().add_deployment(unhealthy);
         let stored = state
-            .unified_router
+            .unified_router()
             .get_deployment("dep-unhealthy")
             .expect("unhealthy deployment");
         stored

@@ -390,7 +390,7 @@ async fn gemini_sdk_stream_client_cancel_is_health_neutral_and_settles_observed_
     );
     let budget_limits = state.budget_limits.clone();
     let deployment = state
-        .unified_router
+        .unified_router()
         .get_deployment("gemini-gemini-3.1-flash-lite")
         .expect("runtime deployment");
     let successes = deployment.state.success_requests.load(Ordering::Relaxed);
@@ -601,7 +601,7 @@ async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_e
     let budget_manager = state.budget_manager.clone();
     let budget_limits = state.budget_limits.clone();
     let deployment = state
-        .unified_router
+        .unified_router()
         .get_deployment("gemini-gemini-3.1-flash-lite")
         .expect("runtime deployment");
     let successes = deployment.state.success_requests.load(Ordering::Relaxed);

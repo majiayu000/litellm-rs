@@ -7,9 +7,7 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::sync::Arc;
 use tracing::{error, info};
 
-pub(super) async fn build_pricing_and_router(
-    config: &Config,
-) -> Result<(Arc<PricingService>, UnifiedRouter)> {
+pub(super) async fn initialize_pricing(config: &Config) -> Result<Arc<PricingService>> {
     let pricing = Arc::new(PricingService::new(config.gateway.pricing.source.clone()));
     if let Err(error) = pricing.initialize().await {
         // A `None` pricing source is disabled. A configured source failure is
@@ -30,22 +28,27 @@ pub(super) async fn build_pricing_and_router(
         info!("Pricing service initial load completed");
     }
     info!("Pricing auto-refresh task is managed by on-demand refresh checks");
+    Ok(pricing)
+}
 
+pub(super) async fn build_router_from_config(
+    config: &Config,
+    pricing: Arc<PricingService>,
+) -> Result<UnifiedRouter> {
     let router_config = crate::core::router::gateway_config::runtime_router_config_from_gateway(
         &config.gateway.router,
     )
     .map_err(|error| GatewayError::Config(format!("Invalid router config: {error}")))?;
-    let router = UnifiedRouter::from_gateway_config_with_aliases_and_pricing(
+    UnifiedRouter::from_gateway_config_with_aliases_and_pricing(
         &config.gateway.providers,
         Some(router_config),
         &config.gateway.model_aliases,
-        Arc::clone(&pricing),
+        pricing,
     )
     .await
     .map_err(|error| {
         GatewayError::Config(format!(
             "Failed to initialize unified router from config: {error}"
         ))
-    })?;
-    Ok((pricing, router))
+    })
 }

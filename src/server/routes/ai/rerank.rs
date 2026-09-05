@@ -71,7 +71,7 @@ async fn handle_rerank_with_state(
     api_key_id: Option<uuid::Uuid>,
     api_key_budget_id: Option<uuid::Uuid>,
 ) -> Result<RerankResponse, GatewayError> {
-    let requested_model = state.unified_router.resolve_model_name(&request.model);
+    let requested_model = state.unified_router().resolve_model_name(&request.model);
     request.model = requested_model.clone();
     let config = state.config();
     let rerank_providers = config.gateway.providers.clone();
@@ -86,7 +86,7 @@ async fn handle_rerank_with_state(
     let pricing_config = state.config().gateway.pricing.clone();
     for router_model in router_models {
         let result = run_unary(
-            &state.unified_router,
+            &state.unified_router(),
             &router_model,
             ProviderCapability::Rerank,
             {

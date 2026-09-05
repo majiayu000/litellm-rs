@@ -60,7 +60,7 @@ pub(super) async fn lookup_chat(
     if should_bypass_chat_cache(request, context) {
         return Ok(None);
     }
-    let Some(cache) = state.response_cache.as_ref() else {
+    let Some(cache) = state.response_cache() else {
         return Ok(None);
     };
     let identity = cache_identity(context);
@@ -85,7 +85,7 @@ pub(super) async fn store_chat(
     if should_bypass_chat_cache(request, context) {
         return Ok(());
     }
-    let Some(cache) = state.response_cache.as_ref() else {
+    let Some(cache) = state.response_cache() else {
         return Ok(());
     };
     let identity = cache_identity(context);
@@ -99,7 +99,7 @@ pub(super) async fn lookup_embedding(
     request: &EmbeddingRequest,
     context: &RequestContext,
 ) -> Result<Option<EmbeddingResponse>, GatewayError> {
-    let Some(cache) = state.response_cache.as_ref() else {
+    let Some(cache) = state.response_cache() else {
         return Ok(None);
     };
     let request = embedding_request_for_cache(request, context);
@@ -118,7 +118,7 @@ pub(super) async fn store_embedding(
     response: &EmbeddingResponse,
     context: &RequestContext,
 ) -> Result<(), GatewayError> {
-    let Some(cache) = state.response_cache.as_ref() else {
+    let Some(cache) = state.response_cache() else {
         return Ok(());
     };
     let request = embedding_request_for_cache(request, context);

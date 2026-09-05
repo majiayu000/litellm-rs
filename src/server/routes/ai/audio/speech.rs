@@ -93,7 +93,7 @@ pub async fn audio_speech(
     let pricing_config = state.config().gateway.pricing.clone();
 
     match run_unary(
-        &state.unified_router,
+        &state.unified_router(),
         &requested_model,
         ProviderCapability::TextToSpeech,
         move |provider, selected_model, _deployment_id| {

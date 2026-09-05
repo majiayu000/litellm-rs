@@ -512,15 +512,15 @@ fn aggregate_readiness(
 async fn check_provider_health(
     state: &AppState,
 ) -> Result<ProviderHealthStatus, crate::utils::error::gateway_error::GatewayError> {
-    let cfg = state.config.load();
+    let runtime = state.pin_runtime();
     let mut provider_details = Vec::new();
 
-    for provider_config in cfg.providers() {
+    for provider_config in runtime.config.providers() {
         let (status, error_message, last_check) = if !provider_config.enabled {
             (Cow::Borrowed("disabled"), None, None)
         } else {
             health_provider_status::derive_health_for_provider(
-                &state.unified_router,
+                &runtime.unified_router,
                 &provider_config.name,
                 provider_config.enabled,
             )

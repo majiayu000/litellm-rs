@@ -6,7 +6,6 @@ use crate::config::models::server::{CorsConfig, ServerConfig};
 use crate::config::{Config, Validate};
 use crate::core::audit::{AuditConfig, AuditLogger, AuditMiddleware};
 use crate::core::budget::UnifiedBudgetLimits;
-use crate::core::guardrails::GuardrailEngine;
 use crate::core::integrations::CallbackRuntime;
 use crate::core::ip_access::{IpAccessControl, IpAccessMiddleware};
 use crate::core::rate_limiter::{get_global_rate_limiter, init_global_rate_limiter_with_redis};
@@ -102,8 +101,15 @@ impl HttpServer {
         let auth =
             crate::auth::AuthSystem::new(&config.gateway.auth, Arc::new(storage.clone())).await?;
 
-        let (pricing, unified_router) =
-            super::http_runtime::build_pricing_and_router(config).await?;
+        let pricing = super::http_runtime::initialize_pricing(config).await?;
+        let revision = super::runtime::build_runtime_revision(
+            config.clone(),
+            0,
+            Arc::clone(&pricing),
+            storage.redis.clone(),
+        )
+        .await?;
+        let guardrails = Arc::clone(&revision.guardrails);
 
         let callback_runtime = crate::server::callbacks::build_callback_runtime(
             &config.gateway.monitoring.callbacks,
@@ -119,25 +125,14 @@ impl HttpServer {
         } else {
             Arc::new(AuditLogger::disabled())
         };
-        let guardrails =
-            GuardrailEngine::shared(config.gateway.guardrails.clone()).map_err(|error| {
-                GatewayError::Config(format!("Invalid guardrails configuration: {error}"))
-            })?;
         let ip_access =
             IpAccessControl::shared(config.gateway.ip_access.clone()).map_err(|error| {
                 GatewayError::Config(format!("Invalid IP access configuration: {error}"))
             })?;
-        let state = AppState::new_with_unified_router(
-            config.clone(),
-            auth,
-            unified_router,
-            storage,
-            pricing,
-            budget_limits,
-        )
-        .with_callbacks(callback_runtime.dispatcher())
-        .with_audit_logger(audit_logger)
-        .with_request_policies(guardrails, ip_access);
+        let state = AppState::new_with_runtime(revision, auth, storage, pricing, budget_limits)
+            .with_callbacks(callback_runtime.dispatcher())
+            .with_audit_logger(audit_logger)
+            .with_request_policies(guardrails, ip_access);
 
         Ok(Self {
             config: config.gateway.server.clone(),
@@ -581,7 +576,7 @@ mod tests {
             Err(error) => panic!("enabled cache should wire runtime cache: {error}"),
         };
 
-        assert!(server.state().response_cache.is_some());
+        assert!(server.state().response_cache().is_some());
     }
 
     #[tokio::test]

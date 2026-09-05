@@ -27,7 +27,7 @@ struct CacheAdminResponse {
 
 async fn cache_admin_response(state: &web::Data<AppState>) -> CacheAdminResponse {
     let cfg = state.config.load();
-    if let Some(cache) = state.response_cache.as_ref() {
+    if let Some(cache) = state.response_cache() {
         return CacheAdminResponse {
             success: true,
             status: "enabled",
@@ -121,7 +121,7 @@ pub async fn clear_response_cache(
         return Ok(forbidden);
     }
 
-    if let Some(cache) = state.response_cache.as_ref() {
+    if let Some(cache) = state.response_cache() {
         cache
             .clear()
             .await

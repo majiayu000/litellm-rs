@@ -91,7 +91,7 @@ pub(crate) async fn handle_streaming_response(
     let settlement_budgeted = state.budgeted.clone();
     let callback_for_execution = callback.clone();
     match run_stream(
-        state.unified_router.clone(),
+        state.unified_router().clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
         move |provider, selected_model, _selected_deployment_id| {
@@ -180,7 +180,7 @@ pub(crate) async fn handle_streaming_response(
         )) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout = state.config.load().gateway.server.stream_idle_timeout;
-            let guardrails = Arc::clone(&state.guardrails);
+            let guardrails = Arc::clone(&state.guardrails());
             let settlement = StreamBudgetSettlement {
                 pricing_service: settlement_budgeted.pricing(),
                 pricing_config: state.config().gateway.pricing.clone(),

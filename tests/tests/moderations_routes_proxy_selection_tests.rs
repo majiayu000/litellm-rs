@@ -110,7 +110,7 @@ async fn moderation_route_resolves_alias_to_provider_fallback_model() {
     let mock = MockModerationServer::start_moderation_mock().await;
     let state = build_test_app_state(vec![moderation_provider(&mock.base_url)]).await;
     state
-        .unified_router
+        .unified_router()
         .add_model_alias("public-moderation", "mock-openai-compatible")
         .expect("provider fallback alias should install");
     let app = test::init_service(

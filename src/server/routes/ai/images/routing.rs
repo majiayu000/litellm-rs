@@ -26,10 +26,10 @@ pub(super) fn ensure_image_edit_candidate_configured(
     requested_model: &str,
 ) -> Result<bool, GatewayError> {
     let native_candidate = state
-        .unified_router
+        .unified_router()
         .get_deployments_for_model(requested_model)
         .into_iter()
-        .filter_map(|deployment_id| state.unified_router.get_deployment(&deployment_id))
+        .filter_map(|deployment_id| state.unified_router().get_deployment(&deployment_id))
         .any(|deployment| {
             native_edit::is_native_image_provider(&deployment.provider)
                 && deployment.provider.supports_capability_for_model(

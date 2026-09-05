@@ -656,7 +656,7 @@ mod tests {
         ])
         .await;
         state
-            .unified_router
+            .unified_router()
             .add_model_alias("public-rerank", "rerank-english-v3.0")
             .expect("runtime rerank alias should install");
         state.budget_limits.providers.set_provider_limit(

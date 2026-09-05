@@ -77,7 +77,7 @@ pub(super) async fn handle_streaming_completion(
     let callback_for_execution = callback.clone();
 
     match run_stream(
-        state.unified_router.clone(),
+        state.unified_router().clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
         move |provider, selected_model, _selected_deployment_id| {
@@ -169,7 +169,7 @@ pub(super) async fn handle_streaming_completion(
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let include_usage = adapter_request.include_usage;
             let mut echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
-            let guardrails = Arc::clone(&state.guardrails);
+            let guardrails = Arc::clone(&state.guardrails());
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);

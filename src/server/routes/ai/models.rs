@@ -16,9 +16,9 @@ use super::openai_errors;
 pub async fn list_models(state: web::Data<AppState>) -> ActixResult<HttpResponse> {
     debug!("Listing available models");
 
-    let unified_router = &state.unified_router;
+    let unified_router = state.unified_router();
 
-    match get_models_from_router(unified_router).await {
+    match get_models_from_router(&unified_router).await {
         Ok(models) => {
             let response = ModelListResponse {
                 object: "list".to_string(),
@@ -42,9 +42,9 @@ pub async fn get_model(
 ) -> ActixResult<HttpResponse> {
     debug!("Getting model info for: {}", model_id);
 
-    let unified_router = &state.unified_router;
+    let unified_router = state.unified_router();
 
-    match get_model_from_router(unified_router, &model_id).await {
+    match get_model_from_router(&unified_router, &model_id).await {
         Ok(Some(model)) => Ok(HttpResponse::Ok().json(model)),
         Ok(None) => Ok(openai_errors::gateway_error_response(
             &GatewayError::not_found(format!("Model not found: {}", model_id)),
