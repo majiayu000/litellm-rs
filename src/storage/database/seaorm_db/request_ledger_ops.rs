@@ -4,22 +4,54 @@ use chrono::{Duration, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::super::entities::{self, request_ledger};
 use super::types::SeaOrmDatabase;
+
+/// Minimum seconds between write-path retention deletes on one sink.
+const REQUEST_LEDGER_PRUNE_INTERVAL_SECS: i64 = 3600;
 
 /// Database-backed request ledger writer with bounded retention.
 #[derive(Clone)]
 pub struct RequestLedgerSink {
     db: Arc<SeaOrmDatabase>,
     retention_days: u32,
+    last_prune_unix: Arc<AtomicI64>,
 }
 
 impl RequestLedgerSink {
     /// Create a sink that stores terminal rows and prunes by `retention_days`.
     pub fn new(db: Arc<SeaOrmDatabase>, retention_days: u32) -> Self {
-        Self { db, retention_days }
+        Self {
+            db,
+            retention_days,
+            last_prune_unix: Arc::new(AtomicI64::new(0)),
+        }
+    }
+
+    fn claim_prune_slot(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        loop {
+            let last = self.last_prune_unix.load(Ordering::Relaxed);
+            if last != 0 && now.saturating_sub(last) < REQUEST_LEDGER_PRUNE_INTERVAL_SECS {
+                return false;
+            }
+            match self.last_prune_unix.compare_exchange_weak(
+                last,
+                now.max(1),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(_) => continue,
+            }
+        }
     }
 }
 
@@ -27,9 +59,16 @@ impl RequestLedgerSink {
 impl RequestLedgerWriter for RequestLedgerSink {
     async fn persist(&self, record: RequestLedgerRecord) -> std::result::Result<(), String> {
         self.db
-            .store_request_ledger(&record, self.retention_days)
+            .upsert_request_ledger(&record)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if self.claim_prune_slot() {
+            self.db
+                .prune_expired_request_ledger(self.retention_days)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -40,6 +79,11 @@ impl SeaOrmDatabase {
         record: &RequestLedgerRecord,
         retention_days: u32,
     ) -> Result<()> {
+        self.upsert_request_ledger(record).await?;
+        self.prune_expired_request_ledger(retention_days).await
+    }
+
+    async fn upsert_request_ledger(&self, record: &RequestLedgerRecord) -> Result<()> {
         debug!("Persisting request ledger row {}", record.request_id);
 
         let active_model = request_ledger::ActiveModel {
@@ -90,14 +134,16 @@ impl SeaOrmDatabase {
             .exec(&self.db)
             .await
             .map_err(GatewayError::from)?;
+        Ok(())
+    }
 
+    async fn prune_expired_request_ledger(&self, retention_days: u32) -> Result<()> {
         let cutoff = Utc::now() - Duration::days(i64::from(retention_days.max(1)));
         entities::RequestLedger::delete_many()
             .filter(request_ledger::Column::FinishedAt.lt(cutoff))
             .exec(&self.db)
             .await
             .map_err(GatewayError::from)?;
-
         Ok(())
     }
 
@@ -221,5 +267,12 @@ mod tests {
                 .expect("lookup new")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn request_ledger_sink_throttles_write_path_prune() {
+        let sink = RequestLedgerSink::new(Arc::new(test_db().await), 30);
+        assert!(sink.claim_prune_slot());
+        assert!(!sink.claim_prune_slot());
     }
 }

@@ -238,6 +238,12 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         note: "Realtime module is excluded from the default build behind the websockets feature.",
     },
     CoreSubsystem {
+        name: "request_ledger",
+        decision: SubsystemDecision::Wired,
+        runtime_path: Some("AppState RequestLedgerRuntime and AuditMiddleware"),
+        note: "storage.request_ledger persists one metadata-only terminal row per request when enabled; the default remains disabled.",
+    },
+    CoreSubsystem {
         name: "rerank",
         decision: SubsystemDecision::Wired,
         runtime_path: Some("/v1/rerank route"),

@@ -1,6 +1,8 @@
 //! Migration: create metadata-only request_ledger table.
 //!
-//! Retention is enforced at write time using `storage.request_ledger.retention_days`.
+//! Retention is enforced on the write path using
+//! `storage.request_ledger.retention_days`, throttled so expired rows are not
+//! deleted on every request.
 //! Indexes are bounded to time-range, request id, model, provider, and terminal
 //! status filters used by the later admin query API.
 

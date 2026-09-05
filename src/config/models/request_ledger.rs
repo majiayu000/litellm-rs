@@ -26,7 +26,8 @@ pub enum RequestLedgerWriteFailure {
 ///
 /// Owned by `storage.request_ledger`. The table never stores prompt, response
 /// body, Authorization, raw API keys, or provider secrets. Rows older than
-/// `retention_days` are deleted on subsequent writes so retention stays bounded.
+/// `retention_days` are deleted from the write path, throttled so retention
+/// stays bounded without a delete on every request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RequestLedgerConfig {

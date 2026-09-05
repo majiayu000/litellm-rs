@@ -138,7 +138,8 @@ storage:
   # prompt, response body, Authorization, raw API keys, or provider secrets.
   # write_failure: continue logs persist errors; fail returns HTTP 503 on unary
   # requests when the row cannot be written. retention_days bounds table size
-  # (indexes: finished_at, model, provider, terminal_status).
+  # via a throttled write-path prune (indexes: finished_at, model, provider,
+  # terminal_status).
   # request_ledger:
   #   enabled: false
   #   write_failure: continue
