@@ -50,10 +50,11 @@ async fn cache_admin_response(state: &web::Data<AppState>) -> CacheAdminResponse
     }
 }
 
-fn require_cache_admin(
+pub(super) fn require_admin(
     req: &HttpRequest,
     state: &web::Data<AppState>,
     action: &str,
+    error: &'static str,
 ) -> Option<HttpResponse> {
     let cfg = state.config.load();
     if !cfg.auth().enable_jwt && !cfg.auth().enable_api_key {
@@ -77,8 +78,21 @@ fn require_cache_admin(
 
     Some(HttpResponse::Forbidden().json(serde_json::json!({
         "success": false,
-        "error": "Admin role required for cache administration"
+        "error": error
     })))
+}
+
+fn require_cache_admin(
+    req: &HttpRequest,
+    state: &web::Data<AppState>,
+    action: &str,
+) -> Option<HttpResponse> {
+    require_admin(
+        req,
+        state,
+        action,
+        "Admin role required for cache administration",
+    )
 }
 
 /// GET /admin/cache and /admin/cache/status
@@ -127,6 +141,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/status", web::get().to(cache_status))
             .route("/clear", web::post().to(clear_response_cache)),
     );
+    super::admin_routing::configure_routes(cfg);
 }
 
 #[cfg(test)]

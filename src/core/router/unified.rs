@@ -64,7 +64,7 @@ pub struct RoutingSnapshot {
     pub(crate) model_index: HashMap<String, Vec<DeploymentId>>,
     pub(crate) model_order: Vec<String>,
     pub(crate) model_aliases: HashMap<String, String>,
-    pub(super) provider_names: HashMap<DeploymentId, String>,
+    pub(crate) provider_names: HashMap<DeploymentId, String>,
     legacy_selector_metadata: HashMap<DeploymentId, LegacySelectorMetadata>,
 }
 
@@ -404,7 +404,7 @@ impl Router {
         Ok(result)
     }
 
-    pub(super) fn load_routing_snapshot(&self) -> Arc<RoutingSnapshot> {
+    pub(crate) fn load_routing_snapshot(&self) -> Arc<RoutingSnapshot> {
         self.routing_snapshot.load_full()
     }
 
