@@ -36,16 +36,16 @@ window.createRoutingInventoryView = function createRoutingInventoryView({
     return values.join(", ");
   }
 
-  function formatRate(window) {
-    if (!window || typeof window !== "object") {
+  function formatRate(rateWindow) {
+    if (!rateWindow || typeof rateWindow !== "object") {
       return "—";
     }
     const usage =
-      window.current_usage == null ? "—" : String(window.current_usage);
+      rateWindow.current_usage == null ? "—" : String(rateWindow.current_usage);
     const limit =
-      window.configured_limit == null
+      rateWindow.configured_limit == null
         ? "unlimited"
-        : String(window.configured_limit);
+        : String(rateWindow.configured_limit);
     return `${usage} / ${limit}`;
   }
 
