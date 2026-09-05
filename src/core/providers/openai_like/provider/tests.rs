@@ -1,6 +1,7 @@
 #![allow(deprecated)]
 
 use super::*;
+use crate::core::audio::types::{SpeechRequest, TranscriptionRequest, TranslationRequest};
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::ChatMessage;
@@ -106,6 +107,10 @@ impl CapturedHttpRequest {
     fn json_body(&self) -> serde_json::Value {
         serde_json::from_slice(&self.body).expect("captured request body should be JSON")
     }
+
+    fn body_text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
 }
 
 async fn read_full_http_request(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
@@ -189,14 +194,24 @@ async fn openai_like_json_response_url(
     status: &str,
     body: &str,
 ) -> std::io::Result<(String, Arc<Mutex<Option<CapturedHttpRequest>>>)> {
+    openai_like_http_response_url(status, "application/json", body.as_bytes()).await
+}
+
+async fn openai_like_http_response_url(
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> std::io::Result<(String, Arc<Mutex<Option<CapturedHttpRequest>>>)> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
     let captured = Arc::new(Mutex::new(None));
     let captured_for_server = Arc::clone(&captured);
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    let mut response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
-    );
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
 
     tokio::spawn(async move {
         let (mut socket, _) = match listener.accept().await {
@@ -209,7 +224,7 @@ async fn openai_like_json_response_url(
         };
         *captured_for_server.lock().expect("captured request mutex") =
             Some(parse_http_path_and_body(&request_bytes));
-        if let Err(err) = socket.write_all(response.as_bytes()).await {
+        if let Err(err) = socket.write_all(&response).await {
             panic!("test server failed to write response: {err}");
         }
     });
@@ -349,8 +364,14 @@ async fn openai_compatible_declares_executable_proxy_capabilities() {
     );
     assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::Embeddings));
     assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::ImageGeneration));
+    assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::AudioTranscription));
+    assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::AudioTranslation));
+    assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::TextToSpeech));
     assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::Embeddings));
     assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::ImageGeneration));
+    assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::AudioTranscription));
+    assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::AudioTranslation));
+    assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::TextToSpeech));
 }
 
 #[tokio::test]
@@ -364,6 +385,7 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
     static UNIMPLEMENTED_EMBEDDINGS: &[ProviderCapability] = &[ProviderCapability::Embeddings];
     static UNIMPLEMENTED_IMAGE_GENERATION: &[ProviderCapability] =
         &[ProviderCapability::ImageGeneration];
+    static UNIMPLEMENTED_AUDIO: &[ProviderCapability] = &[ProviderCapability::AudioTranscription];
 
     let config = OpenAILikeConfig::new(TEST_PUBLIC_API_BASE).with_skip_api_key(true);
     for (profile, expected) in [
@@ -376,6 +398,10 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
         ),
         (
             UNIMPLEMENTED_IMAGE_GENERATION,
+            "not executable for this OpenAI-like profile",
+        ),
+        (
+            UNIMPLEMENTED_AUDIO,
             "not executable for this OpenAI-like profile",
         ),
     ] {
@@ -1232,6 +1258,200 @@ async fn openai_compatible_image_generation_malformed_200_is_parse_error()
             assert_eq!(provider, PROVIDER_NAME);
         }
         other => panic!("expected response parsing error, got {other:?}"),
+    }
+    Ok(())
+}
+
+fn transcription_request(model: &str) -> TranscriptionRequest {
+    TranscriptionRequest {
+        file: b"fake-audio".to_vec(),
+        filename: "sample.mp3".to_string(),
+        model: model.to_string(),
+        language: Some("en".to_string()),
+        prompt: None,
+        response_format: Some("json".to_string()),
+        temperature: None,
+        timestamp_granularities: None,
+    }
+}
+
+fn translation_request(model: &str) -> TranslationRequest {
+    TranslationRequest {
+        file: b"fake-audio".to_vec(),
+        filename: "sample.mp3".to_string(),
+        model: model.to_string(),
+        prompt: None,
+        response_format: Some("json".to_string()),
+        temperature: None,
+    }
+}
+
+fn speech_request(model: &str) -> SpeechRequest {
+    SpeechRequest {
+        input: "hello".to_string(),
+        model: model.to_string(),
+        voice: "alloy".to_string(),
+        response_format: Some("mp3".to_string()),
+        speed: None,
+    }
+}
+
+const TRANSCRIPTION_SUCCESS_BODY: &str = r#"{"text":"hello world"}"#;
+
+#[tokio::test]
+async fn openai_compatible_audio_transcription_forwards_success_response()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", TRANSCRIPTION_SUCCESS_BODY).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let response = LLMProvider::audio_transcription(
+        &provider,
+        transcription_request("whisper-1"),
+        RequestContext::default(),
+    )
+    .await?;
+
+    assert_eq!(response.text, "hello world");
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("transcription request should reach upstream");
+    assert_eq!(captured.path, "/audio/transcriptions");
+    let body = captured.body_text();
+    assert!(body.contains("whisper-1"));
+    assert!(body.contains("sample.mp3"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_audio_transcription_rewrites_prefixed_model()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", TRANSCRIPTION_SUCCESS_BODY).await?;
+    let mut config = private_openai_like_config(api_base);
+    config.model_prefix = Some("custom/".to_string());
+    let provider = OpenAILikeProvider::new_openai_compatible(config).await?;
+
+    LLMProvider::audio_transcription(
+        &provider,
+        transcription_request("custom/whisper-1"),
+        RequestContext::default(),
+    )
+    .await?;
+
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("transcription request should reach upstream");
+    let body = captured.body_text();
+    assert!(body.contains("whisper-1"));
+    assert!(!body.contains("custom/whisper-1"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_audio_transcription_maps_401_before_deserialize()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"authentication_error","message":"invalid api key"}}"#;
+    let (api_base, _) = openai_like_json_response_url("401 Unauthorized", body).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = LLMProvider::audio_transcription(
+        &provider,
+        transcription_request("whisper-1"),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("401 must map to authentication before deserialize");
+
+    match err {
+        ProviderError::Authentication { provider, .. } => {
+            assert_eq!(provider, PROVIDER_NAME);
+        }
+        other => panic!("expected authentication error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_audio_translation_forwards_success_response()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", r#"{"text":"hello"}"#).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let response = LLMProvider::audio_translation(
+        &provider,
+        translation_request("whisper-1"),
+        RequestContext::default(),
+    )
+    .await?;
+
+    assert_eq!(response.text, "hello");
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("translation request should reach upstream");
+    assert_eq!(captured.path, "/audio/translations");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_text_to_speech_forwards_binary_response()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_http_response_url("200 OK", "audio/mpeg", b"mock-audio").await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let response = LLMProvider::text_to_speech(
+        &provider,
+        speech_request("tts-1"),
+        RequestContext::default(),
+    )
+    .await?;
+
+    assert_eq!(response.audio, b"mock-audio");
+    assert_eq!(response.content_type, "audio/mpeg");
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("speech request should reach upstream");
+    assert_eq!(captured.path, "/audio/speech");
+    let body = captured.json_body();
+    assert_eq!(body["model"], "tts-1");
+    assert_eq!(body["input"], "hello");
+    assert_eq!(body["voice"], "alloy");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_text_to_speech_maps_401_before_returning_audio()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"authentication_error","message":"invalid api key"}}"#;
+    let (api_base, _) = openai_like_json_response_url("401 Unauthorized", body).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = match LLMProvider::text_to_speech(
+        &provider,
+        speech_request("tts-1"),
+        RequestContext::default(),
+    )
+    .await
+    {
+        Ok(_) => panic!("401 must map to authentication before returning audio"),
+        Err(err) => err,
+    };
+
+    match err {
+        ProviderError::Authentication { provider, .. } => {
+            assert_eq!(provider, PROVIDER_NAME);
+        }
+        other => panic!("expected authentication error, got {other:?}"),
     }
     Ok(())
 }

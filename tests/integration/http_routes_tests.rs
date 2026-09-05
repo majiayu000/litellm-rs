@@ -8,6 +8,7 @@ mod tests {
     use crate::common::providers::mock_provider_config;
     use actix_web::http::StatusCode;
     use actix_web::{App, HttpResponse, HttpServer, test, web};
+    use bytes::Bytes;
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
@@ -246,6 +247,25 @@ mod tests {
         build_state_with_config(config).await
     }
 
+    async fn build_openai_compatible_audio_state(base_url: &str) -> AppState {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.providers = vec![mock_provider_config(
+            "mock-openai-compatible",
+            "openai_compatible",
+            "sk-test",
+            base_url,
+            vec!["whisper-1".to_string(), "tts-1".to_string()],
+        )];
+
+        build_state_with_config(config).await
+    }
+
     async fn mock_embeddings(
         captured_requests: web::Data<Arc<Mutex<Vec<Value>>>>,
         payload: web::Json<Value>,
@@ -280,6 +300,24 @@ mod tests {
                 "url": "https://images.example.test/gen.png"
             }]
         }))
+    }
+
+    async fn mock_audio_speech(
+        captured_requests: web::Data<Arc<Mutex<Vec<Value>>>>,
+        payload: web::Json<Value>,
+    ) -> HttpResponse {
+        captured_requests.lock().unwrap().push(payload.into_inner());
+        HttpResponse::Ok()
+            .content_type("audio/mpeg")
+            .body(Bytes::from_static(b"mock-audio"))
+    }
+
+    async fn mock_audio_transcriptions(
+        captured_bodies: web::Data<Arc<Mutex<Vec<Vec<u8>>>>>,
+        body: Bytes,
+    ) -> HttpResponse {
+        captured_bodies.lock().unwrap().push(body.to_vec());
+        HttpResponse::Ok().json(serde_json::json!({ "text": "hello world" }))
     }
 
     /// Construct an actix-web test app with AuthMiddleware and route
@@ -906,6 +944,140 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["model"], "gpt-image-1-mini");
         assert_eq!(requests[0]["prompt"], "a red cube");
+    }
+
+    #[tokio::test]
+    async fn test_audio_speech_rejects_streaming_before_upstream() {
+        let state = build_auth_disabled_state().await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/audio/speech")
+            .set_json(serde_json::json!({
+                "model": "tts-1",
+                "input": "hello",
+                "voice": "alloy",
+                "stream": true
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body: Value = test::read_body_json(resp).await;
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Streaming speech is not supported")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_audio_speech_route_proxies_openai_compatible_provider() {
+        let captured_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock server should have local address");
+        let captured_for_server = Arc::clone(&captured_requests);
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
+                .route("/audio/speech", web::post().to(mock_audio_speech))
+        })
+        .listen(listener)
+        .expect("mock server should listen")
+        .run();
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let state = build_openai_compatible_audio_state(&format!("http://{address}")).await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/audio/speech")
+            .set_json(serde_json::json!({
+                "model": "tts-1",
+                "input": "hello",
+                "voice": "alloy"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        let status = resp.status();
+        let body = test::read_body(resp).await;
+
+        handle.stop(true).await;
+        let _ = task.await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_ref(), b"mock-audio");
+        let requests = captured_requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["model"], "tts-1");
+        assert_eq!(requests[0]["input"], "hello");
+    }
+
+    #[tokio::test]
+    async fn test_audio_transcriptions_route_proxies_openai_compatible_provider() {
+        let captured_bodies = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock server should have local address");
+        let captured_for_server = Arc::clone(&captured_bodies);
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
+                .route(
+                    "/audio/transcriptions",
+                    web::post().to(mock_audio_transcriptions),
+                )
+        })
+        .listen(listener)
+        .expect("mock server should listen")
+        .run();
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let state = build_openai_compatible_audio_state(&format!("http://{address}")).await;
+        let app = test::init_service(build_test_app(state)).await;
+        let boundary = "litellm-rs-audio-boundary";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+        payload.extend_from_slice(b"whisper-1\r\n");
+        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        payload.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"sample.mp3\"\r\n",
+        );
+        payload.extend_from_slice(b"Content-Type: audio/mpeg\r\n\r\n");
+        payload.extend_from_slice(&[b'a'; 32]);
+        payload.extend_from_slice(b"\r\n");
+        payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let req = test::TestRequest::post()
+            .uri("/v1/audio/transcriptions")
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(payload)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        let status = resp.status();
+        let body: Value = test::read_body_json(resp).await;
+
+        handle.stop(true).await;
+        let _ = task.await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["text"], "hello world");
+        let captured = captured_bodies.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1);
+        let upstream = String::from_utf8_lossy(&captured[0]);
+        assert!(upstream.contains("whisper-1"));
+        assert!(upstream.contains("sample.mp3"));
     }
 
     // ---------------------------------------------------------------

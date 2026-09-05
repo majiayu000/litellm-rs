@@ -27,6 +27,9 @@ pub struct AudioSpeechRequest {
     pub response_format: Option<String>,
     /// Speed of speech (0.25 to 4.0)
     pub speed: Option<f32>,
+    /// Streaming speech is not supported; `true` fails closed.
+    #[serde(default)]
+    pub stream: Option<bool>,
 }
 
 fn default_tts_model() -> String {
@@ -59,6 +62,12 @@ pub async fn audio_speech(
     if request.input.len() > 4096 {
         return Ok(openai_errors::validation_error(
             "Input text too long (max 4096 characters)",
+        ));
+    }
+
+    if request.stream == Some(true) {
+        return Ok(openai_errors::validation_error(
+            "Streaming speech is not supported",
         ));
     }
 

@@ -253,7 +253,7 @@ a gateway video route.
 | Ollama (`ollama`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native `/api/chat` NDJSON streaming, `/api/embed`, and model tags/show endpoints. Localhost defaults to private-network endpoint policy; explicit endpoints keep their configured policy. |
 | GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
 | GitHub Copilot (`github_copilot`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native GitHub Copilot auth and model access when `providers-extended` is enabled; otherwise explicitly unsupported. |
-| Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | passthrough | passthrough | – | For self-hosted / unlisted OpenAI-compatible chat, embeddings, and image endpoints. |
+| Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | passthrough | passthrough | passthrough | For self-hosted / unlisted OpenAI-compatible chat, embeddings, image, and audio endpoints. |
 
 ### Tier 1 — catalog providers (OpenAI-compatible, always available)
 
