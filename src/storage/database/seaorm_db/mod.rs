@@ -23,6 +23,6 @@ mod user_state_corruption_tests;
 mod virtual_key_ops;
 
 // Re-export public types
-pub use request_ledger_ops::RequestLedgerSink;
+pub use request_ledger_ops::{RequestLedgerListFilter, RequestLedgerSink};
 pub use team_repository::SeaOrmTeamRepository;
 pub use types::{DatabaseBackendType, DatabaseStats, SeaOrmDatabase};

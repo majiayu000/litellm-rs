@@ -142,6 +142,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/clear", web::post().to(clear_response_cache)),
     );
     super::admin_routing::configure_routes(cfg);
+    super::admin_request_ledger::configure_routes(cfg);
 }
 
 #[cfg(test)]

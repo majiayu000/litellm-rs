@@ -1,8 +1,10 @@
 use crate::core::request_ledger::{RequestLedgerRecord, RequestLedgerWriter};
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,6 +15,27 @@ use super::types::SeaOrmDatabase;
 
 /// Minimum seconds between write-path retention deletes on one sink.
 const REQUEST_LEDGER_PRUNE_INTERVAL_SECS: i64 = 3600;
+
+/// Equality and time-window filters for the admin ledger query.
+#[derive(Debug, Clone, Default)]
+pub struct RequestLedgerListFilter {
+    /// Inclusive lower bound on `finished_at`.
+    pub finished_after: Option<DateTime<Utc>>,
+    /// Exclusive upper bound on `finished_at`.
+    pub finished_before: Option<DateTime<Utc>>,
+    /// Exact request id.
+    pub request_id: Option<String>,
+    /// Exact model name.
+    pub model: Option<String>,
+    /// Exact provider name.
+    pub provider: Option<String>,
+    /// Exact terminal status.
+    pub terminal_status: Option<String>,
+    /// Seek `finished_at` from the previous page (DESC).
+    pub after_finished_at: Option<DateTime<Utc>>,
+    /// Seek `request_id` from the previous page (DESC).
+    pub after_request_id: Option<String>,
+}
 
 /// Database-backed request ledger writer with bounded retention.
 #[derive(Clone)]
@@ -147,6 +170,55 @@ impl SeaOrmDatabase {
         Ok(())
     }
 
+    /// List metadata-only ledger rows newest-first, using `(finished_at, request_id)` seek.
+    pub async fn list_request_ledger(
+        &self,
+        filter: &RequestLedgerListFilter,
+        limit: u64,
+    ) -> Result<Vec<request_ledger::Model>> {
+        let mut query = entities::RequestLedger::find();
+
+        if let Some(request_id) = filter.request_id.as_deref() {
+            query = query.filter(request_ledger::Column::RequestId.eq(request_id));
+        }
+        if let Some(model) = filter.model.as_deref() {
+            query = query.filter(request_ledger::Column::Model.eq(model));
+        }
+        if let Some(provider) = filter.provider.as_deref() {
+            query = query.filter(request_ledger::Column::Provider.eq(provider));
+        }
+        if let Some(status) = filter.terminal_status.as_deref() {
+            query = query.filter(request_ledger::Column::TerminalStatus.eq(status));
+        }
+        if let Some(after) = filter.finished_after {
+            query = query.filter(request_ledger::Column::FinishedAt.gte(after));
+        }
+        if let Some(before) = filter.finished_before {
+            query = query.filter(request_ledger::Column::FinishedAt.lt(before));
+        }
+        if let (Some(finished_at), Some(request_id)) =
+            (filter.after_finished_at, filter.after_request_id.as_deref())
+        {
+            query = query.filter(
+                Condition::any()
+                    .add(request_ledger::Column::FinishedAt.lt(finished_at))
+                    .add(
+                        Condition::all()
+                            .add(request_ledger::Column::FinishedAt.eq(finished_at))
+                            .add(request_ledger::Column::RequestId.lt(request_id)),
+                    ),
+            );
+        }
+
+        query
+            .order_by_desc(request_ledger::Column::FinishedAt)
+            .order_by_desc(request_ledger::Column::RequestId)
+            .limit(limit)
+            .all(&self.db)
+            .await
+            .map_err(GatewayError::from)
+    }
+
     #[cfg(test)]
     pub(crate) async fn find_request_ledger(
         &self,
@@ -274,5 +346,81 @@ mod tests {
         let sink = RequestLedgerSink::new(Arc::new(test_db().await), 30);
         assert!(sink.claim_prune_slot());
         assert!(!sink.claim_prune_slot());
+    }
+
+    #[tokio::test]
+    async fn list_request_ledger_filters_and_pages_by_finished_at() {
+        let db = test_db().await;
+        let t1 = Utc::now() - Duration::seconds(30);
+        let t2 = Utc::now() - Duration::seconds(20);
+        let t3 = Utc::now() - Duration::seconds(10);
+        db.store_request_ledger(&record("req-a", t1), 30)
+            .await
+            .expect("a");
+        db.store_request_ledger(&record("req-b", t2), 30)
+            .await
+            .expect("b");
+        let mut newest = record("req-c", t3);
+        newest.model = Some("claude".to_string());
+        newest.provider = Some("anthropic".to_string());
+        newest.terminal_status = "failed".to_string();
+        db.store_request_ledger(&newest, 30).await.expect("c");
+
+        let gpt = db
+            .list_request_ledger(
+                &RequestLedgerListFilter {
+                    model: Some("gpt-4".to_string()),
+                    ..RequestLedgerListFilter::default()
+                },
+                10,
+            )
+            .await
+            .expect("model filter");
+        assert_eq!(
+            gpt.iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["req-b", "req-a"]
+        );
+
+        let page1 = db
+            .list_request_ledger(&RequestLedgerListFilter::default(), 2)
+            .await
+            .expect("page 1");
+        assert_eq!(
+            page1
+                .iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["req-c", "req-b"]
+        );
+
+        let page2 = db
+            .list_request_ledger(
+                &RequestLedgerListFilter {
+                    after_finished_at: Some(page1[1].finished_at.with_timezone(&Utc)),
+                    after_request_id: Some(page1[1].request_id.clone()),
+                    ..RequestLedgerListFilter::default()
+                },
+                2,
+            )
+            .await
+            .expect("page 2");
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].request_id, "req-a");
+
+        let by_id = db
+            .list_request_ledger(
+                &RequestLedgerListFilter {
+                    request_id: Some("req-c".to_string()),
+                    ..RequestLedgerListFilter::default()
+                },
+                10,
+            )
+            .await
+            .expect("id filter");
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(by_id[0].terminal_status, "failed");
+        assert_eq!(by_id[0].provider.as_deref(), Some("anthropic"));
     }
 }
