@@ -37,6 +37,7 @@ for variable in \
   RUSTC_WRAPPER \
   RUSTC_WORKSPACE_WRAPPER \
   CARGO_ENCODED_RUSTFLAGS \
+  CARGO_BUILD_RUSTFLAGS \
   CARGO_BUILD_RUSTC_WRAPPER \
   CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
   CARGO_BUILD_TARGET \
@@ -187,9 +188,17 @@ readonly request_body='{"model":"benchmark-model","messages":[{"role":"user","co
 request_file="$tmp_dir/request.json"
 printf '%s' "$request_body" >"$request_file"
 
+export CARGO_TARGET_DIR="$tmp_dir/cargo-target"
+mkdir -p "$CARGO_TARGET_DIR"
+gateway_bin="$CARGO_TARGET_DIR/release/gateway"
+
 cd "$repo_root"
 cargo build "${BUILD_FLAGS[@]}"
-target/release/gateway --config scripts/bench/gateway-overhead.yaml validate-config
+if [[ ! -x "$gateway_bin" ]]; then
+  echo "benchmark gateway binary was not produced: $gateway_bin" >&2
+  exit 1
+fi
+"$gateway_bin" --config scripts/bench/gateway-overhead.yaml validate-config
 
 require_port_available 18000
 python3 scripts/bench/mock_openai.py >"$tmp_dir/mock.log" 2>&1 &
@@ -198,7 +207,7 @@ wait_for_child_service \
   "$mock_pid" http://127.0.0.1:18000/health "$tmp_dir/mock.log" 100 "mock upstream"
 
 require_port_available 18080
-target/release/gateway \
+"$gateway_bin" \
   --config scripts/bench/gateway-overhead.yaml \
   --log-level error serve >"$tmp_dir/gateway.log" 2>&1 &
 gateway_pid=$!
