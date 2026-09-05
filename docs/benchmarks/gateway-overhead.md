@@ -26,14 +26,16 @@ scripts/bench/run_gateway_overhead.sh \
 ```
 
 The script builds `gateway` with the recorded `build_flags` of `--release --bin
-gateway`, validates the benchmark config, starts the deterministic mock and
-gateway, runs a 10-second warmup, then measures for 60 seconds at concurrency
-64. It rejects unrecorded Cargo/Rust environment overrides and Cargo
-configuration outside the checked-out repository. It fails if the Git tree or
-HEAD changes, the exact tool version differs, either benchmark port is already
-owned, a spawned service exits or misses its bounded readiness deadline, the
-output artifact exists, or any request fails or returns a status other than
-HTTP 200.
+gateway` into a fresh empty isolated Cargo target directory, validates the
+benchmark config, starts the deterministic mock and gateway, runs a 10-second
+warmup, then measures for 60 seconds at concurrency 64. It rejects unrecorded
+Cargo/Rust environment overrides, including `CARGO_BUILD_RUSTFLAGS` and a
+caller-supplied `CARGO_TARGET_DIR`, and Cargo configuration outside the
+checked-out repository. A replaced workspace `target/release/gateway` is never
+executed. It fails if the Git tree or HEAD changes, the exact tool version
+differs, either benchmark port is already owned, a spawned service exits or
+misses its bounded readiness deadline, the output artifact exists, or any
+request fails or returns a status other than HTTP 200.
 
 Keep the load generator, gateway, and mock on an otherwise idle machine. Record
 every run rather than selecting the best result. For comparisons, use the same
@@ -48,14 +50,15 @@ base SHA and GitHub's exact synthetic merge SHA sequentially on one
 `ubuntu-24.04` runner. This keeps intervening base-branch changes on both sides
 of the comparison. Both runs force `RUSTUP_TOOLCHAIN=1.96.1`, use oha 1.16.0,
 and use the deterministic mock above. Before measuring, the workflow requires
-the runner, mock, and benchmark config to be byte-identical in both checkouts;
-a pull request that changes the harness must validate that change separately
-instead of producing an incomparable regression report. The two raw artifacts
-and `comparison.json` are uploaded together, so a report remains tied to the
-commits and environment that produced it. The current base checkout's
-comparator owns validation, thresholds, and the verdict; only the pull request
-that first introduces the comparator uses the candidate copy when the base
-file does not yet exist.
+the runner, mock, and benchmark config to be byte-identical in both checkouts.
+A pull request that changes the harness skips the incomparable measurement and
+must validate that change with the contract tests instead of producing a
+regression report. The two raw artifacts
+and `comparison.json` are uploaded together when a comparison runs, so a report
+remains tied to the commits and environment that produced it. The current base
+checkout's comparator owns validation, thresholds, and the verdict; only the
+pull request that first introduces the comparator uses the candidate copy when
+the base file does not yet exist.
 
 The initial policy is deliberately report-only. A measured regression exits the
 comparator with status 10, which the workflow renders as a warning and a job

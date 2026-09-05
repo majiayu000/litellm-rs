@@ -7,8 +7,10 @@ import http.client
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
+import textwrap
 import threading
 import unittest
 from pathlib import Path
@@ -237,11 +239,15 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertIn("kill -0", runner)
         self.assertIn("source_git_sha", runner)
         self.assertIn("CARGO_PROFILE_RELEASE_", runner)
+        self.assertIn("CARGO_BUILD_RUSTFLAGS", runner)
+        self.assertIn('CARGO_TARGET_DIR="$tmp_dir/cargo-target"', runner)
         self.assertIn('artifact_tmp="$tmp_dir/artifact.json"', runner)
         self.assertIn('.statusCodeDistribution | keys == ["200"]', runner)
         self.assertIn("--max-time", runner)
         self.assertIn("/proc/cpuinfo", runner)
         self.assertIn("%Y-%m-%dT%H%M%SZ", methodology)
+        self.assertNotIn("\ntarget/release/gateway", runner)
+        self.assertNotIn(" target/release/gateway", runner)
 
     def test_runner_requires_the_exact_oha_release(self) -> None:
         result = self.run_preflight(oha_version="oha 1.16.0-dev")
@@ -257,9 +263,132 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("build override is not allowed: CARGO_TARGET_DIR", result.stderr)
 
+        result = self.run_preflight(
+            extra_env={"CARGO_BUILD_RUSTFLAGS": "-C target-cpu=native"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "build override is not allowed: CARGO_BUILD_RUSTFLAGS",
+            result.stderr,
+        )
+
         result = self.run_preflight(external_cargo_config=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("external Cargo configuration is not allowed", result.stderr)
+
+    def test_runner_builds_into_an_isolated_target_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            probe_repo = temp_dir / "probe-repo"
+            runner_dir = probe_repo / "scripts" / "bench"
+            runner_dir.mkdir(parents=True)
+            shutil.copy(RUNNER_PATH, runner_dir / "run_gateway_overhead.sh")
+            (probe_repo / ".gitignore").write_text("/target/\n", encoding="utf-8")
+            cargo_home = temp_dir / "cargo-home"
+            cargo_home.mkdir()
+            subprocess.run(
+                ["git", "init", "-b", "main"],
+                cwd=probe_repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "add", "."],
+                cwd=probe_repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=probe@example.com",
+                    "-c",
+                    "user.name=probe",
+                    "commit",
+                    "-m",
+                    "probe",
+                ],
+                cwd=probe_repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            bin_dir = temp_dir / "bin"
+            bin_dir.mkdir()
+            probe_log = temp_dir / "probe-target-dir"
+            decoy_log = temp_dir / "decoy.log"
+            isolated_log = temp_dir / "isolated.log"
+            fake_oha = bin_dir / "oha"
+            fake_oha.write_text("#!/bin/sh\nprintf '%s\\n' 'oha 1.16.0'\n", encoding="utf-8")
+            fake_oha.chmod(0o755)
+            fake_cargo = bin_dir / "cargo"
+            fake_cargo.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env python3
+                    import os
+                    import pathlib
+                    import sys
+
+                    target = os.environ.get("CARGO_TARGET_DIR", "")
+                    pathlib.Path({str(probe_log)!r}).write_text(target)
+                    if len(sys.argv) >= 2 and sys.argv[1] in ("-V", "--version"):
+                        print("cargo 1.96.1 (test)")
+                        raise SystemExit(0)
+                    if not target:
+                        sys.stderr.write("CARGO_TARGET_DIR was not set\\n")
+                        raise SystemExit(2)
+                    binary = pathlib.Path(target) / "release" / "gateway"
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.write_text(
+                        "#!/bin/sh\\n"
+                        f"printf isolated >> '{isolated_log}'\\n"
+                        "exit 1\\n"
+                    )
+                    binary.chmod(0o755)
+                    raise SystemExit(0)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_cargo.chmod(0o755)
+
+            decoy_path = probe_repo / "target" / "release" / "gateway"
+            decoy_path.parent.mkdir(parents=True, exist_ok=True)
+            decoy_path.write_text(
+                "#!/bin/sh\n"
+                f"printf decoy >> '{decoy_log}'\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            decoy_path.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
+            environment["CARGO_HOME"] = str(cargo_home)
+            output = temp_dir / "artifact.json"
+            result = subprocess.run(
+                ["bash", str(runner_dir / "run_gateway_overhead.sh"), str(output)],
+                cwd=probe_repo,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(probe_log.exists(), result.stderr)
+            target_dir = Path(probe_log.read_text(encoding="utf-8"))
+            self.assertTrue(str(target_dir), result.stderr)
+            self.assertNotEqual(target_dir.resolve(), (probe_repo / "target").resolve())
+            self.assertEqual(target_dir.name, "cargo-target")
+            self.assertTrue(isolated_log.exists(), result.stderr)
+            self.assertEqual(isolated_log.read_text(encoding="utf-8"), "isolated")
+            self.assertFalse(decoy_log.exists())
 
     def test_runner_refuses_an_existing_artifact(self) -> None:
         result = self.run_preflight(existing_output=True)
@@ -383,7 +512,10 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
 
     def test_workflow_file_is_present(self) -> None:
         self.assertTrue(WORKFLOW_PATH.is_file())
-        self.assertGreater(WORKFLOW_PATH.stat().st_size, 0)
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertGreater(len(workflow), 0)
+        self.assertIn("id: harness", workflow)
+        self.assertIn("steps.harness.outputs.identical == 'true'", workflow)
 
 
 if __name__ == "__main__":
