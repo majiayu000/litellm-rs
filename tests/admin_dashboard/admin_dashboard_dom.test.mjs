@@ -21,6 +21,13 @@ const providerHealthSource = await readFile(
   ),
   "utf8",
 );
+const routingInventorySource = await readFile(
+  new URL(
+    "../../src/server/routes/admin_dashboard/routing_inventory.js",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const immediate = () => new Promise((resolve) => setImmediate(resolve));
 async function settle(turns = 8) {
   for (let index = 0; index < turns; index += 1) {
@@ -79,11 +86,20 @@ function dashboard(options = {}) {
         provider_details: [],
       },
     },
+    inventory = {
+      snapshot_generation: 1,
+      models: [],
+      unavailable_providers: [],
+    },
     handler,
   } = options;
   const htmlWithoutScript = indexHtml
     .replace(
       '<script src="/admin/dashboard/provider-health.js" defer></script>',
+      "",
+    )
+    .replace(
+      '<script src="/admin/dashboard/routing-inventory.js" defer></script>',
       "",
     )
     .replace('<script src="/admin/dashboard/budget.js" defer></script>', "")
@@ -202,6 +218,9 @@ function dashboard(options = {}) {
     if (url.pathname === "/health/detailed" && call.method === "GET") {
       return Promise.resolve(healthResponse(health, 503));
     }
+    if (url.pathname === "/admin/routing/inventory" && call.method === "GET") {
+      return Promise.resolve(apiResponse(inventory));
+    }
     const usageMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/usage$/);
     if (usageMatch && call.method === "GET") {
       const result = usageByTeam.get(decodeURIComponent(usageMatch[1]));
@@ -214,6 +233,7 @@ function dashboard(options = {}) {
     throw new Error(`Unexpected request: ${call.method} ${call.path}`);
   };
   window.eval(providerHealthSource);
+  window.eval(routingInventorySource);
   window.eval(budgetSource);
   window.eval(appSource);
   return context;
@@ -1294,4 +1314,208 @@ test("B16 a committed save clears edit state before a superseded refresh settles
   assert.equal(window.document.getElementById("budget-name").value, "");
   assert.equal(window.document.getElementById("budget-scope").disabled, false);
   assert.equal(window.document.getElementById("budget-name").readOnly, false);
+});
+
+test("B14 routing inventory renders empty, unknown, unhealthy, and feature-gated rows", { concurrency: false }, async (t) => {
+  const inventory = {
+    snapshot_generation: 9,
+    models: [],
+    unavailable_providers: [],
+  };
+  let inventoryGets = 0;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/admin/routing/inventory" && call.method === "GET") {
+        inventoryGets += 1;
+        if (inventoryGets === 2) {
+          return apiResponse({
+            snapshot_generation: 12,
+            models: [
+              {
+                public_model: "gpt-4",
+                aliases: ["gpt4"],
+                deployments: [
+                  {
+                    provider: "openai",
+                    deployment: "dep-unknown",
+                    public_model: "gpt-4",
+                    model: "gpt-4-turbo",
+                    capabilities: ["chat_completion"],
+                    health: "unknown",
+                    available: true,
+                    unavailable_reasons: [],
+                    rpm: { configured_limit: 100 },
+                    tpm: { configured_limit: null },
+                    active_requests: 0,
+                  },
+                  {
+                    provider: "openai",
+                    deployment: "dep-unhealthy",
+                    public_model: "gpt-4",
+                    model: "gpt-4-turbo",
+                    capabilities: ["chat_completion"],
+                    health: "unhealthy",
+                    available: false,
+                    unavailable_reasons: ["unhealthy"],
+                    cooldown: { until_unix_secs: 1, remaining_secs: 12 },
+                    rpm: { configured_limit: 50, current_usage: 50 },
+                    tpm: { configured_limit: 1000, current_usage: 25 },
+                    active_requests: 3,
+                  },
+                ],
+              },
+            ],
+            unavailable_providers: [
+              {
+                provider: "offline-pydantic",
+                provider_type: "pydantic_ai",
+                public_models: ["agent-model"],
+                available: false,
+                unavailable_reasons: ["feature_gated"],
+              },
+            ],
+          });
+        }
+        return apiResponse(inventory);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  window.document.querySelector('[data-view="routing"]').click();
+  assert.equal(window.document.querySelectorAll("#routing-body tr").length, 0);
+  assert.equal(window.document.getElementById("routing-empty").hidden, false);
+
+  window.document.getElementById("refresh-routing").click();
+  await waitFor(() => inventoryGets === 2, "routing inventory refresh was not requested");
+  await waitFor(
+    () => window.document.querySelectorAll("#routing-body tr").length === 2,
+    "routing inventory rows did not render",
+  );
+
+  assert.match(window.document.getElementById("routing-summary").textContent, /Generation 12/);
+  assert.match(window.document.getElementById("routing-notice").textContent, /feature-gated/i);
+  assert.match(window.document.getElementById("routing-notice").textContent, /unknown/i);
+  const rows = rowText(window, "#routing-body tr");
+  assert.match(rows[0], /gpt-4.*gpt4.*dep-unknown.*unknown.*Available/i);
+  assert.match(rows[1], /dep-unhealthy.*unhealthy.*Unavailable.*unhealthy.*12s remaining/i);
+  const missing = rowText(window, "#routing-unavailable-body tr");
+  assert.match(missing[0], /offline-pydantic.*pydantic_ai.*feature_gated/i);
+  assert.equal(window.document.getElementById("routing-empty").hidden, true);
+});
+
+test("B15 routing inventory failures are explicit and clear stale rows", { concurrency: false }, async (t) => {
+  let mode = "ok";
+  const context = dashboard({
+    inventory: {
+      snapshot_generation: 2,
+      models: [
+        {
+          public_model: "gpt-4",
+          aliases: [],
+          deployments: [
+            {
+              provider: "openai",
+              deployment: "dep-ok",
+              public_model: "gpt-4",
+              model: "gpt-4",
+              capabilities: ["chat_completion"],
+              health: "healthy",
+              available: true,
+              unavailable_reasons: [],
+              rpm: { configured_limit: null },
+              tpm: { configured_limit: null },
+              active_requests: 0,
+            },
+          ],
+        },
+      ],
+      unavailable_providers: [],
+    },
+    handler(call) {
+      if (call.url.pathname !== "/admin/routing/inventory" || call.method !== "GET") {
+        return undefined;
+      }
+      if (mode === "error") {
+        return Promise.reject(new Error("network offline"));
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  window.document.querySelector('[data-view="routing"]').click();
+  assert.equal(window.document.querySelectorAll("#routing-body tr").length, 1);
+
+  mode = "error";
+  window.document.getElementById("refresh-routing").click();
+  await waitFor(
+    () => /network offline/i.test(window.document.getElementById("routing-notice").textContent),
+    "network failure was not shown in the routing view",
+  );
+  assert.equal(window.document.querySelectorAll("#routing-body tr").length, 0);
+
+  window.document.getElementById("sign-out").click();
+  await settle();
+  assert.equal(window.document.getElementById("routing-summary").textContent, "");
+  assert.equal(window.document.getElementById("routing-notice").textContent, "");
+  assert.equal(window.document.querySelectorAll("#routing-body tr").length, 0);
+});
+
+test("B16 a late routing inventory response after logout cannot restore stale data", { concurrency: false }, async (t) => {
+  let inventoryGets = 0;
+  let late;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/admin/routing/inventory" && call.method === "GET") {
+        inventoryGets += 1;
+        if (inventoryGets === 2) {
+          late = deferred();
+          return late.promise;
+        }
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  window.document.querySelector('[data-view="routing"]').click();
+  window.document.getElementById("refresh-routing").click();
+  await waitFor(() => inventoryGets === 2, "late routing inventory request was not pending");
+  window.document.getElementById("sign-out").click();
+  late.resolve(
+    apiResponse({
+      snapshot_generation: 99,
+      models: [
+        {
+          public_model: "must-not-return",
+          aliases: [],
+          deployments: [
+            {
+              provider: "openai",
+              deployment: "stale",
+              public_model: "must-not-return",
+              model: "stale",
+              capabilities: [],
+              health: "healthy",
+              available: true,
+              unavailable_reasons: [],
+              rpm: { configured_limit: null },
+              tpm: { configured_limit: null },
+              active_requests: 0,
+            },
+          ],
+        },
+      ],
+      unavailable_providers: [],
+    }),
+  );
+  await settle();
+  assert.equal(window.document.getElementById("routing-summary").textContent, "");
+  assert.equal(window.document.getElementById("routing-notice").textContent, "");
+  assert.equal(window.document.querySelectorAll("#routing-body tr").length, 0);
 });

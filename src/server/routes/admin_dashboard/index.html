@@ -7,6 +7,7 @@
   <title>LiteLLM-RS Admin</title>
   <link rel="stylesheet" href="/admin/dashboard/app.css">
   <script src="/admin/dashboard/provider-health.js" defer></script>
+  <script src="/admin/dashboard/routing-inventory.js" defer></script>
   <script src="/admin/dashboard/budget.js" defer></script>
   <script src="/admin/dashboard/app.js" defer></script>
 </head>
@@ -53,6 +54,8 @@
                 aria-controls="budgets-panel" aria-selected="false">Budgets</button>
         <button class="tab" type="button" data-view="health"
                 aria-controls="health-panel" aria-selected="false">Provider health</button>
+        <button class="tab" type="button" data-view="routing"
+                aria-controls="routing-panel" aria-selected="false">Routing inventory</button>
       </nav>
 
       <section id="keys-panel" class="panel" aria-labelledby="keys-title">
@@ -337,6 +340,62 @@
           </table>
         </div>
         <p id="health-empty" class="empty-state" hidden>No providers configured.</p>
+      </section>
+
+      <section id="routing-panel" class="panel" aria-labelledby="routing-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Live routing snapshot</p>
+            <h2 id="routing-title">Routing inventory</h2>
+            <p>Public models, deployments, and configured providers that are not routed.</p>
+          </div>
+          <button id="refresh-routing" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <p id="routing-summary" class="health-summary"></p>
+        <p id="routing-notice" class="health-notice" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <caption>Deployments from the live routing snapshot</caption>
+            <thead>
+              <tr>
+                <th scope="col">Public model</th>
+                <th scope="col">Aliases</th>
+                <th scope="col">Provider</th>
+                <th scope="col">Deployment</th>
+                <th scope="col">Wire model</th>
+                <th scope="col">Capabilities</th>
+                <th scope="col">Health</th>
+                <th scope="col">Availability</th>
+                <th scope="col">Unavailable reasons</th>
+                <th scope="col">Cooldown</th>
+                <th scope="col">RPM</th>
+                <th scope="col">TPM</th>
+                <th scope="col">Active</th>
+              </tr>
+            </thead>
+            <tbody id="routing-body"></tbody>
+          </table>
+        </div>
+        <p id="routing-empty" class="empty-state" hidden>No routed deployments.</p>
+        <div class="table-wrap">
+          <table>
+            <caption>Configured providers missing from the live snapshot</caption>
+            <thead>
+              <tr>
+                <th scope="col">Provider</th>
+                <th scope="col">Type</th>
+                <th scope="col">Public models</th>
+                <th scope="col">Availability</th>
+                <th scope="col">Unavailable reasons</th>
+              </tr>
+            </thead>
+            <tbody id="routing-unavailable-body"></tbody>
+          </table>
+        </div>
+        <p id="routing-unavailable-empty" class="empty-state" hidden>
+          No configured providers are missing from routing.
+        </p>
       </section>
     </section>
   </main>

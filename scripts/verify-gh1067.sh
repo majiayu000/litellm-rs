@@ -85,6 +85,8 @@ const trackedInputs = [
   "scripts/verify-gh1067.sh", "tests/admin_dashboard/package.json",
   "tests/admin_dashboard/package-lock.json", "tests/admin_dashboard/admin_dashboard_dom.test.mjs",
   "src/server/routes/admin_dashboard/index.html", "src/server/routes/admin_dashboard/app.js",
+  "src/server/routes/admin_dashboard/provider_health.js",
+  "src/server/routes/admin_dashboard/routing_inventory.js",
 ];
 const log = path.join(artifactDir, "admin_dashboard_dom.log");
 const files = [...trackedInputs.map((name) => path.join(root, name)), log]

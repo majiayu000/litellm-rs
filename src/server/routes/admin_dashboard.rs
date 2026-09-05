@@ -8,6 +8,7 @@ const APP_CSS: &str = include_str!("admin_dashboard/app.css");
 const APP_JS: &str = include_str!("admin_dashboard/app.js");
 const BUDGET_JS: &str = include_str!("admin_dashboard/budget.js");
 const PROVIDER_HEALTH_JS: &str = include_str!("admin_dashboard/provider_health.js");
+const ROUTING_INVENTORY_JS: &str = include_str!("admin_dashboard/routing_inventory.js");
 const DASHBOARD_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
     connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; \
     form-action 'self'; frame-ancestors 'none'";
@@ -36,6 +37,10 @@ async fn provider_health_javascript() -> HttpResponse {
     embedded_asset("text/javascript; charset=utf-8", PROVIDER_HEALTH_JS)
 }
 
+async fn routing_inventory_javascript() -> HttpResponse {
+    embedded_asset("text/javascript; charset=utf-8", ROUTING_INVENTORY_JS)
+}
+
 async fn budget_javascript() -> HttpResponse {
     embedded_asset("text/javascript; charset=utf-8", BUDGET_JS)
 }
@@ -47,6 +52,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/admin/dashboard/provider-health.js",
             web::get().to(provider_health_javascript),
+        )
+        .route(
+            "/admin/dashboard/routing-inventory.js",
+            web::get().to(routing_inventory_javascript),
         )
         .route(
             "/admin/dashboard/budget.js",
@@ -84,6 +93,11 @@ mod tests {
                 "/admin/dashboard/provider-health.js",
                 "text/javascript; charset=utf-8",
                 "createProviderHealthView",
+            ),
+            (
+                "/admin/dashboard/routing-inventory.js",
+                "text/javascript; charset=utf-8",
+                "createRoutingInventoryView",
             ),
             (
                 "/admin/dashboard/budget.js",
@@ -128,6 +142,7 @@ mod tests {
             "/admin/dashboard/",
             "/admin/dashboard/app.js.map",
             "/admin/dashboard/budget.js.map",
+            "/admin/dashboard/routing-inventory.js.map",
             "/admin/dashboard/private",
         ] {
             let response = actix_test::call_service(
@@ -151,9 +166,10 @@ mod tests {
             assert!(APP_JS.contains(path), "missing API path {path}");
         }
         assert!(PROVIDER_HEALTH_JS.contains("\"/health/detailed\""));
+        assert!(ROUTING_INVENTORY_JS.contains("\"/admin/routing/inventory\""));
         assert!(BUDGET_JS.contains("\"/v1/budget/providers\""));
         assert!(BUDGET_JS.contains("\"/v1/budget/models\""));
-        for asset in [APP_JS, PROVIDER_HEALTH_JS, BUDGET_JS] {
+        for asset in [APP_JS, PROVIDER_HEALTH_JS, ROUTING_INVENTORY_JS, BUDGET_JS] {
             for forbidden in [
                 "localStorage",
                 "sessionStorage",
@@ -205,6 +221,9 @@ mod tests {
             "id=\"budget-form\"",
             "id=\"provider-budgets-body\"",
             "id=\"model-budgets-body\"",
+            "id=\"routing-panel\"",
+            "id=\"routing-body\"",
+            "id=\"routing-unavailable-body\"",
         ] {
             assert!(INDEX_HTML.contains(marker), "missing HTML marker {marker}");
         }
