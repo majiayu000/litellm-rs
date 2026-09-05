@@ -4,6 +4,7 @@ use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+#[derive(Clone, Copy)]
 pub(super) enum AuditBodyOutcome {
     Completed,
     Failed(&'static str),

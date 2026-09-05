@@ -7,13 +7,13 @@ use chrono::Utc;
 use sea_orm::{ConnectionTrait, EntityTrait};
 #[cfg(feature = "sqlite")]
 use sea_orm::{DbBackend, Statement};
-#[cfg(feature = "sqlite")]
 use sea_orm_migration::MigratorTrait;
 use std::collections::HashMap;
 use std::error::Error;
 use uuid::Uuid;
 
 const PRE_OWNER_RESTRICT_MIGRATION_COUNT: u32 = 10;
+const OWNER_RESTRICT_MIGRATION: &str = "m20260712_000001_restrict_api_key_owner_deletion";
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 #[test]
@@ -76,6 +76,33 @@ fn api_key(name: &str, user_id: Option<Uuid>) -> ApiKey {
     }
 }
 
+async fn applied_migration_names(db: &SeaOrmDatabase) -> TestResult<Vec<String>> {
+    Ok(Migrator::get_applied_migrations(db.connection())
+        .await?
+        .into_iter()
+        .map(|migration| migration.name().to_string())
+        .collect())
+}
+
+async fn rollback_migrations_after(db: &SeaOrmDatabase, name: &str) -> TestResult {
+    let applied = applied_migration_names(db).await?;
+    let steps = applied
+        .iter()
+        .rev()
+        .take_while(|applied_name| applied_name.as_str() != name)
+        .count();
+    if steps > 0 {
+        Migrator::down(db.connection(), Some(u32::try_from(steps)?)).await?;
+    }
+    Ok(())
+}
+
+async fn rollback_through(db: &SeaOrmDatabase, name: &str) -> TestResult {
+    rollback_migrations_after(db, name).await?;
+    Migrator::down(db.connection(), Some(1)).await?;
+    Ok(())
+}
+
 async fn stored_key(db: &SeaOrmDatabase, key_id: Uuid) -> TestResult<entities::api_key::Model> {
     entities::ApiKey::find_by_id(key_id)
         .one(db.connection())
@@ -128,7 +155,7 @@ async fn assert_owner_restrict_upgrade_contract(db: &SeaOrmDatabase) -> TestResu
     assert!(db.create_api_key(&duplicate_hash).await.is_err());
     assert_eq!(stored_key(db, global_key.metadata.id).await?, global_before);
 
-    Migrator::down(db.connection(), Some(1)).await?;
+    rollback_through(db, OWNER_RESTRICT_MIGRATION).await?;
     let deleted_owner = entities::User::delete_by_id(owner.id())
         .exec(db.connection())
         .await?;
@@ -198,11 +225,7 @@ async fn owner_restrict_sqlite_upgrade_rolls_back_on_dangling_owner() -> TestRes
     assert!(sqlite_object_exists(&db, "index", "idx_api_keys_key_hash").await?);
     assert_eq!(stored_key(&db, dangling_key.metadata.id).await?, before);
     let pending = Migrator::get_pending_migrations(db.connection()).await?;
-    assert_eq!(pending.len(), 1);
-    assert_eq!(
-        pending[0].name(),
-        "m20260712_000001_restrict_api_key_owner_deletion"
-    );
+    assert_eq!(pending[0].name(), OWNER_RESTRICT_MIGRATION);
     Ok(())
 }
 
@@ -225,11 +248,7 @@ async fn owner_restrict_sqlite_ledger_insert_failure_rolls_back_schema() -> Test
 
     assert!(db.migrate().await.is_err());
     let pending = Migrator::get_pending_migrations(db.connection()).await?;
-    assert_eq!(pending.len(), 1);
-    assert_eq!(
-        pending[0].name(),
-        "m20260712_000001_restrict_api_key_owner_deletion"
-    );
+    assert_eq!(pending[0].name(), OWNER_RESTRICT_MIGRATION);
     let deleted = entities::User::delete_by_id(owner.id())
         .exec(db.connection())
         .await?;
@@ -247,6 +266,7 @@ async fn owner_restrict_sqlite_ledger_delete_failure_rolls_back_schema() -> Test
     let owned_key = api_key("ledger-delete-key", Some(owner.id()));
     db.create_api_key(&owned_key).await?;
     db.migrate().await?;
+    rollback_migrations_after(&db, OWNER_RESTRICT_MIGRATION).await?;
     db.connection()
         .execute_unprepared(
             "CREATE TRIGGER fail_owner_restrict_ledger_delete \
@@ -260,7 +280,7 @@ async fn owner_restrict_sqlite_ledger_delete_failure_rolls_back_schema() -> Test
     let applied = Migrator::get_applied_migrations(db.connection()).await?;
     assert_eq!(
         applied.last().map(|migration| migration.name()),
-        Some("m20260712_000001_restrict_api_key_owner_deletion")
+        Some(OWNER_RESTRICT_MIGRATION)
     );
     assert!(
         entities::User::delete_by_id(owner.id())

@@ -8,6 +8,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 mod redis_config;
+pub use super::request_ledger::{RequestLedgerConfig, RequestLedgerWriteFailure};
 pub use redis_config::RedisConfig;
 
 /// Storage configuration
@@ -24,6 +25,9 @@ pub struct StorageConfig {
     /// Vector database configuration (optional)
     #[serde(default)]
     pub vector_db: Option<VectorDbConfig>,
+    /// Metadata-only terminal request ledger. Disabled by default.
+    #[serde(default)]
+    pub request_ledger: RequestLedgerConfig,
 }
 
 impl StorageConfig {
@@ -46,6 +50,7 @@ impl StorageConfig {
         if other.vector_db.is_some() {
             self.vector_db = other.vector_db;
         }
+        self.request_ledger = self.request_ledger.merge(other.request_ledger);
         self
     }
 }
@@ -592,6 +597,8 @@ mod tests {
         assert_eq!(config.redis.url, "redis://localhost:6379");
         assert_eq!(config.files.storage_type, "local");
         assert!(config.vector_db.is_none());
+        assert!(!config.request_ledger.enabled);
+        assert_eq!(config.request_ledger.retention_days, 30);
     }
 
     #[test]
@@ -601,6 +608,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
         assert!(config.vector_db.is_none());
     }
@@ -645,6 +653,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
         let merged = base.merge(other);
         assert_eq!(merged.database.url, "postgresql://new/db");
@@ -711,6 +720,7 @@ mod tests {
                 s3: None,
             },
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let merged = base.merge(other);

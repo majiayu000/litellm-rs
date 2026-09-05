@@ -494,7 +494,7 @@ pub struct StorageHealthStatus {
 mod tests {
     use super::*;
     use crate::config::models::file_storage::FileStorageConfig;
-    use crate::config::models::storage::{DatabaseConfig, RedisConfig};
+    use crate::config::models::storage::{DatabaseConfig, RedisConfig, RequestLedgerConfig};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -521,6 +521,7 @@ mod tests {
             },
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         // This test would require actual database connections
@@ -542,6 +543,7 @@ mod tests {
                 s3: None,
             },
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let storage = StorageLayer::new(&config)
@@ -569,6 +571,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let storage = StorageLayer::new(&config)
@@ -600,6 +603,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let err = match StorageLayer::new(&config).await {
@@ -620,6 +624,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let storage = match StorageLayer::new(&config).await {
@@ -641,6 +646,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let storage = StorageLayer::new(&config)
@@ -687,6 +693,7 @@ mod tests {
             redis: unreachable_redis_config(false),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let result = StorageLayer::new(&config).await;
@@ -703,6 +710,7 @@ mod tests {
             redis: unreachable_redis_config(true),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let storage = StorageLayer::new(&config)
@@ -726,6 +734,7 @@ mod tests {
             redis,
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         };
 
         let storage = StorageLayer::new(&config)

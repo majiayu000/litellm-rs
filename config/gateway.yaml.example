@@ -134,6 +134,16 @@ storage:
     max_connections: 20
     connection_timeout: 5
     cluster: false
+  # Metadata-only terminal request log. Disabled by default. Never stores
+  # prompt, response body, Authorization, raw API keys, or provider secrets.
+  # write_failure: continue logs persist errors; fail returns HTTP 503 on unary
+  # requests when the row cannot be written. retention_days bounds table size
+  # via a throttled write-path prune (indexes: finished_at, model, provider,
+  # terminal_status).
+  # request_ledger:
+  #   enabled: false
+  #   write_failure: continue
+  #   retention_days: 30
   vector_db: null
 
 auth:

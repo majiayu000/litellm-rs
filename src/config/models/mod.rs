@@ -25,6 +25,7 @@ pub(crate) use guardrails::validate_gateway_guardrails;
 pub mod monitoring;
 pub mod provider;
 pub mod rate_limit;
+pub mod request_ledger;
 pub mod router;
 pub mod server;
 pub mod storage;

@@ -22,6 +22,7 @@ pub mod a2a; // Experimental module-only A2A gateway; see subsystem_registry.
 pub mod analytics;
 pub mod audio; // Audio API (transcription, translation, speech)
 pub mod audit; // Audit logging system
+pub mod request_ledger; // Metadata-only terminal request ledger
 // pub mod base_provider;  // Removed: unused dead code
 #[cfg(feature = "storage")]
 pub mod batch;

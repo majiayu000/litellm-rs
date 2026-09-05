@@ -23,6 +23,8 @@ impl Validate for StorageConfig {
             vector_db.validate()?;
         }
 
+        self.request_ledger.validate()?;
+
         Ok(())
     }
 }

@@ -64,6 +64,7 @@ fn storage_with_vector(
         redis: RedisConfig::default(),
         files: FileStorageConfig::default(),
         vector_db,
+        request_ledger: crate::config::models::storage::RequestLedgerConfig::default(),
     }
 }
 
