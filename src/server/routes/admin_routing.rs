@@ -122,7 +122,7 @@ pub struct RateWindowInventory {
 
 fn build_inventory(snapshot: &RoutingSnapshot, providers: &[ProviderConfig]) -> RoutingInventory {
     let aliases_by_model = aliases_by_public_model(snapshot);
-    let mut models: Vec<PublicModelInventory> = snapshot
+    let models: Vec<PublicModelInventory> = snapshot
         .model_order
         .iter()
         .filter_map(|public_model| {
@@ -146,7 +146,6 @@ fn build_inventory(snapshot: &RoutingSnapshot, providers: &[ProviderConfig]) -> 
             })
         })
         .collect();
-    models.sort_by(|left, right| left.public_model.cmp(&right.public_model));
 
     RoutingInventory {
         success: true,
@@ -670,6 +669,30 @@ mod tests {
         assert_eq!(deployments[0]["tpm"]["current_usage"], 25);
         assert!(deployments[1]["rpm"]["current_usage"].is_null());
         assert!(deployments[0]["capabilities"].as_array().is_some());
+    }
+
+    #[actix_web::test]
+    async fn inventory_preserves_snapshot_model_order() {
+        let state = test_state(base_test_config(true)).await;
+        state
+            .unified_router
+            .add_deployment(openai_deployment("dep-zeta", "zeta", "zeta").await);
+        state
+            .unified_router
+            .add_deployment(openai_deployment("dep-alpha", "alpha", "alpha").await);
+
+        let app = admin_app(state, Some(make_test_user(UserRole::Admin)), None).await;
+        let (status, body) = get_inventory(&app).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|model| model["public_model"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["zeta", "alpha"]
+        );
     }
 
     #[actix_web::test]
