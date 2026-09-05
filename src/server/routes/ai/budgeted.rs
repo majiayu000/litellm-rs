@@ -368,6 +368,7 @@ pub(super) struct SettledStream {
     pub(super) request_pricing: spend::RequestPricing,
     pub(super) budget_reservation: Option<UnifiedBudgetReservation>,
     pub(super) key_budget_reservation: Option<BudgetReservation>,
+    pub(super) ledger_facts: Option<crate::core::request_ledger::SharedRequestLedgerFacts>,
 }
 
 impl SettledStream {
@@ -376,7 +377,8 @@ impl SettledStream {
         usage: Option<&Usage>,
         saw_upstream_output: bool,
     ) {
-        spend::record_finished_stream_spend_with_reservation_with_policy(
+        let facts = self.ledger_facts.clone();
+        let fut = spend::record_finished_stream_spend_with_reservation_with_policy(
             self.pricing_service.as_ref(),
             &self.pricing_config,
             spend::StreamSpendSettlement {
@@ -391,12 +393,16 @@ impl SettledStream {
                 budget_reservation: self.budget_reservation.take(),
                 key_budget_reservation: self.key_budget_reservation.take(),
             },
-        )
-        .await;
+        );
+        match facts {
+            Some(facts) => crate::core::request_ledger::scope_facts(facts, fut).await,
+            None => fut.await,
+        }
     }
 
     pub(super) async fn record_disconnect(&mut self, usage: Option<&Usage>) {
-        spend::record_stream_disconnect_spend_with_reservation_with_policy(
+        let facts = self.ledger_facts.clone();
+        let fut = spend::record_stream_disconnect_spend_with_reservation_with_policy(
             self.pricing_service.as_ref(),
             &self.pricing_config,
             spend::usage_spend_settlement_with_request_pricing(
@@ -410,8 +416,11 @@ impl SettledStream {
                 self.budget_reservation.take(),
                 self.key_budget_reservation.take(),
             ),
-        )
-        .await;
+        );
+        match facts {
+            Some(facts) => crate::core::request_ledger::scope_facts(facts, fut).await,
+            None => fut.await,
+        }
     }
 }
 
@@ -744,6 +753,7 @@ mod tests {
             request_pricing,
             budget_reservation: reservation,
             key_budget_reservation: None,
+            ledger_facts: None,
         }
     }
 

@@ -150,6 +150,7 @@ pub(super) async fn handle_streaming_chat_completion(
                     request_pricing,
                     budget_reservation,
                     key_budget_reservation,
+                    ledger_facts: crate::core::request_ledger::current_facts(),
                 };
                 Ok((stream, settlement))
             }

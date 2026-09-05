@@ -192,6 +192,7 @@ pub(crate) async fn handle_streaming_response(
                 request_pricing,
                 budget_reservation,
                 key_budget_reservation,
+                ledger_facts: crate::core::request_ledger::current_facts(),
             };
 
             tokio::spawn(async move {

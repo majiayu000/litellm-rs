@@ -189,6 +189,16 @@ impl HttpServer {
         let audit_enabled = state.audit_logger.is_enabled();
         let audit_logger = Arc::clone(&state.audit_logger);
         let trusted_proxies = cfg.gateway.server.trusted_proxies.clone();
+        let ledger_enabled = cfg.gateway.storage.request_ledger.enabled;
+        let request_ledger = ledger_enabled.then(|| {
+            Arc::new(crate::core::request_ledger::RequestLedgerRuntime {
+                writer: Arc::new(crate::storage::database::RequestLedgerSink::new(
+                    Arc::clone(&state.storage.database),
+                    cfg.gateway.storage.request_ledger.retention_days,
+                )),
+                write_failure: cfg.gateway.storage.request_ledger.write_failure,
+            })
+        });
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
         let max_body_size = cfg.gateway.server.max_body_size;
@@ -221,10 +231,14 @@ impl HttpServer {
             // IP policy remains before authentication/provider side effects.
             .wrap(IpAccessMiddleware::new(ip_access))
             // Audit wraps IP denials; request IDs wrap the complete lifecycle.
-            .wrap(Condition::new(
-                audit_enabled,
-                AuditMiddleware::with_trusted_proxies(audit_logger, trusted_proxies),
-            ))
+            .wrap(Condition::new(audit_enabled || ledger_enabled, {
+                let mut audit =
+                    AuditMiddleware::with_trusted_proxies(audit_logger, trusted_proxies);
+                if let Some(request_ledger) = request_ledger {
+                    audit = audit.with_request_ledger(request_ledger);
+                }
+                audit
+            }))
             .wrap(RequestIdMiddleware)
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)

@@ -7,7 +7,7 @@
 mod tests {
     use litellm_rs::config::models::file_storage::FileStorageConfig;
     use litellm_rs::config::models::storage::DatabaseConfig;
-    use litellm_rs::config::models::storage::{RedisConfig, StorageConfig};
+    use litellm_rs::config::models::storage::{RedisConfig, RequestLedgerConfig, StorageConfig};
     use litellm_rs::core::batch::{BatchRequest, BatchStatus, BatchType};
     use litellm_rs::core::models::user::types::User;
     use litellm_rs::core::models::{ApiKey, Metadata, RateLimits, UsageStats};
@@ -76,6 +76,7 @@ mod tests {
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
             vector_db: None,
+            request_ledger: RequestLedgerConfig::default(),
         }
     }
 

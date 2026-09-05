@@ -2,14 +2,19 @@
 //!
 //! This module provides middleware for automatic request/response logging.
 
+use crate::core::request_ledger::{
+    RequestLedgerFacts, RequestLedgerRecord, RequestLedgerRuntime, SharedRequestLedgerFacts,
+    persist_with_policy, scope_facts, snapshot_facts,
+};
 use crate::core::types::context::{RequestContext, SharedRequestContext};
 use actix_web::body::{BodySize, MessageBody};
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::http::header::CONTENT_TYPE;
 use actix_web::{Error, HttpMessage};
+use chrono::{DateTime, Utc};
 use futures::future::{LocalBoxFuture, Ready, ready};
 use std::rc::Rc;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tracing::debug;
 
@@ -18,6 +23,8 @@ use super::logger::AuditLogger;
 pub use super::middleware_body::AuditResponseBody;
 use super::middleware_body::{AuditBodyOutcome, AuditTerminalRecorder};
 use super::types::{AuditError, RequestLog};
+
+const OPERATIONAL_LEDGER_PATHS: &[&str] = &["/health", "/metrics", "/ready", "/live", "/healthz"];
 
 #[derive(Clone, Default)]
 struct AuditPrincipal {
@@ -50,6 +57,7 @@ pub(crate) fn record_authenticated_principal(message: &impl HttpMessage, context
 pub struct AuditMiddleware {
     logger: Arc<AuditLogger>,
     trusted_proxies: Arc<Vec<String>>,
+    ledger: Option<Arc<RequestLedgerRuntime>>,
 }
 
 impl AuditMiddleware {
@@ -58,6 +66,7 @@ impl AuditMiddleware {
         Self {
             logger,
             trusted_proxies: Arc::new(Vec::new()),
+            ledger: None,
         }
     }
 
@@ -66,7 +75,14 @@ impl AuditMiddleware {
         Self {
             logger,
             trusted_proxies: Arc::new(trusted_proxies),
+            ledger: None,
         }
+    }
+
+    /// Persist one metadata-only terminal request-ledger row per request.
+    pub fn with_request_ledger(mut self, ledger: Arc<RequestLedgerRuntime>) -> Self {
+        self.ledger = Some(ledger);
+        self
     }
 }
 
@@ -87,6 +103,7 @@ where
             service: Rc::new(service),
             logger: self.logger.clone(),
             trusted_proxies: Arc::clone(&self.trusted_proxies),
+            ledger: self.ledger.clone(),
         }))
     }
 }
@@ -96,6 +113,7 @@ pub struct AuditMiddlewareService<S> {
     service: Rc<S>,
     logger: Arc<AuditLogger>,
     trusted_proxies: Arc<Vec<String>>,
+    ledger: Option<Arc<RequestLedgerRuntime>>,
 }
 
 impl<S, B> Service<ServiceRequest> for AuditMiddlewareService<S>
@@ -114,11 +132,12 @@ where
         let logger = self.logger.clone();
         let service = Rc::clone(&self.service);
         let trusted_proxies = Arc::clone(&self.trusted_proxies);
+        let ledger = self.ledger.clone();
         let path = req.path().to_string();
         let method = req.method().to_string();
+        let persist_ledger = ledger.is_some() && !OPERATIONAL_LEDGER_PATHS.contains(&path.as_str());
 
-        // Check if path should be logged
-        if !logger.should_log_path(&path) {
+        if !logger.should_log_path(&path) && !persist_ledger {
             let fut = service.call(req);
             return Box::pin(async move {
                 fut.await.map(|response| {
@@ -130,8 +149,9 @@ where
         let principal = Arc::new(RwLock::new(AuditPrincipal::default()));
         req.extensions_mut()
             .insert::<SharedAuditPrincipal>(Arc::clone(&principal));
+        let facts = SharedRequestLedgerFacts::new(Mutex::new(RequestLedgerFacts::default()));
+        req.extensions_mut().insert(Arc::clone(&facts));
 
-        // Generate request ID
         let request_id = req
             .headers()
             .get("x-request-id")
@@ -139,7 +159,6 @@ where
             .map(|s| s.to_string())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        // Extract request info
         let client_ip = trusted_client_ip(&req, &trusted_proxies);
 
         let user_agent = req
@@ -148,7 +167,6 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        // Create request log
         let mut request_log = RequestLog::new(&request_id, &method, &path);
         if let Some(ip) = client_ip {
             request_log = request_log.with_client_ip(ip);
@@ -157,12 +175,11 @@ where
             request_log = request_log.with_user_agent(ua);
         }
 
-        // Log request started
         let start_event = AuditEvent::request_started(&request_id, &path).with_request(request_log);
-
         let start_time = Instant::now();
+        let started_at = Utc::now();
 
-        Box::pin(async move {
+        Box::pin(scope_facts(Arc::clone(&facts), async move {
             let cancellation_request_id = request_id.clone();
             let cancellation_principal = Arc::clone(&principal);
             let terminal_permit = logger
@@ -185,6 +202,22 @@ where
                         &Self::recorded_principal(&principal),
                     );
                     Self::complete_terminal(&logger, terminal_permit, event);
+                    if persist_ledger {
+                        let principal = Self::recorded_principal(&principal);
+                        Self::persist_ledger(
+                            ledger.as_ref(),
+                            &request_id,
+                            &method,
+                            &path,
+                            started_at,
+                            start_time,
+                            0,
+                            "failed",
+                            &principal,
+                            &facts,
+                        )
+                        .await?;
+                    }
                     debug!("Request {} failed: {}", request_id, error);
                     return Err(error);
                 }
@@ -192,6 +225,22 @@ where
 
             let status_code = response.status().as_u16();
             let principal = Self::response_principal(&response, &principal);
+            let is_stream = matches!(response.response().body().size(), BodySize::Stream);
+            if persist_ledger && !is_stream {
+                Self::persist_ledger(
+                    ledger.as_ref(),
+                    &request_id,
+                    &method,
+                    &path,
+                    started_at,
+                    start_time,
+                    status_code,
+                    "completed",
+                    &principal,
+                    &facts,
+                )
+                .await?;
+            }
             let recorder = Self::terminal_recorder(
                 Arc::clone(&logger),
                 terminal_permit,
@@ -199,8 +248,12 @@ where
                 status_code,
                 start_time,
                 principal,
+                ledger.filter(|_| persist_ledger && is_stream),
+                facts,
+                method,
+                path,
+                started_at,
             );
-            let is_stream = matches!(response.response().body().size(), BodySize::Stream);
             let is_sse = response
                 .headers()
                 .get(CONTENT_TYPE)
@@ -214,7 +267,7 @@ where
                     AuditResponseBody::passthrough(body)
                 }
             }))
-        })
+        }))
     }
 }
 
@@ -285,6 +338,7 @@ impl<S> AuditMiddlewareService<S> {
         principal
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn terminal_recorder(
         logger: Arc<AuditLogger>,
         permit: super::logger::AuditEventPermit,
@@ -292,6 +346,11 @@ impl<S> AuditMiddlewareService<S> {
         status_code: u16,
         start_time: Instant,
         principal: AuditPrincipal,
+        ledger: Option<Arc<RequestLedgerRuntime>>,
+        facts: SharedRequestLedgerFacts,
+        method: String,
+        path: String,
+        started_at: DateTime<Utc>,
     ) -> AuditTerminalRecorder {
         AuditTerminalRecorder::new(move |outcome| {
             let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -304,6 +363,27 @@ impl<S> AuditMiddlewareService<S> {
                 }
             };
             Self::complete_terminal(&logger, permit, Self::with_principal(event, &principal));
+            if let Some(runtime) = ledger {
+                let terminal_status = match outcome {
+                    AuditBodyOutcome::Completed => "completed",
+                    AuditBodyOutcome::Failed(_) => "failed",
+                };
+                let record = ledger_record(
+                    &request_id,
+                    &method,
+                    &path,
+                    started_at,
+                    start_time,
+                    status_code,
+                    terminal_status,
+                    &principal,
+                    &snapshot_facts(&facts),
+                );
+                let policy = runtime.write_failure;
+                actix_web::rt::spawn(async move {
+                    let _ = persist_with_policy(runtime.writer.as_ref(), record, policy).await;
+                });
+            }
             debug!(
                 "Request {} terminated: status={}, duration={}ms",
                 request_id, status_code, duration_ms
@@ -320,6 +400,75 @@ impl<S> AuditMiddlewareService<S> {
             tracing::error!("Failed to record reserved audit terminal event: {error}");
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn persist_ledger(
+        ledger: Option<&Arc<RequestLedgerRuntime>>,
+        request_id: &str,
+        method: &str,
+        path: &str,
+        started_at: DateTime<Utc>,
+        start_time: Instant,
+        status_code: u16,
+        terminal_status: &str,
+        principal: &AuditPrincipal,
+        facts: &SharedRequestLedgerFacts,
+    ) -> Result<(), Error> {
+        let Some(runtime) = ledger else {
+            return Ok(());
+        };
+        let record = ledger_record(
+            request_id,
+            method,
+            path,
+            started_at,
+            start_time,
+            status_code,
+            terminal_status,
+            principal,
+            &snapshot_facts(facts),
+        );
+        persist_with_policy(runtime.writer.as_ref(), record, runtime.write_failure)
+            .await
+            .map_err(|error| {
+                tracing::error!("request ledger unavailable: {error}");
+                actix_web::error::ErrorServiceUnavailable("request ledger unavailable")
+            })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ledger_record(
+    request_id: &str,
+    method: &str,
+    path: &str,
+    started_at: DateTime<Utc>,
+    start_time: Instant,
+    status_code: u16,
+    terminal_status: &str,
+    principal: &AuditPrincipal,
+    facts: &RequestLedgerFacts,
+) -> RequestLedgerRecord {
+    RequestLedgerRecord {
+        request_id: request_id.to_string(),
+        started_at,
+        finished_at: Utc::now(),
+        method: method.to_string(),
+        endpoint: path.to_string(),
+        model: facts.model.clone(),
+        provider: facts.provider.clone(),
+        deployment: facts.deployment.clone(),
+        status_code: i32::from(status_code),
+        terminal_status: terminal_status.to_string(),
+        latency_ms: start_time.elapsed().as_millis() as i64,
+        prompt_tokens: facts.prompt_tokens,
+        completion_tokens: facts.completion_tokens,
+        total_tokens: facts.total_tokens,
+        cost: facts.cost,
+        user_id: principal.user_id.clone(),
+        api_key_id: principal.api_key_id.clone(),
+        team_id: principal.team_id.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -332,7 +481,9 @@ mod tests {
     use crate::core::audit::types::AuditResult;
     use crate::core::ip_access::{IpAccessConfig, IpAccessControl, IpAccessMiddleware};
     use crate::core::types::context::RequestContext;
-    use actix_web::{App, HttpRequest, HttpResponse, http::StatusCode, test as actix_test, web};
+    use actix_web::{
+        App, HttpRequest, HttpResponse, dev::Service, http::StatusCode, test as actix_test, web,
+    };
     use bytes::Bytes;
     use tokio::sync::Mutex;
 
@@ -682,5 +833,142 @@ mod tests {
         assert_eq!(events[1].user_id.as_deref(), Some("user-after-start"));
         assert_eq!(events[1].api_key_id.as_deref(), Some("key-after-start"));
         assert_eq!(events[1].team_id.as_deref(), Some("team-after-start"));
+    }
+
+    struct MemoryLedgerWriter {
+        rows: std::sync::Mutex<Vec<RequestLedgerRecord>>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::request_ledger::RequestLedgerWriter for MemoryLedgerWriter {
+        async fn persist(&self, record: RequestLedgerRecord) -> Result<(), String> {
+            if self.fail {
+                return Err("ledger unavailable".to_string());
+            }
+            self.rows.lock().expect("ledger lock").push(record);
+            Ok(())
+        }
+    }
+
+    #[actix_web::test]
+    async fn request_ledger_persists_one_unary_metadata_row() {
+        let writer = Arc::new(MemoryLedgerWriter {
+            rows: std::sync::Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let runtime = Arc::new(RequestLedgerRuntime {
+            writer: writer.clone(),
+            write_failure:
+                crate::config::models::request_ledger::RequestLedgerWriteFailure::Continue,
+        });
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(
+                    AuditMiddleware::new(Arc::new(AuditLogger::disabled()))
+                        .with_request_ledger(runtime),
+                )
+                .route(
+                    "/v1/chat/completions",
+                    web::post().to(|| async { HttpResponse::Ok().finish() }),
+                ),
+        )
+        .await;
+        let request = actix_test::TestRequest::post()
+            .uri("/v1/chat/completions")
+            .insert_header(("x-request-id", "req-ledger-unary"))
+            .to_request();
+        let response = actix_test::call_service(&app, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let rows = writer.rows.lock().expect("ledger lock");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].request_id, "req-ledger-unary");
+        assert_eq!(rows[0].endpoint, "/v1/chat/completions");
+        assert_eq!(rows[0].terminal_status, "completed");
+        let json = serde_json::to_value(&rows[0]).expect("serialize");
+        assert!(json.get("body").is_none());
+        assert!(json.get("authorization").is_none());
+    }
+
+    #[actix_web::test]
+    async fn request_ledger_fail_policy_rejects_unary_write_errors() {
+        let writer = Arc::new(MemoryLedgerWriter {
+            rows: std::sync::Mutex::new(Vec::new()),
+            fail: true,
+        });
+        let runtime = Arc::new(RequestLedgerRuntime {
+            writer: writer.clone(),
+            write_failure: crate::config::models::request_ledger::RequestLedgerWriteFailure::Fail,
+        });
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(
+                    AuditMiddleware::new(Arc::new(AuditLogger::disabled()))
+                        .with_request_ledger(runtime),
+                )
+                .route(
+                    "/v1/models",
+                    web::get().to(|| async { HttpResponse::Ok().finish() }),
+                ),
+        )
+        .await;
+        let request = actix_test::TestRequest::get()
+            .uri("/v1/models")
+            .to_request();
+        let result = app.call(request).await;
+        assert!(
+            result.is_err(),
+            "fail policy must surface persist errors before the response is committed"
+        );
+    }
+
+    #[actix_web::test]
+    async fn request_ledger_records_stream_disconnect() {
+        let writer = Arc::new(MemoryLedgerWriter {
+            rows: std::sync::Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let runtime = Arc::new(RequestLedgerRuntime {
+            writer: writer.clone(),
+            write_failure:
+                crate::config::models::request_ledger::RequestLedgerWriteFailure::Continue,
+        });
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(
+                    AuditMiddleware::new(Arc::new(AuditLogger::disabled()))
+                        .with_request_ledger(runtime),
+                )
+                .route(
+                    "/v1/chat/completions",
+                    web::get().to(|| async {
+                        let body = futures::stream::iter(vec![Ok::<_, actix_web::Error>(
+                            Bytes::from_static(b"data: hi\n\n"),
+                        )]);
+                        HttpResponse::Ok()
+                            .insert_header((CONTENT_TYPE, "text/event-stream"))
+                            .streaming(body)
+                    }),
+                ),
+        )
+        .await;
+        let request = actix_test::TestRequest::get()
+            .uri("/v1/chat/completions")
+            .to_request();
+        let response = actix_test::call_service(&app, request).await;
+        drop(actix_test::read_body(response).await);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if writer.rows.lock().expect("ledger lock").len() == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream ledger row");
+        let rows = writer.rows.lock().expect("ledger lock");
+        assert_eq!(rows[0].endpoint, "/v1/chat/completions");
+        assert!(rows[0].terminal_status == "completed" || rows[0].terminal_status == "failed");
     }
 }

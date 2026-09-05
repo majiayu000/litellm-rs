@@ -18,6 +18,7 @@ use crate::core::budget::{
 use crate::core::keys::KeyManager;
 use crate::core::pricing_service::{PricingService, PricingUsage};
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::request_ledger::{SharedRequestLedgerFacts, apply_settlement, current_facts};
 use crate::core::types::responses::{ChatChunk, Usage};
 #[cfg(test)]
 use std::sync::LazyLock;
@@ -141,6 +142,7 @@ pub(super) struct UsageSpendSettlement<'a> {
     pub(super) usage: Option<&'a Usage>,
     pub(super) budget_reservation: Option<UnifiedBudgetReservation>,
     pub(super) key_budget_reservation: Option<BudgetReservation>,
+    pub(super) ledger_facts: Option<SharedRequestLedgerFacts>,
 }
 
 pub(super) fn usage_spend_settlement<'a>(
@@ -181,6 +183,47 @@ pub(super) fn usage_spend_settlement_with_pricing<'a>(
         usage,
         budget_reservation,
         key_budget_reservation,
+        ledger_facts: current_facts(),
+    }
+}
+
+impl UsageSpendSettlement<'_> {
+    pub(super) fn with_ledger_facts(mut self, facts: Option<SharedRequestLedgerFacts>) -> Self {
+        if facts.is_some() {
+            self.ledger_facts = facts;
+        }
+        self
+    }
+}
+
+fn capture_ledger_settlement(
+    facts: Option<&SharedRequestLedgerFacts>,
+    provider: &str,
+    model: &str,
+    usage: Option<&Usage>,
+    cost: Option<f64>,
+) {
+    let prompt_tokens = usage.map(|usage| i64::from(usage.prompt_tokens));
+    let completion_tokens = usage.map(|usage| i64::from(usage.completion_tokens));
+    let total_tokens = usage.map(|usage| i64::from(usage.total_tokens));
+    match facts {
+        Some(facts) => apply_settlement(
+            facts,
+            provider,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cost,
+        ),
+        None => crate::core::request_ledger::record_current_settlement(
+            provider,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cost,
+        ),
     }
 }
 
@@ -237,9 +280,11 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
         usage,
         budget_reservation,
         key_budget_reservation,
+        ledger_facts,
     } = settlement;
 
     let Some(usage) = usage else {
+        capture_ledger_settlement(ledger_facts.as_ref(), provider, model, None, None);
         record_reserved_spend_without_usage(
             key_manager,
             api_key_id,
@@ -285,9 +330,18 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
                 "completion spend pricing unavailable",
             )
             .await;
+            capture_ledger_settlement(ledger_facts.as_ref(), provider, model, Some(usage), None);
             return;
         }
     };
+
+    capture_ledger_settlement(
+        ledger_facts.as_ref(),
+        provider,
+        model,
+        Some(usage),
+        Some(cost),
+    );
 
     if let Some(reservation) = budget_reservation {
         if let Err(error) = reservation.settle(cost) {
@@ -405,6 +459,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         usage,
         budget_reservation,
         key_budget_reservation,
+        ledger_facts,
     } = settlement;
 
     if let Some(usage) = usage {
@@ -424,7 +479,8 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
                 budget_reservation,
                 key_budget_reservation,
             )
-        };
+        }
+        .with_ledger_facts(ledger_facts);
         record_completion_spend_with_reservation_with_policy(
             pricing_service,
             pricing_config,
@@ -434,6 +490,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         return;
     }
 
+    capture_ledger_settlement(ledger_facts.as_ref(), provider, model, None, None);
     record_reserved_spend_without_usage(
         key_manager,
         api_key_id,
