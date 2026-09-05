@@ -653,8 +653,8 @@ async fn http_sdk_and_completion_chat_entries_conform() {
         .await
         .unwrap_or_else(|err| panic!("gateway test server: {err}"));
     let state = server.state().clone();
-    regroup(&state.unified_router);
-    let router = state.unified_router.clone();
+    regroup(&state.unified_router());
+    let router = state.unified_router().clone();
     let binding = bind_runtime(&router);
     let app = test::init_service(
         App::new()

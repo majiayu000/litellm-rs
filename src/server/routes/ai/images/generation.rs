@@ -69,7 +69,7 @@ pub async fn handle_image_generation_with_state(
     let pricing_config = state.config().gateway.pricing.clone();
     let request_for_selection = core_request.clone();
     let core_response = super::super::execution::execute_with_selected_deployment_matching(
-        &state.unified_router,
+        &state.unified_router(),
         &requested_model,
         ProviderCapability::ImageGeneration,
         move |deployment| {
@@ -88,7 +88,7 @@ pub async fn handle_image_generation_with_state(
             let pricing_config = pricing_config.clone();
             async move {
                 let budget_provider = state
-                    .unified_router
+                    .unified_router()
                     .configured_provider_name(&deployment_id)
                     .unwrap_or_else(|| provider.name().to_string());
                 let mut request_pricing = super::super::spend::request_pricing_for_provider(

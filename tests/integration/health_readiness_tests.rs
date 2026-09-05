@@ -99,7 +99,7 @@ mod tests {
             .migrate()
             .await
             .expect("in-memory migrations should succeed");
-        let router = Arc::clone(&state.unified_router);
+        let router = Arc::clone(&state.unified_router());
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let published = router

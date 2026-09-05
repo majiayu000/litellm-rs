@@ -130,7 +130,7 @@ async fn proxy_gemini_route_inner(
         &requested_model,
         gemini_requested_max_output_tokens(&request),
     )?;
-    let requested_model = state.unified_router.resolve_model_name(&requested_model);
+    let requested_model = state.unified_router().resolve_model_name(&requested_model);
     validate_model_segment(&requested_model)?;
 
     if stream {
@@ -145,12 +145,12 @@ async fn proxy_gemini_route_inner(
         .await;
     }
 
-    let router_models = gemini_router_models(&state.unified_router, &requested_model);
+    let router_models = gemini_router_models(&state.unified_router(), &requested_model);
 
     let mut last_router_error = None;
     for router_model in router_models {
         let result = run_unary(
-            &state.unified_router,
+            &state.unified_router(),
             &router_model,
             gemini_route_capability(),
             {
@@ -227,12 +227,12 @@ async fn proxy_gemini_stream_route_inner(
     method: &'static str,
     request: Value,
 ) -> Result<HttpResponse, GatewayError> {
-    let router_models = gemini_router_models(&state.unified_router, &requested_model);
+    let router_models = gemini_router_models(&state.unified_router(), &requested_model);
     let api_key_budget_id = context.api_key_budget_id();
     let mut last_router_error = None;
     for router_model in router_models {
         let result = run_stream(
-            state.unified_router.clone(),
+            state.unified_router().clone(),
             &router_model,
             gemini_route_capability(),
             {

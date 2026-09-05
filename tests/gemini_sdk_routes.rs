@@ -142,7 +142,7 @@ mod tests {
         )])
         .await;
         state
-            .unified_router
+            .unified_router()
             .add_model_alias("gemini@prod", "gemini-2.5-pro")
             .expect("runtime alias should install");
         let api_key = api_key_with_allowed_model_and_max_tokens("gemini@prod", 8);
@@ -187,7 +187,7 @@ mod tests {
         )])
         .await;
         state
-            .unified_router
+            .unified_router()
             .add_model_alias("public-gemini", "gemini@prod")
             .expect("runtime alias should install");
         let app = test::init_service(

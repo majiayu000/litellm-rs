@@ -226,7 +226,8 @@ async fn handle_chat_completion_internal(
     extensions: Vec<ChatMessageContinuation>,
     opt_in: bool,
 ) -> Result<(ChatCompletionResponseWithExtensions, CallbackLifecycle), GatewayError> {
-    let unified_router = &state.unified_router;
+    let runtime = state.pin_runtime();
+    let unified_router = runtime.unified_router.as_ref();
     let requested_model = request.model.clone();
     let core_request = ChatContinuationRequest::new(
         build_core_chat_request(request.as_ref(), requested_model, false)?,

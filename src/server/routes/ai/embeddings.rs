@@ -143,7 +143,7 @@ async fn handle_embedding_internal(
     let pricing_config = state.config().gateway.pricing.clone();
     let callback_for_execution = callback.clone();
     let core_response = match run_unary(
-        &state.unified_router,
+        &state.unified_router(),
         &requested_model,
         ProviderCapability::Embeddings,
         move |provider, selected_model, _deployment_id| {

@@ -20,25 +20,26 @@ pub(crate) async fn apply_chat_input(
     state: &AppState,
     request: &ChatCompletionRequest,
 ) -> Result<ChatCompletionRequest, GatewayError> {
-    apply_input(state.guardrails.as_ref(), request).await
+    apply_input(state.guardrails().as_ref(), request).await
 }
 
 pub(crate) async fn apply_chat_output(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    apply_output_with_engine(state.guardrails.as_ref(), response).await
+    apply_output_with_engine(state.guardrails().as_ref(), response).await
 }
 
 pub(crate) async fn ensure_chat_input_unmodified(
     state: &AppState,
     request: &ChatCompletionRequest,
 ) -> Result<(), GatewayError> {
-    if !state.guardrails.input_checks_enabled() {
+    let guardrails = state.guardrails();
+    if !guardrails.input_checks_enabled() {
         return Ok(());
     }
-    let content = input_payload(state.guardrails.as_ref(), request)?;
-    match enforce(state.guardrails.check_input(&content).await, "input")? {
+    let content = input_payload(guardrails.as_ref(), request)?;
+    match enforce(guardrails.check_input(&content).await, "input")? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("input")),
     }
@@ -48,15 +49,17 @@ pub(crate) async fn ensure_chat_output_unmodified(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<(), GatewayError> {
-    let content = output_scan::response_payload(state.guardrails.as_ref(), response)?;
-    match enforce(state.guardrails.check_output(&content).await, "output")? {
+    let guardrails = state.guardrails();
+    let content = output_scan::response_payload(guardrails.as_ref(), response)?;
+    match enforce(guardrails.check_output(&content).await, "output")? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("output")),
     }
 }
 
 pub(crate) fn reject_unsupported_streaming_mask(state: &AppState) -> Result<(), GatewayError> {
-    let config = state.guardrails.config();
+    let guardrails = state.guardrails();
+    let config = guardrails.config();
     let output_masking = config.enabled
         && config.check_output
         && config.pii.as_ref().is_some_and(|policy| {

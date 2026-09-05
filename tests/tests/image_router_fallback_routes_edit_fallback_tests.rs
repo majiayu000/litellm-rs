@@ -43,7 +43,7 @@ async fn image_edit_transport_uses_the_same_selected_deployment() {
     add_raw_image_alias_pricing(&state, "inpaint", "gpt-image-1-mini");
 
     let first = state
-        .unified_router
+        .unified_router()
         .select_deployment_lease_for_capability("inpaint", &ProviderCapability::ImageEdit)
         .expect("first image edit deployment should be selectable");
     assert!(matches!(

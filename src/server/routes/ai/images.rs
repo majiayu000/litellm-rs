@@ -81,7 +81,7 @@ pub async fn image_generations(
     {
         return Ok(openai_errors::gateway_error_response(&error));
     }
-    request.model = Some(state.unified_router.resolve_model_name(&requested_model));
+    request.model = Some(state.unified_router().resolve_model_name(&requested_model));
 
     handle_ai_request(&req, request, "Image generation", |request, context| {
         generation::handle_image_generation_with_state(state.get_ref(), request, context)
@@ -147,7 +147,7 @@ async fn proxy_image_multipart_endpoint(
     let form_fields = extract_image_proxy_form_fields(&body, &content_type);
     let public_model = required_image_proxy_model(&form_fields)?;
     super::context::enforce_api_key_model_and_token_limits(req, public_model, None)?;
-    let requested_model = state.unified_router.resolve_model_name(public_model);
+    let requested_model = state.unified_router().resolve_model_name(public_model);
     let body = if requested_model == public_model {
         body
     } else {
@@ -195,7 +195,7 @@ async fn proxy_image_multipart_endpoint(
         let native_edit_request_for_selection = native_edit_request.clone();
         let native_edit_request_for_operation = native_edit_request.clone();
         let result = super::execution::execute_with_selected_deployment_matching(
-            &state.unified_router,
+            &state.unified_router(),
             &router_model,
             endpoint.capability(),
             move |deployment| {
@@ -238,7 +238,7 @@ async fn proxy_image_multipart_endpoint(
                                 })?
                                 .clone()?;
                             let budget_provider = state
-                                .unified_router
+                                .unified_router()
                                 .configured_provider_name(&deployment_id)
                                 .unwrap_or_else(|| selected_provider.name().to_string());
                             let (response, tokens_used) =

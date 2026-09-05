@@ -125,7 +125,7 @@ async fn completions_inner(
             let response = if adapter_request.echo {
                 let echoed = chat_response_with_completion_echo(response, &masked_prompt);
                 match crate::server::guardrails::apply_output_with_engine(
-                    state.guardrails.as_ref(),
+                    state.guardrails().as_ref(),
                     &echoed,
                 )
                 .await

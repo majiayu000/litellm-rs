@@ -156,7 +156,7 @@ pub async fn audio_transcriptions(
     let pricing_config = state.config().gateway.pricing.clone();
 
     match run_unary(
-        &state.unified_router,
+        &state.unified_router(),
         &requested_model,
         ProviderCapability::AudioTranscription,
         move |provider, selected_model, _deployment_id| {
