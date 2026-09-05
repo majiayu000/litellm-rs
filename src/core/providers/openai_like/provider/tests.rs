@@ -7,6 +7,7 @@ use crate::core::types::chat::ChatMessage;
 use crate::core::types::context::RequestContext;
 use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
 use crate::core::types::health::HealthStatus;
+use crate::core::types::image::ImageGenerationRequest;
 use crate::core::types::message::{MessageContent, MessageRole};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -347,7 +348,9 @@ async fn openai_compatible_declares_executable_proxy_capabilities() {
         OPENAI_COMPATIBLE_PROXY_CAPABILITIES
     );
     assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::Embeddings));
+    assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::ImageGeneration));
     assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::Embeddings));
+    assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::ImageGeneration));
 }
 
 #[tokio::test]
@@ -359,6 +362,8 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
     ];
     static UNIMPLEMENTED: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
     static UNIMPLEMENTED_EMBEDDINGS: &[ProviderCapability] = &[ProviderCapability::Embeddings];
+    static UNIMPLEMENTED_IMAGE_GENERATION: &[ProviderCapability] =
+        &[ProviderCapability::ImageGeneration];
 
     let config = OpenAILikeConfig::new(TEST_PUBLIC_API_BASE).with_skip_api_key(true);
     for (profile, expected) in [
@@ -367,6 +372,10 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
         (UNIMPLEMENTED, "not executable for this OpenAI-like profile"),
         (
             UNIMPLEMENTED_EMBEDDINGS,
+            "not executable for this OpenAI-like profile",
+        ),
+        (
+            UNIMPLEMENTED_IMAGE_GENERATION,
             "not executable for this OpenAI-like profile",
         ),
     ] {
@@ -1085,6 +1094,134 @@ async fn openai_compatible_embeddings_malformed_200_is_parse_error()
             "text-embedding-3-small",
             EmbeddingInput::Text("hello".to_string()),
         ),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("malformed 200 must not become an empty success");
+
+    match err {
+        ProviderError::ResponseParsing { provider, .. } => {
+            assert_eq!(provider, PROVIDER_NAME);
+        }
+        other => panic!("expected response parsing error, got {other:?}"),
+    }
+    Ok(())
+}
+
+fn image_generation_request(model: &str) -> ImageGenerationRequest {
+    ImageGenerationRequest {
+        prompt: "a red cube".to_string(),
+        model: Some(model.to_string()),
+        n: Some(1),
+        size: Some("1024x1024".to_string()),
+        quality: None,
+        response_format: Some("url".to_string()),
+        style: None,
+        user: None,
+    }
+}
+
+const IMAGE_GENERATION_SUCCESS_BODY: &str = r#"{
+    "created": 1710000000,
+    "data": [
+        {
+            "url": "https://images.example.test/gen.png"
+        }
+    ]
+}"#;
+
+#[tokio::test]
+async fn openai_compatible_image_generation_forwards_success_response()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", IMAGE_GENERATION_SUCCESS_BODY).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let response = LLMProvider::image_generation(
+        &provider,
+        image_generation_request("gpt-image-1-mini"),
+        RequestContext::default(),
+    )
+    .await?;
+
+    assert_eq!(response.created, 1_710_000_000);
+    assert_eq!(
+        response.data[0].url.as_deref(),
+        Some("https://images.example.test/gen.png")
+    );
+
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("image generation request should reach upstream");
+    assert_eq!(captured.path, "/images/generations");
+    let body = captured.json_body();
+    assert_eq!(body["model"], "gpt-image-1-mini");
+    assert_eq!(body["prompt"], "a red cube");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_image_generation_rewrites_prefixed_model()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", IMAGE_GENERATION_SUCCESS_BODY).await?;
+    let mut config = private_openai_like_config(api_base);
+    config.model_prefix = Some("custom/".to_string());
+    let provider = OpenAILikeProvider::new_openai_compatible(config).await?;
+
+    LLMProvider::image_generation(
+        &provider,
+        image_generation_request("custom/gpt-image-1-mini"),
+        RequestContext::default(),
+    )
+    .await?;
+
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("image generation request should reach upstream");
+    let body = captured.json_body();
+    assert_eq!(body["model"], "gpt-image-1-mini");
+    assert_ne!(body["model"], "custom/gpt-image-1-mini");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_image_generation_maps_401_before_deserialize()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"authentication_error","message":"invalid api key"}}"#;
+    let (api_base, _) = openai_like_json_response_url("401 Unauthorized", body).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = LLMProvider::image_generation(
+        &provider,
+        image_generation_request("gpt-image-1-mini"),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("401 must map to authentication before deserialize");
+
+    match err {
+        ProviderError::Authentication { provider, .. } => {
+            assert_eq!(provider, PROVIDER_NAME);
+        }
+        other => panic!("expected authentication error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_image_generation_malformed_200_is_parse_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, _) = openai_like_json_response_url("200 OK", r#"{"created":1}"#).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = LLMProvider::image_generation(
+        &provider,
+        image_generation_request("gpt-image-1-mini"),
         RequestContext::default(),
     )
     .await

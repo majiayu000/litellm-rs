@@ -227,6 +227,25 @@ mod tests {
         build_state_with_config(config).await
     }
 
+    async fn build_openai_compatible_image_state(base_url: &str) -> AppState {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.providers = vec![mock_provider_config(
+            "mock-openai-compatible",
+            "openai_compatible",
+            "sk-test",
+            base_url,
+            vec!["gpt-image-1-mini".to_string()],
+        )];
+
+        build_state_with_config(config).await
+    }
+
     async fn mock_embeddings(
         captured_requests: web::Data<Arc<Mutex<Vec<Value>>>>,
         payload: web::Json<Value>,
@@ -246,6 +265,20 @@ mod tests {
                 "completion_tokens": 0,
                 "total_tokens": 1
             }
+        }))
+    }
+
+    async fn mock_image_generations(
+        captured_requests: web::Data<Arc<Mutex<Vec<Value>>>>,
+        payload: web::Json<Value>,
+    ) -> HttpResponse {
+        captured_requests.lock().unwrap().push(payload.into_inner());
+
+        HttpResponse::Ok().json(serde_json::json!({
+            "created": 1710000000,
+            "data": [{
+                "url": "https://images.example.test/gen.png"
+            }]
         }))
     }
 
@@ -823,6 +856,56 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["model"], "text-embedding-3-small");
         assert_eq!(requests[0]["input"], "hello");
+    }
+
+    #[tokio::test]
+    async fn test_image_generations_route_proxies_openai_compatible_provider() {
+        let captured_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock server should have local address");
+        let captured_for_server = Arc::clone(&captured_requests);
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
+                .route(
+                    "/images/generations",
+                    web::post().to(mock_image_generations),
+                )
+        })
+        .listen(listener)
+        .expect("mock server should listen")
+        .run();
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let state = build_openai_compatible_image_state(&format!("http://{address}")).await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/images/generations")
+            .set_json(serde_json::json!({
+                "model": "gpt-image-1-mini",
+                "prompt": "a red cube"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        handle.stop(true).await;
+        let _ = task.await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(
+            body["data"][0]["url"],
+            "https://images.example.test/gen.png"
+        );
+        let requests = captured_requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["model"], "gpt-image-1-mini");
+        assert_eq!(requests[0]["prompt"], "a red cube");
     }
 
     // ---------------------------------------------------------------
