@@ -208,6 +208,25 @@ mod tests {
         build_state_with_config(config).await
     }
 
+    async fn build_openai_compatible_embeddings_state(base_url: &str) -> AppState {
+        let mut config = Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.providers = vec![mock_provider_config(
+            "mock-openai-compatible",
+            "openai_compatible",
+            "sk-test",
+            base_url,
+            vec!["text-embedding-3-small".to_string()],
+        )];
+
+        build_state_with_config(config).await
+    }
+
     async fn mock_embeddings(
         captured_requests: web::Data<Arc<Mutex<Vec<Value>>>>,
         payload: web::Json<Value>,
@@ -756,6 +775,54 @@ mod tests {
             .map(|usage| usage.current_spend)
             .unwrap_or_default();
         assert!(spent > 0.0, "successful embedding usage must record spend");
+    }
+
+    #[tokio::test]
+    async fn test_embeddings_route_proxies_openai_compatible_provider() {
+        let captured_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock server should have local address");
+        let captured_for_server = Arc::clone(&captured_requests);
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
+                .route("/embeddings", web::post().to(mock_embeddings))
+        })
+        .listen(listener)
+        .expect("mock server should listen")
+        .run();
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let state = build_openai_compatible_embeddings_state(&format!("http://{address}")).await;
+        let app = test::init_service(build_test_app(state)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/v1/embeddings")
+            .set_json(serde_json::json!({
+                "model": "text-embedding-3-small",
+                "input": "hello"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        handle.stop(true).await;
+        let _ = task.await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["data"][0]["index"], 0);
+        assert_eq!(
+            body["data"][0]["embedding"].as_array().map(Vec::len),
+            Some(2)
+        );
+        let requests = captured_requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["model"], "text-embedding-3-small");
+        assert_eq!(requests[0]["input"], "hello");
     }
 
     // ---------------------------------------------------------------

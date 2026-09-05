@@ -1,10 +1,14 @@
 #![allow(deprecated)]
 
 use super::*;
+use crate::core::providers::unified_provider::ProviderError;
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::ChatMessage;
 use crate::core::types::context::RequestContext;
+use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
 use crate::core::types::health::HealthStatus;
 use crate::core::types::message::{MessageContent, MessageRole};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -91,14 +95,26 @@ fn private_openai_like_config(api_base: impl Into<String>) -> OpenAILikeConfig {
     config
 }
 
-async fn read_full_http_request(socket: &mut TcpStream) -> std::io::Result<()> {
+#[derive(Clone)]
+struct CapturedHttpRequest {
+    path: String,
+    body: Vec<u8>,
+}
+
+impl CapturedHttpRequest {
+    fn json_body(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).expect("captured request body should be JSON")
+    }
+}
+
+async fn read_full_http_request(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     let mut request_bytes = Vec::new();
     let mut buffer = [0_u8; 1024];
 
     loop {
         let bytes_read = socket.read(&mut buffer).await?;
         if bytes_read == 0 {
-            return Ok(());
+            return Ok(request_bytes);
         }
 
         request_bytes.extend_from_slice(&buffer[..bytes_read]);
@@ -115,10 +131,29 @@ async fn read_full_http_request(socket: &mut TcpStream) -> std::io::Result<()> {
                 .unwrap_or(0);
 
             if request_bytes.len() >= header_end + 4 + content_length {
-                return Ok(());
+                return Ok(request_bytes);
             }
         }
     }
+}
+
+fn parse_http_path_and_body(request_bytes: &[u8]) -> CapturedHttpRequest {
+    let header_end = request_bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(request_bytes.len());
+    let headers = String::from_utf8_lossy(&request_bytes[..header_end]);
+    let path = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
+        .to_string();
+    let body = request_bytes
+        .get(header_end.saturating_add(4)..)
+        .unwrap_or(&[])
+        .to_vec();
+    CapturedHttpRequest { path, body }
 }
 
 async fn openai_like_stream_response_url(
@@ -147,6 +182,95 @@ async fn openai_like_stream_response_url(
     });
 
     Ok(format!("http://{addr}"))
+}
+
+async fn openai_like_json_response_url(
+    status: &str,
+    body: &str,
+) -> std::io::Result<(String, Arc<Mutex<Option<CapturedHttpRequest>>>)> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    let captured = Arc::new(Mutex::new(None));
+    let captured_for_server = Arc::clone(&captured);
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+
+    tokio::spawn(async move {
+        let (mut socket, _) = match listener.accept().await {
+            Ok(connection) => connection,
+            Err(err) => panic!("test server failed to accept request: {err}"),
+        };
+        let request_bytes = match read_full_http_request(&mut socket).await {
+            Ok(bytes) => bytes,
+            Err(err) => panic!("test server failed to read request: {err}"),
+        };
+        *captured_for_server.lock().expect("captured request mutex") =
+            Some(parse_http_path_and_body(&request_bytes));
+        if let Err(err) = socket.write_all(response.as_bytes()).await {
+            panic!("test server failed to write response: {err}");
+        }
+    });
+
+    Ok((format!("http://{addr}"), captured))
+}
+
+fn embedding_request(model: &str, input: EmbeddingInput) -> EmbeddingRequest {
+    EmbeddingRequest {
+        model: model.to_string(),
+        input,
+        user: None,
+        encoding_format: None,
+        dimensions: None,
+        task_type: None,
+        truncation: None,
+    }
+}
+
+const EMBEDDING_SUCCESS_BODY: &str = r#"{
+    "object": "list",
+    "data": [
+        {
+            "object": "embedding",
+            "index": 0,
+            "embedding": [0.1, 0.2]
+        }
+    ],
+    "model": "text-embedding-3-small",
+    "usage": {
+        "prompt_tokens": 1,
+        "completion_tokens": 0,
+        "total_tokens": 1
+    }
+}"#;
+
+const EMBEDDING_MULTI_INPUT_BODY: &str = r#"{
+    "object": "list",
+    "data": [
+        {
+            "object": "embedding",
+            "index": 0,
+            "embedding": [0.1]
+        },
+        {
+            "object": "embedding",
+            "index": 1,
+            "embedding": [0.2, 0.3]
+        }
+    ],
+    "model": "text-embedding-3-small",
+    "usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 0,
+        "total_tokens": 2
+    }
+}"#;
+
+async fn openai_compatible_embeddings_provider(api_base: impl Into<String>) -> OpenAILikeProvider {
+    OpenAILikeProvider::new_openai_compatible(private_openai_like_config(api_base))
+        .await
+        .expect("openai-compatible provider should build")
 }
 
 fn openai_like_chat_stream_request() -> ChatRequest {
@@ -190,8 +314,6 @@ async fn provider_rejects_private_access_to_official_openai_endpoint() {
 
 #[tokio::test]
 async fn generic_openai_like_declares_only_catalog_executable_capabilities() {
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let provider = OpenAILikeProvider::with_api_base(TEST_PUBLIC_API_BASE)
         .await
         .expect("OpenAI-like provider should build");
@@ -205,12 +327,16 @@ async fn generic_openai_like_declares_only_catalog_executable_capabilities() {
             ProviderCapability::FunctionCalling,
         ]
     );
+    assert!(
+        !provider
+            .capabilities()
+            .contains(&ProviderCapability::Embeddings)
+    );
+    assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::Embeddings));
 }
 
 #[tokio::test]
 async fn openai_compatible_declares_executable_proxy_capabilities() {
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let config = OpenAILikeConfig::new(TEST_PUBLIC_API_BASE).with_skip_api_key(true);
     let provider = OpenAILikeProvider::new_openai_compatible(config)
         .await
@@ -220,6 +346,8 @@ async fn openai_compatible_declares_executable_proxy_capabilities() {
         provider.capabilities(),
         OPENAI_COMPATIBLE_PROXY_CAPABILITIES
     );
+    assert!(OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(&ProviderCapability::Embeddings));
+    assert!(!OPENAI_LIKE_CATALOG_CAPABILITIES.contains(&ProviderCapability::Embeddings));
 }
 
 #[tokio::test]
@@ -230,12 +358,17 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
         ProviderCapability::ChatCompletion,
     ];
     static UNIMPLEMENTED: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
+    static UNIMPLEMENTED_EMBEDDINGS: &[ProviderCapability] = &[ProviderCapability::Embeddings];
 
     let config = OpenAILikeConfig::new(TEST_PUBLIC_API_BASE).with_skip_api_key(true);
     for (profile, expected) in [
         (EMPTY, "cannot be empty"),
         (DUPLICATE, "duplicate ChatCompletion"),
         (UNIMPLEMENTED, "not executable for this OpenAI-like profile"),
+        (
+            UNIMPLEMENTED_EMBEDDINGS,
+            "not executable for this OpenAI-like profile",
+        ),
     ] {
         let error = OpenAILikeProvider::new_for_catalog(config.clone(), profile)
             .await
@@ -250,9 +383,6 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
 #[tokio::test]
 async fn test_openai_like_streaming_maps_non_success_status_before_sse()
 -> Result<(), Box<dyn std::error::Error>> {
-    use crate::core::providers::unified_provider::ProviderError;
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let body = r#"{"error":{"type":"rate_limit_error","message":"slow down","retry_after":5}}"#;
     let api_base = openai_like_stream_response_url("429 Too Many Requests", body, true).await?;
     let config = private_openai_like_config(api_base);
@@ -287,8 +417,6 @@ async fn test_openai_like_streaming_maps_non_success_status_before_sse()
 #[tokio::test]
 async fn openai_like_policy_pool_rejects_cross_authority_without_connect()
 -> Result<(), Box<dyn std::error::Error>> {
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let api_base = openai_like_stream_response_url("200 OK", "{}", true).await?;
     let health_provider = OpenAILikeProvider::new(private_openai_like_config(api_base)).await?;
     assert_eq!(
@@ -389,8 +517,6 @@ async fn test_request_transformation() {
 
 #[tokio::test]
 async fn test_supported_params_advertise_forwarded_chat_fields() {
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let provider = OpenAILikeProvider::with_api_base(TEST_PUBLIC_API_BASE)
         .await
         .unwrap_or_else(|err| panic!("OpenAI-like test provider should initialize: {err}"));
@@ -465,8 +591,6 @@ async fn test_xai_grok_420_rejects_reasoning_effort() {
 
 #[tokio::test]
 async fn test_xai_high_context_uses_registered_pricing() {
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let config = OpenAILikeConfig::new("https://api.x.ai/v1")
         .with_provider_name("xai")
         .with_skip_api_key(true);
@@ -485,8 +609,6 @@ async fn test_xai_high_context_uses_registered_pricing() {
 
 #[tokio::test]
 async fn test_non_xai_provider_does_not_use_xai_pricing() {
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-
     let config = OpenAILikeConfig::new("https://api.groq.com/openai/v1")
         .with_provider_name("groq")
         .with_skip_api_key(true);
@@ -792,4 +914,187 @@ async fn current_xai_reasoning_normalizes_after_extra_merge() {
         ..Default::default()
     };
     assert!(provider.transform_chat_request(request).is_err());
+}
+
+#[tokio::test]
+async fn openai_compatible_embeddings_forwards_success_response()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", EMBEDDING_SUCCESS_BODY).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let response = LLMProvider::embeddings(
+        &provider,
+        embedding_request(
+            "text-embedding-3-small",
+            EmbeddingInput::Text("hello".to_string()),
+        ),
+        RequestContext::default(),
+    )
+    .await?;
+
+    assert_eq!(response.object, "list");
+    assert_eq!(response.model, "text-embedding-3-small");
+    assert_eq!(response.data.len(), 1);
+    assert_eq!(response.data[0].index, 0);
+    assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("embeddings request should reach upstream");
+    assert_eq!(captured.path, "/embeddings");
+    let body = captured.json_body();
+    assert_eq!(body["model"], "text-embedding-3-small");
+    assert_eq!(body["input"], "hello");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_embeddings_preserve_multi_input_indexes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", EMBEDDING_MULTI_INPUT_BODY).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let response = LLMProvider::embeddings(
+        &provider,
+        embedding_request(
+            "text-embedding-3-small",
+            EmbeddingInput::Array(vec!["hello".to_string(), "world".to_string()]),
+        ),
+        RequestContext::default(),
+    )
+    .await?;
+
+    assert_eq!(response.data.len(), 2);
+    assert_eq!(response.data[0].index, 0);
+    assert_eq!(response.data[0].embedding, vec![0.1]);
+    assert_eq!(response.data[1].index, 1);
+    assert_eq!(response.data[1].embedding, vec![0.2, 0.3]);
+
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("embeddings request should reach upstream");
+    let body = captured.json_body();
+    assert_eq!(body["input"], serde_json::json!(["hello", "world"]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_embeddings_rewrites_prefixed_model()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, captured) =
+        openai_like_json_response_url("200 OK", EMBEDDING_SUCCESS_BODY).await?;
+    let mut config = private_openai_like_config(api_base);
+    config.model_prefix = Some("custom/".to_string());
+    let provider = OpenAILikeProvider::new_openai_compatible(config).await?;
+
+    LLMProvider::embeddings(
+        &provider,
+        embedding_request(
+            "custom/text-embedding-3-small",
+            EmbeddingInput::Text("hello".to_string()),
+        ),
+        RequestContext::default(),
+    )
+    .await?;
+
+    let captured = captured
+        .lock()
+        .expect("captured request mutex")
+        .clone()
+        .expect("embeddings request should reach upstream");
+    let body = captured.json_body();
+    assert_eq!(body["model"], "text-embedding-3-small");
+    assert_ne!(body["model"], "custom/text-embedding-3-small");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_embeddings_maps_401_before_deserialize()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"authentication_error","message":"invalid api key"}}"#;
+    let (api_base, _) = openai_like_json_response_url("401 Unauthorized", body).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = LLMProvider::embeddings(
+        &provider,
+        embedding_request(
+            "text-embedding-3-small",
+            EmbeddingInput::Text("hello".to_string()),
+        ),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("401 must map to authentication before deserialize");
+
+    match err {
+        ProviderError::Authentication { provider, .. } => {
+            assert_eq!(provider, PROVIDER_NAME);
+        }
+        other => panic!("expected authentication error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_embeddings_maps_429_before_deserialize()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = r#"{"error":{"type":"rate_limit_error","message":"slow down","retry_after":7}}"#;
+    let (api_base, _) = openai_like_json_response_url("429 Too Many Requests", body).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = LLMProvider::embeddings(
+        &provider,
+        embedding_request(
+            "text-embedding-3-small",
+            EmbeddingInput::Text("hello".to_string()),
+        ),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("429 must map to rate limit before deserialize");
+
+    match err {
+        ProviderError::RateLimit {
+            provider,
+            retry_after,
+            ..
+        } => {
+            assert_eq!(provider, PROVIDER_NAME);
+            assert_eq!(retry_after, Some(7));
+        }
+        other => panic!("expected rate limit error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openai_compatible_embeddings_malformed_200_is_parse_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (api_base, _) = openai_like_json_response_url("200 OK", r#"{"object":"list"}"#).await?;
+    let provider = openai_compatible_embeddings_provider(api_base).await;
+
+    let err = LLMProvider::embeddings(
+        &provider,
+        embedding_request(
+            "text-embedding-3-small",
+            EmbeddingInput::Text("hello".to_string()),
+        ),
+        RequestContext::default(),
+    )
+    .await
+    .expect_err("malformed 200 must not become an empty success");
+
+    match err {
+        ProviderError::ResponseParsing { provider, .. } => {
+            assert_eq!(provider, PROVIDER_NAME);
+        }
+        other => panic!("expected response parsing error, got {other:?}"),
+    }
+    Ok(())
 }
