@@ -526,22 +526,6 @@ mod tests {
         assert!(image_edit.contains("BaseHttpClient::new_for_provider_no_redirect"));
     }
 
-    #[test]
-    fn credentialed_audio_clients_explicitly_disable_redirects() {
-        let source = include_str!("api_methods.rs");
-        let audio = source
-            .split_once("pub(crate) async fn execute_audio_transcription")
-            .expect("audio transcription adapter should exist")
-            .1
-            .split_once("fn transcription_form")
-            .expect("audio adapters should end before transcription helpers")
-            .0;
-
-        assert!(audio.contains("pub(crate) async fn execute_audio_translation"));
-        assert!(audio.contains("pub(crate) async fn execute_text_to_speech"));
-        assert!(audio.contains("BaseHttpClient::new_for_provider_no_redirect"));
-    }
-
     #[tokio::test]
     async fn public_multipart_loopback_fails_before_connect() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

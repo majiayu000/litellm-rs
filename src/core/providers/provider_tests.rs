@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::audio::types::{SpeechRequest, TranscriptionRequest, TranslationRequest};
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::types::context::RequestContext;
 use crate::core::types::image::ImageEditRequest;
@@ -49,7 +50,41 @@ fn image_edit_request() -> ImageEditRequest {
     }
 }
 
-async fn redirecting_image_edit_server(
+fn transcription_request() -> TranscriptionRequest {
+    TranscriptionRequest {
+        file: b"fake-audio".to_vec(),
+        filename: "sample.mp3".to_string(),
+        model: "whisper-1".to_string(),
+        language: Some("en".to_string()),
+        prompt: None,
+        response_format: Some("json".to_string()),
+        temperature: None,
+        timestamp_granularities: None,
+    }
+}
+
+fn translation_request() -> TranslationRequest {
+    TranslationRequest {
+        file: b"fake-audio".to_vec(),
+        filename: "sample.mp3".to_string(),
+        model: "whisper-1".to_string(),
+        prompt: None,
+        response_format: Some("json".to_string()),
+        temperature: None,
+    }
+}
+
+fn speech_request() -> SpeechRequest {
+    SpeechRequest {
+        input: "hello".to_string(),
+        model: "tts-1".to_string(),
+        voice: "alloy".to_string(),
+        response_format: Some("mp3".to_string()),
+        speed: None,
+    }
+}
+
+async fn redirecting_origin_server(
     status: u16,
     reason: &'static str,
 ) -> (String, tokio::task::JoinHandle<Option<String>>) {
@@ -330,8 +365,7 @@ async fn advertised_openai_image_edit_variants_dispatch_upstream() {
 
 #[tokio::test]
 async fn credentialed_image_edits_do_not_follow_cross_origin_redirects() {
-    let (openai_base, openai_server) =
-        redirecting_image_edit_server(307, "Temporary Redirect").await;
+    let (openai_base, openai_server) = redirecting_origin_server(307, "Temporary Redirect").await;
     let mut openai_config = openai::OpenAIConfig::default();
     openai_config.base.api_key = Some("sk-test".to_string());
     openai_config.base.api_base = Some(openai_base);
@@ -351,7 +385,7 @@ async fn credentialed_image_edits_do_not_follow_cross_origin_redirects() {
     let openai_sink_request = openai_server.await.expect("redirect server should finish");
 
     let (compatible_base, compatible_server) =
-        redirecting_image_edit_server(308, "Permanent Redirect").await;
+        redirecting_origin_server(308, "Permanent Redirect").await;
     let mut compatible_config =
         openai_like::OpenAILikeConfig::with_api_key(compatible_base, "compatible-placeholder");
     compatible_config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
@@ -390,6 +424,93 @@ async fn credentialed_image_edits_do_not_follow_cross_origin_redirects() {
         compatible_sink_request.is_none(),
         "OpenAI-compatible secret was replayed"
     );
+}
+
+#[tokio::test]
+async fn credentialed_audio_requests_do_not_follow_cross_origin_redirects() {
+    #[derive(Clone, Copy)]
+    enum AudioKind {
+        Transcription,
+        Translation,
+        Speech,
+    }
+
+    async fn openai_provider(api_base: String) -> Provider {
+        let mut config = openai::OpenAIConfig::default();
+        config.base.api_key = Some("sk-test".to_string());
+        config.base.api_base = Some(api_base);
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        config.base.headers.insert(
+            "x-proxy-secret".to_string(),
+            "openai-placeholder".to_string(),
+        );
+        Provider::OpenAI(
+            openai::OpenAIProvider::new(config)
+                .await
+                .expect("OpenAI provider should initialize"),
+        )
+    }
+
+    async fn compatible_provider(api_base: String) -> Provider {
+        let mut config =
+            openai_like::OpenAILikeConfig::with_api_key(api_base, "compatible-placeholder");
+        config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        config.custom_headers.insert(
+            "x-proxy-secret".to_string(),
+            "compatible-placeholder".to_string(),
+        );
+        Provider::OpenAILike(
+            openai_like::OpenAILikeProvider::new_openai_compatible(config)
+                .await
+                .expect("OpenAI-compatible provider should initialize"),
+        )
+    }
+
+    async fn call_audio(provider: &Provider, kind: AudioKind) -> Result<(), ProviderError> {
+        match kind {
+            AudioKind::Transcription => provider
+                .audio_transcription(transcription_request(), RequestContext::default())
+                .await
+                .map(|_| ()),
+            AudioKind::Translation => provider
+                .audio_translation(translation_request(), RequestContext::default())
+                .await
+                .map(|_| ()),
+            AudioKind::Speech => provider
+                .text_to_speech(speech_request(), RequestContext::default())
+                .await
+                .map(|_| ()),
+        }
+    }
+
+    for (kind, openai, status, reason) in [
+        (AudioKind::Transcription, true, 307, "Temporary Redirect"),
+        (AudioKind::Transcription, false, 308, "Permanent Redirect"),
+        (AudioKind::Translation, true, 307, "Temporary Redirect"),
+        (AudioKind::Translation, false, 308, "Permanent Redirect"),
+        (AudioKind::Speech, true, 307, "Temporary Redirect"),
+        (AudioKind::Speech, false, 308, "Permanent Redirect"),
+    ] {
+        let (api_base, server) = redirecting_origin_server(status, reason).await;
+        let provider = if openai {
+            openai_provider(api_base).await
+        } else {
+            compatible_provider(api_base).await
+        };
+        let result = call_audio(&provider, kind).await;
+        let sink_request = server.await.expect("redirect server should finish");
+        match result {
+            Ok(()) => panic!("credentialed audio redirect must not be followed"),
+            Err(error) => assert!(
+                matches!(error, ProviderError::ApiError { status: got, .. } if got == status),
+                "{error:?}"
+            ),
+        }
+        assert!(
+            sink_request.is_none(),
+            "credentialed audio secret was replayed"
+        );
+    }
 }
 
 #[tokio::test]
