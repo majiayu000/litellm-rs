@@ -8,6 +8,9 @@ use actix_web::{
 };
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
+
+static LIVE_SERVER_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct RunningServer {
     address: std::net::SocketAddr,
@@ -56,19 +59,30 @@ impl RunningServer {
     }
 
     async fn stop(mut self) {
-        self.handle.stop(true).await;
-        let result = self
-            .task
-            .take()
-            .expect("server task should be present")
+        let task = self.task.take().expect("server task should be present");
+        let abort_handle = task.abort_handle();
+        if tokio::time::timeout(Duration::from_secs(5), self.handle.stop(false))
             .await
-            .expect("server task should join");
-        result.expect("server should stop cleanly");
+            .is_err()
+        {
+            abort_handle.abort();
+            panic!("production-path server stop exceeded 5s");
+        }
+        match tokio::time::timeout(Duration::from_secs(5), task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => panic!("server should stop cleanly: {error}"),
+            Ok(Err(error)) => panic!("server task should join: {error}"),
+            Err(_) => {
+                abort_handle.abort();
+                panic!("server task should join within 5s");
+            }
+        }
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn production_builder_tries_candidates_but_binds_exactly_one() {
+    let _lock = LIVE_SERVER_LOCK.lock().await;
     let occupied =
         std::net::TcpListener::bind("127.0.0.1:0").expect("first candidate should be reserved");
     let occupied_address = occupied
@@ -134,11 +148,11 @@ async fn open_keep_alive(address: std::net::SocketAddr) -> tokio::net::TcpStream
         .await
         .expect("keep-alive client should connect");
     stream
-        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n")
         .await
         .expect("keep-alive client should write a request");
     let mut response = vec![0_u8; 2048];
-    let bytes = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut response))
+    let bytes = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut response))
         .await
         .expect("health request should complete")
         .expect("health response should be readable");
@@ -182,10 +196,27 @@ fn listener_settings_apply_workers_timeout_and_total_cap() {
     assert_eq!(reduced.configured_workers, 4);
     assert_eq!(reduced.effective_workers, 1);
     assert_eq!(reduced.max_connections_per_worker, Some(2));
+
+    // Multi-worker totals stay at or below the configured cap. Live occupancy
+    // is proven on one worker because Actix's limit is per worker and accept
+    // distribution across workers is not deterministic under cargo test load.
+    let two_workers = validated_listener_settings(&ServerConfig {
+        workers: Some(2),
+        max_connections: Some(4),
+        ..ServerConfig::default()
+    })
+    .expect("two-worker cap should validate");
+    let two_worker_limit = two_workers
+        .max_connections_per_worker
+        .expect("cap should produce a per-worker limit");
+    assert_eq!(two_workers.effective_workers, 2);
+    assert_eq!(two_worker_limit, 2);
+    assert_eq!(two_worker_limit * two_workers.effective_workers, 4);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn production_builder_applies_first_request_head_timeout() {
+    let _lock = LIVE_SERVER_LOCK.lock().await;
     let running = RunningServer::start(ServerConfig {
         workers: Some(1),
         timeout: 1,
@@ -208,10 +239,14 @@ async fn production_builder_applies_first_request_head_timeout() {
     running.stop().await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn production_builder_enforces_server_wide_connection_cap() {
+    let _lock = LIVE_SERVER_LOCK.lock().await;
+    // Actix applies max_connections per worker. A single worker makes the
+    // configured total a deterministic server-wide cap instead of depending
+    // on which worker accepts each keep-alive client.
     let running = RunningServer::start(ServerConfig {
-        workers: Some(2),
+        workers: Some(1),
         max_connections: Some(4),
         timeout: 10,
         ..ServerConfig::default()
