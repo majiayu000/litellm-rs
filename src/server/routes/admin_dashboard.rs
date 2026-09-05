@@ -9,6 +9,7 @@ const APP_JS: &str = include_str!("admin_dashboard/app.js");
 const BUDGET_JS: &str = include_str!("admin_dashboard/budget.js");
 const PROVIDER_HEALTH_JS: &str = include_str!("admin_dashboard/provider_health.js");
 const ROUTING_INVENTORY_JS: &str = include_str!("admin_dashboard/routing_inventory.js");
+const REQUEST_LEDGER_JS: &str = include_str!("admin_dashboard/request_ledger.js");
 const DASHBOARD_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
     connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; \
     form-action 'self'; frame-ancestors 'none'";
@@ -41,6 +42,10 @@ async fn routing_inventory_javascript() -> HttpResponse {
     embedded_asset("text/javascript; charset=utf-8", ROUTING_INVENTORY_JS)
 }
 
+async fn request_ledger_javascript() -> HttpResponse {
+    embedded_asset("text/javascript; charset=utf-8", REQUEST_LEDGER_JS)
+}
+
 async fn budget_javascript() -> HttpResponse {
     embedded_asset("text/javascript; charset=utf-8", BUDGET_JS)
 }
@@ -56,6 +61,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/admin/dashboard/routing-inventory.js",
             web::get().to(routing_inventory_javascript),
+        )
+        .route(
+            "/admin/dashboard/request-ledger.js",
+            web::get().to(request_ledger_javascript),
         )
         .route(
             "/admin/dashboard/budget.js",
@@ -98,6 +107,11 @@ mod tests {
                 "/admin/dashboard/routing-inventory.js",
                 "text/javascript; charset=utf-8",
                 "createRoutingInventoryView",
+            ),
+            (
+                "/admin/dashboard/request-ledger.js",
+                "text/javascript; charset=utf-8",
+                "createRequestLedgerView",
             ),
             (
                 "/admin/dashboard/budget.js",
@@ -143,6 +157,7 @@ mod tests {
             "/admin/dashboard/app.js.map",
             "/admin/dashboard/budget.js.map",
             "/admin/dashboard/routing-inventory.js.map",
+            "/admin/dashboard/request-ledger.js.map",
             "/admin/dashboard/private",
         ] {
             let response = actix_test::call_service(
@@ -167,9 +182,16 @@ mod tests {
         }
         assert!(PROVIDER_HEALTH_JS.contains("\"/health/detailed\""));
         assert!(ROUTING_INVENTORY_JS.contains("\"/admin/routing/inventory\""));
+        assert!(REQUEST_LEDGER_JS.contains("\"/admin/request-ledger\""));
         assert!(BUDGET_JS.contains("\"/v1/budget/providers\""));
         assert!(BUDGET_JS.contains("\"/v1/budget/models\""));
-        for asset in [APP_JS, PROVIDER_HEALTH_JS, ROUTING_INVENTORY_JS, BUDGET_JS] {
+        for asset in [
+            APP_JS,
+            PROVIDER_HEALTH_JS,
+            ROUTING_INVENTORY_JS,
+            REQUEST_LEDGER_JS,
+            BUDGET_JS,
+        ] {
             for forbidden in [
                 "localStorage",
                 "sessionStorage",
@@ -224,6 +246,10 @@ mod tests {
             "id=\"routing-panel\"",
             "id=\"routing-body\"",
             "id=\"routing-unavailable-body\"",
+            "id=\"request-logs-panel\"",
+            "id=\"request-logs-body\"",
+            "id=\"request-logs-empty\"",
+            "id=\"request-logs-detail\"",
         ] {
             assert!(INDEX_HTML.contains(marker), "missing HTML marker {marker}");
         }

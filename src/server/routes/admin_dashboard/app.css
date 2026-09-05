@@ -383,6 +383,34 @@ td code {
   color: var(--muted);
 }
 
+#request-logs-detail {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+#request-logs-detail h3 {
+  margin: 0 0 0.75rem;
+}
+
+#request-logs-detail dl {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+#request-logs-detail dt {
+  color: var(--muted);
+}
+
+#request-logs-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .health-state {
   display: inline-block;
   padding: 0.2rem 0.55rem;
