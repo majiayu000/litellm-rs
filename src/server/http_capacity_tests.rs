@@ -59,23 +59,24 @@ impl RunningServer {
     }
 
     async fn stop(mut self) {
+        let task = self.task.take().expect("server task should be present");
+        let abort_handle = task.abort_handle();
         if tokio::time::timeout(Duration::from_secs(5), self.handle.stop(false))
             .await
             .is_err()
         {
-            if let Some(task) = self.task.take() {
-                task.abort();
-            }
+            abort_handle.abort();
             panic!("production-path server stop exceeded 5s");
         }
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.task.take().expect("server task should be present"),
-        )
-        .await
-        .expect("server task should join within 5s")
-        .expect("server task should join");
-        result.expect("server should stop cleanly");
+        match tokio::time::timeout(Duration::from_secs(5), task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => panic!("server should stop cleanly: {error}"),
+            Ok(Err(error)) => panic!("server task should join: {error}"),
+            Err(_) => {
+                abort_handle.abort();
+                panic!("server task should join within 5s");
+            }
+        }
     }
 }
 
@@ -195,6 +196,22 @@ fn listener_settings_apply_workers_timeout_and_total_cap() {
     assert_eq!(reduced.configured_workers, 4);
     assert_eq!(reduced.effective_workers, 1);
     assert_eq!(reduced.max_connections_per_worker, Some(2));
+
+    // Multi-worker totals stay at or below the configured cap. Live occupancy
+    // is proven on one worker because Actix's limit is per worker and accept
+    // distribution across workers is not deterministic under cargo test load.
+    let two_workers = validated_listener_settings(&ServerConfig {
+        workers: Some(2),
+        max_connections: Some(4),
+        ..ServerConfig::default()
+    })
+    .expect("two-worker cap should validate");
+    let two_worker_limit = two_workers
+        .max_connections_per_worker
+        .expect("cap should produce a per-worker limit");
+    assert_eq!(two_workers.effective_workers, 2);
+    assert_eq!(two_worker_limit, 2);
+    assert_eq!(two_worker_limit * two_workers.effective_workers, 4);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
