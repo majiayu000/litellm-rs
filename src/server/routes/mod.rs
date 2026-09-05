@@ -4,6 +4,7 @@
 
 pub mod admin;
 pub mod admin_dashboard;
+mod admin_routing;
 pub mod ai;
 pub mod auth;
 pub mod budget;
