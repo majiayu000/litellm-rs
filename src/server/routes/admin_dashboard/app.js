@@ -76,6 +76,7 @@ function resetProtectedState() {
   renderSpend();
   providerHealthView.reset();
   routingInventoryView.reset();
+  requestLedgerView.reset();
   budgetView.reset();
 }
 function endSession(message = "Signed out") {
@@ -393,6 +394,17 @@ const routingInventoryView = window.createRoutingInventoryView({
   byId,
   captureSession,
   clearError,
+  ensureCurrent,
+  reportRequestError,
+  setStatus,
+  textCell,
+});
+const requestLedgerView = window.createRequestLedgerView({
+  apiRequest,
+  byId,
+  captureSession,
+  clearError,
+  createAction,
   ensureCurrent,
   reportRequestError,
   setStatus,
@@ -742,7 +754,7 @@ function showView(view) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const panel of ["keys", "teams", "spend", "budgets", "health", "routing"]) {
+  for (const panel of ["keys", "teams", "spend", "budgets", "health", "routing", "request-logs"]) {
     byId(`${panel}-panel`).hidden = panel !== view;
   }
   if (view === "spend") {
@@ -750,6 +762,9 @@ function showView(view) {
   }
   if (view === "budgets") {
     void budgetView.loadOnce();
+  }
+  if (view === "request-logs") {
+    void requestLedgerView.loadOnce();
   }
 }
 byId("login-form").addEventListener("submit", (event) => void signIn(event));

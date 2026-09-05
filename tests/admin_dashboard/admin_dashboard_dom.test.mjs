@@ -28,6 +28,13 @@ const routingInventorySource = await readFile(
   ),
   "utf8",
 );
+const requestLedgerSource = await readFile(
+  new URL(
+    "../../src/server/routes/admin_dashboard/request_ledger.js",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const immediate = () => new Promise((resolve) => setImmediate(resolve));
 async function settle(turns = 8) {
   for (let index = 0; index < turns; index += 1) {
@@ -91,6 +98,11 @@ function dashboard(options = {}) {
       models: [],
       unavailable_providers: [],
     },
+    ledger = {
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    },
     handler,
   } = options;
   const htmlWithoutScript = indexHtml
@@ -100,6 +112,10 @@ function dashboard(options = {}) {
     )
     .replace(
       '<script src="/admin/dashboard/routing-inventory.js" defer></script>',
+      "",
+    )
+    .replace(
+      '<script src="/admin/dashboard/request-ledger.js" defer></script>',
       "",
     )
     .replace('<script src="/admin/dashboard/budget.js" defer></script>', "")
@@ -221,6 +237,9 @@ function dashboard(options = {}) {
     if (url.pathname === "/admin/routing/inventory" && call.method === "GET") {
       return Promise.resolve(apiResponse(inventory));
     }
+    if (url.pathname === "/admin/request-ledger" && call.method === "GET") {
+      return Promise.resolve(apiResponse(ledger));
+    }
     const usageMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/usage$/);
     if (usageMatch && call.method === "GET") {
       const result = usageByTeam.get(decodeURIComponent(usageMatch[1]));
@@ -234,6 +253,7 @@ function dashboard(options = {}) {
   };
   window.eval(providerHealthSource);
   window.eval(routingInventorySource);
+  window.eval(requestLedgerSource);
   window.eval(budgetSource);
   window.eval(appSource);
   return context;
@@ -262,6 +282,39 @@ async function signIn(context) {
         "Dashboard refreshed.",
     "dashboard did not finish signing in",
   );
+}
+
+async function openRequestLogs(context) {
+  const { window } = context;
+  window.document.querySelector('[data-view="request-logs"]').click();
+  await waitFor(
+    () => window.document.getElementById("status-region").textContent === "Request logs loaded.",
+    "request log view did not load",
+  );
+}
+
+function ledgerItem(overrides = {}) {
+  return {
+    request_id: "req-1",
+    started_at: "2026-09-05T10:00:00Z",
+    finished_at: "2026-09-05T10:00:01Z",
+    method: "POST",
+    endpoint: "/v1/chat/completions",
+    model: "gpt-4",
+    provider: "openai",
+    deployment: "openai",
+    status_code: 200,
+    terminal_status: "completed",
+    latency_ms: 12,
+    prompt_tokens: 4,
+    completion_tokens: 6,
+    total_tokens: 10,
+    cost: 0.02,
+    user_id: "user-1",
+    api_key_id: "key-1",
+    team_id: "team-1",
+    ...overrides,
+  };
 }
 
 async function openBudgets(context) {
@@ -1518,4 +1571,170 @@ test("B16 a late routing inventory response after logout cannot restore stale da
   assert.equal(window.document.getElementById("routing-summary").textContent, "");
   assert.equal(window.document.getElementById("routing-notice").textContent, "");
   assert.equal(window.document.querySelectorAll("#routing-body tr").length, 0);
+});
+
+test("B17 request logs render empty, filtered, paged, and metadata-only detail", { concurrency: false }, async (t) => {
+  let ledgerGets = 0;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname !== "/admin/request-ledger" || call.method !== "GET") {
+        return undefined;
+      }
+      ledgerGets += 1;
+      if (ledgerGets === 1) {
+        return apiResponse({ items: [], next_cursor: null, has_more: false });
+      }
+      if (call.url.searchParams.get("model") === "claude") {
+        return apiResponse({
+          items: [
+            ledgerItem({
+              request_id: "req-c",
+              model: "claude",
+              terminal_status: "failed",
+              api_key_id: "key-9",
+            }),
+          ],
+          next_cursor: null,
+          has_more: false,
+        });
+      }
+      if (call.url.searchParams.get("cursor") === "cursor-2") {
+        return apiResponse({
+          items: [ledgerItem({ request_id: "req-b" })],
+          next_cursor: null,
+          has_more: false,
+        });
+      }
+      return apiResponse({
+        items: [ledgerItem({ request_id: "req-a" })],
+        next_cursor: "cursor-2",
+        has_more: true,
+      });
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  await openRequestLogs(context);
+  const { window } = context;
+  assert.equal(window.document.querySelectorAll("#request-logs-body tr").length, 0);
+  assert.equal(window.document.getElementById("request-logs-empty").hidden, false);
+
+  window.document.getElementById("refresh-request-logs").click();
+  await waitFor(
+    () => window.document.querySelectorAll("#request-logs-body tr").length === 1,
+    "request log refresh did not render a row",
+  );
+  assert.match(rowText(window, "#request-logs-body tr")[0], /req-a.*gpt-4.*openai.*completed/i);
+  assert.equal(window.document.getElementById("request-logs-next").disabled, false);
+
+  window.document.getElementById("request-logs-next").click();
+  await waitFor(
+    () => /req-b/.test(rowText(window, "#request-logs-body tr")[0] || ""),
+    "next request log page did not load",
+  );
+  window.document.getElementById("request-logs-previous").click();
+  await waitFor(
+    () => /req-a/.test(rowText(window, "#request-logs-body tr")[0] || ""),
+    "previous request log page did not load",
+  );
+
+  window.document.getElementById("request-logs-model").value = "claude";
+  submit(window, window.document.getElementById("request-logs-filter"));
+  await waitFor(
+    () => /req-c/.test(rowText(window, "#request-logs-body tr")[0] || ""),
+    "filtered request logs did not load",
+  );
+  const filterCall = context.calls.find(
+    (call) =>
+      call.url.pathname === "/admin/request-ledger" &&
+      call.url.searchParams.get("model") === "claude",
+  );
+  assert.ok(filterCall, "filtered ledger query was not sent");
+
+  window.document.querySelector("#request-logs-body button").click();
+  const detail = window.document.getElementById("request-logs-detail");
+  assert.equal(detail.hidden, false);
+  assert.match(detail.textContent, /Request ID/);
+  assert.match(detail.textContent, /Key key-9/);
+  assert.match(detail.textContent, /User user-1/);
+  assert.match(detail.textContent, /Team team-1/);
+  assert.doesNotMatch(detail.textContent, /\bauthorization\b/i);
+  assert.doesNotMatch(detail.textContent, /\bmessages\b/i);
+  assert.doesNotMatch(detail.textContent, /\bchoices\b/i);
+  assert.equal(detail.querySelector("[data-body], [data-prompt]"), null);
+});
+
+test("B18 request log failures are explicit and clear stale rows", { concurrency: false }, async (t) => {
+  let mode = "ok";
+  const context = dashboard({
+    ledger: {
+      items: [ledgerItem()],
+      next_cursor: null,
+      has_more: false,
+    },
+    handler(call) {
+      if (call.url.pathname !== "/admin/request-ledger" || call.method !== "GET") {
+        return undefined;
+      }
+      if (mode === "error") {
+        return Promise.reject(new Error("network offline"));
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  await openRequestLogs(context);
+  const { window } = context;
+  assert.equal(window.document.querySelectorAll("#request-logs-body tr").length, 1);
+
+  mode = "error";
+  window.document.getElementById("refresh-request-logs").click();
+  await waitFor(
+    () => /network offline/i.test(window.document.getElementById("request-logs-notice").textContent),
+    "network failure was not shown in the request log view",
+  );
+  assert.equal(window.document.querySelectorAll("#request-logs-body tr").length, 0);
+
+  window.document.getElementById("sign-out").click();
+  await settle();
+  assert.equal(window.document.getElementById("request-logs-summary").textContent, "");
+  assert.equal(window.document.getElementById("request-logs-notice").textContent, "");
+  assert.equal(window.document.querySelectorAll("#request-logs-body tr").length, 0);
+  assert.equal(window.document.getElementById("request-logs-detail").hidden, true);
+});
+
+test("B19 a late request log response after logout cannot restore stale data", { concurrency: false }, async (t) => {
+  let ledgerGets = 0;
+  let late;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/admin/request-ledger" && call.method === "GET") {
+        ledgerGets += 1;
+        if (ledgerGets === 2) {
+          late = deferred();
+          return late.promise;
+        }
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  await openRequestLogs(context);
+  const { window } = context;
+  window.document.getElementById("refresh-request-logs").click();
+  await waitFor(() => ledgerGets === 2, "late request log request was not pending");
+  window.document.getElementById("sign-out").click();
+  late.resolve(
+    apiResponse({
+      items: [ledgerItem({ request_id: "must-not-return" })],
+      next_cursor: null,
+      has_more: false,
+    }),
+  );
+  await settle();
+  assert.equal(window.document.getElementById("request-logs-summary").textContent, "");
+  assert.equal(window.document.getElementById("request-logs-notice").textContent, "");
+  assert.equal(window.document.querySelectorAll("#request-logs-body tr").length, 0);
 });

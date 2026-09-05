@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/admin/dashboard/app.css">
   <script src="/admin/dashboard/provider-health.js" defer></script>
   <script src="/admin/dashboard/routing-inventory.js" defer></script>
+  <script src="/admin/dashboard/request-ledger.js" defer></script>
   <script src="/admin/dashboard/budget.js" defer></script>
   <script src="/admin/dashboard/app.js" defer></script>
 </head>
@@ -56,6 +57,8 @@
                 aria-controls="health-panel" aria-selected="false">Provider health</button>
         <button class="tab" type="button" data-view="routing"
                 aria-controls="routing-panel" aria-selected="false">Routing inventory</button>
+        <button class="tab" type="button" data-view="request-logs"
+                aria-controls="request-logs-panel" aria-selected="false">Request logs</button>
       </nav>
 
       <section id="keys-panel" class="panel" aria-labelledby="keys-title">
@@ -396,6 +399,67 @@
         <p id="routing-unavailable-empty" class="empty-state" hidden>
           No configured providers are missing from routing.
         </p>
+      </section>
+
+      <section id="request-logs-panel" class="panel" aria-labelledby="request-logs-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Metadata only</p>
+            <h2 id="request-logs-title">Request logs</h2>
+            <p>Terminal request outcomes without prompt or response bodies.</p>
+          </div>
+          <button id="refresh-request-logs" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <form id="request-logs-filter" class="form-grid">
+          <label for="request-logs-after">Finished after</label>
+          <input id="request-logs-after" name="finished_after" type="datetime-local">
+          <label for="request-logs-before">Finished before</label>
+          <input id="request-logs-before" name="finished_before" type="datetime-local">
+          <label for="request-logs-request-id">Request ID</label>
+          <input id="request-logs-request-id" name="request_id" maxlength="120">
+          <label for="request-logs-model">Model</label>
+          <input id="request-logs-model" name="model" maxlength="240">
+          <label for="request-logs-provider">Provider</label>
+          <input id="request-logs-provider" name="provider" maxlength="120">
+          <label for="request-logs-status">Status</label>
+          <select id="request-logs-status" name="terminal_status">
+            <option value="">Any</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <button type="submit">Apply filters</button>
+        </form>
+
+        <p id="request-logs-summary" class="health-summary"></p>
+        <p id="request-logs-notice" class="health-notice" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <caption>Metadata-only terminal request records</caption>
+            <thead>
+              <tr>
+                <th scope="col">Request ID</th>
+                <th scope="col">Finished</th>
+                <th scope="col">Model</th>
+                <th scope="col">Provider</th>
+                <th scope="col">Status</th>
+                <th scope="col">Code</th>
+                <th scope="col">Latency</th>
+                <th scope="col">Cost</th>
+                <th scope="col">API key</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody id="request-logs-body"></tbody>
+          </table>
+        </div>
+        <p id="request-logs-empty" class="empty-state" hidden>No request logs found.</p>
+        <div class="pagination" aria-label="Request log pages">
+          <button id="request-logs-previous" class="secondary" type="button">Previous</button>
+          <button id="request-logs-next" class="secondary" type="button">Next</button>
+        </div>
+        <div id="request-logs-detail" hidden></div>
       </section>
     </section>
   </main>
