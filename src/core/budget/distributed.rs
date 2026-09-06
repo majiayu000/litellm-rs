@@ -113,24 +113,27 @@ impl BudgetLeaseBackend {
             #[cfg(feature = "gateway")]
             Self::Redis { pool, lease_ttl_ms } => {
                 let lease_id = uuid::Uuid::new_v4().to_string();
-                let state = run_redis(
-                    scope,
-                    name,
-                    "reserve",
+                let pool = Arc::clone(pool);
+                let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
+                let amount = to_i64(amount)?;
+                let max = to_i64(max)?;
+                let seed_committed = to_i64(seed_committed)?;
+                let ttl_ms = *lease_ttl_ms;
+                let now_ms = now_ms();
+                let lease_id_for_fut = lease_id.clone();
+                let state = run_redis(scope, name, "reserve", async move {
                     pool.budget_reserve(crate::storage::redis::budget::BudgetReserveArgs {
-                        key: &crate::storage::redis::RedisPool::budget_lease_key(
-                            scope.as_str(),
-                            name,
-                        ),
-                        amount: to_i64(amount)?,
-                        max: to_i64(max)?,
-                        seed_committed: to_i64(seed_committed)?,
+                        key: &key,
+                        amount,
+                        max,
+                        seed_committed,
                         period_epoch,
-                        lease_id: &lease_id,
-                        now_ms: now_ms(),
-                        ttl_ms: *lease_ttl_ms,
-                    }),
-                )?;
+                        lease_id: &lease_id_for_fut,
+                        now_ms,
+                        ttl_ms,
+                    })
+                    .await
+                })?;
                 if !state.allowed {
                     return Err(scope.exceeded_error());
                 }
@@ -158,19 +161,16 @@ impl BudgetLeaseBackend {
             Self::Unavailable => Err(BudgetReservationError::BackendUnavailable),
             #[cfg(feature = "gateway")]
             Self::Redis { pool, .. } => {
-                let state = run_redis(
-                    scope,
-                    name,
-                    "settle",
-                    pool.budget_settle(
-                        &crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name),
-                        to_i64(reserved)?,
-                        to_i64(actual)?,
-                        period_epoch,
-                        lease_id,
-                        now_ms(),
-                    ),
-                )?;
+                let pool = Arc::clone(pool);
+                let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
+                let reserved = to_i64(reserved)?;
+                let actual = to_i64(actual)?;
+                let lease_id = lease_id.to_string();
+                let now_ms = now_ms();
+                let state = run_redis(scope, name, "settle", async move {
+                    pool.budget_settle(&key, reserved, actual, period_epoch, &lease_id, now_ms)
+                        .await
+                })?;
                 lease_snapshot(state)
             }
         }
@@ -193,18 +193,15 @@ impl BudgetLeaseBackend {
             }),
             #[cfg(feature = "gateway")]
             Self::Redis { pool, .. } => {
-                let state = run_redis(
-                    scope,
-                    name,
-                    "cancel",
-                    pool.budget_cancel(
-                        &crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name),
-                        to_i64(reserved)?,
-                        period_epoch,
-                        lease_id,
-                        now_ms(),
-                    ),
-                )?;
+                let pool = Arc::clone(pool);
+                let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
+                let reserved = to_i64(reserved)?;
+                let lease_id = lease_id.to_string();
+                let now_ms = now_ms();
+                let state = run_redis(scope, name, "cancel", async move {
+                    pool.budget_cancel(&key, reserved, period_epoch, &lease_id, now_ms)
+                        .await
+                })?;
                 lease_snapshot(state)
             }
         }
@@ -225,14 +222,7 @@ impl BudgetLeaseBackend {
             };
             let pool = Arc::clone(pool);
             let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
-            let Ok(handle) = tokio::runtime::Handle::try_current() else {
-                warn!(
-                    scope = scope.as_str(),
-                    name, "budget lease drop-cancel has no runtime; relying on expiry"
-                );
-                return;
-            };
-            handle.spawn(async move {
+            budget_io_handle().spawn(async move {
                 if let Err(err) = pool
                     .budget_cancel(&key, reserved, period_epoch, &lease_id, now_ms())
                     .await
@@ -266,17 +256,12 @@ impl BudgetLeaseBackend {
             }),
             #[cfg(feature = "gateway")]
             Self::Redis { pool, .. } => {
-                let state = run_redis(
-                    scope,
-                    name,
-                    "reset",
-                    pool.budget_reset(
-                        &crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name),
-                        period_epoch,
-                        now_ms(),
-                        true,
-                    ),
-                )?;
+                let pool = Arc::clone(pool);
+                let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
+                let now_ms = now_ms();
+                let state = run_redis(scope, name, "reset", async move {
+                    pool.budget_reset(&key, period_epoch, now_ms, true).await
+                })?;
                 lease_snapshot(state)
             }
         }
@@ -335,27 +320,77 @@ fn lease_snapshot(
 }
 
 #[cfg(feature = "gateway")]
+fn budget_io_handle() -> tokio::runtime::Handle {
+    static HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+    HANDLE
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            std::thread::Builder::new()
+                .name("budget-redis-rt".into())
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(1)
+                        .enable_all()
+                        .thread_name("budget-redis")
+                        .build()
+                        .expect("budget redis runtime");
+                    let handle = runtime.handle().clone();
+                    tx.send(handle).expect("send budget redis handle");
+                    runtime.block_on(std::future::pending::<()>());
+                })
+                .expect("spawn budget redis runtime thread");
+            rx.recv().expect("budget redis runtime handle")
+        })
+        .clone()
+}
+
+#[cfg(feature = "gateway")]
 fn run_redis<T>(
     scope: BudgetLeaseScope,
     name: &str,
     operation: &'static str,
-    fut: impl std::future::Future<Output = crate::utils::error::gateway_error::Result<T>>,
-) -> Result<T, BudgetReservationError> {
-    let handle = tokio::runtime::Handle::try_current().map_err(|_| {
-        warn!(
-            scope = scope.as_str(),
-            name, operation, "budget redis called without a tokio runtime; failing closed"
-        );
-        BudgetReservationError::BackendUnavailable
-    })?;
-    tokio::task::block_in_place(|| handle.block_on(fut)).map_err(|err| {
-        warn!(
-            scope = scope.as_str(),
-            name,
-            operation,
-            error = %err,
-            "budget redis operation failed; failing closed"
-        );
-        BudgetReservationError::BackendUnavailable
-    })
+    fut: impl std::future::Future<Output = crate::utils::error::gateway_error::Result<T>>
+    + Send
+    + 'static,
+) -> Result<T, BudgetReservationError>
+where
+    T: Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    budget_io_handle().spawn(async move {
+        let _ = tx.send(fut.await);
+    });
+    match rx.recv() {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(err)) => {
+            warn!(
+                scope = scope.as_str(),
+                name,
+                operation,
+                error = %err,
+                "budget redis operation failed; failing closed"
+            );
+            Err(BudgetReservationError::BackendUnavailable)
+        }
+        Err(_) => {
+            warn!(
+                scope = scope.as_str(),
+                name, operation, "budget redis worker dropped; failing closed"
+            );
+            Err(BudgetReservationError::BackendUnavailable)
+        }
+    }
+}
+
+#[cfg(all(test, feature = "gateway"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_redis_does_not_panic_on_current_thread_runtime() {
+        let result = run_redis(BudgetLeaseScope::Provider, "probe", "probe", async {
+            Ok::<i64, crate::utils::error::gateway_error::GatewayError>(7)
+        });
+        assert_eq!(result.expect("current_thread redis bridge"), 7);
+    }
 }

@@ -132,6 +132,21 @@ mod redis {
         cleanup(&pool, &provider, &model).await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn current_thread_runtime_can_reserve_without_panic() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("provider-current-thread");
+        let model = unique("model-current-thread");
+        let limits = seeded(pool.clone(), &provider, &model, 10.0);
+        let reservation = limits
+            .reserve_spend(&provider, &model, 4.0)
+            .expect("Actix workers use current_thread; reserve must not panic");
+        reservation.settle(4.0).unwrap();
+        cleanup(&pool, &provider, &model).await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn abandoned_lease_is_recovered_after_expiry() {
         let Some(pool) = live_redis_pool().await else {

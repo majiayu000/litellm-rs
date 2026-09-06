@@ -1,7 +1,9 @@
 //! Single-key Lua budget lease operations (cluster-safe: `KEYS[1]` only).
 
-use super::pool::RedisPool;
+use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 const BUDGET_LEASE_SCRIPT: &str = r#"
 local op = ARGV[1]
@@ -62,6 +64,8 @@ local function reclaim()
           outstanding = outstanding - amount
           if outstanding < 0 then outstanding = 0 end
         end
+        redis.call('HDEL', KEYS[1], field)
+      elseif amount == nil or expiry == nil or lease_epoch == nil then
         redis.call('HDEL', KEYS[1], field)
       end
     end
@@ -176,6 +180,26 @@ pub(crate) struct BudgetReserveArgs<'a> {
     pub ttl_ms: i64,
 }
 
+fn budget_runtime_connections() -> &'static tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>
+{
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
+    let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
+    {
+        let cache = budget_runtime_connections().lock().await;
+        if let Some(conn) = cache.get(&cache_key) {
+            return Ok(conn.clone());
+        }
+    }
+    let conn = pool.open_live_connection().await?;
+    let mut cache = budget_runtime_connections().lock().await;
+    Ok(cache.entry(cache_key).or_insert(conn).clone())
+}
+
 fn parse_budget_lease_state(values: Vec<i64>) -> Result<BudgetLeaseState> {
     if values.len() != 3 {
         return Err(GatewayError::Storage(format!(
@@ -211,12 +235,13 @@ impl RedisPool {
             ));
         }
 
-        let mut conn = self.get_connection().await?;
-        let Some(ref mut c) = conn.conn else {
-            return Err(GatewayError::Storage(
-                "budget redis backend is unavailable".to_string(),
-            ));
-        };
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
+        let mut conn = connection_on_current_runtime(self).await?;
 
         let values: Vec<i64> = redis::Script::new(BUDGET_LEASE_SCRIPT)
             .key(key)
@@ -228,7 +253,7 @@ impl RedisPool {
             .arg(args.seed_committed)
             .arg(args.lease_id)
             .arg(args.ttl_ms)
-            .invoke_async(c)
+            .invoke_async(&mut conn)
             .await
             .map_err(GatewayError::from)?;
         parse_budget_lease_state(values)
