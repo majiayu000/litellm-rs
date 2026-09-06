@@ -120,6 +120,10 @@ pub(in crate::server::routes::ai) fn reservation_error_to_provider_error(
             "budget",
             format!("actual spend exceeded reserved budget for '{provider}'/'{model}'"),
         ),
+        BudgetReservationError::BackendUnavailable => ProviderError::provider_unavailable(
+            "budget",
+            format!("budget backend unavailable for '{provider}'/'{model}'"),
+        ),
     }
 }
 

@@ -325,6 +325,7 @@ fn reservation_error_to_gateway_error(
             "actual spend exceeded reserved budget for '{}/{}'",
             provider.provider_name, provider.model
         ),
+        BudgetReservationError::BackendUnavailable => "budget backend unavailable".to_string(),
     };
     match error {
         BudgetReservationError::BudgetExceeded
@@ -335,6 +336,9 @@ fn reservation_error_to_gateway_error(
         BudgetReservationError::InvalidAmount(_)
         | BudgetReservationError::ActualExceedsReservation => {
             GatewayError::from(ProviderError::invalid_request("budget", message))
+        }
+        BudgetReservationError::BackendUnavailable => {
+            GatewayError::from(ProviderError::provider_unavailable("budget", message))
         }
     }
 }

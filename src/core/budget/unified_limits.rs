@@ -41,6 +41,33 @@ impl UnifiedBudgetLimits {
         }
         limits
     }
+    #[cfg(feature = "gateway")]
+    pub fn with_redis(self, redis: std::sync::Arc<crate::storage::redis::RedisPool>) -> Self {
+        Self {
+            providers: self.providers.with_redis(std::sync::Arc::clone(&redis)),
+            models: self.models.with_redis(redis),
+        }
+    }
+    #[cfg(all(test, feature = "gateway"))]
+    pub fn with_redis_lease_ttl(
+        self,
+        redis: std::sync::Arc<crate::storage::redis::RedisPool>,
+        lease_ttl_ms: i64,
+    ) -> Self {
+        Self {
+            providers: self
+                .providers
+                .with_redis_lease_ttl(std::sync::Arc::clone(&redis), lease_ttl_ms),
+            models: self.models.with_redis_lease_ttl(redis, lease_ttl_ms),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn with_unavailable_backend() -> Self {
+        let mut limits = Self::new();
+        limits.providers.backend = super::distributed::BudgetLeaseBackend::Unavailable;
+        limits.models.backend = super::distributed::BudgetLeaseBackend::Unavailable;
+        limits
+    }
     pub fn can_spend(&self, provider: &str, model: &str, amount: f64) -> bool {
         self.providers.can_provider_spend(provider, amount)
             && self.models.can_model_spend(model, amount)

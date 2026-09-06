@@ -11,6 +11,7 @@
 //! - `hash` - Hash and Sorted Set operations
 //! - `pubsub` - Pub/Sub operations (temporarily disabled)
 //! - `atomic` - Atomic operations and utilities
+//! - `budget` - Cluster-safe single-key Lua budget leases
 //! - `tests` - Module tests
 
 #![allow(dead_code)]
@@ -18,6 +19,7 @@
 // Module declarations
 mod atomic;
 mod batch;
+pub(crate) mod budget;
 mod cache;
 mod collections;
 mod hash;

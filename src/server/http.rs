@@ -69,10 +69,10 @@ impl HttpServer {
                     Arc::clone(&storage.database).start_budget_limit_persistence_task();
                 budget_persistence_task = Some(persistence_task);
                 info!("Loaded {} persisted budget limit snapshots", count);
-                Arc::new(UnifiedBudgetLimits::from_snapshots_with_persistence(
-                    snapshots,
-                    persistence_tx,
-                ))
+                Arc::new(
+                    UnifiedBudgetLimits::from_snapshots_with_persistence(snapshots, persistence_tx)
+                        .with_redis(storage.redis.clone()),
+                )
             }
             Err(e) => {
                 if config.gateway.storage.database.allow_degraded
@@ -85,7 +85,7 @@ impl HttpServer {
                         config.gateway.storage.database.enabled,
                         e
                     );
-                    Arc::new(UnifiedBudgetLimits::new())
+                    Arc::new(UnifiedBudgetLimits::new().with_redis(storage.redis.clone()))
                 } else {
                     error!(
                         "Budget limit persistence load failed and \
