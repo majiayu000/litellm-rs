@@ -521,14 +521,10 @@ mod tests {
         .await
         .expect("overlay config should be written");
 
-        let standalone_error = Config::from_file(&base_path)
+        let loaded = Config::from_file(&base_path)
             .await
-            .expect_err("standalone cluster config must still fail final validation");
-        assert!(
-            standalone_error
-                .to_string()
-                .contains("storage.redis.cluster=false")
-        );
+            .expect("cluster=true with a valid Redis URL should pass validation");
+        assert!(loaded.gateway.storage.redis.cluster);
 
         let base = Config::overlay_from_file(base_path)
             .await

@@ -297,7 +297,7 @@ fn standalone_gateway_env_loader_preserves_jwt_requirement() {
 }
 
 #[test]
-fn config_environment_overlay_defers_final_cluster_validation() {
+fn config_environment_overlay_accepts_cluster_mode() {
     let _guard = GATEWAY_ENV_LOCK.blocking_lock();
     let _env = EnvGuard::cleared();
     unsafe {
@@ -309,15 +309,16 @@ fn config_environment_overlay_defers_final_cluster_validation() {
         env::set_var(ENV_REDIS_CLUSTER, "true");
     }
 
-    assert!(crate::config::Config::from_env().is_err());
+    let config = crate::config::Config::from_env()
+        .expect("cluster=true with the default Redis URL should validate");
+    assert!(config.gateway.storage.redis.enabled);
+    assert!(config.gateway.storage.redis.cluster);
+
     let layer = crate::config::Config::overlay_from_env()
-        .expect("environment overlay should parse before final validation")
+        .expect("environment overlay should parse")
         .into_config();
-    assert!(
-        layer
-            .validate()
-            .expect_err("materialized cluster layer must remain invalid before merge")
-            .to_string()
-            .contains("storage.redis.cluster=false")
-    );
+    layer
+        .validate()
+        .expect("materialized cluster layer must be a valid configuration");
+    assert!(layer.gateway.storage.redis.cluster);
 }

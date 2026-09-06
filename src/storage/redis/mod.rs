@@ -28,5 +28,5 @@ mod rate_limit;
 mod tests;
 
 // Re-export public types
-pub use pool::{RedisConnection, RedisPool};
+pub use pool::{RedisConnection, RedisPool, cluster_hash_tag};
 pub use pubsub::Subscription;

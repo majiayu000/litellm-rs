@@ -2,9 +2,11 @@
 //!
 //! This module provides core key-value caching operations including get, set, delete, exists, expire, and ttl.
 
-use super::pool::RedisPool;
+use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use redis::{AsyncCommands, RedisResult};
+use redis::cluster_async::ClusterConnection;
+use redis::cluster_routing::{RoutingInfo, SingleNodeRoutingInfo};
+use redis::{AsyncCommands, Value};
 
 impl RedisPool {
     /// Get a value from cache
@@ -15,12 +17,8 @@ impl RedisPool {
 
         let mut conn = self.get_connection().await?;
         if let Some(ref mut c) = conn.conn {
-            let result: RedisResult<String> = c.get(key).await;
-            match result {
-                Ok(value) => Ok(Some(value)),
-                Err(e) if e.kind() == redis::ErrorKind::UnexpectedReturnType => Ok(None),
-                Err(e) => Err(GatewayError::from(e)),
-            }
+            let value: Option<String> = c.get(key).await.map_err(GatewayError::from)?;
+            Ok(value)
         } else {
             Ok(None)
         }
@@ -66,41 +64,11 @@ impl RedisPool {
         }
 
         let mut conn = self.get_connection().await?;
-        let Some(ref mut c) = conn.conn else {
-            return Ok(0);
-        };
-
-        let pattern = format!("{prefix}*");
-        let mut cursor = 0_u64;
-        let mut deleted = 0_usize;
-
-        loop {
-            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(&pattern)
-                .arg("COUNT")
-                .arg(100_usize)
-                .query_async(&mut *c)
-                .await
-                .map_err(GatewayError::from)?;
-
-            if !keys.is_empty() {
-                let count: usize = redis::cmd("DEL")
-                    .arg(&keys)
-                    .query_async(&mut *c)
-                    .await
-                    .map_err(GatewayError::from)?;
-                deleted += count;
-            }
-
-            if next_cursor == 0 {
-                break;
-            }
-            cursor = next_cursor;
+        match conn.conn.as_mut() {
+            Some(RedisLiveConnection::Standalone(c)) => scan_and_delete_standalone(c, prefix).await,
+            Some(RedisLiveConnection::Cluster(c)) => scan_and_delete_cluster(c, prefix).await,
+            None => Ok(0),
         }
-
-        Ok(deleted)
     }
 
     /// Check if a key exists
@@ -148,4 +116,152 @@ impl RedisPool {
             Ok(-2)
         }
     }
+}
+
+async fn scan_and_delete_standalone(
+    conn: &mut redis::aio::MultiplexedConnection,
+    prefix: &str,
+) -> Result<usize> {
+    let pattern = format!("{prefix}*");
+    let mut cursor = 0_u64;
+    let mut deleted = 0_usize;
+
+    loop {
+        let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(&pattern)
+            .arg("COUNT")
+            .arg(100_usize)
+            .query_async(&mut *conn)
+            .await
+            .map_err(GatewayError::from)?;
+
+        if !keys.is_empty() {
+            let count: usize = redis::cmd("DEL")
+                .arg(&keys)
+                .query_async(&mut *conn)
+                .await
+                .map_err(GatewayError::from)?;
+            deleted += count;
+        }
+
+        if next_cursor == 0 {
+            break;
+        }
+        cursor = next_cursor;
+    }
+
+    Ok(deleted)
+}
+
+async fn scan_and_delete_cluster(conn: &mut ClusterConnection, prefix: &str) -> Result<usize> {
+    let slots: Value = redis::cmd("CLUSTER")
+        .arg("SLOTS")
+        .query_async(&mut *conn)
+        .await
+        .map_err(GatewayError::from)?;
+    let masters = cluster_master_addrs(&slots);
+
+    if masters.is_empty() {
+        return scan_node_and_delete(conn, None, prefix).await;
+    }
+
+    let mut deleted = 0_usize;
+    for (host, port) in masters {
+        deleted += scan_node_and_delete(conn, Some((host, port)), prefix).await?;
+    }
+    Ok(deleted)
+}
+
+async fn scan_node_and_delete(
+    conn: &mut ClusterConnection,
+    master: Option<(String, u16)>,
+    prefix: &str,
+) -> Result<usize> {
+    let pattern = format!("{prefix}*");
+    let mut cursor = 0_u64;
+    let mut deleted = 0_usize;
+
+    loop {
+        let mut cmd = redis::cmd("SCAN");
+        cmd.arg(cursor)
+            .arg("MATCH")
+            .arg(&pattern)
+            .arg("COUNT")
+            .arg(100_usize);
+
+        let scanned = match &master {
+            Some((host, port)) => conn
+                .route_command(
+                    cmd,
+                    RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress {
+                        host: host.clone(),
+                        port: *port,
+                    }),
+                )
+                .await
+                .map_err(GatewayError::from)?,
+            None => cmd.query_async(conn).await.map_err(GatewayError::from)?,
+        };
+
+        let (next_cursor, keys) = parse_scan_page(scanned)?;
+        for key in keys {
+            let count: usize = redis::cmd("DEL")
+                .arg(&key)
+                .query_async(&mut *conn)
+                .await
+                .map_err(GatewayError::from)?;
+            deleted += count;
+        }
+
+        if next_cursor == 0 {
+            break;
+        }
+        cursor = next_cursor;
+    }
+
+    Ok(deleted)
+}
+
+fn cluster_master_addrs(slots: &Value) -> Vec<(String, u16)> {
+    let Value::Array(ranges) = slots else {
+        return Vec::new();
+    };
+
+    let mut masters = Vec::new();
+    for range in ranges {
+        let Value::Array(item) = range else {
+            continue;
+        };
+        if item.len() < 3 {
+            continue;
+        }
+        let Value::Array(node) = &item[2] else {
+            continue;
+        };
+        if node.len() < 2 {
+            continue;
+        }
+        let host = match &node[0] {
+            Value::BulkString(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            _ => continue,
+        };
+        let port = match node[1] {
+            Value::Int(port) => port as u16,
+            _ => continue,
+        };
+        if !masters
+            .iter()
+            .any(|(existing, p)| existing == &host && *p == port)
+        {
+            masters.push((host, port));
+        }
+    }
+    masters
+}
+
+fn parse_scan_page(value: Value) -> Result<(u64, Vec<String>)> {
+    redis::from_redis_value(value)
+        .map_err(|error| GatewayError::Storage(format!("Invalid Redis SCAN response: {error}")))
 }

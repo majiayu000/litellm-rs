@@ -122,17 +122,6 @@ impl Validate for RedisConfig {
             return Ok(());
         }
 
-        if self.cluster {
-            return Err(
-                "storage.redis.cluster=true is declared but not implemented yet. \
-                 A standalone client against a cluster node only fails later \
-                 with MOVED errors, so cluster mode is rejected at startup. \
-                 Set storage.redis.cluster=false and point storage.redis.url \
-                 at a standalone or primary endpoint."
-                    .to_string(),
-            );
-        }
-
         if self.url.is_empty() {
             return Err("Redis URL cannot be empty".to_string());
         }
