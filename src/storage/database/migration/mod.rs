@@ -16,6 +16,7 @@ mod m20240501_000001_create_budget_limit_snapshots;
 mod m20260712_000001_restrict_api_key_owner_deletion;
 mod m20260906_000001_create_request_ledger;
 mod m20260906_000002_create_provider_config_revisions;
+mod m20260906_000003_create_routing_policy_revisions;
 
 /// Database migrator for SeaORM
 pub struct Migrator;
@@ -75,6 +76,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260712_000001_restrict_api_key_owner_deletion::Migration),
             Box::new(m20260906_000001_create_request_ledger::Migration),
             Box::new(m20260906_000002_create_provider_config_revisions::Migration),
+            Box::new(m20260906_000003_create_routing_policy_revisions::Migration),
         ]
     }
 }

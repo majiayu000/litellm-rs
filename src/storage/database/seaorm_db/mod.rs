@@ -10,6 +10,7 @@ mod budget_limit_ops;
 mod connection;
 mod provider_config_ops;
 mod request_ledger_ops;
+mod routing_policy_ops;
 mod team_repository;
 #[cfg(test)]
 mod team_repository_tests;

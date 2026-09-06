@@ -33,7 +33,18 @@ pub(super) async fn routing_inventory(
 }
 
 pub(super) fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/admin/routing").route("/inventory", web::get().to(routing_inventory)));
+    cfg.service(
+        web::scope("/admin/routing")
+            .route("/inventory", web::get().to(routing_inventory))
+            .route(
+                "/policy",
+                web::get().to(super::admin_routing_policy::get_routing_policy),
+            )
+            .route(
+                "/policy",
+                web::put().to(super::admin_routing_policy::put_routing_policy),
+            ),
+    );
 }
 
 /// Sanitized inventory of effective routing state.

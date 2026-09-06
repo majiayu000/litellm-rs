@@ -14,6 +14,8 @@ pub mod pricing_history;
 pub mod provider_config_revision;
 /// Request ledger entity module
 pub mod request_ledger;
+/// Sanitized routing policy revision entity module
+pub mod routing_policy_revision;
 /// User entity module
 pub mod user;
 /// User session entity module
@@ -27,6 +29,7 @@ pub use pricing::Entity as ModelPricing;
 pub use pricing_history::Entity as PricingHistory;
 pub use provider_config_revision::Entity as ProviderConfigRevision;
 pub use request_ledger::Entity as RequestLedger;
+pub use routing_policy_revision::Entity as RoutingPolicyRevision;
 pub use user::Entity as User;
 // UserSession is available but not currently used
 #[allow(unused_imports)]
