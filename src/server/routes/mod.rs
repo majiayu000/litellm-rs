@@ -7,6 +7,7 @@ pub mod admin_dashboard;
 mod admin_providers;
 mod admin_request_ledger;
 mod admin_routing;
+mod admin_routing_policy;
 pub mod ai;
 pub mod auth;
 pub mod budget;
