@@ -199,7 +199,7 @@ async fn test_get_models_with_fallbacks_no_fallbacks() {
 
 #[tokio::test]
 async fn test_set_fallback_config_runtime() {
-    let mut router = Router::default();
+    let router = Router::default();
 
     let fallbacks = router.get_fallbacks("gpt-4", FallbackType::General);
     assert_eq!(fallbacks.len(), 0);

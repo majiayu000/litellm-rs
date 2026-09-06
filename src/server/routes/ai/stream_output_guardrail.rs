@@ -195,21 +195,23 @@ impl StreamOutputGuardrail {
     pub(super) async fn flush_to_until_closed(
         &mut self,
         tx: &mpsc::Sender<Bytes>,
-    ) -> Result<Option<()>, StreamGuardrailError> {
+    ) -> Result<Option<usize>, StreamGuardrailError> {
         let Some(pending) = self.finish_until_closed(tx).await? else {
             return Ok(None);
         };
+        let mut flushed = 0usize;
         for event in pending {
-            let sent = tokio::select! {
+            let send_result = tokio::select! {
                 biased;
                 _ = tx.closed() => return Ok(None),
                 sent = tx.send(event) => sent,
             };
-            if sent.is_err() {
+            if send_result.is_err() {
                 return Ok(None);
             }
+            flushed += 1;
         }
-        Ok(Some(()))
+        Ok(Some(flushed))
     }
 
     async fn append_and_check(

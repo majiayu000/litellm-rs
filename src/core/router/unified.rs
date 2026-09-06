@@ -360,9 +360,12 @@ impl Router {
         self
     }
 
-    /// Set fallback configuration (runtime method)
-    pub fn set_fallback_config(&mut self, config: FallbackConfig) {
-        self.fallback_config = config;
+    /// Set fallback configuration (runtime method).
+    ///
+    /// Takes `&self` so HTTP tests can install maps on `Arc<Router>` without a
+    /// unique owner. YAML still does not deserialize these maps.
+    pub fn set_fallback_config(&self, config: FallbackConfig) {
+        self.fallback_config.overwrite(config);
     }
 
     /// Get the router configuration

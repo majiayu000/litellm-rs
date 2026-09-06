@@ -21,6 +21,7 @@ mod moderations;
 mod openai_errors;
 #[cfg(test)]
 mod openapi_contract_tests;
+mod output_fallback;
 mod provider_config;
 #[cfg(test)]
 mod provider_selection;

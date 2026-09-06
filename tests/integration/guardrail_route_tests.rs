@@ -275,6 +275,73 @@ mod tests {
             .clone()
     }
 
+    fn compatible_provider(
+        name: &str,
+        base_url: &str,
+        models: Vec<String>,
+    ) -> litellm_rs::config::models::provider::ProviderConfig {
+        let mut provider =
+            mock_provider_config(name, "openai_compatible", "sk-test", base_url, models);
+        provider.settings = HashMap::from([
+            ("skip_api_key".to_string(), Value::Bool(true)),
+            ("provider_name".to_string(), Value::String(name.to_string())),
+        ]);
+        provider
+    }
+
+    async fn app_state_with_output_fallback(
+        primary_url: &str,
+        fallback_url: Option<&str>,
+        fallback_models: Vec<String>,
+    ) -> litellm_rs::server::state::AppState {
+        use litellm_rs::core::guardrails::PromptInjectionConfig;
+        use litellm_rs::core::guardrails::config::CustomRuleConfig;
+        use litellm_rs::core::router::FallbackConfig;
+
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.guardrails.prompt_injection = Some(PromptInjectionConfig {
+            enabled: false,
+            ..PromptInjectionConfig::default()
+        });
+        config.gateway.guardrails.pii = None;
+        config.gateway.guardrails.openai_moderation = None;
+        config.gateway.guardrails.custom_rules = vec![CustomRuleConfig {
+            name: "deny-forbidden-token".to_string(),
+            description: None,
+            enabled: true,
+            patterns: vec!["forbidden-token-xyz".to_string()],
+            action: litellm_rs::core::guardrails::GuardrailAction::Block,
+            message: None,
+        }];
+        let mut providers = vec![compatible_provider(
+            "openai",
+            primary_url,
+            vec!["gpt-4o".to_string()],
+        )];
+        if let Some(fallback_url) = fallback_url {
+            providers.push(compatible_provider(
+                "backup",
+                fallback_url,
+                vec!["gpt-4o-mini".to_string()],
+            ));
+        }
+        config.gateway.providers = providers;
+        let state = GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with output fallback fixtures")
+            .state()
+            .clone();
+        if !fallback_models.is_empty() {
+            state.unified_router().set_fallback_config(
+                FallbackConfig::new().add_content_policy("gpt-4o", fallback_models),
+            );
+        }
+        state
+    }
+
     fn guardrail_chat_request(content: &str) -> Value {
         json!({
             "model": "gpt-4o",
@@ -1183,5 +1250,220 @@ mod tests {
         assert!(body.contains("\"code\":\"guardrail_violation\""), "{body}");
         assert!(!body.contains("forbidden-token-xyz"), "{body}");
         provider.stop_upstream().await;
+    }
+
+    async fn call_chat(
+        state: litellm_rs::server::state::AppState,
+        payload: Value,
+    ) -> (StatusCode, String) {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(payload)
+                .to_request(),
+        )
+        .await;
+        let status = response.status();
+        let body = String::from_utf8(test::read_body(response).await.to_vec())
+            .expect("response should be UTF-8");
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn output_block_falls_back_to_configured_model() {
+        let primary =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let fallback = GuardrailTestUpstream::launch_with_output("safe fallback").await;
+        let state = app_state_with_output_fallback(
+            &primary.base_url,
+            Some(&fallback.base_url),
+            vec!["gpt-4o-mini".to_string()],
+        )
+        .await;
+
+        let (status, body) = call_chat(state.clone(), guardrail_chat_request("hello")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("safe fallback"), "{body}");
+        assert!(!body.contains("forbidden-token-xyz"), "{body}");
+        assert_eq!(primary.requests.lock().unwrap().len(), 1);
+        assert_eq!(fallback.requests.lock().unwrap().len(), 1);
+        primary.stop_upstream().await;
+        fallback.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn output_block_without_fallback_stays_forbidden() {
+        let provider =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let state = app_state_with_output_fallback(&provider.base_url, None, Vec::new()).await;
+        let (status, body) = call_chat(state, guardrail_chat_request("hello")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn output_block_does_not_retry_the_same_deployment() {
+        let provider =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let state =
+            app_state_with_output_fallback(&provider.base_url, None, vec!["gpt-4o".to_string()])
+                .await;
+        let (status, body) = call_chat(state, guardrail_chat_request("hello")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn output_block_does_not_trip_deployment_circuit() {
+        use std::sync::atomic::Ordering;
+
+        let provider =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let state = app_state_with_output_fallback(&provider.base_url, None, Vec::new()).await;
+        let deployment_id = state
+            .unified_router()
+            .list_deployments()
+            .into_iter()
+            .next()
+            .expect("primary deployment");
+        let before = state
+            .unified_router()
+            .get_deployment(&deployment_id)
+            .expect("deployment");
+        let fails_before = before.state.fail_requests.load(Ordering::Relaxed);
+
+        let (status, body) = call_chat(state.clone(), guardrail_chat_request("hello")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+        let after = state
+            .unified_router()
+            .get_deployment(&deployment_id)
+            .expect("deployment");
+        assert!(!after.is_in_cooldown());
+        assert_eq!(
+            after.state.fail_requests.load(Ordering::Relaxed),
+            fails_before
+        );
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn committed_stream_block_does_not_call_fallback() {
+        let safe = format!("{}{}", "safe-output-", "a".repeat(256));
+        let primary = GuardrailTestUpstream::launch_with_stream_chunks(vec![
+            json!({
+                "id": "chatcmpl-committed-safe",
+                "object": "chat.completion.chunk",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": safe},
+                    "finish_reason": null
+                }]
+            }),
+            json!({
+                "id": "chatcmpl-committed-block",
+                "object": "chat.completion.chunk",
+                "created": 1_707_000_000_i64,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": " forbidden-token-xyz"},
+                    "finish_reason": "stop"
+                }]
+            }),
+        ])
+        .await;
+        let fallback = GuardrailTestUpstream::launch_with_output("safe fallback").await;
+        let state = app_state_with_output_fallback(
+            &primary.base_url,
+            Some(&fallback.base_url),
+            vec!["gpt-4o-mini".to_string()],
+        )
+        .await;
+        let (status, body) = call_chat(
+            state,
+            json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert!(body.contains("safe-output-"), "{body}");
+        assert!(!body.contains("forbidden-token-xyz"), "{body}");
+        assert!(fallback.requests.lock().unwrap().is_empty(), "{body}");
+        primary.stop_upstream().await;
+        fallback.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn uncommitted_stream_block_falls_back() {
+        let primary =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let fallback = GuardrailTestUpstream::launch_with_output("safe fallback").await;
+        let state = app_state_with_output_fallback(
+            &primary.base_url,
+            Some(&fallback.base_url),
+            vec!["gpt-4o-mini".to_string()],
+        )
+        .await;
+        let (status, body) = call_chat(
+            state,
+            json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("safe fallback"), "{body}");
+        assert!(!body.contains("forbidden-token-xyz"), "{body}");
+        assert!(!body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert_eq!(primary.requests.lock().unwrap().len(), 1);
+        assert_eq!(fallback.requests.lock().unwrap().len(), 1);
+        primary.stop_upstream().await;
+        fallback.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn fallback_audit_metadata_omits_payload_text() {
+        let primary =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let fallback = GuardrailTestUpstream::launch_with_output("safe fallback").await;
+        let state = app_state_with_output_fallback(
+            &primary.base_url,
+            Some(&fallback.base_url),
+            vec!["gpt-4o-mini".to_string()],
+        )
+        .await;
+        let deployments = state.unified_router().list_deployments();
+        let (status, body) = call_chat(state, guardrail_chat_request("hello")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("safe fallback"), "{body}");
+        assert!(!body.contains("forbidden-token-xyz"), "{body}");
+        assert!(
+            deployments.iter().any(|id| id.contains("gpt-4o")),
+            "{deployments:?}"
+        );
+        assert!(
+            deployments.iter().any(|id| id.contains("gpt-4o-mini")),
+            "{deployments:?}"
+        );
+        primary.stop_upstream().await;
+        fallback.stop_upstream().await;
     }
 }
