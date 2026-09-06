@@ -331,23 +331,12 @@ impl Router {
             }
             matching_deployments += 1;
 
-            // Check cooldown first: is_in_cooldown() resets health
-            // from Cooldown to Degraded when the cooldown period expires.
-            if deployment.is_in_cooldown() {
+            // Shared circuit (or local cooldown/health) owns selection eligibility.
+            if !self.deployment_is_selectable(deployment) {
                 tracing::trace!(
                     deployment_id = id.as_str(),
                     model = %resolved_name,
-                    reason = "in_cooldown",
-                    "deployment excluded from routing candidates"
-                );
-                continue;
-            }
-
-            if !deployment.is_healthy() {
-                tracing::trace!(
-                    deployment_id = id.as_str(),
-                    model = %resolved_name,
-                    reason = "unhealthy",
+                    reason = "circuit_or_unhealthy",
                     "deployment excluded from routing candidates"
                 );
                 continue;
