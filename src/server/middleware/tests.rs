@@ -96,6 +96,7 @@ fn test_is_public_route() {
     assert!(is_public_route("/admin/dashboard/app.css"));
     assert!(is_public_route("/admin/dashboard/app.js"));
     assert!(is_public_route("/admin/dashboard/budget.js"));
+    assert!(is_public_route("/admin/dashboard/providers.js"));
     assert!(is_public_route("/admin/dashboard/provider-health.js"));
     assert!(is_public_route("/admin/dashboard/routing-inventory.js"));
     // /metrics requires authentication (not in PUBLIC_ROUTES)
@@ -106,6 +107,7 @@ fn test_is_public_route() {
     assert!(!is_public_route("/admin/dashboard/private"));
     assert!(!is_public_route("/admin/dashboard/app.js.map"));
     assert!(!is_public_route("/admin/dashboard/budget.js.map"));
+    assert!(!is_public_route("/admin/dashboard/providers.js.map"));
     assert!(!is_public_route("/admin/dashboard/provider-health.js.map"));
     assert!(!is_public_route(
         "/admin/dashboard/routing-inventory.js.map"

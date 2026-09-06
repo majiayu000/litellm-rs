@@ -329,7 +329,8 @@ td code {
   margin: 0 0 0.65rem;
 }
 
-.budget-actions {
+.budget-actions,
+.provider-actions {
   display: flex;
   min-width: 13rem;
   gap: 0.45rem;

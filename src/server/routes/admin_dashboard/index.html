@@ -10,6 +10,7 @@
   <script src="/admin/dashboard/routing-inventory.js" defer></script>
   <script src="/admin/dashboard/request-ledger.js" defer></script>
   <script src="/admin/dashboard/budget.js" defer></script>
+  <script src="/admin/dashboard/providers.js" defer></script>
   <script src="/admin/dashboard/app.js" defer></script>
 </head>
 <body>
@@ -53,6 +54,8 @@
                 aria-controls="spend-panel" aria-selected="false">Spend</button>
         <button class="tab" type="button" data-view="budgets"
                 aria-controls="budgets-panel" aria-selected="false">Budgets</button>
+        <button class="tab" type="button" data-view="providers"
+                aria-controls="providers-panel" aria-selected="false">Providers</button>
         <button class="tab" type="button" data-view="health"
                 aria-controls="health-panel" aria-selected="false">Provider health</button>
         <button class="tab" type="button" data-view="routing"
@@ -313,6 +316,106 @@
             </p>
           </div>
         </div>
+      </section>
+
+      <section id="providers-panel" class="panel" aria-labelledby="providers-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Runtime configuration</p>
+            <h2 id="providers-title">Providers</h2>
+            <p>Create, edit, disable, or delete providers. Secrets accept
+              replacement references only and are never loaded from GET.</p>
+          </div>
+          <button id="refresh-providers" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <details class="create-card">
+          <summary>Create a provider</summary>
+          <form id="create-provider-form" class="form-grid">
+            <label for="provider-create-name">Name</label>
+            <input id="provider-create-name" name="name" required maxlength="120">
+            <label for="provider-create-type">Type</label>
+            <input id="provider-create-type" name="provider_type" required
+                   maxlength="120" placeholder="openai">
+            <label for="provider-create-api-key">API key</label>
+            <input id="provider-create-api-key" name="api_key"
+                   placeholder="replacement reference only"
+                   autocomplete="off">
+            <p class="field-help">Use a ${ENV_VAR} reference. Raw keys are rejected.</p>
+            <label for="provider-create-base-url">Base URL</label>
+            <input id="provider-create-base-url" name="base_url" maxlength="500">
+            <label for="provider-create-models">Models</label>
+            <input id="provider-create-models" name="models"
+                   placeholder="gpt-4o, gpt-4o-mini">
+            <label for="provider-create-tags">Tags</label>
+            <input id="provider-create-tags" name="tags">
+            <label for="provider-create-weight">Weight</label>
+            <input id="provider-create-weight" name="weight" type="number"
+                   step="any" value="1">
+            <label for="provider-create-priority">Priority</label>
+            <input id="provider-create-priority" name="priority" type="number"
+                   step="1" value="0">
+            <label class="checkbox-row" for="provider-create-enabled">
+              <input id="provider-create-enabled" name="enabled" type="checkbox" checked>
+              Enabled
+            </label>
+            <button type="submit">Create provider</button>
+          </form>
+        </details>
+
+        <details id="provider-editor" class="create-card" hidden>
+          <summary>Edit provider</summary>
+          <form id="edit-provider-form" class="form-grid">
+            <label for="provider-edit-name">Name</label>
+            <input id="provider-edit-name" name="name" required maxlength="120"
+                   readonly>
+            <label for="provider-edit-type">Type</label>
+            <input id="provider-edit-type" name="provider_type" required
+                   maxlength="120">
+            <label for="provider-edit-api-key">API key</label>
+            <input id="provider-edit-api-key" name="api_key"
+                   placeholder="replacement reference only"
+                   autocomplete="off">
+            <p id="provider-edit-api-key-ref" class="field-help"></p>
+            <label for="provider-edit-base-url">Base URL</label>
+            <input id="provider-edit-base-url" name="base_url" maxlength="500">
+            <label for="provider-edit-models">Models</label>
+            <input id="provider-edit-models" name="models">
+            <label for="provider-edit-tags">Tags</label>
+            <input id="provider-edit-tags" name="tags">
+            <label for="provider-edit-weight">Weight</label>
+            <input id="provider-edit-weight" name="weight" type="number" step="any">
+            <label for="provider-edit-priority">Priority</label>
+            <input id="provider-edit-priority" name="priority" type="number" step="1">
+            <label class="checkbox-row" for="provider-edit-enabled">
+              <input id="provider-edit-enabled" name="enabled" type="checkbox">
+              Enabled
+            </label>
+            <button type="submit">Save provider</button>
+            <button id="cancel-provider-edit" class="secondary" type="button">
+              Cancel edit
+            </button>
+          </form>
+        </details>
+
+        <p id="providers-notice" class="health-notice" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <caption>Configured providers from the live runtime</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Type</th>
+                <th scope="col">Enabled</th>
+                <th scope="col">Models</th>
+                <th scope="col">Secret</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="providers-body"></tbody>
+          </table>
+        </div>
+        <p id="providers-empty" class="empty-state" hidden>No providers configured.</p>
       </section>
 
       <section id="health-panel" class="panel" aria-labelledby="health-title" hidden>

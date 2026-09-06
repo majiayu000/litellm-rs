@@ -35,6 +35,10 @@ const requestLedgerSource = await readFile(
   ),
   "utf8",
 );
+const providersSource = await readFile(
+  new URL("../../src/server/routes/admin_dashboard/providers.js", import.meta.url),
+  "utf8",
+);
 const immediate = () => new Promise((resolve) => setImmediate(resolve));
 async function settle(turns = 8) {
   for (let index = 0; index < turns; index += 1) {
@@ -103,6 +107,7 @@ function dashboard(options = {}) {
       next_cursor: null,
       has_more: false,
     },
+    providerList = [],
     handler,
   } = options;
   const htmlWithoutScript = indexHtml
@@ -119,6 +124,7 @@ function dashboard(options = {}) {
       "",
     )
     .replace('<script src="/admin/dashboard/budget.js" defer></script>', "")
+    .replace('<script src="/admin/dashboard/providers.js" defer></script>', "")
     .replace('<script src="/admin/dashboard/app.js" defer></script>', "");
   const dom = new JSDOM(htmlWithoutScript, {
     url: "https://gateway.test/admin/dashboard",
@@ -240,6 +246,11 @@ function dashboard(options = {}) {
     if (url.pathname === "/admin/request-ledger" && call.method === "GET") {
       return Promise.resolve(apiResponse(ledger));
     }
+    if (url.pathname === "/admin/providers" && call.method === "GET") {
+      return Promise.resolve(
+        apiResponse({ providers: providerList, generation: 1 }),
+      );
+    }
     const usageMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/usage$/);
     if (usageMatch && call.method === "GET") {
       const result = usageByTeam.get(decodeURIComponent(usageMatch[1]));
@@ -255,6 +266,7 @@ function dashboard(options = {}) {
   window.eval(routingInventorySource);
   window.eval(requestLedgerSource);
   window.eval(budgetSource);
+  window.eval(providersSource);
   window.eval(appSource);
   return context;
 }
@@ -324,6 +336,26 @@ async function openBudgets(context) {
     () => window.document.getElementById("status-region").textContent === "Budgets loaded.",
     "budget view did not load",
   );
+}
+
+async function openProviders(context) {
+  const { window } = context;
+  window.document.querySelector('[data-view="providers"]').click();
+  await waitFor(
+    () => window.document.getElementById("status-region").textContent === "Providers loaded.",
+    "provider view did not load",
+  );
+}
+
+function fillProviderCreate(window, values = {}) {
+  window.document.getElementById("provider-create-name").value =
+    values.name ?? "openai";
+  window.document.getElementById("provider-create-type").value =
+    values.provider_type ?? "openai";
+  window.document.getElementById("provider-create-api-key").value =
+    values.api_key ?? "${OPENAI_API_KEY}";
+  window.document.getElementById("provider-create-models").value =
+    values.models ?? "gpt-4o";
 }
 
 function fillKeyForm(window, name) {
@@ -1737,4 +1769,259 @@ test("B19 a late request log response after logout cannot restore stale data", {
   assert.equal(window.document.getElementById("request-logs-summary").textContent, "");
   assert.equal(window.document.getElementById("request-logs-notice").textContent, "");
   assert.equal(window.document.querySelectorAll("#request-logs-body tr").length, 0);
+});
+
+test("B20 empty provider list creates with a replacement reference and never fills secrets", { concurrency: false }, async (t) => {
+  let providerGets = 0;
+  let providerList = [];
+  const created = [];
+  const patches = [];
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/admin/providers" && call.method === "GET") {
+        providerGets += 1;
+        return apiResponse({ providers: providerList, generation: 1 });
+      }
+      if (call.url.pathname === "/admin/providers" && call.method === "POST") {
+        const payload = JSON.parse(call.init.body);
+        created.push(payload);
+        providerList = [{
+          name: payload.name,
+          provider_type: payload.provider_type,
+          enabled: payload.enabled !== false,
+          models: payload.models,
+          tags: payload.tags,
+          weight: payload.weight,
+          priority: payload.priority,
+          api_key_ref: "OPENAI_API_KEY",
+          api_key: "sk-leaked-from-get",
+        }];
+        return apiResponse({
+          provider: {
+            name: payload.name,
+            provider_type: payload.provider_type,
+            api_key_ref: "OPENAI_API_KEY",
+          },
+        });
+      }
+      if (call.url.pathname === "/admin/providers/openai" && call.method === "PATCH") {
+        const payload = JSON.parse(call.init.body);
+        patches.push(payload);
+        providerList = [{ ...providerList[0], enabled: payload.enabled }];
+        return apiResponse({ provider: providerList[0] });
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  assert.equal(providerGets, 0, "sign-in must not load the unopened providers tab");
+  await openProviders(context);
+  assert.equal(providerGets, 1);
+  window.document.querySelector('[data-view="providers"]').click();
+  await settle();
+  assert.equal(providerGets, 1, "reopening the loaded tab must not reload providers");
+  assert.equal(window.document.querySelectorAll("#providers-body tr").length, 0);
+  assert.equal(window.document.getElementById("providers-empty").hidden, false);
+  assert.equal(
+    window.document.getElementById("provider-create-api-key").placeholder,
+    "replacement reference only",
+  );
+
+  fillProviderCreate(window);
+  const createButton = submit(window, window.document.getElementById("create-provider-form"));
+  await waitFor(() => !createButton.disabled, "provider create did not settle");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].api_key, "${OPENAI_API_KEY}");
+  assert.doesNotMatch(JSON.stringify(created[0]), /sk-/);
+  const row = rowText(window, "#providers-body tr")[0];
+  assert.match(row, /openai.*enabled.*gpt-4o.*OPENAI_API_KEY/i);
+  assert.doesNotMatch(row, /sk-/);
+  assert.doesNotMatch(window.document.body.textContent, /sk-leaked-from-get/);
+
+  window.document.querySelector("#providers-body button").click();
+  assert.equal(window.document.getElementById("provider-edit-api-key").value, "");
+  assert.equal(
+    window.document.getElementById("provider-edit-api-key").placeholder,
+    "replacement reference only",
+  );
+  assert.match(
+    window.document.getElementById("provider-edit-api-key-ref").textContent,
+    /OPENAI_API_KEY/,
+  );
+  assert.equal(window.document.getElementById("provider-edit-name").value, "openai");
+  assert.equal(window.document.getElementById("provider-edit-type").value, "openai");
+
+  const disable = window.document.querySelectorAll("#providers-body button")[1];
+  context.setConfirm(false);
+  disable.click();
+  await settle();
+  assert.equal(patches.length, 0);
+  context.setConfirm(true);
+  disable.click();
+  await waitFor(
+    () => /provider disabled/i.test(window.document.getElementById("status-region").textContent),
+    "provider disable did not settle",
+  );
+  assert.deepEqual(patches[0], { enabled: false });
+  assert.match(rowText(window, "#providers-body tr")[0], /disabled/i);
+});
+
+test("B21 provider apply errors keep form input and the previous runtime list", { concurrency: false }, async (t) => {
+  const existing = {
+    name: "anthropic",
+    provider_type: "anthropic",
+    enabled: true,
+    models: ["claude-3"],
+    tags: [],
+    weight: 1,
+    priority: 0,
+    api_key_ref: "ANTHROPIC_API_KEY",
+  };
+  let providerGets = 0;
+  const context = dashboard({
+    providerList: [existing],
+    handler(call) {
+      if (call.url.pathname === "/admin/providers" && call.method === "GET") {
+        providerGets += 1;
+        return apiResponse({ providers: [existing], generation: 4 });
+      }
+      if (call.url.pathname === "/admin/providers/anthropic" && call.method === "PATCH") {
+        return apiResponse("api_key must be an existing env reference of the form ${VAR}", 400);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openProviders(context);
+  const before = rowText(window, "#providers-body tr");
+  window.document.querySelector("#providers-body button").click();
+  window.document.getElementById("provider-edit-type").value = "not-a-real-provider-type";
+  window.document.getElementById("provider-edit-api-key").value = "${NEW_PROVIDER_KEY}";
+  const save = submit(window, window.document.getElementById("edit-provider-form"));
+  await waitFor(() => !save.disabled, "rejected provider update did not settle");
+
+  assert.deepEqual(rowText(window, "#providers-body tr"), before);
+  assert.equal(providerGets, 1, "a rejected mutation must not refresh or replace rows");
+  assert.equal(window.document.getElementById("provider-edit-type").value, "not-a-real-provider-type");
+  assert.equal(window.document.getElementById("provider-edit-api-key").value, "${NEW_PROVIDER_KEY}");
+  assert.match(
+    window.document.getElementById("providers-notice").textContent,
+    /previous runtime revision is still active/i,
+  );
+  assert.match(
+    window.document.getElementById("error-region").textContent,
+    /env reference/i,
+  );
+  assert.match(
+    window.document.getElementById("status-region").textContent,
+    /previous runtime revision is still active/i,
+  );
+});
+
+test("B22 provider delete requires confirmation and surfaces routing dependency conflicts", { concurrency: false }, async (t) => {
+  const existing = {
+    name: "test-openai",
+    provider_type: "openai",
+    enabled: true,
+    models: ["gpt-4o"],
+    tags: [],
+    weight: 1,
+    priority: 0,
+    api_key_ref: "OPENAI_API_KEY",
+  };
+  const conflict =
+    "Provider 'test-openai' is still referenced by live routing; disable it or remove routing references before delete";
+  const context = dashboard({
+    providerList: [existing],
+    handler(call) {
+      if (call.url.pathname === "/admin/providers/test-openai" && call.method === "DELETE") {
+        return apiResponse(conflict, 409);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openProviders(context);
+  const buttons = window.document.querySelectorAll("#providers-body button");
+  const remove = buttons[2];
+  context.setConfirm(false);
+  remove.click();
+  await settle();
+  assert.equal(
+    context.calls.filter((call) => call.method === "DELETE").length,
+    0,
+  );
+  assert.equal(window.document.querySelectorAll("#providers-body tr").length, 1);
+
+  context.setConfirm(true);
+  remove.click();
+  await waitFor(() => !remove.disabled, "rejected provider delete did not settle");
+  assert.equal(window.document.querySelectorAll("#providers-body tr").length, 1);
+  assert.match(
+    window.document.getElementById("providers-notice").textContent,
+    /still referenced by live routing/i,
+  );
+  assert.match(
+    window.document.getElementById("error-region").textContent,
+    /still referenced by live routing/i,
+  );
+  assert.match(
+    rowText(window, "#providers-body tr")[0],
+    /test-openai/,
+  );
+});
+
+test("B23 a late provider mutation after logout cannot restore protected rows", { concurrency: false }, async (t) => {
+  const lateCreate = deferred();
+  let providerGets = 0;
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/admin/providers" && call.method === "GET") {
+        providerGets += 1;
+      }
+      if (call.url.pathname === "/admin/providers" && call.method === "POST") {
+        return lateCreate.promise;
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openProviders(context);
+  fillProviderCreate(window, {
+    name: "must-not-return",
+    api_key: "${OPENAI_API_KEY}",
+  });
+  submit(window, window.document.getElementById("create-provider-form"));
+  await waitFor(
+    () => context.calls.some((call) => call.url.pathname === "/admin/providers" && call.method === "POST"),
+    "late provider create was not pending",
+  );
+  window.document.getElementById("sign-out").click();
+  lateCreate.resolve(
+    apiResponse({
+      provider: {
+        name: "must-not-return",
+        provider_type: "openai",
+        api_key_ref: "OPENAI_API_KEY",
+      },
+    }),
+  );
+  await settle(12);
+
+  assert.equal(providerGets, 1, "a stale mutation must not trigger a follow-up list request");
+  assert.equal(window.document.querySelectorAll("#providers-body tr").length, 0);
+  assert.equal(window.document.getElementById("provider-create-name").value, "");
+  assert.doesNotMatch(window.document.body.textContent, /must-not-return/);
+  await signIn(context);
+  assert.equal(providerGets, 1, "reauthentication on Keys must not reload providers");
+  assert.equal(window.document.getElementById("keys-panel").hidden, false);
+  assert.equal(window.document.getElementById("providers-panel").hidden, true);
 });
