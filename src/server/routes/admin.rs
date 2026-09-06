@@ -134,6 +134,7 @@ pub async fn clear_response_cache(
 
 /// Configure admin routes.
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    super::admin_openapi::configure_routes(cfg);
     cfg.service(
         web::scope("/admin/cache")
             .route("", web::get().to(cache_status))

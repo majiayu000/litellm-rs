@@ -1,0 +1,2520 @@
+{
+  "openapi": "3.2.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "LiteLLM-RS Admin Control Plane API",
+    "version": "0.6.0",
+    "summary": "Authenticated control-plane HTTP contract for the self-hosted LiteLLM-RS gateway",
+    "description": "Auth, keys, teams, budgets, routing inventory, request ledger, provider configuration, routing policy, and cache administration. This document is served at GET /admin/openapi.json and requires an Admin-role caller when authentication is enabled. The stable inference contract remains GET /openapi.json and is intentionally separate. MCP, A2A, Realtime, and dashboard static assets are excluded. Response schemas omit api_key values, Authorization headers, prompt/body payloads, header maps, and raw secrets.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The current gateway origin"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    { "name": "OpenAPI", "description": "Control-plane contract document" },
+    { "name": "Auth", "description": "Login, logout, registration, and token lifecycle" },
+    { "name": "Keys", "description": "Gateway API key management" },
+    { "name": "Teams", "description": "Team and membership administration" },
+    { "name": "Budgets", "description": "Provider and model spend limits" },
+    { "name": "Routing", "description": "Live routing inventory and routing policy" },
+    { "name": "Ledger", "description": "Metadata-only request ledger" },
+    { "name": "Providers", "description": "Runtime provider configuration" },
+    { "name": "Cache", "description": "Response cache administration" }
+  ],
+  "paths": {
+    "/admin/openapi.json": {
+      "get": {
+        "operationId": "getAdminOpenApi",
+        "summary": "Get the admin control-plane OpenAPI document",
+        "description": "Requires an authenticated Admin-role user when JWT or API-key auth is enabled. API keys without an admin user context receive 403.",
+        "tags": ["OpenAPI"],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.2 document",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/cache": {
+      "get": {
+        "operationId": "getAdminCache",
+        "summary": "Inspect response-cache status",
+        "description": "Requires Admin role. Returns 501 when the cache is not wired into request handling.",
+        "tags": ["Cache"],
+        "responses": {
+          "200": {
+            "description": "Cache is wired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CacheAdminResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "501": {
+            "description": "Cache is not wired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CacheAdminResponse" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/cache/status": {
+      "get": {
+        "operationId": "getAdminCacheStatus",
+        "summary": "Inspect response-cache status (alias)",
+        "description": "Same payload as GET /admin/cache. Requires Admin role.",
+        "tags": ["Cache"],
+        "responses": {
+          "200": {
+            "description": "Cache is wired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CacheAdminResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "501": {
+            "description": "Cache is not wired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CacheAdminResponse" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/cache/clear": {
+      "post": {
+        "operationId": "clearAdminCache",
+        "summary": "Clear the response cache",
+        "description": "Requires Admin role. Returns 501 when the cache is not wired.",
+        "tags": ["Cache"],
+        "responses": {
+          "200": {
+            "description": "Cache cleared",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CacheAdminResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "501": {
+            "description": "Cache is not wired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CacheAdminResponse" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/providers": {
+      "get": {
+        "operationId": "listAdminProviders",
+        "summary": "List configured providers",
+        "description": "Requires Admin role. Returns public provider fields only. Raw api_key values and header maps are never serialized; api_key_ref is an env-var name when known.",
+        "tags": ["Providers"],
+        "responses": {
+          "200": {
+            "description": "Provider list",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderListResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "post": {
+        "operationId": "createAdminProvider",
+        "summary": "Create a provider",
+        "description": "Requires Admin role. api_key must be an existing env reference of the form ${VAR}. Raw secrets are rejected with 400.",
+        "tags": ["Providers"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateProviderRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderMutationResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/providers/{name}": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "minLength": 1 }
+        }
+      ],
+      "patch": {
+        "operationId": "updateAdminProvider",
+        "summary": "Update a provider",
+        "description": "Requires Admin role. Optional api_key must be ${VAR}. Responses never include api_key or headers.",
+        "tags": ["Providers"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProviderPatch" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderMutationResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAdminProvider",
+        "summary": "Delete a provider",
+        "description": "Requires Admin role. Conflicts when the provider is still referenced by live routing or unique alias targets.",
+        "tags": ["Providers"],
+        "responses": {
+          "200": {
+            "description": "Provider deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderMutationResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "409": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/request-ledger": {
+      "get": {
+        "operationId": "listAdminRequestLedger",
+        "summary": "Query the metadata-only request ledger",
+        "description": "Requires Admin role. Cursor pagination over finished requests. Prompt, body, and credentials are not fields.",
+        "tags": ["Ledger"],
+        "parameters": [
+          {
+            "name": "finished_after",
+            "in": "query",
+            "schema": { "type": "string", "format": "date-time" },
+            "description": "RFC 3339 lower bound on finished_at"
+          },
+          {
+            "name": "finished_before",
+            "in": "query",
+            "schema": { "type": "string", "format": "date-time" },
+            "description": "RFC 3339 exclusive upper bound on finished_at"
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "terminal_status",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["completed", "failed", "cancelled"] }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Opaque cursor from next_cursor"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ledger page",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestLedgerPage" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/routing/inventory": {
+      "get": {
+        "operationId": "getAdminRoutingInventory",
+        "summary": "Get the sanitized live routing inventory",
+        "description": "Requires Admin role. Public routing fields only; secrets and raw provider config are not serialized.",
+        "tags": ["Routing"],
+        "responses": {
+          "200": {
+            "description": "Routing inventory",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RoutingInventory" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/admin/routing/policy": {
+      "get": {
+        "operationId": "getAdminRoutingPolicy",
+        "summary": "Get the current routing policy",
+        "description": "Requires Admin role. Returns strategy, circuit breaker, load balancer, aliases, and per-provider routing knobs. No secrets.",
+        "tags": ["Routing"],
+        "responses": {
+          "200": {
+            "description": "Routing policy",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RoutingPolicyResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "put": {
+        "operationId": "putAdminRoutingPolicy",
+        "summary": "Update routing policy",
+        "description": "Requires Admin role. Unknown fields are rejected. Alias targets must resolve to known models.",
+        "tags": ["Routing"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoutingPolicyUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated policy",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RoutingPolicyResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "operationId": "registerUser",
+        "summary": "Register a user",
+        "tags": ["Auth"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RegisterSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "Log in",
+        "description": "Public. Optional team_id selects a verified membership for the issued access token.",
+        "tags": ["Auth"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login succeeded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "Log out",
+        "tags": ["Auth"],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "refreshToken",
+        "summary": "Refresh an access token",
+        "description": "Public to the auth middleware. Optional team_id selects a verified membership.",
+        "tags": ["Auth"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefreshTokenRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New token pair",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TokenPairSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/forgot-password": {
+      "post": {
+        "operationId": "forgotPassword",
+        "summary": "Request a password reset",
+        "tags": ["Auth"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ForgotPasswordRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/reset-password": {
+      "post": {
+        "operationId": "resetPassword",
+        "summary": "Reset password with a token",
+        "tags": ["Auth"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ResetPasswordRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/verify-email": {
+      "post": {
+        "operationId": "verifyEmail",
+        "summary": "Verify email with a token",
+        "tags": ["Auth"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/VerifyEmailRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Email verified",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/change-password": {
+      "post": {
+        "operationId": "changePassword",
+        "summary": "Change the authenticated user's password",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChangePasswordRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "summary": "Get the authenticated user",
+        "description": "password_hash is never serialized.",
+        "tags": ["Auth"],
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CurrentUserSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/keys": {
+      "post": {
+        "operationId": "createApiKey",
+        "summary": "Create an API key",
+        "description": "Requires authentication. Non-admins cannot assign another user_id or team_id. The plaintext key is returned once in data.key and is not stored.",
+        "tags": ["Keys"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateKeyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Key created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreateKeySuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "get": {
+        "operationId": "listApiKeys",
+        "summary": "List API keys",
+        "description": "Listing all keys requires Admin. Filtering by user_id or team_id is allowed for owners, team managers, and admins. Keys are masked (key_prefix only).",
+        "tags": ["Keys"],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "$ref": "#/components/schemas/KeyStatus" }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "team_id",
+            "in": "query",
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "default": 1 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key list",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListKeysSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/keys/verify": {
+      "post": {
+        "operationId": "verifyApiKey",
+        "summary": "Verify an API key",
+        "tags": ["Keys"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/VerifyKeyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VerifyKeySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/keys/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/KeyId" }
+      ],
+      "get": {
+        "operationId": "getApiKey",
+        "summary": "Get a masked API key",
+        "tags": ["Keys"],
+        "responses": {
+          "200": {
+            "description": "Key info",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KeyInfoSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "put": {
+        "operationId": "updateApiKey",
+        "summary": "Update an API key",
+        "tags": ["Keys"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateKeyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KeyInfoSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "delete": {
+        "operationId": "revokeApiKey",
+        "summary": "Revoke an API key",
+        "tags": ["Keys"],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RevokeKeySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/keys/{id}/rotate": {
+      "parameters": [
+        { "$ref": "#/components/parameters/KeyId" }
+      ],
+      "post": {
+        "operationId": "rotateApiKey",
+        "summary": "Rotate an API key",
+        "description": "Returns the new plaintext key once in data.new_key.",
+        "tags": ["Keys"],
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RotateKeySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/keys/{id}/usage": {
+      "parameters": [
+        { "$ref": "#/components/parameters/KeyId" }
+      ],
+      "get": {
+        "operationId": "getApiKeyUsage",
+        "summary": "Get API key usage",
+        "tags": ["Keys"],
+        "responses": {
+          "200": {
+            "description": "Usage",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KeyUsageSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/teams": {
+      "post": {
+        "operationId": "createTeam",
+        "summary": "Create a team",
+        "description": "Requires Admin role when authentication is enabled.",
+        "tags": ["Teams"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateTeamBody" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Team created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "get": {
+        "operationId": "listTeams",
+        "summary": "List teams",
+        "description": "Admins see all teams. Other callers see membership-scoped teams. Page/limit pagination.",
+        "tags": ["Teams"],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "default": 1 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Team page",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamListSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/teams/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TeamId" }
+      ],
+      "get": {
+        "operationId": "getTeam",
+        "summary": "Get a team",
+        "tags": ["Teams"],
+        "responses": {
+          "200": {
+            "description": "Team",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "put": {
+        "operationId": "updateTeam",
+        "summary": "Update a team",
+        "description": "Requires team admin or gateway Admin.",
+        "tags": ["Teams"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateTeamBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated team",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTeam",
+        "summary": "Delete a team",
+        "description": "Requires team admin or gateway Admin.",
+        "tags": ["Teams"],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/teams/{id}/members": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TeamId" }
+      ],
+      "post": {
+        "operationId": "addTeamMember",
+        "summary": "Add a team member",
+        "description": "Requires team admin or gateway Admin.",
+        "tags": ["Teams"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AddMemberBody" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Member added",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamMemberSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "get": {
+        "operationId": "listTeamMembers",
+        "summary": "List team members",
+        "tags": ["Teams"],
+        "responses": {
+          "200": {
+            "description": "Members",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamMemberListSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/teams/{id}/members/{user_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TeamId" },
+        { "$ref": "#/components/parameters/UserId" }
+      ],
+      "delete": {
+        "operationId": "removeTeamMember",
+        "summary": "Remove a team member",
+        "description": "Requires team admin or gateway Admin.",
+        "tags": ["Teams"],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmptySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/teams/{id}/members/{user_id}/role": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TeamId" },
+        { "$ref": "#/components/parameters/UserId" }
+      ],
+      "put": {
+        "operationId": "updateTeamMemberRole",
+        "summary": "Update a member role",
+        "description": "Requires team admin or gateway Admin.",
+        "tags": ["Teams"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateRoleBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamMemberSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/teams/{id}/usage": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TeamId" }
+      ],
+      "get": {
+        "operationId": "getTeamUsage",
+        "summary": "Get team usage",
+        "tags": ["Teams"],
+        "responses": {
+          "200": {
+            "description": "Usage",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamUsageSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/providers": {
+      "post": {
+        "operationId": "setProviderBudget",
+        "summary": "Set a provider budget",
+        "description": "Requires Admin role for mutations.",
+        "tags": ["Budgets"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SetProviderBudgetRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Budget set",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderBudgetSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "get": {
+        "operationId": "listProviderBudgets",
+        "summary": "List provider budgets",
+        "description": "Requires authentication. Read-only.",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Provider budgets",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListProviderBudgetsSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/providers/{name}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BudgetName" }
+      ],
+      "get": {
+        "operationId": "getProviderBudget",
+        "summary": "Get a provider budget",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Provider budget",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderBudgetSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProviderBudget",
+        "summary": "Delete a provider budget",
+        "description": "Requires Admin role.",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteBudgetSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/providers/{name}/reset": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BudgetName" }
+      ],
+      "post": {
+        "operationId": "resetProviderBudget",
+        "summary": "Reset provider spend",
+        "description": "Requires Admin role.",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Reset",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderBudgetSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/models": {
+      "post": {
+        "operationId": "setModelBudget",
+        "summary": "Set a model budget",
+        "description": "Requires Admin role for mutations.",
+        "tags": ["Budgets"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SetModelBudgetRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Budget set",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ModelBudgetSuccess" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "get": {
+        "operationId": "listModelBudgets",
+        "summary": "List model budgets",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Model budgets",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListModelBudgetsSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/models/{name}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BudgetName" }
+      ],
+      "get": {
+        "operationId": "getModelBudget",
+        "summary": "Get a model budget",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Model budget",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ModelBudgetSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteModelBudget",
+        "summary": "Delete a model budget",
+        "description": "Requires Admin role.",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteBudgetSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/models/{name}/reset": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BudgetName" }
+      ],
+      "post": {
+        "operationId": "resetModelBudget",
+        "summary": "Reset model spend",
+        "description": "Requires Admin role.",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Reset",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ModelBudgetSuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/AdminError" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
+    "/v1/budget/summary": {
+      "get": {
+        "operationId": "getBudgetSummary",
+        "summary": "Get budget summary",
+        "tags": ["Budgets"],
+        "responses": {
+          "200": {
+            "description": "Summary",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BudgetSummarySuccess" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT or gateway API key",
+        "description": "Authorization: Bearer <jwt>, ApiKey <gw-...>, or a raw gw- prefixed key. Admin-tagged /admin/* JSON APIs additionally require an authenticated user with the Admin role (SuperAdmin satisfies has_role). API keys without that user context receive HTTP 403 with the AdminError envelope."
+      }
+    },
+    "parameters": {
+      "KeyId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "TeamId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "UserId": {
+        "name": "user_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "BudgetName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    },
+    "responses": {
+      "AdminError": {
+        "description": "Control-plane error using RFC 9110 status codes and the {success:false, error} JSON envelope",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/AdminErrorBody" }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication required or credentials were rejected (RFC 9110 §15.5.2)",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/AdminErrorBody" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Authenticated caller lacks Admin role or other required permission (RFC 9110 §15.5.4)",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/AdminErrorBody" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AdminErrorBody": {
+        "type": "object",
+        "required": ["success", "error"],
+        "properties": {
+          "success": { "type": "boolean", "const": false },
+          "error": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "EmptySuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "type": "null" }
+        },
+        "additionalProperties": true
+      },
+      "CacheAdminResponse": {
+        "type": "object",
+        "required": ["success", "status", "cache_enabled", "semantic_cache_enabled", "message"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["enabled", "unsupported"] },
+          "cache_enabled": { "type": "boolean" },
+          "semantic_cache_enabled": { "type": "boolean" },
+          "message": { "type": "string" },
+          "stats": { "$ref": "#/components/schemas/CombinedCacheStats" },
+          "redis_available": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "CombinedCacheStats": {
+        "type": "object",
+        "required": ["chat", "embedding"],
+        "properties": {
+          "chat": { "$ref": "#/components/schemas/CacheStatsSnapshot" },
+          "embedding": { "$ref": "#/components/schemas/CacheStatsSnapshot" }
+        },
+        "additionalProperties": false
+      },
+      "CacheStatsSnapshot": {
+        "type": "object",
+        "properties": {
+          "memory_hits": { "type": "integer", "minimum": 0 },
+          "memory_misses": { "type": "integer", "minimum": 0 },
+          "redis_hits": { "type": "integer", "minimum": 0 },
+          "redis_misses": { "type": "integer", "minimum": 0 },
+          "writes": { "type": "integer", "minimum": 0 },
+          "deletions": { "type": "integer", "minimum": 0 },
+          "evictions": { "type": "integer", "minimum": 0 },
+          "entry_count": { "type": "integer", "minimum": 0 },
+          "total_size_bytes": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "PublicProvider": {
+        "type": "object",
+        "required": ["name", "provider_type", "enabled", "models", "tags", "weight", "priority"],
+        "properties": {
+          "name": { "type": "string" },
+          "provider_type": { "type": "string" },
+          "base_url": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "models": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "weight": { "type": "number" },
+          "priority": { "type": "integer", "minimum": 0 },
+          "api_key_ref": { "type": "string", "description": "Environment variable name; never a secret value" }
+        },
+        "additionalProperties": false
+      },
+      "ProviderListResponse": {
+        "type": "object",
+        "required": ["success", "generation", "providers"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "generation": { "type": "integer", "minimum": 0 },
+          "providers": { "type": "array", "items": { "$ref": "#/components/schemas/PublicProvider" } }
+        },
+        "additionalProperties": false
+      },
+      "ProviderMutationResponse": {
+        "type": "object",
+        "required": ["success", "generation"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "generation": { "type": "integer", "minimum": 0 },
+          "provider": { "$ref": "#/components/schemas/PublicProvider" }
+        },
+        "additionalProperties": false
+      },
+      "CreateProviderRequest": {
+        "type": "object",
+        "required": ["name", "provider_type"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "provider_type": { "type": "string", "minLength": 1 },
+          "api_key": {
+            "type": "string",
+            "description": "Must be ${VAR} referencing an existing environment variable. Raw secrets are rejected. Never returned."
+          },
+          "base_url": { "type": "string" },
+          "endpoint_access": { "type": "string", "enum": ["public_only", "private_network"] },
+          "api_version": { "type": "string" },
+          "organization": { "type": "string" },
+          "project": { "type": "string" },
+          "weight": { "type": "number" },
+          "priority": { "type": "integer", "minimum": 0 },
+          "rpm": { "type": "integer", "minimum": 0 },
+          "tpm": { "type": "integer", "minimum": 0 },
+          "max_concurrent_requests": { "type": "integer", "minimum": 0 },
+          "timeout": { "type": "integer", "minimum": 0 },
+          "max_retries": { "type": "integer", "minimum": 0 },
+          "retry": { "$ref": "#/components/schemas/RetryConfig" },
+          "health_check": { "$ref": "#/components/schemas/ProviderHealthCheck" },
+          "models": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "enabled": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "ProviderPatch": {
+        "type": "object",
+        "properties": {
+          "provider_type": { "type": "string" },
+          "api_key": {
+            "type": "string",
+            "description": "Must be ${VAR}. Never returned."
+          },
+          "base_url": { "type": ["string", "null"] },
+          "models": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "enabled": { "type": "boolean" },
+          "weight": { "type": "number" },
+          "priority": { "type": "integer", "minimum": 0 },
+          "rpm": { "type": "integer", "minimum": 0 },
+          "tpm": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "RetryConfig": {
+        "type": "object",
+        "properties": {
+          "base_delay": { "type": "integer", "minimum": 0 },
+          "max_delay": { "type": "integer", "minimum": 0 },
+          "backoff_multiplier": { "type": "number" },
+          "jitter": { "type": "number" }
+        },
+        "additionalProperties": false
+      },
+      "ProviderHealthCheck": {
+        "type": "object",
+        "properties": {
+          "interval": { "type": "integer", "minimum": 0 },
+          "failure_threshold": { "type": "integer", "minimum": 0 },
+          "recovery_timeout": { "type": "integer", "minimum": 0 },
+          "endpoint": { "type": "string" },
+          "expected_codes": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      },
+      "RequestLedgerPage": {
+        "type": "object",
+        "required": ["success", "items", "has_more"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/RequestLedgerItem" } },
+          "next_cursor": { "type": ["string", "null"] },
+          "has_more": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "RequestLedgerItem": {
+        "type": "object",
+        "required": ["request_id", "started_at", "finished_at", "method", "endpoint", "status_code", "terminal_status", "latency_ms"],
+        "properties": {
+          "request_id": { "type": "string" },
+          "started_at": { "type": "string", "format": "date-time" },
+          "finished_at": { "type": "string", "format": "date-time" },
+          "method": { "type": "string" },
+          "endpoint": { "type": "string" },
+          "model": { "type": "string" },
+          "provider": { "type": "string" },
+          "deployment": { "type": "string" },
+          "status_code": { "type": "integer" },
+          "terminal_status": { "type": "string" },
+          "latency_ms": { "type": "integer" },
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" },
+          "cost": { "type": "number" },
+          "user_id": { "type": "string" },
+          "api_key_id": { "type": "string" },
+          "team_id": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "RoutingInventory": {
+        "type": "object",
+        "required": ["success", "snapshot_generation", "models", "unavailable_providers"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "snapshot_generation": { "type": "integer", "minimum": 0 },
+          "models": { "type": "array", "items": { "$ref": "#/components/schemas/PublicModelInventory" } },
+          "unavailable_providers": { "type": "array", "items": { "$ref": "#/components/schemas/UnavailableProviderInventory" } }
+        },
+        "additionalProperties": false
+      },
+      "PublicModelInventory": {
+        "type": "object",
+        "required": ["public_model", "aliases", "deployments"],
+        "properties": {
+          "public_model": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "deployments": { "type": "array", "items": { "$ref": "#/components/schemas/DeploymentInventory" } }
+        },
+        "additionalProperties": false
+      },
+      "DeploymentInventory": {
+        "type": "object",
+        "required": ["provider", "deployment", "public_model", "model", "capabilities", "health", "available", "unavailable_reasons", "rpm", "tpm", "active_requests"],
+        "properties": {
+          "provider": { "type": "string" },
+          "deployment": { "type": "string" },
+          "public_model": { "type": "string" },
+          "model": { "type": "string" },
+          "capabilities": { "type": "array", "items": { "$ref": "#/components/schemas/ProviderCapability" } },
+          "health": { "type": "string", "enum": ["unknown", "healthy", "degraded", "unhealthy"] },
+          "available": { "type": "boolean" },
+          "unavailable_reasons": { "type": "array", "items": { "$ref": "#/components/schemas/UnavailableReason" } },
+          "cooldown": { "$ref": "#/components/schemas/CooldownInventory" },
+          "rpm": { "$ref": "#/components/schemas/RateWindowInventory" },
+          "tpm": { "$ref": "#/components/schemas/RateWindowInventory" },
+          "active_requests": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "UnavailableProviderInventory": {
+        "type": "object",
+        "required": ["provider", "provider_type", "public_models", "available", "unavailable_reasons"],
+        "properties": {
+          "provider": { "type": "string" },
+          "provider_type": { "type": "string" },
+          "public_models": { "type": "array", "items": { "type": "string" } },
+          "available": { "type": "boolean" },
+          "unavailable_reasons": { "type": "array", "items": { "$ref": "#/components/schemas/UnavailableReason" } }
+        },
+        "additionalProperties": false
+      },
+      "UnavailableReason": {
+        "type": "string",
+        "enum": ["cooldown", "unhealthy", "rpm_limit_reached", "tpm_limit_reached", "parallel_limit_reached", "feature_gated", "unavailable"]
+      },
+      "ProviderCapability": {
+        "type": "string",
+        "enum": ["chat_completion", "chat_completion_stream", "embeddings", "image_generation", "image_edit", "image_variation", "audio_transcription", "audio_translation", "text_to_speech", "moderation", "rerank", "tool_calling", "function_calling", "code_execution", "file_upload", "fine_tuning", "batch_processing", "realtime_api", "gemini_generate_content"]
+      },
+      "CooldownInventory": {
+        "type": "object",
+        "required": ["until_unix_secs", "remaining_secs"],
+        "properties": {
+          "until_unix_secs": { "type": "integer", "minimum": 0 },
+          "remaining_secs": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "RateWindowInventory": {
+        "type": "object",
+        "required": ["configured_limit"],
+        "properties": {
+          "configured_limit": { "type": ["integer", "null"], "minimum": 0 },
+          "current_usage": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "RoutingPolicyResponse": {
+        "type": "object",
+        "required": ["success", "generation", "policy"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "generation": { "type": "integer", "minimum": 0 },
+          "policy": { "$ref": "#/components/schemas/RoutingPolicyView" }
+        },
+        "additionalProperties": false
+      },
+      "RoutingPolicyView": {
+        "type": "object",
+        "required": ["strategy", "circuit_breaker", "load_balancer", "model_aliases", "providers"],
+        "properties": {
+          "strategy": { "$ref": "#/components/schemas/RoutingStrategy" },
+          "circuit_breaker": { "$ref": "#/components/schemas/CircuitBreakerConfig" },
+          "load_balancer": { "$ref": "#/components/schemas/LoadBalancerConfig" },
+          "model_aliases": { "type": "object", "additionalProperties": { "type": "string" } },
+          "providers": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/ProviderRoutingView" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RoutingPolicyUpdate": {
+        "type": "object",
+        "properties": {
+          "strategy": { "$ref": "#/components/schemas/RoutingStrategy" },
+          "circuit_breaker": { "$ref": "#/components/schemas/CircuitBreakerConfig" },
+          "load_balancer": { "$ref": "#/components/schemas/LoadBalancerConfig" },
+          "model_aliases": { "type": "object", "additionalProperties": { "type": "string" } },
+          "providers": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/ProviderRoutingPatch" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RoutingStrategy": {
+        "type": "string",
+        "enum": ["simple_shuffle", "least_busy", "usage_based", "latency_based", "priority_based", "rate_limit_aware", "round_robin"]
+      },
+      "CircuitBreakerConfig": {
+        "type": "object",
+        "properties": {
+          "failure_threshold": { "type": "integer", "minimum": 1 },
+          "recovery_timeout": { "type": "integer", "minimum": 0 },
+          "min_requests": { "type": "integer", "minimum": 0 },
+          "success_threshold": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "LoadBalancerConfig": {
+        "type": "object",
+        "properties": {
+          "health_check_enabled": { "type": "boolean" },
+          "sticky_sessions": { "type": "boolean" },
+          "session_timeout": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "ProviderRoutingView": {
+        "type": "object",
+        "required": ["weight", "priority", "max_retries", "retry"],
+        "properties": {
+          "weight": { "type": "number" },
+          "priority": { "type": "integer", "minimum": 0 },
+          "max_retries": { "type": "integer", "minimum": 0 },
+          "retry": { "$ref": "#/components/schemas/RetryConfig" }
+        },
+        "additionalProperties": false
+      },
+      "ProviderRoutingPatch": {
+        "type": "object",
+        "properties": {
+          "weight": { "type": "number" },
+          "priority": { "type": "integer", "minimum": 0 },
+          "max_retries": { "type": "integer", "minimum": 0 },
+          "retry": { "$ref": "#/components/schemas/RetryConfig" }
+        },
+        "additionalProperties": false
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["username", "email", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string", "writeOnly": true },
+          "full_name": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "RegisterSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/RegisterResponse" }
+        },
+        "additionalProperties": true
+      },
+      "RegisterResponse": {
+        "type": "object",
+        "required": ["user_id", "username", "email", "message"],
+        "properties": {
+          "user_id": { "type": "string", "format": "uuid" },
+          "username": { "type": "string" },
+          "email": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string", "writeOnly": true },
+          "team_id": { "type": "string", "format": "uuid" }
+        },
+        "additionalProperties": false
+      },
+      "LoginSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/LoginResponse" }
+        },
+        "additionalProperties": true
+      },
+      "LoginResponse": {
+        "type": "object",
+        "required": ["access_token", "refresh_token", "token_type", "expires_in", "user"],
+        "properties": {
+          "access_token": { "type": "string", "writeOnly": true },
+          "refresh_token": { "type": "string", "writeOnly": true },
+          "token_type": { "type": "string" },
+          "expires_in": { "type": "integer", "minimum": 0 },
+          "user": { "$ref": "#/components/schemas/UserInfo" }
+        },
+        "additionalProperties": false
+      },
+      "UserInfo": {
+        "type": "object",
+        "required": ["id", "username", "email", "role", "email_verified"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "username": { "type": "string" },
+          "email": { "type": "string" },
+          "full_name": { "type": "string" },
+          "role": { "type": "string" },
+          "email_verified": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "RefreshTokenRequest": {
+        "type": "object",
+        "required": ["refresh_token"],
+        "properties": {
+          "refresh_token": { "type": "string", "writeOnly": true },
+          "team_id": { "type": "string", "format": "uuid" }
+        },
+        "additionalProperties": false
+      },
+      "TokenPairSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/TokenPair" }
+        },
+        "additionalProperties": true
+      },
+      "TokenPair": {
+        "type": "object",
+        "required": ["access_token", "refresh_token", "token_type", "expires_in"],
+        "properties": {
+          "access_token": { "type": "string", "writeOnly": true },
+          "refresh_token": { "type": "string", "writeOnly": true },
+          "token_type": { "type": "string" },
+          "expires_in": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "ForgotPasswordRequest": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "format": "email" }
+        },
+        "additionalProperties": false
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": ["token", "new_password"],
+        "properties": {
+          "token": { "type": "string", "writeOnly": true },
+          "new_password": { "type": "string", "writeOnly": true }
+        },
+        "additionalProperties": false
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {
+          "token": { "type": "string", "writeOnly": true }
+        },
+        "additionalProperties": false
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": ["current_password", "new_password"],
+        "properties": {
+          "current_password": { "type": "string", "writeOnly": true },
+          "new_password": { "type": "string", "writeOnly": true }
+        },
+        "additionalProperties": false
+      },
+      "CurrentUserSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/PublicUser" }
+        },
+        "additionalProperties": true
+      },
+      "PublicUser": {
+        "type": "object",
+        "required": ["id", "username", "email", "role", "status", "email_verified"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "username": { "type": "string" },
+          "email": { "type": "string" },
+          "display_name": { "type": "string" },
+          "role": { "type": "string", "enum": ["super_admin", "admin", "manager", "user", "viewer", "api_user"] },
+          "status": { "type": "string", "enum": ["active", "inactive", "suspended", "pending", "deleted"] },
+          "team_ids": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+          "email_verified": { "type": "boolean" },
+          "two_factor_enabled": { "type": "boolean" },
+          "last_login_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      },
+      "CreateKeyRequest": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "user_id": { "type": "string", "format": "uuid" },
+          "team_id": { "type": "string", "format": "uuid" },
+          "budget_id": { "type": "string", "format": "uuid" },
+          "permissions": { "$ref": "#/components/schemas/KeyPermissions" },
+          "rate_limits": { "$ref": "#/components/schemas/KeyRateLimits" },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "metadata": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+      },
+      "UpdateKeyRequest": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": ["string", "null"] },
+          "permissions": { "$ref": "#/components/schemas/KeyPermissions" },
+          "rate_limits": { "$ref": "#/components/schemas/KeyRateLimits" },
+          "budget_id": { "type": ["string", "null"], "format": "uuid" },
+          "expires_at": { "type": ["string", "null"], "format": "date-time" },
+          "metadata": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+      },
+      "VerifyKeyRequest": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": { "type": "string", "writeOnly": true, "description": "Plaintext key to verify; not echoed in responses" }
+        },
+        "additionalProperties": false
+      },
+      "KeyStatus": {
+        "type": "string",
+        "enum": ["active", "revoked", "expired"]
+      },
+      "KeyPermissions": {
+        "type": "object",
+        "properties": {
+          "allowed_models": { "type": "array", "items": { "type": "string" } },
+          "allowed_endpoints": { "type": "array", "items": { "type": "string" } },
+          "max_tokens_per_request": { "type": "integer", "minimum": 0 },
+          "is_admin": { "type": "boolean" },
+          "custom_permissions": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      },
+      "KeyRateLimits": {
+        "type": "object",
+        "properties": {
+          "requests_per_minute": { "type": "integer", "minimum": 0 },
+          "tokens_per_minute": { "type": "integer", "minimum": 0 },
+          "requests_per_day": { "type": "integer", "minimum": 0 },
+          "tokens_per_day": { "type": "integer", "minimum": 0 },
+          "max_concurrent_requests": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "KeyUsageStats": {
+        "type": "object",
+        "properties": {
+          "total_requests": { "type": "integer", "minimum": 0 },
+          "total_tokens": { "type": "integer", "minimum": 0 },
+          "total_cost": { "type": "number" },
+          "requests_today": { "type": "integer", "minimum": 0 },
+          "tokens_today": { "type": "integer", "minimum": 0 },
+          "cost_today": { "type": "number" },
+          "unpriced_requests": { "type": "integer", "minimum": 0 },
+          "unpriced_tokens": { "type": "integer", "minimum": 0 },
+          "unpriced_cost": { "type": "number" },
+          "last_unpriced_at": { "type": "string", "format": "date-time" },
+          "last_reset": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "KeyInfo": {
+        "type": "object",
+        "required": ["id", "key_prefix", "name", "status"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "key_prefix": { "type": "string", "description": "Masked prefix only" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "user_id": { "type": "string", "format": "uuid" },
+          "team_id": { "type": "string", "format": "uuid" },
+          "budget_id": { "type": "string", "format": "uuid" },
+          "status": { "$ref": "#/components/schemas/KeyStatus" },
+          "permissions": { "$ref": "#/components/schemas/KeyPermissions" },
+          "rate_limits": { "$ref": "#/components/schemas/KeyRateLimits" },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "last_used_at": { "type": "string", "format": "date-time" },
+          "usage_stats": { "$ref": "#/components/schemas/KeyUsageStats" }
+        },
+        "additionalProperties": false
+      },
+      "PaginationInfo": {
+        "type": "object",
+        "required": ["page", "limit", "total", "pages", "has_next", "has_prev"],
+        "properties": {
+          "page": { "type": "integer", "minimum": 1 },
+          "limit": { "type": "integer", "minimum": 1 },
+          "total": { "type": "integer", "minimum": 0 },
+          "pages": { "type": "integer", "minimum": 0 },
+          "has_next": { "type": "boolean" },
+          "has_prev": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "CreateKeyResponse": {
+        "type": "object",
+        "required": ["id", "key", "info", "warning"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "key": { "type": "string", "writeOnly": true, "description": "Plaintext key shown once on create" },
+          "info": { "$ref": "#/components/schemas/KeyInfo" },
+          "warning": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "CreateKeySuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/CreateKeyResponse" }
+        },
+        "additionalProperties": true
+      },
+      "ListKeysResponse": {
+        "type": "object",
+        "required": ["keys", "pagination"],
+        "properties": {
+          "keys": { "type": "array", "items": { "$ref": "#/components/schemas/KeyInfo" } },
+          "pagination": { "$ref": "#/components/schemas/PaginationInfo" }
+        },
+        "additionalProperties": false
+      },
+      "ListKeysSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/ListKeysResponse" }
+        },
+        "additionalProperties": true
+      },
+      "KeyInfoSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": {
+            "type": "object",
+            "properties": {
+              "key": { "$ref": "#/components/schemas/KeyInfo" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "VerifyKeyResult": {
+        "type": "object",
+        "required": ["valid"],
+        "properties": {
+          "valid": { "type": "boolean" },
+          "key": { "$ref": "#/components/schemas/KeyInfo" },
+          "invalid_reason": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "VerifyKeySuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/VerifyKeyResult" }
+        },
+        "additionalProperties": true
+      },
+      "RotateKeyResponse": {
+        "type": "object",
+        "required": ["old_key_id", "new_key_id", "new_key", "info", "warning"],
+        "properties": {
+          "old_key_id": { "type": "string", "format": "uuid" },
+          "new_key_id": { "type": "string", "format": "uuid" },
+          "new_key": { "type": "string", "writeOnly": true, "description": "Plaintext key shown once on rotate" },
+          "info": { "$ref": "#/components/schemas/KeyInfo" },
+          "warning": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "RotateKeySuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/RotateKeyResponse" }
+        },
+        "additionalProperties": true
+      },
+      "RevokeKeyResponse": {
+        "type": "object",
+        "required": ["key_id", "status", "message"],
+        "properties": {
+          "key_id": { "type": "string", "format": "uuid" },
+          "status": { "$ref": "#/components/schemas/KeyStatus" },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "RevokeKeySuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/RevokeKeyResponse" }
+        },
+        "additionalProperties": true
+      },
+      "KeyUsageResponse": {
+        "type": "object",
+        "required": ["key_id", "usage"],
+        "properties": {
+          "key_id": { "type": "string", "format": "uuid" },
+          "usage": { "$ref": "#/components/schemas/KeyUsageStats" }
+        },
+        "additionalProperties": false
+      },
+      "KeyUsageSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/KeyUsageResponse" }
+        },
+        "additionalProperties": true
+      },
+      "CreateTeamBody": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "display_name": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "UpdateTeamBody": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "display_name": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "AddMemberBody": {
+        "type": "object",
+        "required": ["user_id", "role"],
+        "properties": {
+          "user_id": { "type": "string", "format": "uuid" },
+          "role": { "$ref": "#/components/schemas/TeamRole" }
+        },
+        "additionalProperties": false
+      },
+      "UpdateRoleBody": {
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+          "role": { "$ref": "#/components/schemas/TeamRole" }
+        },
+        "additionalProperties": false
+      },
+      "TeamRole": {
+        "type": "string",
+        "enum": ["owner", "admin", "manager", "member", "viewer"]
+      },
+      "TeamStatus": {
+        "type": "string",
+        "enum": ["active", "inactive", "suspended", "deleted"]
+      },
+      "Team": {
+        "type": "object",
+        "required": ["id", "name", "status"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "name": { "type": "string" },
+          "display_name": { "type": "string" },
+          "description": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/TeamStatus" },
+          "member_count": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": true
+      },
+      "TeamSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/Team" }
+        },
+        "additionalProperties": true
+      },
+      "PaginatedTeams": {
+        "type": "object",
+        "required": ["items", "pagination"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Team" } },
+          "pagination": { "$ref": "#/components/schemas/PaginationInfo" }
+        },
+        "additionalProperties": false
+      },
+      "TeamListSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/PaginatedTeams" }
+        },
+        "additionalProperties": true
+      },
+      "TeamMember": {
+        "type": "object",
+        "required": ["id", "team_id", "user_id", "role", "status"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "team_id": { "type": "string", "format": "uuid" },
+          "user_id": { "type": "string", "format": "uuid" },
+          "role": { "$ref": "#/components/schemas/TeamRole" },
+          "status": { "type": "string", "enum": ["active", "pending", "suspended", "left"] },
+          "joined_at": { "type": "string", "format": "date-time" },
+          "invited_by": { "type": "string", "format": "uuid" },
+          "permissions": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      },
+      "TeamMemberSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/TeamMember" }
+        },
+        "additionalProperties": true
+      },
+      "TeamMemberListSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/TeamMember" } }
+        },
+        "additionalProperties": true
+      },
+      "TeamUsageStats": {
+        "type": "object",
+        "required": ["team_id", "team_name", "total_requests", "total_tokens", "total_cost"],
+        "properties": {
+          "team_id": { "type": "string", "format": "uuid" },
+          "team_name": { "type": "string" },
+          "total_requests": { "type": "integer", "minimum": 0 },
+          "total_tokens": { "type": "integer", "minimum": 0 },
+          "total_cost": { "type": "number" },
+          "requests_today": { "type": "integer", "minimum": 0 },
+          "tokens_today": { "type": "integer", "minimum": 0 },
+          "cost_today": { "type": "number" },
+          "member_count": { "type": "integer", "minimum": 0 },
+          "budget_usage_percent": { "type": "number" },
+          "remaining_budget": { "type": "number" }
+        },
+        "additionalProperties": false
+      },
+      "TeamUsageSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/TeamUsageStats" }
+        },
+        "additionalProperties": true
+      },
+      "ResetPeriod": {
+        "type": "string",
+        "enum": ["daily", "weekly", "monthly", "never"]
+      },
+      "Currency": {
+        "type": "string",
+        "enum": ["USD", "EUR", "GBP", "JPY", "CNY"]
+      },
+      "BudgetStatus": {
+        "type": "string",
+        "enum": ["ok", "warning", "exceeded"]
+      },
+      "SetProviderBudgetRequest": {
+        "type": "object",
+        "required": ["provider", "max_budget"],
+        "properties": {
+          "provider": { "type": "string", "minLength": 1 },
+          "max_budget": { "type": "number" },
+          "reset_period": { "$ref": "#/components/schemas/ResetPeriod" },
+          "soft_limit_percentage": { "type": "number" },
+          "currency": { "$ref": "#/components/schemas/Currency" },
+          "enabled": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "SetModelBudgetRequest": {
+        "type": "object",
+        "required": ["model", "max_budget"],
+        "properties": {
+          "model": { "type": "string", "minLength": 1 },
+          "max_budget": { "type": "number" },
+          "reset_period": { "$ref": "#/components/schemas/ResetPeriod" },
+          "soft_limit_percentage": { "type": "number" },
+          "currency": { "$ref": "#/components/schemas/Currency" },
+          "enabled": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "ProviderBudgetResponse": {
+        "type": "object",
+        "required": ["provider", "max_budget", "current_spend", "remaining", "usage_percentage", "status", "reset_period", "currency", "enabled", "request_count"],
+        "properties": {
+          "provider": { "type": "string" },
+          "max_budget": { "type": "number" },
+          "current_spend": { "type": "number" },
+          "remaining": { "type": "number" },
+          "usage_percentage": { "type": "number" },
+          "status": { "$ref": "#/components/schemas/BudgetStatus" },
+          "reset_period": { "$ref": "#/components/schemas/ResetPeriod" },
+          "currency": { "$ref": "#/components/schemas/Currency" },
+          "enabled": { "type": "boolean" },
+          "request_count": { "type": "integer", "minimum": 0 },
+          "last_reset_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "ModelBudgetResponse": {
+        "type": "object",
+        "required": ["model", "max_budget", "current_spend", "remaining", "usage_percentage", "status", "reset_period", "currency", "enabled", "request_count"],
+        "properties": {
+          "model": { "type": "string" },
+          "max_budget": { "type": "number" },
+          "current_spend": { "type": "number" },
+          "remaining": { "type": "number" },
+          "usage_percentage": { "type": "number" },
+          "status": { "$ref": "#/components/schemas/BudgetStatus" },
+          "reset_period": { "$ref": "#/components/schemas/ResetPeriod" },
+          "currency": { "$ref": "#/components/schemas/Currency" },
+          "enabled": { "type": "boolean" },
+          "request_count": { "type": "integer", "minimum": 0 },
+          "last_reset_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "ProviderBudgetSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/ProviderBudgetResponse" }
+        },
+        "additionalProperties": true
+      },
+      "ModelBudgetSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/ModelBudgetResponse" }
+        },
+        "additionalProperties": true
+      },
+      "ListProviderBudgetsResponse": {
+        "type": "object",
+        "required": ["providers", "total"],
+        "properties": {
+          "providers": { "type": "array", "items": { "$ref": "#/components/schemas/ProviderBudgetResponse" } },
+          "total": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "ListProviderBudgetsSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/ListProviderBudgetsResponse" }
+        },
+        "additionalProperties": true
+      },
+      "ListModelBudgetsResponse": {
+        "type": "object",
+        "required": ["models", "total"],
+        "properties": {
+          "models": { "type": "array", "items": { "$ref": "#/components/schemas/ModelBudgetResponse" } },
+          "total": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "ListModelBudgetsSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/ListModelBudgetsResponse" }
+        },
+        "additionalProperties": true
+      },
+      "DeleteBudgetResponse": {
+        "type": "object",
+        "required": ["success", "message"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "DeleteBudgetSuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/DeleteBudgetResponse" }
+        },
+        "additionalProperties": true
+      },
+      "BudgetSummaryResponse": {
+        "type": "object",
+        "properties": {
+          "total_provider_budgets": { "type": "integer", "minimum": 0 },
+          "total_model_budgets": { "type": "integer", "minimum": 0 },
+          "exceeded_providers": { "type": "array", "items": { "type": "string" } },
+          "warning_providers": { "type": "array", "items": { "type": "string" } },
+          "total_provider_allocated": { "type": "number" },
+          "total_provider_spent": { "type": "number" },
+          "total_model_allocated": { "type": "number" },
+          "total_model_spent": { "type": "number" }
+        },
+        "additionalProperties": false
+      },
+      "BudgetSummarySuccess": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "const": true },
+          "data": { "$ref": "#/components/schemas/BudgetSummaryResponse" }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

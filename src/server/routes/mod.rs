@@ -4,6 +4,7 @@
 
 pub mod admin;
 pub mod admin_dashboard;
+mod admin_openapi;
 mod admin_providers;
 mod admin_request_ledger;
 mod admin_routing;

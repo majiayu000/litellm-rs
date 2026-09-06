@@ -20,6 +20,7 @@ include = [
     "config/model_catalog_authority.json",
     "config/model_catalog_decisions.json",
     "docs/openapi/inference.json",
+    "docs/openapi/admin.json",
     "migrations/**/*",
     ".github/workflows/*.yml",
     "build.rs",
