@@ -7,10 +7,22 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use redis::AsyncCommands;
 
 impl RedisPool {
-    /// Get multiple keys at once
+    /// Get multiple keys at once.
+    ///
+    /// Standalone mode uses `MGET`. Cluster mode issues per-key `GET` so keys
+    /// in different hash slots do not trigger CROSSSLOT errors. Result order
+    /// matches `keys`.
     pub async fn mget(&self, keys: &[String]) -> Result<Vec<Option<String>>> {
         if self.noop_mode {
             return Ok(vec![None; keys.len()]);
+        }
+
+        if self.is_cluster() {
+            let mut values = Vec::with_capacity(keys.len());
+            for key in keys {
+                values.push(self.get(key).await?);
+            }
+            return Ok(values);
         }
 
         let mut conn = self.get_connection().await?;
@@ -22,9 +34,19 @@ impl RedisPool {
         }
     }
 
-    /// Set multiple key-value pairs with optional TTL
+    /// Set multiple key-value pairs with optional TTL.
+    ///
+    /// Standalone mode uses an atomic pipeline. Cluster mode issues per-key
+    /// `SET`/`SETEX` to stay slot-safe.
     pub async fn mset(&self, pairs: &[(String, String)], ttl: Option<u64>) -> Result<()> {
         if self.noop_mode || pairs.is_empty() {
+            return Ok(());
+        }
+
+        if self.is_cluster() {
+            for (key, value) in pairs {
+                self.set(key, value, ttl).await?;
+            }
             return Ok(());
         }
 

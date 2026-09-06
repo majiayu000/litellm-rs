@@ -148,7 +148,7 @@ fn redis_validation_skips_when_disabled() {
 }
 
 #[test]
-fn redis_validation_rejects_unimplemented_cluster_mode_with_actionable_remedy() {
+fn redis_validation_accepts_cluster_mode_when_url_is_valid() {
     let config = RedisConfig {
         enabled: true,
         url: "redis://localhost:6379".to_string(),
@@ -158,14 +158,22 @@ fn redis_validation_rejects_unimplemented_cluster_mode_with_actionable_remedy() 
         allow_degraded: false,
     };
 
-    let error = Validate::validate(&config).unwrap_err();
+    assert!(Validate::validate(&config).is_ok());
+}
 
-    assert!(error.contains("cluster"), "got: {error}");
-    assert!(error.contains("not implemented"), "got: {error}");
-    assert!(
-        error.contains("storage.redis.cluster=false"),
-        "got: {error}"
-    );
+#[test]
+fn redis_validation_rejects_cluster_mode_with_empty_url() {
+    let config = RedisConfig {
+        enabled: true,
+        url: String::new(),
+        max_connections: 10,
+        connection_timeout: 5,
+        cluster: true,
+        allow_degraded: false,
+    };
+
+    let error = Validate::validate(&config).unwrap_err();
+    assert!(error.contains("Redis URL cannot be empty"), "got: {error}");
 }
 
 #[test]

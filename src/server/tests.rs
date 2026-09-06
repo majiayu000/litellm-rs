@@ -119,25 +119,35 @@ async fn test_server_builder_requires_config() {
 }
 
 #[tokio::test]
-async fn server_builder_rejects_redis_cluster_before_client_initialization() {
-    let mut config = crate::config::Config::default();
+async fn server_builder_fails_unreachable_redis_cluster_unless_degraded() {
+    let mut config = valid_programmatic_config();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.pricing.source = None;
     config.gateway.storage.redis.enabled = true;
     config.gateway.storage.redis.cluster = true;
+    config.gateway.storage.redis.url = "redis://127.0.0.1:1".to_string();
+    config.gateway.storage.redis.connection_timeout = 1;
+    config.gateway.storage.redis.allow_degraded = false;
 
-    let error = match ServerBuilder::new().with_config(config).build().await {
+    let error = match ServerBuilder::new()
+        .with_config(config.clone())
+        .build()
+        .await
+    {
         Err(error) => error,
-        Ok(_) => panic!("server builder must reject unsupported Redis cluster mode"),
+        Ok(_) => panic!("unreachable Redis Cluster must fail startup in strict mode"),
     };
+    assert!(
+        !error.to_string().contains("not implemented"),
+        "cluster mode is valid config; got: {error}"
+    );
 
-    let message = error.to_string();
-    assert!(
-        message.contains("storage.redis.cluster=true"),
-        "got: {message}"
-    );
-    assert!(
-        message.contains("storage.redis.cluster=false"),
-        "got: {message}"
-    );
+    config.gateway.storage.redis.allow_degraded = true;
+    ServerBuilder::new()
+        .with_config(config)
+        .build()
+        .await
+        .expect("allow_degraded must start the gateway with a no-op Redis pool");
 }
 
 #[tokio::test]

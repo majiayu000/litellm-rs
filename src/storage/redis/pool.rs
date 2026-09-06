@@ -4,18 +4,84 @@
 
 use crate::config::models::storage::RedisConfig;
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use redis::{AsyncConnectionConfig, Client, aio::MultiplexedConnection};
+use redis::aio::{ConnectionLike, MultiplexedConnection};
+use redis::cluster::ClusterClient;
+use redis::cluster_async::ClusterConnection;
+use redis::{AsyncConnectionConfig, Client, Cmd, Pipeline, RedisFuture, Value};
+use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info};
+
+/// Format a Redis Cluster hash-tagged key so related keys map to one hash slot.
+///
+/// Cluster hashes only the substring between `{` and `}`. Use this when multiple
+/// keys must participate in one atomic Lua script or MULTI/EXEC. Single-key
+/// operations (including the rate-limit scripts, which use `KEYS[1]` only) do
+/// not need a hash tag.
+pub fn cluster_hash_tag(tag: &str, suffix: &str) -> String {
+    format!("{{{tag}}}{suffix}")
+}
+
+/// Split `storage.redis.url` into cluster seed nodes. A single seed is enough;
+/// comma-separated `redis://` / `rediss://` URLs are also accepted.
+pub(crate) fn cluster_seed_urls(url: &str) -> Vec<&str> {
+    url.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+/// Live Redis connection used by both standalone and cluster modes.
+#[derive(Clone)]
+pub(crate) enum RedisLiveConnection {
+    Standalone(MultiplexedConnection),
+    Cluster(ClusterConnection),
+}
+
+impl fmt::Debug for RedisLiveConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Standalone(_) => write!(f, "Standalone"),
+            Self::Cluster(_) => write!(f, "Cluster"),
+        }
+    }
+}
+
+impl ConnectionLike for RedisLiveConnection {
+    fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
+        match self {
+            Self::Standalone(conn) => conn.req_packed_command(cmd),
+            Self::Cluster(conn) => conn.req_packed_command(cmd),
+        }
+    }
+
+    fn req_packed_commands<'a>(
+        &'a mut self,
+        pipeline: &'a Pipeline,
+        offset: usize,
+        count: usize,
+    ) -> RedisFuture<'a, Vec<Value>> {
+        match self {
+            Self::Standalone(conn) => conn.req_packed_commands(pipeline, offset, count),
+            Self::Cluster(conn) => conn.req_packed_commands(pipeline, offset, count),
+        }
+    }
+
+    fn get_db(&self) -> i64 {
+        match self {
+            Self::Standalone(conn) => conn.get_db(),
+            Self::Cluster(conn) => conn.get_db(),
+        }
+    }
+}
 
 /// Redis connection pool (supports no-op mode when Redis is unavailable)
 #[derive(Debug, Clone)]
 pub struct RedisPool {
-    /// Redis client (None in no-op mode)
-    pub(crate) client: Option<Client>,
-    /// Connection manager (None in no-op mode)
-    pub(crate) connection_manager: Option<MultiplexedConnection>,
+    /// Live connection (None in no-op mode)
+    pub(crate) connection: Option<RedisLiveConnection>,
     /// Configuration
     pub(crate) config: RedisConfig,
     /// Whether this is a no-op pool (Redis unavailable)
@@ -26,7 +92,7 @@ pub struct RedisPool {
 
 /// Redis connection wrapper
 pub struct RedisConnection {
-    pub(crate) conn: Option<MultiplexedConnection>,
+    pub(crate) conn: Option<RedisLiveConnection>,
     /// Held permit that is released when the connection is dropped
     pub(crate) _permit: Option<OwnedSemaphorePermit>,
 }
@@ -40,70 +106,92 @@ impl RedisPool {
 
         if !config.enabled {
             info!("Redis disabled in config; using no-op Redis pool");
-            return Ok(Self {
-                client: None,
-                connection_manager: None,
-                config: config.clone(),
-                noop_mode: true,
-                semaphore: Arc::new(Semaphore::new(1)),
-            });
+            return Ok(Self::noop_from_config(config));
         }
 
-        info!("Creating Redis connection pool");
         debug!("Redis URL: {}", Self::sanitize_url(&config.url));
         debug!(
-            "Redis max_connections: {}, connection_timeout: {}s",
-            config.max_connections, config.connection_timeout
+            "Redis max_connections: {}, connection_timeout: {}s, cluster: {}",
+            config.max_connections, config.connection_timeout, config.cluster
         );
 
-        let client = Client::open(config.url.as_str()).map_err(GatewayError::from)?;
-
-        let async_config = AsyncConnectionConfig::new().set_connection_timeout(Some(
-            std::time::Duration::from_secs(config.connection_timeout),
-        ));
-
-        let connection_manager = client
-            .get_multiplexed_async_connection_with_config(&async_config)
-            .await
-            .map_err(GatewayError::from)?;
+        let connection = if config.cluster {
+            info!("Creating Redis Cluster connection pool");
+            Some(Self::connect_cluster(config).await?)
+        } else {
+            info!("Creating Redis connection pool");
+            Some(Self::connect_standalone(config).await?)
+        };
 
         let max_connections = config.max_connections.max(1) as usize;
 
         info!(
-            "Redis connection pool created successfully (max_connections={})",
-            max_connections
+            "Redis connection pool created successfully (max_connections={}, cluster={})",
+            max_connections, config.cluster
         );
         Ok(Self {
-            client: Some(client),
-            connection_manager: Some(connection_manager),
+            connection,
             config: config.clone(),
             noop_mode: false,
             semaphore: Arc::new(Semaphore::new(max_connections)),
         })
     }
 
-    /// Create a no-op Redis pool (for when Redis is unavailable)
-    pub fn create_noop() -> Self {
-        info!("Creating no-op Redis pool (Redis unavailable)");
+    async fn connect_standalone(config: &RedisConfig) -> Result<RedisLiveConnection> {
+        let client = Client::open(config.url.as_str()).map_err(GatewayError::from)?;
+        let async_config = AsyncConnectionConfig::new()
+            .set_connection_timeout(Some(Duration::from_secs(config.connection_timeout)));
+        let connection = client
+            .get_multiplexed_async_connection_with_config(&async_config)
+            .await
+            .map_err(GatewayError::from)?;
+        Ok(RedisLiveConnection::Standalone(connection))
+    }
+
+    async fn connect_cluster(config: &RedisConfig) -> Result<RedisLiveConnection> {
+        let seeds = cluster_seed_urls(&config.url);
+        let timeout = Duration::from_secs(config.connection_timeout);
+        let client = ClusterClient::builder(seeds)
+            .connection_timeout(timeout)
+            .build()
+            .map_err(GatewayError::from)?;
+        let connection = client
+            .get_async_connection()
+            .await
+            .map_err(GatewayError::from)?;
+        Ok(RedisLiveConnection::Cluster(connection))
+    }
+
+    fn noop_from_config(config: &RedisConfig) -> Self {
         Self {
-            client: None,
-            connection_manager: None,
-            config: RedisConfig {
-                url: String::new(),
-                enabled: false,
-                max_connections: 0,
-                connection_timeout: 0,
-                cluster: false,
-                allow_degraded: false,
-            },
+            connection: None,
+            config: config.clone(),
             noop_mode: true,
             semaphore: Arc::new(Semaphore::new(1)),
         }
     }
 
+    /// Create a no-op Redis pool (for when Redis is unavailable)
+    pub fn create_noop() -> Self {
+        info!("Creating no-op Redis pool (Redis unavailable)");
+        Self::noop_from_config(&RedisConfig {
+            url: String::new(),
+            enabled: false,
+            max_connections: 0,
+            connection_timeout: 0,
+            cluster: false,
+            allow_degraded: false,
+        })
+    }
+
     /// Check if this is a no-op pool
     pub fn is_noop(&self) -> bool {
         self.noop_mode
+    }
+
+    /// Whether this pool uses Redis Cluster routing.
+    pub(crate) fn is_cluster(&self) -> bool {
+        self.config.cluster && !self.noop_mode
     }
 
     /// Get a connection from the pool.
@@ -127,7 +215,7 @@ impl RedisPool {
             .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
 
         Ok(RedisConnection {
-            conn: self.connection_manager.clone(),
+            conn: self.connection.clone(),
             _permit: Some(permit),
         })
     }
@@ -171,5 +259,27 @@ impl RedisPool {
         } else {
             "invalid_url".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{cluster_hash_tag, cluster_seed_urls};
+
+    #[test]
+    fn cluster_hash_tag_wraps_only_the_tag() {
+        assert_eq!(cluster_hash_tag("cache", ":user:1"), "{cache}:user:1");
+    }
+
+    #[test]
+    fn cluster_seed_urls_split_comma_separated_seeds() {
+        assert_eq!(
+            cluster_seed_urls("redis://127.0.0.1:7000, redis://127.0.0.1:7001"),
+            vec!["redis://127.0.0.1:7000", "redis://127.0.0.1:7001"]
+        );
+        assert_eq!(
+            cluster_seed_urls("redis://127.0.0.1:7000"),
+            vec!["redis://127.0.0.1:7000"]
+        );
     }
 }

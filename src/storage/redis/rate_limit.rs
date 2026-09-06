@@ -1,4 +1,7 @@
 //! Redis-backed rate limit operations.
+//!
+//! Lua scripts below use a single `KEYS[1]` so they stay cluster-safe without
+//! a hash tag. Multi-key atomics should use [`super::cluster_hash_tag`].
 
 use super::pool::RedisPool;
 use crate::core::rate_limiter::RateLimitResult;
