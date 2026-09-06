@@ -79,6 +79,7 @@ function resetProtectedState() {
   requestLedgerView.reset();
   budgetView.reset();
   providerEditorView.reset();
+  routingPolicyView.reset();
 }
 function endSession(message = "Signed out") {
   abortActiveRequests();
@@ -418,6 +419,10 @@ const budgetView = window.createBudgetView({
 const providerEditorView = window.createProviderEditorView({
   apiRequest, beginBusy, byId, captureSession, clearError, createAction, endBusy,
   ensureCurrent, reportRequestError, setStatus, textCell,
+});
+const routingPolicyView = window.createRoutingPolicyView({
+  apiRequest, beginBusy, byId, captureSession, clearError, createAction, endBusy,
+  ensureCurrent, reportRequestError, setStatus,
 });
 async function loadKeys(session = captureSession()) {
   const requestVersion = ++state.keyRequestVersion;
@@ -759,7 +764,7 @@ function showView(view) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
-  for (const panel of ["keys", "teams", "spend", "budgets", "providers", "health", "routing", "request-logs"]) {
+  for (const panel of ["keys", "teams", "spend", "budgets", "providers", "health", "routing", "routing-policy", "request-logs"]) {
     byId(`${panel}-panel`).hidden = panel !== view;
   }
   if (view === "spend") {
@@ -770,6 +775,9 @@ function showView(view) {
   }
   if (view === "providers") {
     void providerEditorView.loadOnce();
+  }
+  if (view === "routing-policy") {
+    void routingPolicyView.loadOnce();
   }
   if (view === "request-logs") {
     void requestLedgerView.loadOnce();

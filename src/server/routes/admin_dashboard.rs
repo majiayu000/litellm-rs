@@ -8,6 +8,7 @@ const APP_CSS: &str = include_str!("admin_dashboard/app.css");
 const APP_JS: &str = include_str!("admin_dashboard/app.js");
 const BUDGET_JS: &str = include_str!("admin_dashboard/budget.js");
 const PROVIDERS_JS: &str = include_str!("admin_dashboard/providers.js");
+const ROUTING_POLICY_JS: &str = include_str!("admin_dashboard/routing_policy.js");
 const PROVIDER_HEALTH_JS: &str = include_str!("admin_dashboard/provider_health.js");
 const ROUTING_INVENTORY_JS: &str = include_str!("admin_dashboard/routing_inventory.js");
 const REQUEST_LEDGER_JS: &str = include_str!("admin_dashboard/request_ledger.js");
@@ -55,6 +56,10 @@ async fn providers_javascript() -> HttpResponse {
     embedded_asset("text/javascript; charset=utf-8", PROVIDERS_JS)
 }
 
+async fn routing_policy_javascript() -> HttpResponse {
+    embedded_asset("text/javascript; charset=utf-8", ROUTING_POLICY_JS)
+}
+
 /// Register the exact dashboard asset routes.
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/admin/dashboard", web::get().to(dashboard))
@@ -78,6 +83,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/admin/dashboard/providers.js",
             web::get().to(providers_javascript),
+        )
+        .route(
+            "/admin/dashboard/routing-policy.js",
+            web::get().to(routing_policy_javascript),
         )
         .route("/admin/dashboard/app.js", web::get().to(javascript));
 }
@@ -132,6 +141,11 @@ mod tests {
                 "text/javascript; charset=utf-8",
                 "createProviderEditorView",
             ),
+            (
+                "/admin/dashboard/routing-policy.js",
+                "text/javascript; charset=utf-8",
+                "createRoutingPolicyView",
+            ),
         ];
 
         for (path, content_type, marker) in cases {
@@ -173,6 +187,7 @@ mod tests {
             "/admin/dashboard/routing-inventory.js.map",
             "/admin/dashboard/request-ledger.js.map",
             "/admin/dashboard/providers.js.map",
+            "/admin/dashboard/routing-policy.js.map",
             "/admin/dashboard/private",
         ] {
             let response = actix_test::call_service(
@@ -201,6 +216,7 @@ mod tests {
         assert!(BUDGET_JS.contains("\"/v1/budget/providers\""));
         assert!(BUDGET_JS.contains("\"/v1/budget/models\""));
         assert!(PROVIDERS_JS.contains("\"/admin/providers\""));
+        assert!(ROUTING_POLICY_JS.contains("\"/admin/routing/policy\""));
         for asset in [
             APP_JS,
             PROVIDER_HEALTH_JS,
@@ -208,6 +224,7 @@ mod tests {
             REQUEST_LEDGER_JS,
             BUDGET_JS,
             PROVIDERS_JS,
+            ROUTING_POLICY_JS,
         ] {
             for forbidden in [
                 "localStorage",
@@ -276,6 +293,14 @@ mod tests {
             "id=\"provider-edit-api-key\"",
             "id=\"provider-edit-api-key-ref\"",
             "id=\"providers-notice\"",
+            "id=\"routing-policy-panel\"",
+            "id=\"routing-policy-form\"",
+            "id=\"routing-policy-generation\"",
+            "id=\"routing-policy-strategy\"",
+            "id=\"routing-policy-aliases-body\"",
+            "id=\"routing-policy-providers-body\"",
+            "id=\"routing-policy-notice\"",
+            "id=\"routing-policy-add-alias\"",
         ] {
             assert!(INDEX_HTML.contains(marker), "missing HTML marker {marker}");
         }
