@@ -4,7 +4,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use crate::core::guardrails::{CheckResult, GuardrailEngine};
+use crate::core::guardrails::{CheckResult, GuardrailAction, GuardrailEngine};
+use crate::server::guardrails::GuardrailDecisionSink;
 
 const CONTEXT_OVERLAP_CHARS: usize = 4096;
 const MAX_PENDING_BYTES: usize = 1024 * 1024;
@@ -52,6 +53,7 @@ pub(super) struct StreamOutputGuardrail {
     surfaces: BTreeMap<u32, SurfaceState>,
     pending: Vec<Bytes>,
     pending_bytes: usize,
+    decision_sink: Option<GuardrailDecisionSink>,
 }
 
 impl StreamOutputGuardrail {
@@ -64,7 +66,13 @@ impl StreamOutputGuardrail {
             surfaces: BTreeMap::new(),
             pending: Vec::new(),
             pending_bytes: 0,
+            decision_sink: None,
         }
+    }
+
+    pub(super) fn with_decision_sink(mut self, sink: GuardrailDecisionSink) -> Self {
+        self.decision_sink = Some(sink);
+        self
     }
 
     pub(super) async fn push(
@@ -254,6 +262,11 @@ impl StreamOutputGuardrail {
             .check_output(content)
             .await
             .map_err(|_| StreamGuardrailError::Execution)?;
+        if result.action != GuardrailAction::Allow
+            && let Some(sink) = &self.decision_sink
+        {
+            sink.emit("output", &result);
+        }
         enforce(result)?;
 
         if let Some(state) = self.surfaces.get_mut(&surface) {

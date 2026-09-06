@@ -8,7 +8,8 @@ use tracing::{debug, error, warn};
 
 use crate::core::traits::integration::{
     BoxedIntegration, CacheHitEvent, EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent,
-    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    GuardrailDecisionEvent, IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent,
+    LlmStartEvent, LlmStreamEvent,
 };
 
 /// Configuration for the integration manager
@@ -173,6 +174,31 @@ impl IntegrationManager {
         } else {
             self.dispatch_sequential_error(&integrations, event).await
         }
+    }
+
+    /// Notify all integrations of a sanitized guardrail decision.
+    pub async fn on_guardrail_decision(
+        &self,
+        event: &GuardrailDecisionEvent,
+    ) -> IntegrationResult<()> {
+        let integrations = self.integrations.read().await;
+        for integration in integrations.iter() {
+            if integration.is_enabled()
+                && let Err(e) = integration.on_guardrail_decision(event).await
+            {
+                if self.config.log_errors {
+                    warn!(
+                        "Integration {} guardrail decision error: {}",
+                        integration.name(),
+                        e
+                    );
+                }
+                if self.config.fail_fast {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Notify all integrations of LLM stream chunk

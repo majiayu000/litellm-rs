@@ -181,6 +181,12 @@ pub(crate) async fn handle_streaming_response(
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout = state.config.load().gateway.server.stream_idle_timeout;
             let guardrails = Arc::clone(&state.guardrails());
+            let decision_sink = crate::server::guardrails::GuardrailDecisionSink::from_state(
+                state,
+                Some(served_model.as_str()),
+                Some(served_provider.as_str()),
+                None,
+            );
             let settlement = StreamBudgetSettlement {
                 pricing_service: settlement_budgeted.pricing(),
                 pricing_config: state.config().gateway.pricing.clone(),
@@ -199,7 +205,8 @@ pub(crate) async fn handle_streaming_response(
                 let mut lease = Some(lease);
                 let mut settlement = settlement;
                 let mut output_guardrail =
-                    super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
+                    super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails)
+                        .with_decision_sink(decision_sink);
 
                 let shell = make_shell(
                     &resp_id,

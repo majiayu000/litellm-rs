@@ -170,11 +170,18 @@ pub(super) async fn handle_streaming_completion(
             let include_usage = adapter_request.include_usage;
             let mut echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
             let guardrails = Arc::clone(&state.guardrails());
+            let decision_sink = crate::server::guardrails::GuardrailDecisionSink::from_state(
+                state,
+                Some(settlement.model.as_str()),
+                Some(settlement.provider.as_str()),
+                None,
+            );
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
                 let mut output_guardrail =
-                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
+                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails)
+                        .with_decision_sink(decision_sink);
                 let mut tokens_used = 0_u64;
                 let mut final_usage = None;
                 let mut saw_upstream_output = false;

@@ -162,11 +162,18 @@ pub(super) async fn handle_streaming_chat_completion(
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let guardrails = Arc::clone(&state.guardrails());
+            let decision_sink = crate::server::guardrails::GuardrailDecisionSink::from_state(
+                state,
+                Some(settlement.model.as_str()),
+                Some(settlement.provider.as_str()),
+                None,
+            );
 
             tokio::spawn(async move {
                 let mut lease = Some(lease);
                 let mut output_guardrail =
-                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails);
+                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails)
+                        .with_decision_sink(decision_sink);
                 let mut tokens_used = 0_u64;
                 let mut final_usage = None;
                 let mut saw_upstream_output = false;

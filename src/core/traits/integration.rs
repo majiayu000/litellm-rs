@@ -362,6 +362,74 @@ pub struct EmbeddingEndEvent {
     pub timestamp_ms: i64,
 }
 
+/// Guardrail decision surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardrailDecisionSurface {
+    /// Request/input inspection.
+    Input,
+    /// Response/output inspection.
+    Output,
+}
+
+/// Sanitized action taken after a guardrail check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardrailDecisionAction {
+    /// Content was allowed without mutation.
+    Allow,
+    /// Content was allowed and recorded.
+    Log,
+    /// Content was blocked.
+    Block,
+    /// Content was masked.
+    Mask,
+}
+
+/// Sanitized guardrail decision. Never includes prompt, match, or response text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardrailDecisionEvent {
+    /// Request ID when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Whether this decision applied to input or output.
+    pub surface: GuardrailDecisionSurface,
+    /// Action taken.
+    pub action: GuardrailDecisionAction,
+    /// Policy families that contributed identities (for example `pii`).
+    pub policy_ids: Vec<String>,
+    /// Specific rule identities (Display/debug names only).
+    pub rule_ids: Vec<String>,
+    /// Requested or served model when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Selected provider when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Selected deployment when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<String>,
+    /// Event timestamp (Unix milliseconds).
+    pub timestamp_ms: i64,
+}
+
+impl GuardrailDecisionEvent {
+    /// Create a metadata-only decision event.
+    pub fn new(surface: GuardrailDecisionSurface, action: GuardrailDecisionAction) -> Self {
+        Self {
+            request_id: None,
+            surface,
+            action,
+            policy_ids: Vec::new(),
+            rule_ids: Vec::new(),
+            model: None,
+            provider: None,
+            deployment: None,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+}
+
 /// Embedding error event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingErrorEvent {
@@ -442,6 +510,12 @@ pub trait Integration: Send + Sync {
 
     /// Called on cache hit (optional)
     async fn on_cache_hit(&self, event: &CacheHitEvent) -> IntegrationResult<()> {
+        let _ = event;
+        Ok(())
+    }
+
+    /// Called after a guardrail CheckResult is determined (optional).
+    async fn on_guardrail_decision(&self, event: &GuardrailDecisionEvent) -> IntegrationResult<()> {
         let _ = event;
         Ok(())
     }

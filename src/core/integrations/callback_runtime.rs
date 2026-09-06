@@ -8,8 +8,8 @@ use tracing::{error, warn};
 
 use super::IntegrationManager;
 use crate::core::traits::integration::{
-    EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, IntegrationError,
-    IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
+    EmbeddingEndEvent, EmbeddingErrorEvent, EmbeddingStartEvent, GuardrailDecisionEvent,
+    IntegrationError, IntegrationResult, LlmEndEvent, LlmErrorEvent, LlmStartEvent, LlmStreamEvent,
 };
 
 pub(crate) trait CallbackMetrics: Send + Sync {
@@ -33,6 +33,7 @@ enum CallbackEvent {
     EmbeddingStart(EmbeddingStartEvent),
     EmbeddingEnd(EmbeddingEndEvent),
     EmbeddingError(EmbeddingErrorEvent),
+    GuardrailDecision(GuardrailDecisionEvent),
 }
 
 /// Error returned when an event cannot enter the non-blocking callback queue.
@@ -210,6 +211,16 @@ impl CallbackDispatcher {
     /// Enqueue an LLM stream event without waiting for exporter I/O.
     pub fn emit_stream(&self, event: LlmStreamEvent) -> Result<(), CallbackDispatchError> {
         self.try_send(CallbackEvent::Stream(event))
+    }
+
+    /// Enqueue a sanitized guardrail decision. Queue pressure is observable only.
+    pub fn emit_guardrail_decision(&self, event: GuardrailDecisionEvent) {
+        if let Err(error) = self.try_send(CallbackEvent::GuardrailDecision(event)) {
+            warn!(
+                error = %error,
+                "Guardrail decision callback dispatch failed"
+            );
+        }
     }
 
     pub(crate) fn begin_llm_metrics(&self, event: &LlmStartEvent) -> Option<CallbackMetricsPermit> {
@@ -391,6 +402,7 @@ async fn dispatch_event(manager: &IntegrationManager, event: CallbackEvent) {
         CallbackEvent::EmbeddingStart(event) => manager.on_embedding_start(&event).await,
         CallbackEvent::EmbeddingEnd(event) => manager.on_embedding_end(&event).await,
         CallbackEvent::EmbeddingError(event) => manager.on_embedding_error(&event).await,
+        CallbackEvent::GuardrailDecision(event) => manager.on_guardrail_decision(&event).await,
     };
     if let Err(error) = result {
         error!("Callback event dispatch failed: {}", error);

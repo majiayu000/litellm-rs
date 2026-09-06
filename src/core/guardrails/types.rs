@@ -329,6 +329,10 @@ impl CheckResult {
             self.passed = false;
         } else if self.action != GuardrailAction::Block && other.action == GuardrailAction::Mask {
             self.action = GuardrailAction::Mask;
+        } else if !matches!(self.action, GuardrailAction::Block | GuardrailAction::Mask)
+            && other.action == GuardrailAction::Log
+        {
+            self.action = GuardrailAction::Log;
         }
 
         // Merge violations
