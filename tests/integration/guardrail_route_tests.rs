@@ -228,6 +228,53 @@ mod tests {
             .clone()
     }
 
+    async fn app_state_with_custom_rule(
+        base_url: &str,
+        action: litellm_rs::core::guardrails::GuardrailAction,
+    ) -> litellm_rs::server::state::AppState {
+        use litellm_rs::core::guardrails::PromptInjectionConfig;
+        use litellm_rs::core::guardrails::config::CustomRuleConfig;
+
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
+        config.gateway.guardrails.prompt_injection = Some(PromptInjectionConfig {
+            enabled: false,
+            ..PromptInjectionConfig::default()
+        });
+        config.gateway.guardrails.pii = None;
+        config.gateway.guardrails.openai_moderation = None;
+        config.gateway.guardrails.custom_rules = vec![CustomRuleConfig {
+            name: "deny-forbidden-token".to_string(),
+            description: None,
+            enabled: true,
+            patterns: vec!["forbidden-token-xyz".to_string()],
+            action,
+            message: None,
+        }];
+        let mut provider = mock_provider_config(
+            "openai",
+            "openai_compatible",
+            "sk-test",
+            base_url,
+            vec!["gpt-4o".to_string()],
+        );
+        provider.settings = HashMap::from([
+            ("skip_api_key".to_string(), Value::Bool(true)),
+            (
+                "provider_name".to_string(),
+                Value::String("openai".to_string()),
+            ),
+        ]);
+        config.gateway.providers = vec![provider];
+        GatewayHttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with custom rules")
+            .state()
+            .clone()
+    }
+
     fn guardrail_chat_request(content: &str) -> Value {
         json!({
             "model": "gpt-4o",
@@ -992,5 +1039,149 @@ mod tests {
         .await;
 
         assert_blocked_stream(&body);
+    }
+
+    #[tokio::test]
+    async fn custom_rule_input_block_rejects_before_provider_execution() {
+        use litellm_rs::core::guardrails::GuardrailAction;
+
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_custom_rule(&provider.base_url, GuardrailAction::Block).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(guardrail_chat_request("hello forbidden-token-xyz"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(provider.requests.lock().unwrap().is_empty());
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn custom_rule_input_log_forwards_to_provider() {
+        use litellm_rs::core::guardrails::GuardrailAction;
+
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_custom_rule(&provider.base_url, GuardrailAction::Log).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(guardrail_chat_request("hello forbidden-token-xyz"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn custom_rule_input_allow_forwards_to_provider() {
+        use litellm_rs::core::guardrails::GuardrailAction;
+
+        let provider = GuardrailTestUpstream::launch_with_output("safe response").await;
+        let state = app_state_with_custom_rule(&provider.base_url, GuardrailAction::Allow).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(guardrail_chat_request("hello forbidden-token-xyz"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn custom_rule_output_block_rejects_after_provider_execution() {
+        use litellm_rs::core::guardrails::GuardrailAction;
+
+        let provider =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let state = app_state_with_custom_rule(&provider.base_url, GuardrailAction::Block).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(guardrail_chat_request("hello"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        provider.stop_upstream().await;
+    }
+
+    #[tokio::test]
+    async fn custom_rule_streaming_output_is_blocked_before_emission() {
+        use litellm_rs::core::guardrails::GuardrailAction;
+
+        let provider =
+            GuardrailTestUpstream::launch_with_output("prefix forbidden-token-xyz suffix").await;
+        let state = app_state_with_custom_rule(&provider.base_url, GuardrailAction::Block).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(json!({
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": true
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(test::read_body(response).await.to_vec())
+            .expect("SSE response should be UTF-8");
+        assert!(body.contains("\"code\":\"guardrail_violation\""), "{body}");
+        assert!(!body.contains("forbidden-token-xyz"), "{body}");
+        provider.stop_upstream().await;
     }
 }

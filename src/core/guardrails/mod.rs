@@ -37,6 +37,7 @@
 //! ```
 
 pub mod config;
+pub mod custom_rules;
 pub mod engine;
 #[cfg(feature = "gateway")]
 pub mod middleware;
