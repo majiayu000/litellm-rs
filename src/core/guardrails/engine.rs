@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use super::config::GuardrailConfig;
+use super::custom_rules::CustomRulesGuardrail;
 use super::openai_moderation::OpenAIModerationGuardrail;
 use super::pii::PIIGuardrail;
 use super::prompt_injection::PromptInjectionGuardrail;
@@ -56,6 +57,11 @@ impl GuardrailEngine {
         {
             info!("Initializing prompt injection guardrail");
             let guardrail = PromptInjectionGuardrail::new(injection_config.clone())?;
+            guardrails.push(Box::new(guardrail));
+        }
+
+        if let Some(guardrail) = CustomRulesGuardrail::try_from_config(&config.custom_rules)? {
+            info!("Initializing custom rules guardrail");
             guardrails.push(Box::new(guardrail));
         }
 
@@ -266,7 +272,7 @@ impl Default for GuardrailEngineBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::guardrails::config::{PIIConfig, PromptInjectionConfig};
+    use crate::core::guardrails::config::{CustomRuleConfig, PIIConfig, PromptInjectionConfig};
     use crate::core::guardrails::traits::Guardrail;
     use crate::core::guardrails::types::GuardrailAction;
 
@@ -450,6 +456,43 @@ mod tests {
         let engine = GuardrailEngine::shared(config).unwrap();
 
         assert!(engine.is_enabled());
+    }
+
+    #[test]
+    fn invalid_custom_rule_regex_fails_engine_construction() {
+        let config = GuardrailConfig {
+            enabled: true,
+            custom_rules: vec![CustomRuleConfig::new("no-secrets", vec!["[".to_string()])],
+            ..Default::default()
+        };
+        let error = match GuardrailEngine::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("invalid custom regex must fail engine construction"),
+        };
+        assert!(error.contains("no-secrets"), "{error}");
+        assert!(error.contains("pattern '['"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn custom_rules_run_through_the_engine() {
+        let config = GuardrailConfig {
+            enabled: true,
+            custom_rules: vec![CustomRuleConfig::new(
+                "deny-token",
+                vec!["forbidden-token-xyz".to_string()],
+            )],
+            ..Default::default()
+        };
+        let engine = GuardrailEngine::new(config).unwrap();
+
+        assert!(engine.guardrail_names().contains(&"custom_rules"));
+        let blocked = engine
+            .check_input("hello forbidden-token-xyz")
+            .await
+            .unwrap();
+        assert!(blocked.is_blocked());
+        let passed = engine.check_input("hello").await.unwrap();
+        assert!(passed.passed);
     }
 
     // Custom guardrail for testing

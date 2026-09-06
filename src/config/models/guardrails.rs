@@ -1,6 +1,7 @@
 //! Gateway-specific defaults and deserialization for content guardrails.
 
 use crate::core::guardrails::config::CustomRuleConfig;
+use crate::core::guardrails::custom_rules::validate_custom_rule_patterns;
 use crate::core::guardrails::{
     GuardrailAction, GuardrailConfig, OpenAIModerationConfig, PIIConfig, PromptInjectionConfig,
 };
@@ -29,9 +30,6 @@ struct GatewayGuardrailsWire {
 }
 
 pub(crate) fn validate_gateway_guardrails(config: &GuardrailConfig) -> Result<(), String> {
-    if !config.custom_rules.is_empty() {
-        return Err("guardrails.custom_rules is not supported by the gateway runtime".to_string());
-    }
     if config.default_action != GuardrailAction::Block {
         return Err(
             "guardrails.default_action is not supported; configure each enabled policy action"
@@ -52,13 +50,19 @@ pub(crate) fn validate_gateway_guardrails(config: &GuardrailConfig) -> Result<()
         || config
             .prompt_injection
             .as_ref()
-            .is_some_and(|policy| policy.enabled && policy.action == GuardrailAction::Mask);
+            .is_some_and(|policy| policy.enabled && policy.action == GuardrailAction::Mask)
+        || config
+            .custom_rules
+            .iter()
+            .any(|rule| rule.enabled && rule.action == GuardrailAction::Mask);
     if unsupported_mask {
         return Err(
             "guardrail action 'mask' is only supported for the PII policy; use block, log, or allow"
                 .to_string(),
         );
     }
+
+    validate_custom_rule_patterns(&config.custom_rules)?;
 
     Ok(())
 }
@@ -133,7 +137,6 @@ mod tests {
     #[test]
     fn gateway_rejects_guardrail_knobs_without_runtime_semantics() {
         for guardrails in [
-            serde_json::json!({"custom_rules": [{"name": "deny", "patterns": ["secret"]}]}),
             serde_json::json!({"default_action": "log"}),
             serde_json::json!({"exclude_paths": ["/v1/chat/completions"]}),
             serde_json::json!({"prompt_injection": {"enabled": true, "action": "mask"}}),
@@ -144,6 +147,62 @@ mod tests {
 
             assert!(Validate::validate(&config).is_err());
         }
+    }
+
+    #[test]
+    fn gateway_accepts_executable_custom_rules() {
+        let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+        value["guardrails"] = serde_json::json!({
+            "custom_rules": [{
+                "name": "deny",
+                "patterns": ["forbidden-token-xyz"],
+                "action": "block"
+            }]
+        });
+        let config: GatewayConfig = serde_json::from_value(value).unwrap();
+
+        assert!(super::validate_gateway_guardrails(&config.guardrails).is_ok());
+        assert!(crate::core::guardrails::GuardrailEngine::new(config.guardrails).is_ok());
+    }
+
+    #[test]
+    fn gateway_rejects_custom_rule_mask_action() {
+        let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+        value["guardrails"] = serde_json::json!({
+            "custom_rules": [{
+                "name": "deny",
+                "patterns": ["forbidden-token-xyz"],
+                "action": "mask"
+            }]
+        });
+        let config: GatewayConfig = serde_json::from_value(value).unwrap();
+
+        let error = super::validate_gateway_guardrails(&config.guardrails)
+            .expect_err("mask custom rules must fail");
+        assert!(error.contains("mask"), "{error}");
+    }
+
+    #[test]
+    fn gateway_rejects_invalid_custom_rule_regex_with_rule_name() {
+        let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+        value["guardrails"] = serde_json::json!({
+            "custom_rules": [{
+                "name": "no-secrets",
+                "patterns": ["["]
+            }]
+        });
+        let config: GatewayConfig = serde_json::from_value(value).unwrap();
+
+        let error = super::validate_gateway_guardrails(&config.guardrails)
+            .expect_err("invalid regex must fail");
+        assert!(error.contains("no-secrets"), "{error}");
+        assert!(error.contains("pattern '['"), "{error}");
+
+        let engine_error = match crate::core::guardrails::GuardrailEngine::new(config.guardrails) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("engine construction must fail closed"),
+        };
+        assert!(engine_error.contains("no-secrets"), "{engine_error}");
     }
 
     #[test]
