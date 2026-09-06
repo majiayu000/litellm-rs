@@ -194,6 +194,23 @@ impl RedisPool {
         self.config.cluster && !self.noop_mode
     }
 
+    /// Open a live connection on the current Tokio runtime.
+    ///
+    /// Budget Lua runs on a dedicated runtime so Actix `current_thread` workers
+    /// can block without parking the multiplexed-connection driver.
+    pub(crate) async fn open_live_connection(&self) -> Result<RedisLiveConnection> {
+        if self.noop_mode {
+            return Err(GatewayError::Storage(
+                "budget redis backend is unavailable".to_string(),
+            ));
+        }
+        if self.config.cluster {
+            Self::connect_cluster(&self.config).await
+        } else {
+            Self::connect_standalone(&self.config).await
+        }
+    }
+
     /// Get a connection from the pool.
     ///
     /// The returned [`RedisConnection`] holds a semaphore permit that limits

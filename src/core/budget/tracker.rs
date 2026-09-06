@@ -475,6 +475,8 @@ pub enum BudgetReservationError {
     ProviderBudgetExceeded,
     ModelBudgetExceeded,
     ActualExceedsReservation,
+    /// Shared Redis/backend was unreachable. Fail closed rather than overspend.
+    BackendUnavailable,
 }
 
 impl From<BudgetAmountError> for BudgetReservationError {

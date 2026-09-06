@@ -4,6 +4,9 @@ use super::config::{
     BudgetLimitKind, BudgetLimitSnapshot, BudgetPersistenceEvent, BudgetPersistenceSender,
     ModelLimitConfig, ProviderLimitConfig,
 };
+use super::distributed::{
+    BudgetLeaseBackend, BudgetLeaseScope, LeaseSnapshot, budget_period_epoch,
+};
 use super::types::{
     BudgetStatus, ModelBudget, ModelUsageStats, ProviderBudget, ProviderUsageStats,
 };
@@ -32,6 +35,7 @@ pub struct ProviderBudgetManager {
     pub(crate) reserved_spend: Arc<DashMap<String, BudgetAmount>>,
     pub(crate) enabled: Arc<std::sync::atomic::AtomicBool>,
     persistence_tx: Option<BudgetPersistenceSender>,
+    pub(crate) backend: BudgetLeaseBackend,
 }
 
 impl Default for ProviderBudgetManager {
@@ -48,6 +52,7 @@ impl ProviderBudgetManager {
             reserved_spend: Arc::new(DashMap::new()),
             enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             persistence_tx: None,
+            backend: BudgetLeaseBackend::InProcess,
         }
     }
     pub fn with_capacity(capacity: usize) -> Self {
@@ -57,11 +62,58 @@ impl ProviderBudgetManager {
             reserved_spend: Arc::new(DashMap::with_capacity(capacity)),
             enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             persistence_tx: None,
+            backend: BudgetLeaseBackend::InProcess,
         }
     }
     pub fn with_persistence(mut self, persistence_tx: BudgetPersistenceSender) -> Self {
         self.persistence_tx = Some(persistence_tx);
         self
+    }
+    #[cfg(feature = "gateway")]
+    pub fn with_redis(mut self, redis: Arc<crate::storage::redis::RedisPool>) -> Self {
+        self.backend = BudgetLeaseBackend::redis(redis);
+        self
+    }
+    #[cfg(all(test, feature = "gateway"))]
+    pub fn with_redis_lease_ttl(
+        mut self,
+        redis: Arc<crate::storage::redis::RedisPool>,
+        lease_ttl_ms: i64,
+    ) -> Self {
+        self.backend = BudgetLeaseBackend::redis_with_ttl(redis, lease_ttl_ms);
+        self
+    }
+
+    pub(crate) fn sync_lease_snapshot(&self, name: &str, snapshot: LeaseSnapshot) {
+        if let Some(mut budget) = self.budgets.get_mut(name) {
+            budget.current_spend = snapshot
+                .committed
+                .checked_add(snapshot.outstanding)
+                .unwrap_or(snapshot.committed)
+                .as_f64();
+            budget.updated_at = chrono::Utc::now();
+        }
+        if snapshot.outstanding == BudgetAmount::zero() {
+            self.reserved_spend.remove(name);
+        } else {
+            self.reserved_spend
+                .insert(name.to_string(), snapshot.outstanding);
+        }
+    }
+
+    fn reset_distributed_lease(&self, name: &str, reset_period: super::types::ResetPeriod) {
+        if !self.backend.is_distributed() {
+            return;
+        }
+        let epoch = budget_period_epoch(reset_period, chrono::Utc::now());
+        match self.backend.reset(BudgetLeaseScope::Provider, name, epoch) {
+            Ok(snapshot) => self.sync_lease_snapshot(name, snapshot),
+            Err(err) => warn!(
+                provider = name,
+                error = ?err,
+                "failed to reset distributed provider budget lease; failing closed on later reserves"
+            ),
+        }
     }
 
     pub(crate) fn send_persistence_event(&self, event: BudgetPersistenceEvent) {
@@ -360,6 +412,7 @@ impl ProviderBudgetManager {
                 "Resetting provider '{}' budget (was ${:.2})",
                 provider, budget.current_spend
             );
+            let reset_period = budget.reset_period;
             budget.reset();
             if let Some(counter) = self.request_counts.get(provider) {
                 counter.count.store(0, Ordering::Relaxed);
@@ -368,6 +421,7 @@ impl ProviderBudgetManager {
 
             let snapshot = self.snapshot_for(&budget);
             drop(budget);
+            self.reset_distributed_lease(provider, reset_period);
             self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
             true
         } else {
@@ -385,6 +439,7 @@ impl ProviderBudgetManager {
                     provider,
                     entry.value().current_spend
                 );
+                let reset_period = entry.value().reset_period;
                 entry.value_mut().reset();
                 if let Some(counter) = self.request_counts.get(&provider) {
                     counter.count.store(0, Ordering::Relaxed);
@@ -393,11 +448,15 @@ impl ProviderBudgetManager {
 
                 let snapshot = self.snapshot_for(entry.value());
                 self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
-                reset_providers.push(provider);
+                reset_providers.push((provider, reset_period));
             }
         }
 
-        reset_providers
+        for (provider, reset_period) in &reset_providers {
+            self.reset_distributed_lease(provider, *reset_period);
+        }
+
+        reset_providers.into_iter().map(|(name, _)| name).collect()
     }
     pub fn provider_count(&self) -> usize {
         self.budgets.len()
@@ -411,6 +470,7 @@ pub struct ModelBudgetManager {
     pub(crate) reserved_spend: Arc<DashMap<String, BudgetAmount>>,
     pub(crate) enabled: Arc<std::sync::atomic::AtomicBool>,
     persistence_tx: Option<BudgetPersistenceSender>,
+    pub(crate) backend: BudgetLeaseBackend,
 }
 
 impl Default for ModelBudgetManager {
@@ -427,11 +487,58 @@ impl ModelBudgetManager {
             reserved_spend: Arc::new(DashMap::new()),
             enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             persistence_tx: None,
+            backend: BudgetLeaseBackend::InProcess,
         }
     }
     pub fn with_persistence(mut self, persistence_tx: BudgetPersistenceSender) -> Self {
         self.persistence_tx = Some(persistence_tx);
         self
+    }
+    #[cfg(feature = "gateway")]
+    pub fn with_redis(mut self, redis: Arc<crate::storage::redis::RedisPool>) -> Self {
+        self.backend = BudgetLeaseBackend::redis(redis);
+        self
+    }
+    #[cfg(all(test, feature = "gateway"))]
+    pub fn with_redis_lease_ttl(
+        mut self,
+        redis: Arc<crate::storage::redis::RedisPool>,
+        lease_ttl_ms: i64,
+    ) -> Self {
+        self.backend = BudgetLeaseBackend::redis_with_ttl(redis, lease_ttl_ms);
+        self
+    }
+
+    pub(crate) fn sync_lease_snapshot(&self, name: &str, snapshot: LeaseSnapshot) {
+        if let Some(mut budget) = self.budgets.get_mut(name) {
+            budget.current_spend = snapshot
+                .committed
+                .checked_add(snapshot.outstanding)
+                .unwrap_or(snapshot.committed)
+                .as_f64();
+            budget.updated_at = chrono::Utc::now();
+        }
+        if snapshot.outstanding == BudgetAmount::zero() {
+            self.reserved_spend.remove(name);
+        } else {
+            self.reserved_spend
+                .insert(name.to_string(), snapshot.outstanding);
+        }
+    }
+
+    fn reset_distributed_lease(&self, name: &str, reset_period: super::types::ResetPeriod) {
+        if !self.backend.is_distributed() {
+            return;
+        }
+        let epoch = budget_period_epoch(reset_period, chrono::Utc::now());
+        match self.backend.reset(BudgetLeaseScope::Model, name, epoch) {
+            Ok(snapshot) => self.sync_lease_snapshot(name, snapshot),
+            Err(err) => warn!(
+                model = name,
+                error = ?err,
+                "failed to reset distributed model budget lease; failing closed on later reserves"
+            ),
+        }
     }
 
     pub(crate) fn send_persistence_event(&self, event: BudgetPersistenceEvent) {
@@ -693,6 +800,7 @@ impl ModelBudgetManager {
                 "Resetting model '{}' budget (was ${:.2})",
                 model, budget.current_spend
             );
+            let reset_period = budget.reset_period;
             budget.reset();
 
             if let Some(counter) = self.request_counts.get(model) {
@@ -702,6 +810,7 @@ impl ModelBudgetManager {
 
             let snapshot = self.snapshot_for(&budget);
             drop(budget);
+            self.reset_distributed_lease(model, reset_period);
             self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
             true
         } else {
@@ -719,6 +828,7 @@ impl ModelBudgetManager {
                     model,
                     entry.value().current_spend
                 );
+                let reset_period = entry.value().reset_period;
                 entry.value_mut().reset();
 
                 if let Some(counter) = self.request_counts.get(&model) {
@@ -728,11 +838,15 @@ impl ModelBudgetManager {
 
                 let snapshot = self.snapshot_for(entry.value());
                 self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
-                reset_models.push(model);
+                reset_models.push((model, reset_period));
             }
         }
 
-        reset_models
+        for (model, reset_period) in &reset_models {
+            self.reset_distributed_lease(model, *reset_period);
+        }
+
+        reset_models.into_iter().map(|(name, _)| name).collect()
     }
     pub fn model_count(&self) -> usize {
         self.budgets.len()

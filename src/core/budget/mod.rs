@@ -65,6 +65,7 @@
 
 mod alerts;
 mod config;
+mod distributed;
 mod manager;
 #[cfg(feature = "gateway")]
 mod middleware;
@@ -74,6 +75,8 @@ mod tracker;
 mod types;
 mod unified_limits;
 
+#[cfg(test)]
+mod distributed_reservation_tests;
 #[cfg(test)]
 mod manager_tests;
 #[cfg(test)]
@@ -161,6 +164,14 @@ impl BudgetAmount {
 
     pub fn saturating_sub(self, other: Self) -> Self {
         Self(self.0.saturating_sub(other.0).max(0))
+    }
+
+    pub(crate) fn as_scaled(self) -> i128 {
+        self.0
+    }
+
+    pub(crate) fn from_scaled(value: i128) -> Self {
+        Self(value.max(0))
     }
 }
 

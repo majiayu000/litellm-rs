@@ -97,6 +97,10 @@ fn key_reservation_error_to_provider_error(
             "budget",
             format!("API key budget '{budget_id}' exceeded"),
         ),
+        BudgetReservationError::BackendUnavailable => ProviderError::provider_unavailable(
+            "budget",
+            format!("budget backend unavailable for API key budget '{budget_id}'"),
+        ),
     }
 }
 

@@ -1,4 +1,5 @@
 use super::config::BudgetPersistenceEvent;
+use super::distributed::{BudgetLeaseScope, budget_period_epoch};
 use super::tracker::BudgetReservationError;
 use super::types::BudgetStatus;
 use super::{
@@ -34,6 +35,36 @@ impl ProviderBudgetManager {
                 provider.to_string(),
                 reserved,
             ));
+        }
+        if self.backend.is_distributed() {
+            let max = BudgetAmount::from_f64(budget.max_budget)?;
+            let period_epoch = budget_period_epoch(budget.reset_period, chrono::Utc::now());
+            let outstanding = self
+                .reserved_spend
+                .get(provider)
+                .map(|value| *value)
+                .unwrap_or_else(BudgetAmount::zero);
+            let seed_committed = BudgetAmount::from_f64(budget.current_spend)
+                .unwrap_or_else(|_| BudgetAmount::zero())
+                .saturating_sub(outstanding);
+            let reservation_reset_at = budget.last_reset_at;
+            drop(budget);
+            let lease = self.backend.reserve(
+                BudgetLeaseScope::Provider,
+                provider,
+                reserved,
+                max,
+                seed_committed,
+                period_epoch,
+            )?;
+            self.sync_lease_snapshot(provider, lease.snapshot);
+            return Ok(ProviderBudgetReservation::tracked(
+                self.clone(),
+                provider.to_string(),
+                reserved,
+                reservation_reset_at,
+            )
+            .with_lease(lease.lease_id, lease.period_epoch));
         }
         if !budget_can_spend(budget.current_spend, budget.max_budget, true, max_amount)? {
             return Err(BudgetReservationError::ProviderBudgetExceeded);
@@ -132,6 +163,18 @@ impl ProviderBudgetManager {
         }
     }
 
+    fn finish_distributed_settle(&self, provider: &str) -> Option<BudgetStatus> {
+        if let Some(counter) = self.request_counts.get(provider) {
+            counter.count.fetch_add(1, Ordering::Relaxed);
+        }
+        let budget = self.budgets.get(provider)?;
+        let status = budget.status();
+        let snapshot = self.snapshot_for(&budget);
+        drop(budget);
+        self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
+        Some(status)
+    }
+
     fn add_provider_outstanding_reservation(
         &self,
         provider: &str,
@@ -193,6 +236,36 @@ impl ModelBudgetManager {
                 model.to_string(),
                 reserved,
             ));
+        }
+        if self.backend.is_distributed() {
+            let max = BudgetAmount::from_f64(budget.max_budget)?;
+            let period_epoch = budget_period_epoch(budget.reset_period, chrono::Utc::now());
+            let outstanding = self
+                .reserved_spend
+                .get(model)
+                .map(|value| *value)
+                .unwrap_or_else(BudgetAmount::zero);
+            let seed_committed = BudgetAmount::from_f64(budget.current_spend)
+                .unwrap_or_else(|_| BudgetAmount::zero())
+                .saturating_sub(outstanding);
+            let reservation_reset_at = budget.last_reset_at;
+            drop(budget);
+            let lease = self.backend.reserve(
+                BudgetLeaseScope::Model,
+                model,
+                reserved,
+                max,
+                seed_committed,
+                period_epoch,
+            )?;
+            self.sync_lease_snapshot(model, lease.snapshot);
+            return Ok(ModelBudgetReservation::tracked(
+                self.clone(),
+                model.to_string(),
+                reserved,
+                reservation_reset_at,
+            )
+            .with_lease(lease.lease_id, lease.period_epoch));
         }
         if !budget_can_spend(budget.current_spend, budget.max_budget, true, max_amount)? {
             return Err(BudgetReservationError::ModelBudgetExceeded);
@@ -291,6 +364,18 @@ impl ModelBudgetManager {
         }
     }
 
+    fn finish_distributed_settle(&self, model: &str) -> Option<BudgetStatus> {
+        if let Some(counter) = self.request_counts.get(model) {
+            counter.count.fetch_add(1, Ordering::Relaxed);
+        }
+        let budget = self.budgets.get(model)?;
+        let status = budget.status();
+        let snapshot = self.snapshot_for(&budget);
+        drop(budget);
+        self.send_persistence_event(BudgetPersistenceEvent::Upsert(snapshot));
+        Some(status)
+    }
+
     fn add_model_outstanding_reservation(
         &self,
         model: &str,
@@ -355,6 +440,8 @@ pub struct ProviderBudgetReservation {
     reservation_reset_at: Option<chrono::DateTime<chrono::Utc>>,
     tracked: bool,
     settled: bool,
+    lease_id: Option<String>,
+    period_epoch: i64,
 }
 
 impl ProviderBudgetReservation {
@@ -371,6 +458,8 @@ impl ProviderBudgetReservation {
             reservation_reset_at,
             tracked: true,
             settled: false,
+            lease_id: None,
+            period_epoch: 0,
         }
     }
 
@@ -386,7 +475,15 @@ impl ProviderBudgetReservation {
             reservation_reset_at: None,
             tracked: false,
             settled: false,
+            lease_id: None,
+            period_epoch: 0,
         }
+    }
+
+    fn with_lease(mut self, lease_id: String, period_epoch: i64) -> Self {
+        self.lease_id = Some(lease_id);
+        self.period_epoch = period_epoch;
+        self
     }
 
     pub fn provider(&self) -> &str {
@@ -406,6 +503,20 @@ impl ProviderBudgetReservation {
         actual_amount: f64,
     ) -> Result<Option<BudgetStatus>, BudgetReservationError> {
         let actual = BudgetAmount::from_f64(actual_amount)?;
+        if let Some(lease_id) = self.lease_id.clone() {
+            let snapshot = self.manager.backend.settle(
+                BudgetLeaseScope::Provider,
+                &self.provider,
+                &lease_id,
+                self.reserved,
+                actual,
+                self.period_epoch,
+            )?;
+            self.manager.sync_lease_snapshot(&self.provider, snapshot);
+            let status = self.manager.finish_distributed_settle(&self.provider);
+            self.settled = true;
+            return Ok(status);
+        }
         let status = if self.tracked {
             self.manager.settle_provider_reservation(
                 &self.provider,
@@ -422,6 +533,26 @@ impl ProviderBudgetReservation {
     }
 
     pub fn cancel(mut self) {
+        if let Some(lease_id) = self.lease_id.clone() {
+            match self.manager.backend.cancel(
+                BudgetLeaseScope::Provider,
+                &self.provider,
+                &lease_id,
+                self.reserved,
+                self.period_epoch,
+            ) {
+                Ok(snapshot) => self.manager.sync_lease_snapshot(&self.provider, snapshot),
+                Err(_) => self.manager.backend.spawn_cancel(
+                    BudgetLeaseScope::Provider,
+                    &self.provider,
+                    lease_id,
+                    self.reserved,
+                    self.period_epoch,
+                ),
+            }
+            self.settled = true;
+            return;
+        }
         if self.tracked {
             self.manager.release_provider_reservation(
                 &self.provider,
@@ -436,11 +567,21 @@ impl ProviderBudgetReservation {
 impl Drop for ProviderBudgetReservation {
     fn drop(&mut self) {
         if self.tracked && !self.settled {
-            self.manager.release_provider_reservation(
-                &self.provider,
-                self.reserved,
-                self.reservation_reset_at,
-            );
+            if let Some(lease_id) = self.lease_id.clone() {
+                self.manager.backend.spawn_cancel(
+                    BudgetLeaseScope::Provider,
+                    &self.provider,
+                    lease_id,
+                    self.reserved,
+                    self.period_epoch,
+                );
+            } else {
+                self.manager.release_provider_reservation(
+                    &self.provider,
+                    self.reserved,
+                    self.reservation_reset_at,
+                );
+            }
         }
     }
 }
@@ -452,6 +593,8 @@ pub struct ModelBudgetReservation {
     reservation_reset_at: Option<chrono::DateTime<chrono::Utc>>,
     tracked: bool,
     settled: bool,
+    lease_id: Option<String>,
+    period_epoch: i64,
 }
 
 impl ModelBudgetReservation {
@@ -468,6 +611,8 @@ impl ModelBudgetReservation {
             reservation_reset_at,
             tracked: true,
             settled: false,
+            lease_id: None,
+            period_epoch: 0,
         }
     }
 
@@ -483,7 +628,15 @@ impl ModelBudgetReservation {
             reservation_reset_at: None,
             tracked: false,
             settled: false,
+            lease_id: None,
+            period_epoch: 0,
         }
+    }
+
+    fn with_lease(mut self, lease_id: String, period_epoch: i64) -> Self {
+        self.lease_id = Some(lease_id);
+        self.period_epoch = period_epoch;
+        self
     }
 
     pub fn model(&self) -> &str {
@@ -503,6 +656,20 @@ impl ModelBudgetReservation {
         actual_amount: f64,
     ) -> Result<Option<BudgetStatus>, BudgetReservationError> {
         let actual = BudgetAmount::from_f64(actual_amount)?;
+        if let Some(lease_id) = self.lease_id.clone() {
+            let snapshot = self.manager.backend.settle(
+                BudgetLeaseScope::Model,
+                &self.model,
+                &lease_id,
+                self.reserved,
+                actual,
+                self.period_epoch,
+            )?;
+            self.manager.sync_lease_snapshot(&self.model, snapshot);
+            let status = self.manager.finish_distributed_settle(&self.model);
+            self.settled = true;
+            return Ok(status);
+        }
         let status = if self.tracked {
             self.manager.settle_model_reservation(
                 &self.model,
@@ -519,6 +686,26 @@ impl ModelBudgetReservation {
     }
 
     pub fn cancel(mut self) {
+        if let Some(lease_id) = self.lease_id.clone() {
+            match self.manager.backend.cancel(
+                BudgetLeaseScope::Model,
+                &self.model,
+                &lease_id,
+                self.reserved,
+                self.period_epoch,
+            ) {
+                Ok(snapshot) => self.manager.sync_lease_snapshot(&self.model, snapshot),
+                Err(_) => self.manager.backend.spawn_cancel(
+                    BudgetLeaseScope::Model,
+                    &self.model,
+                    lease_id,
+                    self.reserved,
+                    self.period_epoch,
+                ),
+            }
+            self.settled = true;
+            return;
+        }
         if self.tracked {
             self.manager.release_model_reservation(
                 &self.model,
@@ -533,11 +720,21 @@ impl ModelBudgetReservation {
 impl Drop for ModelBudgetReservation {
     fn drop(&mut self) {
         if self.tracked && !self.settled {
-            self.manager.release_model_reservation(
-                &self.model,
-                self.reserved,
-                self.reservation_reset_at,
-            );
+            if let Some(lease_id) = self.lease_id.clone() {
+                self.manager.backend.spawn_cancel(
+                    BudgetLeaseScope::Model,
+                    &self.model,
+                    lease_id,
+                    self.reserved,
+                    self.period_epoch,
+                );
+            } else {
+                self.manager.release_model_reservation(
+                    &self.model,
+                    self.reserved,
+                    self.reservation_reset_at,
+                );
+            }
         }
     }
 }
