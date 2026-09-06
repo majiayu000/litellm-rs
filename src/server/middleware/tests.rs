@@ -115,11 +115,13 @@ fn test_is_public_route() {
     assert!(!is_public_route("/healthz"));
     assert!(!is_public_route("/api/users"));
     assert!(!is_public_route("/v1/chat/completions"));
+    assert!(!is_public_route("/admin/openapi.json"));
 }
 
 #[test]
 fn test_is_admin_route() {
     assert!(is_admin_route("/admin/users"));
+    assert!(is_admin_route("/admin/openapi.json"));
     assert!(is_admin_route("/api/admin/config"));
     assert!(!is_admin_route("/api/users"));
     assert!(!is_admin_route("/health"));

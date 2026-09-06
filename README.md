@@ -13,6 +13,7 @@ support policies for runtime-backed APIs and legacy compatibility adapters.
 
 - **60+ runtime-wired providers** - OpenAI, Anthropic, AWS Bedrock, Mistral, Cloudflare, plus 50+ OpenAI-compatible providers via the Tier 1 catalog. See [Provider Support](#provider-support) for the full matrix.
 - **Stable OpenAI-Compatible API** - Versioned inference contract served at `GET /openapi.json`
+- **Admin control-plane OpenAPI** - Auth, keys, teams, budgets, routing, ledger, and provider APIs at `GET /admin/openapi.json`
 - **Measured Performance** - Reproducible [gateway-overhead benchmark methodology](./docs/benchmarks/gateway-overhead.md)
 - **Intelligent Routing** - Load balancing, failover, cost optimization
 - **Gateway Controls** - Default-on prompt-injection guardrails, configured IP access, auth, rate limiting, deterministic caching, metrics, and health endpoints
@@ -45,7 +46,9 @@ satisfies the gateway binary's `storage` requirement.
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
-[`docs/openapi/inference.json`](./docs/openapi/inference.json).
+[`docs/openapi/inference.json`](./docs/openapi/inference.json). The admin
+control-plane contract is served at `GET /admin/openapi.json` (admin-authenticated)
+from [`docs/openapi/admin.json`](./docs/openapi/admin.json).
 
 ## Supported Product Surfaces
 
