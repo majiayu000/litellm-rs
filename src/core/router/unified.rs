@@ -4,6 +4,9 @@
 //! routing strategies, and intelligent request routing across multiple providers.
 
 use super::admission::AdmissionBackend;
+#[cfg(feature = "gateway")]
+use super::circuit::apply_circuit_snapshot;
+use super::circuit::{CircuitBackend, CircuitObserve, CircuitWrite};
 use super::config::RouterConfig;
 use super::deployment::{Deployment, DeploymentId, LegacySelectorMetadata, current_timestamp};
 use super::error::CooldownReason;
@@ -338,6 +341,8 @@ pub struct Router {
     pub(crate) health_probe_wakeup: Arc<tokio::sync::Notify>,
     /// Shared admission backend (local atomics, or Redis when configured).
     pub(crate) admission: AdmissionBackend,
+    /// Shared circuit-breaker backend (local atomics, or Redis when configured).
+    pub(crate) circuit: CircuitBackend,
 }
 
 impl Router {
@@ -355,6 +360,7 @@ impl Router {
             health_probe_tasks: Mutex::new(HashMap::new()),
             health_probe_wakeup: Arc::new(tokio::sync::Notify::new()),
             admission: AdmissionBackend::default(),
+            circuit: CircuitBackend::default(),
         }
     }
 
@@ -365,9 +371,22 @@ impl Router {
         self
     }
 
+    /// Attach Redis so deployment circuit-breaker cooldown is shared across replicas.
+    #[cfg(feature = "gateway")]
+    pub fn with_circuit_redis(mut self, pool: Arc<crate::storage::redis::RedisPool>) -> Self {
+        self.circuit = CircuitBackend::redis(pool);
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn with_unavailable_admission(mut self) -> Self {
         self.admission = AdmissionBackend::Unavailable;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_unavailable_circuit(mut self, allow_degraded: bool) -> Self {
+        self.circuit = CircuitBackend::Unavailable { allow_degraded };
         self
     }
 
@@ -512,8 +531,7 @@ impl Router {
 
         for id in deployment_ids.iter() {
             if let Some(deployment) = snapshot.deployments.get(id.as_str())
-                && deployment.is_healthy()
-                && !deployment.is_in_cooldown()
+                && self.deployment_is_selectable(deployment)
             {
                 healthy.push(id.clone());
             }
@@ -547,7 +565,7 @@ impl Router {
                 continue;
             }
 
-            if deployment.is_in_cooldown() || !deployment.is_healthy() {
+            if !self.deployment_is_selectable(deployment) {
                 continue;
             }
 
@@ -633,8 +651,15 @@ impl Router {
         latency_us: u64,
     ) {
         deployment.record_success(tokens, latency_us);
+        match self.circuit.record_success(deployment, &self.config) {
+            CircuitWrite::Local => self.promote_from_local_success(deployment),
+            CircuitWrite::StrictUnavailable => {}
+            #[cfg(feature = "gateway")]
+            CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
+        }
+    }
 
-        // Promote Degraded -> Healthy once enough consecutive successes
+    fn promote_from_local_success(&self, deployment: &Deployment) {
         let current_health = deployment.state.health.load(Relaxed);
         if current_health == super::deployment::HealthStatus::Degraded as u8 {
             let consec = deployment.state.consecutive_successes.load(Relaxed);
@@ -657,23 +682,10 @@ impl Router {
     }
 
     pub(crate) fn record_failure_for_deployment(&self, deployment: &Deployment) {
-        let minute = deployment.record_failure_with_minute_counters();
-        let fails = minute.failures;
-        let successes_this_minute = minute.rpm;
-        let total_this_minute = successes_this_minute + fails as u64;
-        if fails >= self.config.allowed_fails
-            && total_this_minute >= self.config.min_requests as u64
-        {
-            tracing::info!(
-                deployment_id = %deployment.id,
-                model = %deployment.model_name,
-                reason = "consecutive_failures",
-                cooldown_secs = self.config.cooldown_time_secs,
-                fails_this_minute = fails,
-                "deployment entering cooldown"
-            );
-            deployment.enter_cooldown(self.config.cooldown_time_secs);
-        }
+        self.record_failure_with_reason_for_deployment(
+            deployment,
+            CooldownReason::ConsecutiveFailures,
+        );
     }
 
     /// Record a failed request with a specific reason
@@ -689,6 +701,24 @@ impl Router {
         deployment: &Deployment,
         reason: CooldownReason,
     ) {
+        match self
+            .circuit
+            .record_failure(deployment, &self.config, reason)
+        {
+            CircuitWrite::Local => self.record_local_failure(deployment, reason),
+            CircuitWrite::StrictUnavailable => {
+                let _ = deployment.record_failure_with_minute_counters();
+                deployment.enter_cooldown(self.config.cooldown_time_secs);
+            }
+            #[cfg(feature = "gateway")]
+            CircuitWrite::Applied(state) => {
+                let _ = deployment.record_failure_with_minute_counters();
+                apply_circuit_snapshot(deployment, &state);
+            }
+        }
+    }
+
+    fn record_local_failure(&self, deployment: &Deployment, reason: CooldownReason) {
         let minute = deployment.record_failure_with_minute_counters();
 
         let should_cooldown = match reason {
@@ -722,6 +752,18 @@ impl Router {
                 "deployment entering cooldown"
             );
             deployment.enter_cooldown(self.config.cooldown_time_secs);
+        }
+    }
+
+    pub(crate) fn deployment_is_selectable(&self, deployment: &Deployment) -> bool {
+        match self.circuit.observe(deployment, &self.config) {
+            CircuitObserve::UseLocal => !deployment.is_in_cooldown() && deployment.is_healthy(),
+            CircuitObserve::Blocked => false,
+            #[cfg(feature = "gateway")]
+            CircuitObserve::Shared(state) => {
+                apply_circuit_snapshot(deployment, &state);
+                !state.blocks_selection() && deployment.is_healthy()
+            }
         }
     }
 
