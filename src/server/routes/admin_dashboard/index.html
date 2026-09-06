@@ -11,6 +11,7 @@
   <script src="/admin/dashboard/request-ledger.js" defer></script>
   <script src="/admin/dashboard/budget.js" defer></script>
   <script src="/admin/dashboard/providers.js" defer></script>
+  <script src="/admin/dashboard/routing-policy.js" defer></script>
   <script src="/admin/dashboard/app.js" defer></script>
 </head>
 <body>
@@ -60,6 +61,8 @@
                 aria-controls="health-panel" aria-selected="false">Provider health</button>
         <button class="tab" type="button" data-view="routing"
                 aria-controls="routing-panel" aria-selected="false">Routing inventory</button>
+        <button class="tab" type="button" data-view="routing-policy"
+                aria-controls="routing-policy-panel" aria-selected="false">Routing policy</button>
         <button class="tab" type="button" data-view="request-logs"
                 aria-controls="request-logs-panel" aria-selected="false">Request logs</button>
       </nav>
@@ -502,6 +505,98 @@
         <p id="routing-unavailable-empty" class="empty-state" hidden>
           No configured providers are missing from routing.
         </p>
+      </section>
+
+      <section id="routing-policy-panel" class="panel" aria-labelledby="routing-policy-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Runtime configuration</p>
+            <h2 id="routing-policy-title">Routing policy</h2>
+            <p>Edit strategy, circuit breaker, load balancer, aliases, and
+              named provider weight/priority. Unknown fields are not sent.</p>
+          </div>
+          <button id="refresh-routing-policy" class="secondary" type="button">Refresh</button>
+        </div>
+
+        <p id="routing-policy-generation" class="health-summary">Active revision: —</p>
+        <p id="routing-policy-notice" class="health-notice" aria-live="polite"></p>
+
+        <form id="routing-policy-form">
+          <div class="form-grid">
+            <label for="routing-policy-strategy">Strategy</label>
+            <select id="routing-policy-strategy" name="strategy">
+              <option value="simple_shuffle">simple_shuffle</option>
+              <option value="least_busy">least_busy</option>
+              <option value="usage_based">usage_based</option>
+              <option value="latency_based">latency_based</option>
+              <option value="priority_based">priority_based</option>
+              <option value="rate_limit_aware">rate_limit_aware</option>
+              <option value="round_robin">round_robin</option>
+            </select>
+            <label for="routing-policy-failure-threshold">Failure threshold</label>
+            <input id="routing-policy-failure-threshold" name="failure_threshold"
+                   type="number" min="0" step="1">
+            <label for="routing-policy-recovery-timeout">Recovery timeout</label>
+            <input id="routing-policy-recovery-timeout" name="recovery_timeout"
+                   type="number" min="0" step="1">
+            <label for="routing-policy-min-requests">Minimum requests</label>
+            <input id="routing-policy-min-requests" name="min_requests"
+                   type="number" min="0" step="1">
+            <label for="routing-policy-success-threshold">Success threshold</label>
+            <input id="routing-policy-success-threshold" name="success_threshold"
+                   type="number" min="0" step="1">
+            <label class="checkbox-row" for="routing-policy-health-check-enabled">
+              <input id="routing-policy-health-check-enabled" name="health_check_enabled"
+                     type="checkbox" checked>
+              Health checks enabled
+            </label>
+            <label class="checkbox-row" for="routing-policy-sticky-sessions">
+              <input id="routing-policy-sticky-sessions" name="sticky_sessions"
+                     type="checkbox">
+              Sticky sessions
+            </label>
+            <label for="routing-policy-session-timeout">Session timeout</label>
+            <input id="routing-policy-session-timeout" name="session_timeout"
+                   type="number" min="0" step="1">
+          </div>
+
+          <h3>Model aliases</h3>
+          <div class="table-wrap">
+            <table>
+              <caption>Name to canonical model target</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Alias</th>
+                  <th scope="col">Target</th>
+                  <th scope="col">Action</th>
+                </tr>
+              </thead>
+              <tbody id="routing-policy-aliases-body"></tbody>
+            </table>
+          </div>
+          <button id="routing-policy-add-alias" class="secondary" type="button">
+            Add alias
+          </button>
+
+          <h3>Provider weight and priority</h3>
+          <div class="table-wrap">
+            <table>
+              <caption>Named providers from the live policy</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Provider</th>
+                  <th scope="col">Weight</th>
+                  <th scope="col">Priority</th>
+                </tr>
+              </thead>
+              <tbody id="routing-policy-providers-body"></tbody>
+            </table>
+          </div>
+          <p id="routing-policy-providers-empty" class="empty-state" hidden>
+            No named providers in the current policy.
+          </p>
+          <button type="submit">Apply routing policy</button>
+        </form>
       </section>
 
       <section id="request-logs-panel" class="panel" aria-labelledby="request-logs-title" hidden>

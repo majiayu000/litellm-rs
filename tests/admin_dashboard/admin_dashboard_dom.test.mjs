@@ -39,6 +39,13 @@ const providersSource = await readFile(
   new URL("../../src/server/routes/admin_dashboard/providers.js", import.meta.url),
   "utf8",
 );
+const routingPolicySource = await readFile(
+  new URL(
+    "../../src/server/routes/admin_dashboard/routing_policy.js",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const immediate = () => new Promise((resolve) => setImmediate(resolve));
 async function settle(turns = 8) {
   for (let index = 0; index < turns; index += 1) {
@@ -108,6 +115,25 @@ function dashboard(options = {}) {
       has_more: false,
     },
     providerList = [],
+    routingPolicy = {
+      generation: 1,
+      policy: {
+        strategy: "round_robin",
+        circuit_breaker: {
+          failure_threshold: 5,
+          recovery_timeout: 60,
+          min_requests: 10,
+          success_threshold: 3,
+        },
+        load_balancer: {
+          health_check_enabled: true,
+          sticky_sessions: false,
+          session_timeout: 3600,
+        },
+        model_aliases: {},
+        providers: {},
+      },
+    },
     handler,
   } = options;
   const htmlWithoutScript = indexHtml
@@ -125,6 +151,10 @@ function dashboard(options = {}) {
     )
     .replace('<script src="/admin/dashboard/budget.js" defer></script>', "")
     .replace('<script src="/admin/dashboard/providers.js" defer></script>', "")
+    .replace(
+      '<script src="/admin/dashboard/routing-policy.js" defer></script>',
+      "",
+    )
     .replace('<script src="/admin/dashboard/app.js" defer></script>', "");
   const dom = new JSDOM(htmlWithoutScript, {
     url: "https://gateway.test/admin/dashboard",
@@ -251,6 +281,9 @@ function dashboard(options = {}) {
         apiResponse({ providers: providerList, generation: 1 }),
       );
     }
+    if (url.pathname === "/admin/routing/policy" && call.method === "GET") {
+      return Promise.resolve(apiResponse(routingPolicy));
+    }
     const usageMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/usage$/);
     if (usageMatch && call.method === "GET") {
       const result = usageByTeam.get(decodeURIComponent(usageMatch[1]));
@@ -267,6 +300,7 @@ function dashboard(options = {}) {
   window.eval(requestLedgerSource);
   window.eval(budgetSource);
   window.eval(providersSource);
+  window.eval(routingPolicySource);
   window.eval(appSource);
   return context;
 }
@@ -344,6 +378,17 @@ async function openProviders(context) {
   await waitFor(
     () => window.document.getElementById("status-region").textContent === "Providers loaded.",
     "provider view did not load",
+  );
+}
+
+async function openRoutingPolicy(context) {
+  const { window } = context;
+  window.document.querySelector('[data-view="routing-policy"]').click();
+  await waitFor(
+    () =>
+      window.document.getElementById("status-region").textContent ===
+      "Routing policy loaded.",
+    "routing policy view did not load",
   );
 }
 
@@ -2025,3 +2070,239 @@ test("B23 a late provider mutation after logout cannot restore protected rows", 
   assert.equal(window.document.getElementById("keys-panel").hidden, false);
   assert.equal(window.document.getElementById("providers-panel").hidden, true);
 });
+
+function sampleRoutingPolicy(overrides = {}) {
+  return {
+    generation: overrides.generation ?? 4,
+    policy: {
+      strategy: "least_busy",
+      circuit_breaker: {
+        failure_threshold: 5,
+        recovery_timeout: 60,
+        min_requests: 10,
+        success_threshold: 3,
+      },
+      load_balancer: {
+        health_check_enabled: true,
+        sticky_sessions: false,
+        session_timeout: 3600,
+      },
+      model_aliases: { "prod-chat": "gpt-4o" },
+      providers: { openai: { weight: 1, priority: 0 } },
+      ...(overrides.policy || {}),
+    },
+  };
+}
+
+test("B24 routing policy load shows generation and a successful PUT updates it", { concurrency: false }, async (t) => {
+  let policyGets = 0;
+  const puts = [];
+  let current = sampleRoutingPolicy();
+  const context = dashboard({
+    routingPolicy: current,
+    handler(call) {
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "GET") {
+        policyGets += 1;
+        return apiResponse(current);
+      }
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "PUT") {
+        const payload = JSON.parse(call.init.body);
+        puts.push(payload);
+        current = {
+          generation: current.generation + 1,
+          policy: {
+            ...current.policy,
+            strategy: payload.strategy,
+            circuit_breaker: payload.circuit_breaker,
+            load_balancer: payload.load_balancer,
+            model_aliases: payload.model_aliases,
+            providers: payload.providers || current.policy.providers,
+          },
+        };
+        return apiResponse(current);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  assert.equal(policyGets, 0, "sign-in must not load the unopened routing policy tab");
+  await openRoutingPolicy(context);
+  assert.equal(policyGets, 1);
+  window.document.querySelector('[data-view="routing-policy"]').click();
+  await settle();
+  assert.equal(policyGets, 1, "reopening the loaded tab must not reload routing policy");
+  assert.equal(
+    window.document.getElementById("routing-policy-generation").textContent,
+    "Active revision: 4",
+  );
+  assert.equal(window.document.getElementById("routing-policy-strategy").value, "least_busy");
+  assert.equal(
+    window.document.querySelector('#routing-policy-aliases-body input[aria-label="Alias target"]').value,
+    "gpt-4o",
+  );
+
+  window.document.getElementById("routing-policy-strategy").value = "round_robin";
+  window.document.querySelector('#routing-policy-providers-body input[data-field="weight"]').value = "2";
+  const save = submit(window, window.document.getElementById("routing-policy-form"));
+  await waitFor(() => !save.disabled, "routing policy put did not settle");
+  assert.equal(puts.length, 1);
+  assert.deepEqual(Object.keys(puts[0]).sort(), [
+    "circuit_breaker",
+    "load_balancer",
+    "model_aliases",
+    "providers",
+    "strategy",
+  ]);
+  assert.equal(puts[0].strategy, "round_robin");
+  assert.equal(puts[0].model_aliases["prod-chat"], "gpt-4o");
+  assert.equal(puts[0].providers.openai.weight, 2);
+  assert.equal(puts[0].providers.openai.priority, 0);
+  assert.equal(puts[0].generation, undefined);
+  assert.equal(
+    window.document.getElementById("routing-policy-generation").textContent,
+    "Active revision: 5",
+  );
+  assert.equal(window.document.getElementById("routing-policy-strategy").value, "round_robin");
+  assert.match(
+    window.document.getElementById("status-region").textContent,
+    /routing policy updated/i,
+  );
+});
+
+test("B25 routing policy validation errors keep the draft and previous generation", { concurrency: false }, async (t) => {
+  let policyGets = 0;
+  const context = dashboard({
+    routingPolicy: sampleRoutingPolicy(),
+    handler(call) {
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "GET") {
+        policyGets += 1;
+        return apiResponse(sampleRoutingPolicy());
+      }
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "PUT") {
+        return apiResponse("Model alias 'prod-chat' references unknown model 'missing-model-1273'", 400);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openRoutingPolicy(context);
+  const target = window.document.querySelector(
+    '#routing-policy-aliases-body input[aria-label="Alias target"]',
+  );
+  target.value = "missing-model-1273";
+  const save = submit(window, window.document.getElementById("routing-policy-form"));
+  await waitFor(() => !save.disabled, "rejected routing policy put did not settle");
+
+  assert.equal(policyGets, 1, "a rejected mutation must not refresh the policy");
+  assert.equal(target.value, "missing-model-1273");
+  assert.equal(
+    window.document.getElementById("routing-policy-generation").textContent,
+    "Active revision: 4",
+  );
+  assert.match(
+    window.document.getElementById("routing-policy-notice").textContent,
+    /previous runtime revision is still active/i,
+  );
+  assert.match(
+    window.document.getElementById("error-region").textContent,
+    /unknown model/i,
+  );
+  assert.match(
+    window.document.getElementById("status-region").textContent,
+    /previous runtime revision is still active/i,
+  );
+});
+
+test("B26 routing policy conflicts keep the draft and previous generation", { concurrency: false }, async (t) => {
+  const context = dashboard({
+    routingPolicy: sampleRoutingPolicy(),
+    handler(call) {
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "PUT") {
+        return apiResponse("Routing policy conflict: another revision is active", 409);
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openRoutingPolicy(context);
+  window.document.getElementById("routing-policy-strategy").value = "latency_based";
+  const save = submit(window, window.document.getElementById("routing-policy-form"));
+  await waitFor(() => !save.disabled, "conflicted routing policy put did not settle");
+
+  assert.equal(window.document.getElementById("routing-policy-strategy").value, "latency_based");
+  assert.equal(
+    window.document.getElementById("routing-policy-generation").textContent,
+    "Active revision: 4",
+  );
+  assert.match(
+    window.document.getElementById("error-region").textContent,
+    /another revision is active/i,
+  );
+  assert.match(
+    window.document.getElementById("routing-policy-notice").textContent,
+    /previous runtime revision is still active/i,
+  );
+});
+
+test("B27 a late routing policy PUT after logout cannot restore the draft", { concurrency: false }, async (t) => {
+  const latePut = deferred();
+  let policyGets = 0;
+  const context = dashboard({
+    routingPolicy: sampleRoutingPolicy(),
+    handler(call) {
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "GET") {
+        policyGets += 1;
+      }
+      if (call.url.pathname === "/admin/routing/policy" && call.method === "PUT") {
+        return latePut.promise;
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  const { window } = context;
+  await openRoutingPolicy(context);
+  window.document.querySelector(
+    '#routing-policy-aliases-body input[aria-label="Alias target"]',
+  ).value = "must-not-return";
+  submit(window, window.document.getElementById("routing-policy-form"));
+  await waitFor(
+    () => context.calls.some((call) => call.url.pathname === "/admin/routing/policy" && call.method === "PUT"),
+    "late routing policy put was not pending",
+  );
+  window.document.getElementById("sign-out").click();
+  latePut.resolve(
+    apiResponse({
+      generation: 99,
+      policy: {
+        strategy: "usage_based",
+        circuit_breaker: { failure_threshold: 1, recovery_timeout: 1, min_requests: 1, success_threshold: 1 },
+        load_balancer: { health_check_enabled: false, sticky_sessions: true, session_timeout: 1 },
+        model_aliases: { restored: "must-not-return" },
+        providers: { openai: { weight: 9, priority: 9 } },
+      },
+    }),
+  );
+  await settle(12);
+
+  assert.equal(policyGets, 1, "a stale mutation must not trigger a follow-up policy request");
+  assert.equal(window.document.querySelectorAll("#routing-policy-aliases-body tr").length, 0);
+  assert.equal(window.document.querySelectorAll("#routing-policy-providers-body tr").length, 0);
+  assert.equal(
+    window.document.getElementById("routing-policy-generation").textContent,
+    "Active revision: —",
+  );
+  assert.doesNotMatch(window.document.body.textContent, /must-not-return/);
+  await signIn(context);
+  assert.equal(policyGets, 1, "reauthentication on Keys must not reload routing policy");
+  assert.equal(window.document.getElementById("keys-panel").hidden, false);
+  assert.equal(window.document.getElementById("routing-policy-panel").hidden, true);
+});
+
