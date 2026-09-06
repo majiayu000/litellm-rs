@@ -205,6 +205,22 @@ impl FallbackConfig {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Replace every fallback map with the maps from `other`.
+    pub fn overwrite(&self, other: Self) {
+        replace_fallback_map(&self.general, other.general);
+        replace_fallback_map(&self.context_window, other.context_window);
+        replace_fallback_map(&self.content_policy, other.content_policy);
+        replace_fallback_map(&self.rate_limit, other.rate_limit);
+    }
+}
+
+fn replace_fallback_map(
+    dst: &RwLock<HashMap<String, Vec<String>>>,
+    src: RwLock<HashMap<String, Vec<String>>>,
+) {
+    *dst.write().unwrap_or_else(|e| e.into_inner()) =
+        src.into_inner().unwrap_or_else(|e| e.into_inner());
 }
 
 #[cfg(test)]
@@ -241,6 +257,23 @@ mod tests {
         assert_ne!(FallbackType::General, FallbackType::ContextWindow);
         assert_ne!(FallbackType::ContextWindow, FallbackType::ContentPolicy);
         assert_ne!(FallbackType::ContentPolicy, FallbackType::RateLimit);
+    }
+
+    #[test]
+    fn overwrite_replaces_every_fallback_map() {
+        let config = FallbackConfig::new().add_general("gpt-4o", vec!["old".to_string()]);
+        config.overwrite(
+            FallbackConfig::new().add_content_policy("gpt-4o", vec!["safe".to_string()]),
+        );
+        assert!(
+            config
+                .get_fallbacks_for_type("gpt-4o", FallbackType::General)
+                .is_empty()
+        );
+        assert_eq!(
+            config.get_fallbacks_for_type("gpt-4o", FallbackType::ContentPolicy),
+            vec!["safe".to_string()]
+        );
     }
 
     // ==================== ExecutionResult Tests ====================

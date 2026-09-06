@@ -53,6 +53,10 @@ impl StreamingDeploymentLease {
         self.release();
     }
 
+    pub(super) fn deployment_id(&self) -> &str {
+        self.deployment.id.as_str()
+    }
+
     fn release(&mut self) {
         if !self.finalized {
             UnifiedRouter::release_selected_deployment(&self.deployment);
@@ -301,6 +305,28 @@ where
     F: Fn(Provider, String, String) -> Fut + Clone,
     Fut: std::future::Future<Output = Result<T, ProviderError>>,
 {
+    execute_stream_with_selected_deployment_matching(
+        router,
+        requested_model,
+        capability,
+        |_| true,
+        operation,
+    )
+    .await
+}
+
+pub(super) async fn execute_stream_with_selected_deployment_matching<T, F, Fut, P>(
+    router: Arc<UnifiedRouter>,
+    requested_model: &str,
+    capability: ProviderCapability,
+    is_candidate: P,
+    operation: F,
+) -> Result<(T, StreamingDeploymentLease), GatewayError>
+where
+    F: Fn(Provider, String, String) -> Fut + Clone,
+    Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    P: Fn(&Deployment) -> bool,
+{
     let max_attempts = router.config().num_retries + 1;
     let mut attempt = 1;
     // Selection failures control retry timing but must not replace the most
@@ -323,6 +349,7 @@ where
             |deployment| {
                 !excluded_budget_deployments.contains(deployment.id.as_str())
                     && !tried_deployments.contains(deployment.id.as_str())
+                    && is_candidate(deployment)
             },
         ) {
             Ok(lease) => lease,
@@ -330,7 +357,10 @@ where
                 match router.select_deployment_lease_for_capability_matching(
                     requested_model,
                     &capability,
-                    |deployment| !excluded_budget_deployments.contains(deployment.id.as_str()),
+                    |deployment| {
+                        !excluded_budget_deployments.contains(deployment.id.as_str())
+                            && is_candidate(deployment)
+                    },
                 ) {
                     Ok(lease) => {
                         // Opening the full pool starts a new sweep. Forget the

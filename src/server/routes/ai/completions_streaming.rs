@@ -8,13 +8,15 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::core::providers::ProviderError;
+use crate::core::providers::{Provider, ProviderError};
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
 use crate::server::state::AppState;
+use std::collections::HashSet;
 
 use super::super::budgeted::{ApiKeyBudgetPolicy, SettledStream, run_stream};
 use super::super::callbacks::CallbackLifecycle;
+use super::super::output_fallback;
 use super::super::{chat, openai_errors, spend, token_policy};
 use super::completions_sse::send_stream_error;
 use super::{CompletionAdapterRequest, chunk_has_text_delta, completion_chunk_from_core};
@@ -76,11 +78,8 @@ pub(super) async fn handle_streaming_completion(
     let api_key_budget_id = context.api_key_budget_id();
     let callback_for_execution = callback.clone();
 
-    match run_stream(
-        state.unified_router().clone(),
-        &requested_model,
-        ProviderCapability::ChatCompletionStream,
-        move |provider, selected_model, _selected_deployment_id| {
+    let start_stream =
+        move |provider: Provider, selected_model: String, _selected_deployment_id: String| {
             let core_request = core_request.clone();
             let context = Arc::clone(&context_for_execution);
             let original_request = Arc::clone(&request_for_execution);
@@ -160,248 +159,345 @@ pub(super) async fn handle_streaming_completion(
                 };
                 Ok((stream, settlement))
             }
-        },
+        };
+    let fallback_models = output_fallback::content_policy_fallback_models(
+        state.unified_router().as_ref(),
+        &requested_model,
+    );
+    let router_for_stream = state.unified_router().clone();
+    let state_for_stream = state.clone();
+    match run_stream(
+        router_for_stream.clone(),
+        &requested_model,
+        ProviderCapability::ChatCompletionStream,
+        start_stream.clone(),
     )
     .await
     {
-        Ok(((mut stream, mut settlement), lease)) => {
+        Ok(((stream, settlement), lease)) => {
             let (tx, rx) = mpsc::channel::<Bytes>(8);
             let idle_timeout_secs = state.config.load().gateway.server.stream_idle_timeout;
             let include_usage = adapter_request.include_usage;
-            let mut echo_prefix = adapter_request.echo.then_some(adapter_request.prompt);
+            let original_echo = adapter_request.echo.then_some(adapter_request.prompt);
             let guardrails = Arc::clone(&state.guardrails());
-            let decision_sink = crate::server::guardrails::GuardrailDecisionSink::from_state(
-                state,
-                Some(settlement.model.as_str()),
-                Some(settlement.provider.as_str()),
-                None,
-            );
 
             tokio::spawn(async move {
-                let mut lease = Some(lease);
-                let mut output_guardrail =
-                    super::super::stream_output_guardrail::StreamOutputGuardrail::new(guardrails)
-                        .with_decision_sink(decision_sink);
-                let mut tokens_used = 0_u64;
-                let mut final_usage = None;
-                let mut saw_upstream_output = false;
-                macro_rules! settle_if_chargeable {
-                    () => {
-                        if final_usage.is_some() || saw_upstream_output {
-                            settlement.record_disconnect(final_usage.as_ref()).await;
-                        }
-                    };
-                }
-                macro_rules! return_after_guardrail_error {
-                    ($error:expr) => {{
-                        let guardrail_error = $error;
-                        send_stream_error(
-                            &tx,
-                            guardrail_error.message(),
-                            guardrail_error.error_type(),
-                            guardrail_error.code(),
+                let mut excluded = HashSet::new();
+                let mut original_deployment = None;
+                let mut fallback_models = fallback_models.into_iter();
+                let mut current = Some(((stream, settlement), lease));
+                'fallback: while let Some(((mut stream, mut settlement), lease)) = current.take() {
+                    let deployment_id = lease.deployment_id().to_string();
+                    let sink = crate::server::guardrails::GuardrailDecisionSink::from_state(
+                        &state_for_stream,
+                        Some(settlement.model.as_str()),
+                        Some(settlement.provider.as_str()),
+                        Some(deployment_id.as_str()),
+                    )
+                    .with_fallback_metadata(
+                        original_deployment.as_deref(),
+                        original_deployment.as_ref().map(|_| deployment_id.as_str()),
+                    );
+                    let mut lease = Some(lease);
+                    let mut output_guardrail =
+                        super::super::stream_output_guardrail::StreamOutputGuardrail::new(
+                            Arc::clone(&guardrails),
                         )
-                        .await;
-                        drop(lease.take());
-                        callback.fail(guardrail_error.message(), "guardrail_output");
-                        settle_if_chargeable!();
-                        return;
-                    }};
-                }
-                macro_rules! flush_guardrail {
-                    () => {
-                        match output_guardrail.flush_to_until_closed(&tx).await {
-                            Ok(Some(())) => {}
+                        .with_decision_sink(sink);
+                    let mut echo_prefix = original_echo.clone();
+                    #[allow(unused_assignments)]
+                    let mut committed = false;
+                    let mut retry_block = None;
+                    let mut tokens_used = 0_u64;
+                    let mut final_usage = None;
+                    let mut saw_upstream_output = false;
+                    macro_rules! settle_if_chargeable {
+                        () => {
+                            if final_usage.is_some() || saw_upstream_output {
+                                settlement.record_disconnect(final_usage.as_ref()).await;
+                            }
+                        };
+                    }
+                    macro_rules! return_after_guardrail_error {
+                        ($error:expr) => {{
+                            let guardrail_error = $error;
+                            if output_fallback::allow_uncommitted_stream_fallback(
+                                guardrail_error,
+                                committed,
+                            ) {
+                                if let Some(lease) = lease.take() {
+                                    retry_block = Some(lease.deployment_id().to_string());
+                                    drop(lease);
+                                }
+                                break;
+                            }
+                            send_stream_error(
+                                &tx,
+                                guardrail_error.message(),
+                                guardrail_error.error_type(),
+                                guardrail_error.code(),
+                            )
+                            .await;
+                            drop(lease.take());
+                            callback.fail(guardrail_error.message(), "guardrail_output");
+                            settle_if_chargeable!();
+                            return;
+                        }};
+                    }
+                    macro_rules! flush_guardrail {
+                        () => {
+                            match output_guardrail.flush_to_until_closed(&tx).await {
+                                Ok(Some(_)) => {}
+                                Ok(None) => {
+                                    callback.fail("client disconnected", "client_disconnect");
+                                    settle_if_chargeable!();
+                                    return;
+                                }
+                                Err(error) => return_after_guardrail_error!(error),
+                            }
+                        };
+                    }
+
+                    loop {
+                        let chunk_result = if idle_timeout_secs == 0 {
+                            tokio::select! {
+                                biased;
+                                _ = tx.closed() => {
+                                    callback.fail("client disconnected", "client_disconnect");
+                                    settle_if_chargeable!();
+                                    return;
+                                }
+                                result = stream.next() => result,
+                            }
+                        } else {
+                            let timed_result = tokio::select! {
+                                biased;
+                                _ = tx.closed() => {
+                                    callback.fail("client disconnected", "client_disconnect");
+                                    settle_if_chargeable!();
+                                    return;
+                                }
+                                result = tokio::time::timeout(
+                                    Duration::from_secs(idle_timeout_secs),
+                                    stream.next(),
+                                ) => result,
+                            };
+                            match timed_result {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    flush_guardrail!();
+                                    warn!(
+                                        "Completion SSE stream idle timeout after {}s",
+                                        idle_timeout_secs
+                                    );
+                                    send_stream_error(
+                                        &tx,
+                                        "Stream idle timeout",
+                                        "server_error",
+                                        "timeout",
+                                    )
+                                    .await;
+                                    if let Some(lease) = lease.take() {
+                                        let error = ProviderError::timeout(
+                                            "router",
+                                            format!(
+                                                "stream idle timeout after {}s",
+                                                idle_timeout_secs
+                                            ),
+                                        );
+                                        lease.finish_failure(&error);
+                                    }
+                                    callback.fail(
+                                        format!("stream idle timeout after {}s", idle_timeout_secs),
+                                        "timeout",
+                                    );
+                                    settle_if_chargeable!();
+                                    return;
+                                }
+                            }
+                        };
+
+                        let Some(chunk_result) = chunk_result else {
+                            break;
+                        };
+
+                        let (output_deltas, bytes) = match chunk_result {
+                            Ok(chunk) => {
+                                let has_candidate_output =
+                                    spend::stream_chunk_has_candidate_output(&chunk);
+                                if let Some(usage) = &chunk.usage {
+                                    final_usage = Some(usage.clone());
+                                }
+                                tokens_used = final_usage
+                                    .as_ref()
+                                    .map(|usage| u64::from(usage.total_tokens))
+                                    .unwrap_or(0);
+                                if chunk.choices.is_empty() && chunk.usage.is_none() {
+                                    continue;
+                                }
+                                saw_upstream_output |= has_candidate_output;
+                                let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
+                                    echo_prefix.take()
+                                } else {
+                                    None
+                                };
+                                let output_deltas = chunk
+                                    .choices
+                                    .iter()
+                                    .map(|choice| {
+                                        (
+                                            choice.index,
+                                            choice.delta.content.clone().unwrap_or_default(),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                let completion_chunk = completion_chunk_from_core(
+                                    chunk,
+                                    prefix_for_chunk.as_deref(),
+                                    include_usage,
+                                );
+                                if !include_usage && completion_chunk.choices.is_empty() {
+                                    continue;
+                                }
+                                let bytes = match serde_json::to_string(&completion_chunk) {
+                                    Ok(json) => Event::default().data(&json).to_bytes(),
+                                    Err(error) => {
+                                        flush_guardrail!();
+                                        error!("Completion stream serialization error: {}", error);
+                                        send_stream_error(
+                                            &tx,
+                                            &format!("Serialization error: {}", error),
+                                            "server_error",
+                                            "internal_error",
+                                        )
+                                        .await;
+                                        if let Some(lease) = lease.take() {
+                                            let error = ProviderError::serialization(
+                                                "router",
+                                                format!("Serialization error: {}", error),
+                                            );
+                                            lease.finish_failure(&error);
+                                        }
+                                        callback.fail(
+                                            format!("Serialization error: {}", error),
+                                            "serialization_error",
+                                        );
+                                        settle_if_chargeable!();
+                                        return;
+                                    }
+                                };
+                                (output_deltas, bytes)
+                            }
+                            Err(error) => {
+                                flush_guardrail!();
+                                error!("Completion stream chunk error: {}", error);
+                                let (error_type, error_code) =
+                                    chat::sse_error_classification(&error);
+                                send_stream_error(&tx, &error.to_string(), error_type, error_code)
+                                    .await;
+                                if let Some(lease) = lease.take() {
+                                    lease.finish_failure(&error);
+                                }
+                                callback.fail(error.to_string(), "provider_error");
+                                settle_if_chargeable!();
+                                return;
+                            }
+                        };
+
+                        let pending = match output_guardrail
+                            .push_many_until_closed(&tx, output_deltas, bytes)
+                            .await
+                        {
+                            Ok(Some(pending)) => pending,
                             Ok(None) => {
                                 callback.fail("client disconnected", "client_disconnect");
                                 settle_if_chargeable!();
                                 return;
                             }
                             Err(error) => return_after_guardrail_error!(error),
-                        }
-                    };
-                }
-
-                loop {
-                    let chunk_result = if idle_timeout_secs == 0 {
-                        tokio::select! {
-                            biased;
-                            _ = tx.closed() => {
-                                callback.fail("client disconnected", "client_disconnect");
-                                settle_if_chargeable!();
-                                return;
-                            }
-                            result = stream.next() => result,
-                        }
-                    } else {
-                        let timed_result = tokio::select! {
-                            biased;
-                            _ = tx.closed() => {
-                                callback.fail("client disconnected", "client_disconnect");
-                                settle_if_chargeable!();
-                                return;
-                            }
-                            result = tokio::time::timeout(
-                                Duration::from_secs(idle_timeout_secs),
-                                stream.next(),
-                            ) => result,
                         };
-                        match timed_result {
-                            Ok(result) => result,
-                            Err(_) => {
-                                flush_guardrail!();
-                                warn!(
-                                    "Completion SSE stream idle timeout after {}s",
-                                    idle_timeout_secs
-                                );
-                                send_stream_error(
-                                    &tx,
-                                    "Stream idle timeout",
-                                    "server_error",
-                                    "timeout",
-                                )
-                                .await;
-                                if let Some(lease) = lease.take() {
-                                    let error = ProviderError::timeout(
-                                        "router",
-                                        format!("stream idle timeout after {}s", idle_timeout_secs),
-                                    );
-                                    lease.finish_failure(&error);
-                                }
-                                callback.fail(
-                                    format!("stream idle timeout after {}s", idle_timeout_secs),
-                                    "timeout",
-                                );
+                        for bytes in pending {
+                            if tx.send(bytes).await.is_err() {
+                                callback.fail("client disconnected", "client_disconnect");
                                 settle_if_chargeable!();
                                 return;
                             }
+                            committed = true;
                         }
-                    };
+                    }
 
-                    let Some(chunk_result) = chunk_result else {
-                        break;
-                    };
-
-                    let (output_deltas, bytes) = match chunk_result {
-                        Ok(chunk) => {
-                            let has_candidate_output =
-                                spend::stream_chunk_has_candidate_output(&chunk);
-                            if let Some(usage) = &chunk.usage {
-                                final_usage = Some(usage.clone());
+                    if retry_block.is_none() {
+                        match output_guardrail.flush_to_until_closed(&tx).await {
+                            Ok(Some(_)) => {}
+                            Ok(None) => {
+                                callback.fail("client disconnected", "client_disconnect");
+                                settle_if_chargeable!();
+                                return;
                             }
-                            tokens_used = final_usage
-                                .as_ref()
-                                .map(|usage| u64::from(usage.total_tokens))
-                                .unwrap_or(0);
-                            if chunk.choices.is_empty() && chunk.usage.is_none() {
-                                continue;
-                            }
-                            saw_upstream_output |= has_candidate_output;
-                            let prefix_for_chunk = if chunk_has_text_delta(&chunk) {
-                                echo_prefix.take()
-                            } else {
-                                None
-                            };
-                            let output_deltas = chunk
-                                .choices
-                                .iter()
-                                .map(|choice| {
-                                    (
-                                        choice.index,
-                                        choice.delta.content.clone().unwrap_or_default(),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            let completion_chunk = completion_chunk_from_core(
-                                chunk,
-                                prefix_for_chunk.as_deref(),
-                                include_usage,
-                            );
-                            if !include_usage && completion_chunk.choices.is_empty() {
-                                continue;
-                            }
-                            let bytes = match serde_json::to_string(&completion_chunk) {
-                                Ok(json) => Event::default().data(&json).to_bytes(),
-                                Err(error) => {
-                                    flush_guardrail!();
-                                    error!("Completion stream serialization error: {}", error);
+                            Err(error) => {
+                                if output_fallback::allow_uncommitted_stream_fallback(
+                                    error, committed,
+                                ) {
+                                    if let Some(lease) = lease.take() {
+                                        retry_block = Some(lease.deployment_id().to_string());
+                                        drop(lease);
+                                    }
+                                } else {
                                     send_stream_error(
                                         &tx,
-                                        &format!("Serialization error: {}", error),
-                                        "server_error",
-                                        "internal_error",
+                                        error.message(),
+                                        error.error_type(),
+                                        error.code(),
                                     )
                                     .await;
-                                    if let Some(lease) = lease.take() {
-                                        let error = ProviderError::serialization(
-                                            "router",
-                                            format!("Serialization error: {}", error),
-                                        );
-                                        lease.finish_failure(&error);
-                                    }
-                                    callback.fail(
-                                        format!("Serialization error: {}", error),
-                                        "serialization_error",
-                                    );
+                                    drop(lease.take());
+                                    callback.fail(error.message(), "guardrail_output");
                                     settle_if_chargeable!();
                                     return;
                                 }
-                            };
-                            (output_deltas, bytes)
-                        }
-                        Err(error) => {
-                            flush_guardrail!();
-                            error!("Completion stream chunk error: {}", error);
-                            let (error_type, error_code) = chat::sse_error_classification(&error);
-                            send_stream_error(&tx, &error.to_string(), error_type, error_code)
-                                .await;
-                            if let Some(lease) = lease.take() {
-                                lease.finish_failure(&error);
                             }
-                            callback.fail(error.to_string(), "provider_error");
-                            settle_if_chargeable!();
-                            return;
-                        }
-                    };
-
-                    let pending = match output_guardrail
-                        .push_many_until_closed(&tx, output_deltas, bytes)
-                        .await
-                    {
-                        Ok(Some(pending)) => pending,
-                        Ok(None) => {
-                            callback.fail("client disconnected", "client_disconnect");
-                            settle_if_chargeable!();
-                            return;
-                        }
-                        Err(error) => return_after_guardrail_error!(error),
-                    };
-                    for bytes in pending {
-                        if tx.send(bytes).await.is_err() {
-                            callback.fail("client disconnected", "client_disconnect");
-                            settle_if_chargeable!();
-                            return;
                         }
                     }
-                }
 
-                flush_guardrail!();
+                    if let Some(blocked) = retry_block {
+                        excluded.insert(blocked.clone());
+                        original_deployment.get_or_insert(blocked);
+                        current = output_fallback::next_uncommitted_stream(
+                            router_for_stream.clone(),
+                            ProviderCapability::ChatCompletionStream,
+                            &mut fallback_models,
+                            &excluded,
+                            start_stream.clone(),
+                        )
+                        .await;
+                        if current.is_some() {
+                            continue 'fallback;
+                        }
+                        let error =
+                            super::super::stream_output_guardrail::StreamGuardrailError::Violation;
+                        send_stream_error(&tx, error.message(), error.error_type(), error.code())
+                            .await;
+                        callback.fail(error.message(), "guardrail_output");
+                        return;
+                    }
 
-                if tx
-                    .send(Event::default().data("[DONE]").to_bytes())
-                    .await
-                    .is_err()
-                {
-                    callback.fail("client disconnected", "client_disconnect");
-                    settle_if_chargeable!();
+                    if tx
+                        .send(Event::default().data("[DONE]").to_bytes())
+                        .await
+                        .is_err()
+                    {
+                        callback.fail("client disconnected", "client_disconnect");
+                        settle_if_chargeable!();
+                        return;
+                    }
+                    settlement
+                        .record_completion(final_usage.as_ref(), saw_upstream_output)
+                        .await;
+                    callback.complete_usage(final_usage.as_ref(), "success");
+                    if let Some(lease) = lease.take() {
+                        lease.finish_success(tokens_used);
+                    }
                     return;
-                }
-                settlement
-                    .record_completion(final_usage.as_ref(), saw_upstream_output)
-                    .await;
-                callback.complete_usage(final_usage.as_ref(), "success");
-                if let Some(lease) = lease.take() {
-                    lease.finish_success(tokens_used);
                 }
             });
 

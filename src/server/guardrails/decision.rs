@@ -24,6 +24,8 @@ pub(crate) struct GuardrailDecisionSink {
     provider: Option<String>,
     deployment: Option<String>,
     generation: Option<u64>,
+    original_deployment: Option<String>,
+    fallback_deployment: Option<String>,
 }
 
 impl GuardrailDecisionSink {
@@ -41,7 +43,19 @@ impl GuardrailDecisionSink {
             provider: provider.map(ToString::to_string),
             deployment: deployment.map(ToString::to_string),
             generation: Some(state.pin_runtime().generation),
+            original_deployment: None,
+            fallback_deployment: None,
         }
+    }
+
+    pub(crate) fn with_fallback_metadata(
+        mut self,
+        original_deployment: Option<&str>,
+        fallback_deployment: Option<&str>,
+    ) -> Self {
+        self.original_deployment = original_deployment.map(ToString::to_string);
+        self.fallback_deployment = fallback_deployment.map(ToString::to_string);
+        self
     }
 
     pub(crate) fn emit(&self, surface: &str, result: &CheckResult) {
@@ -61,6 +75,22 @@ impl GuardrailDecisionSink {
         };
         self.callbacks.emit_guardrail_decision(event);
 
+        let audit = self.audit_event(surface, action, &policy_ids, &rule_ids);
+        let audit_logger = Arc::clone(&self.audit);
+        tokio::spawn(async move {
+            if let Err(error) = audit_logger.log(audit).await {
+                warn!(error = %error, "Guardrail decision audit export failed");
+            }
+        });
+    }
+
+    fn audit_event(
+        &self,
+        surface: GuardrailDecisionSurface,
+        action: GuardrailDecisionAction,
+        policy_ids: &[String],
+        rule_ids: &[String],
+    ) -> AuditEvent {
         let mut audit = if action == GuardrailDecisionAction::Block {
             AuditEvent::security(format!("Guardrail {surface:?} {action:?}"))
         } else {
@@ -84,15 +114,22 @@ impl GuardrailDecisionSink {
         if let Some(deployment) = &self.deployment {
             audit = audit.with_metadata("deployment", serde_json::json!(deployment));
         }
+        if let Some(original_deployment) = &self.original_deployment {
+            audit = audit.with_metadata(
+                "original_deployment",
+                serde_json::json!(original_deployment),
+            );
+        }
+        if let Some(fallback_deployment) = &self.fallback_deployment {
+            audit = audit.with_metadata(
+                "fallback_deployment",
+                serde_json::json!(fallback_deployment),
+            );
+        }
         if let Some(generation) = self.generation {
             audit = audit.with_metadata("generation", serde_json::json!(generation));
         }
-        let audit_logger = Arc::clone(&self.audit);
-        tokio::spawn(async move {
-            if let Err(error) = audit_logger.log(audit).await {
-                warn!(error = %error, "Guardrail decision audit export failed");
-            }
-        });
+        audit
     }
 }
 
@@ -321,6 +358,8 @@ mod tests {
             provider: None,
             deployment: None,
             generation: Some(0),
+            original_deployment: None,
+            fallback_deployment: None,
         }
     }
 
@@ -505,5 +544,45 @@ mod tests {
             GuardrailDecisionSurface::Output,
             GuardrailDecisionAction::Allow,
         ));
+    }
+
+    #[test]
+    fn audit_metadata_records_original_and_fallback_deployments_without_payload() {
+        let sink = GuardrailDecisionSink {
+            callbacks: CallbackDispatcher::default(),
+            audit: Arc::new(AuditLogger::disabled()),
+            request_id: Some("req-1277".to_string()),
+            model: Some("gpt-4o".to_string()),
+            provider: Some("backup".to_string()),
+            deployment: Some("backup-gpt-4o-mini".to_string()),
+            generation: Some(0),
+            original_deployment: Some("openai-gpt-4o".to_string()),
+            fallback_deployment: Some("backup-gpt-4o-mini".to_string()),
+        };
+        let event = sink.audit_event(
+            GuardrailDecisionSurface::Output,
+            GuardrailDecisionAction::Block,
+            &["custom_rule".to_string()],
+            &["custom_rule:deny-forbidden-token".to_string()],
+        );
+        assert_eq!(
+            event.metadata.get("original_deployment"),
+            Some(&serde_json::json!("openai-gpt-4o"))
+        );
+        assert_eq!(
+            event.metadata.get("fallback_deployment"),
+            Some(&serde_json::json!("backup-gpt-4o-mini"))
+        );
+        assert_eq!(
+            event.metadata.get("deployment"),
+            Some(&serde_json::json!("backup-gpt-4o-mini"))
+        );
+        assert_eq!(
+            event.metadata.get("action"),
+            Some(&serde_json::json!("block"))
+        );
+        let json = event.to_json().expect("audit event should serialize");
+        assert!(!json.contains("forbidden-token-xyz"), "{json}");
+        assert!(!json.contains("modified_content"));
     }
 }

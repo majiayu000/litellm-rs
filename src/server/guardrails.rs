@@ -17,7 +17,42 @@ mod responses_scan;
 pub(crate) use decision::GuardrailDecisionSink;
 pub(crate) use responses_mask::apply_responses_input;
 
+pub(crate) const OUTPUT_BLOCK_MESSAGE: &str = "Response blocked by output guardrails";
+
 const FRAGMENT_SEPARATOR: &str = "\n---\n";
+
+/// Request-scoped identities attached to an output-guardrail decision.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct OutputDecisionBinding<'a> {
+    pub provider: Option<&'a str>,
+    pub deployment: Option<&'a str>,
+    pub original_deployment: Option<&'a str>,
+    pub fallback_deployment: Option<&'a str>,
+}
+
+impl<'a> OutputDecisionBinding<'a> {
+    pub(crate) fn primary(provider: Option<&'a str>, deployment: Option<&'a str>) -> Self {
+        Self {
+            provider,
+            deployment,
+            original_deployment: None,
+            fallback_deployment: None,
+        }
+    }
+
+    pub(crate) fn fallback(
+        provider: Option<&'a str>,
+        original_deployment: Option<&'a str>,
+        fallback_deployment: Option<&'a str>,
+    ) -> Self {
+        Self {
+            provider,
+            deployment: fallback_deployment,
+            original_deployment,
+            fallback_deployment,
+        }
+    }
+}
 pub(crate) async fn apply_chat_input(
     state: &AppState,
     request: &ChatCompletionRequest,
@@ -30,7 +65,21 @@ pub(crate) async fn apply_chat_output(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    let sink = GuardrailDecisionSink::from_state(state, Some(response.model.as_str()), None, None);
+    apply_chat_output_bound(state, response, OutputDecisionBinding::default()).await
+}
+
+pub(crate) async fn apply_chat_output_bound(
+    state: &AppState,
+    response: &ChatCompletionResponse,
+    binding: OutputDecisionBinding<'_>,
+) -> Result<ChatCompletionResponse, GatewayError> {
+    let sink = GuardrailDecisionSink::from_state(
+        state,
+        Some(response.model.as_str()),
+        binding.provider,
+        binding.deployment,
+    )
+    .with_fallback_metadata(binding.original_deployment, binding.fallback_deployment);
     apply_output_with_sink(state.guardrails().as_ref(), response, Some(&sink)).await
 }
 
@@ -376,14 +425,12 @@ pub(super) fn enforce_with_sink(
         Ok(result) => {
             decision::emit_if_present(sink, surface, &result);
             if result.is_blocked() {
-                let subject = if surface == "output" {
-                    "Response"
+                let message = if surface == "output" {
+                    OUTPUT_BLOCK_MESSAGE.to_string()
                 } else {
-                    "Request"
+                    format!("Request blocked by {surface} guardrails")
                 };
-                Err(GatewayError::Forbidden(format!(
-                    "{subject} blocked by {surface} guardrails"
-                )))
+                Err(GatewayError::Forbidden(message))
             } else if result.is_modified() {
                 Ok(Enforcement::Mask)
             } else {

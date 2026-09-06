@@ -185,7 +185,7 @@ pub(crate) async fn handle_streaming_response(
                 state,
                 Some(served_model.as_str()),
                 Some(served_provider.as_str()),
-                None,
+                Some(lease.deployment_id()),
             );
             let settlement = StreamBudgetSettlement {
                 pricing_service: settlement_budgeted.pricing(),
