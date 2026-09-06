@@ -40,7 +40,11 @@ pub(super) async fn build_runtime_revision(
     redis: Arc<RedisPool>,
 ) -> Result<RuntimeRevision> {
     config.validate()?;
-    let unified_router = Arc::new(build_router_from_config(&config, pricing).await?);
+    let unified_router = Arc::new(
+        build_router_from_config(&config, pricing)
+            .await?
+            .with_admission_redis(Arc::clone(&redis)),
+    );
     let guardrails =
         GuardrailEngine::shared(config.gateway.guardrails.clone()).map_err(|error| {
             GatewayError::Config(format!("Invalid guardrails configuration: {error}"))

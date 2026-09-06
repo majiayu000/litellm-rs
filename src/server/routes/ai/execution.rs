@@ -1,4 +1,5 @@
 use crate::core::providers::{Provider, ProviderError};
+use crate::core::router::admission::{AdmissionBackend, AdmissionHold};
 use crate::core::router::deployment::Deployment;
 use crate::core::router::error::CooldownReason;
 use crate::core::router::execution::{infer_cooldown_reason, router_error_to_provider_error};
@@ -18,15 +19,25 @@ pub(super) struct StreamingDeploymentLease {
     deployment: Arc<Deployment>,
     started_at: Instant,
     finalized: bool,
+    admission: AdmissionBackend,
+    hold: Option<AdmissionHold>,
 }
 
 impl StreamingDeploymentLease {
-    fn new(router: Arc<UnifiedRouter>, deployment: Arc<Deployment>, started_at: Instant) -> Self {
+    fn new(
+        router: Arc<UnifiedRouter>,
+        deployment: Arc<Deployment>,
+        started_at: Instant,
+        admission: AdmissionBackend,
+        hold: Option<AdmissionHold>,
+    ) -> Self {
         Self {
             router,
             deployment,
             started_at,
             finalized: false,
+            admission,
+            hold,
         }
     }
 
@@ -34,6 +45,9 @@ impl StreamingDeploymentLease {
         let latency_us = self.started_at.elapsed().as_micros() as u64;
         self.router
             .record_success_for_deployment(&self.deployment, tokens_used, latency_us);
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle(&hold, tokens_used);
+        }
         self.release();
     }
 
@@ -60,6 +74,9 @@ impl StreamingDeploymentLease {
     fn release(&mut self) {
         if !self.finalized {
             UnifiedRouter::release_selected_deployment(&self.deployment);
+            if let Some(hold) = self.hold.take() {
+                self.admission.cancel(&hold);
+            }
             self.finalized = true;
         }
     }
@@ -120,7 +137,7 @@ where
         // candidate was tried once, fall back to the pool minus budget
         // exclusions so single-deployment setups still get same-target
         // retries. When even that pool is empty, fail closed below.
-        let deployment_lease = match router.select_deployment_lease_for_capability_matching(
+        let mut deployment_lease = match router.select_deployment_lease_for_capability_matching(
             requested_model,
             &capability,
             |deployment| {
@@ -214,6 +231,7 @@ where
                     tokens_used,
                     latency_us,
                 );
+                deployment_lease.commit_admission(tokens_used);
                 drop(deployment_lease);
                 return Ok(value);
             }
@@ -343,7 +361,7 @@ where
         // Prefer deployments this request has not already tried; when every
         // candidate was tried once, fall back to the full pool so
         // single-deployment setups still get same-target retries.
-        let deployment_lease = match router.select_deployment_lease_for_capability_matching(
+        let mut deployment_lease = match router.select_deployment_lease_for_capability_matching(
             requested_model,
             &capability,
             |deployment| {
@@ -431,8 +449,15 @@ where
 
         match operation.clone()(provider, selected_model, selected_deployment_id).await {
             Ok(stream) => {
+                let (admission, hold) = deployment_lease.take_admission();
                 let _deployment_id = deployment_lease.into_deployment_id();
-                let lease = StreamingDeploymentLease::new(router.clone(), deployment, started_at);
+                let lease = StreamingDeploymentLease::new(
+                    router.clone(),
+                    deployment,
+                    started_at,
+                    admission,
+                    hold,
+                );
                 return Ok((stream, lease));
             }
             Err(err) => {
