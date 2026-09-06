@@ -84,7 +84,7 @@ impl Router {
         while attempt <= max_attempts {
             let start = std::time::Instant::now();
 
-            let deployment_lease = match self.select_retry_candidate(
+            let mut deployment_lease = match self.select_retry_candidate(
                 snapshot,
                 model_name,
                 capability,
@@ -142,6 +142,7 @@ impl Router {
                         tokens_used,
                         latency_us,
                     );
+                    deployment_lease.commit_admission(tokens_used);
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
@@ -544,7 +545,7 @@ impl Router {
     {
         let start = std::time::Instant::now();
 
-        let deployment_lease = self.select_deployment_lease(model_name)?;
+        let mut deployment_lease = self.select_deployment_lease(model_name)?;
         let selected_deployment = deployment_lease.clone_deployment();
         let deployment_id = selected_deployment.id.clone();
 
@@ -560,6 +561,7 @@ impl Router {
                     tokens_used,
                     latency_us,
                 );
+                deployment_lease.commit_admission(tokens_used);
                 drop(deployment_lease);
 
                 Ok(build_execution_result(

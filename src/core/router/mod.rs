@@ -28,6 +28,7 @@ use std::time::Duration;
 use url::Url;
 
 // New modular router components
+pub(crate) mod admission;
 pub mod budget_routing;
 pub mod config;
 pub mod deployment;

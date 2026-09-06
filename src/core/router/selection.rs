@@ -3,6 +3,7 @@
 //! This module contains the core routing logic for selecting
 //! the best deployment for a given model.
 
+use super::admission::{AdmissionBackend, AdmissionHold, AdmissionReserve};
 use super::config::RoutingStrategy;
 use super::deployment::{Deployment, DeploymentId, current_timestamp};
 use super::error::RouterError;
@@ -22,17 +23,36 @@ use std::sync::atomic::{
 ///
 /// Dropping the lease releases the selected deployment unless ownership was
 /// explicitly converted back into the legacy deployment-id API.
+#[derive(Debug)]
 pub struct DeploymentLease {
     deployment: Arc<Deployment>,
     release_on_drop: bool,
+    admission: AdmissionBackend,
+    hold: Option<AdmissionHold>,
 }
 
 impl DeploymentLease {
-    fn new(deployment: Arc<Deployment>) -> Self {
+    fn new(
+        deployment: Arc<Deployment>,
+        admission: AdmissionBackend,
+        hold: Option<AdmissionHold>,
+    ) -> Self {
         Self {
             deployment,
             release_on_drop: true,
+            admission,
+            hold,
         }
+    }
+
+    pub(crate) fn commit_admission(&mut self, actual_tokens: u64) {
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle(&hold, actual_tokens);
+        }
+    }
+
+    pub(crate) fn take_admission(&mut self) -> (AdmissionBackend, Option<AdmissionHold>) {
+        (self.admission.clone(), self.hold.take())
     }
 
     pub fn deployment_id(&self) -> &str {
@@ -65,6 +85,9 @@ impl Drop for DeploymentLease {
     fn drop(&mut self) {
         if self.release_on_drop {
             Router::release_selected_deployment(self.deployment());
+            if let Some(hold) = self.hold.take() {
+                self.admission.cancel(&hold);
+            }
         }
     }
 }
@@ -97,7 +120,7 @@ impl Router {
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
         let snapshot = self.load_routing_snapshot();
-        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None)
+        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None, 0)
     }
 
     pub(crate) fn select_deployment_lease_matching_in_snapshot<F>(
@@ -109,7 +132,7 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
-        self.select_deployment_matching(snapshot, model_name, is_candidate, None)
+        self.select_deployment_matching(snapshot, model_name, is_candidate, None, 0)
     }
 
     /// Select the best deployment for a model that supports `capability`.
@@ -208,6 +231,7 @@ impl Router {
                     && is_candidate(deployment)
             },
             Some(no_matching_candidate_error),
+            0,
         )
     }
 
@@ -252,6 +276,7 @@ impl Router {
         model_name: &str,
         is_candidate: F,
         no_matching_candidate_error: Option<RouterError>,
+        estimated_tokens: u64,
     ) -> Result<DeploymentLease, RouterError>
     where
         F: Fn(&Deployment) -> bool,
@@ -414,7 +439,9 @@ impl Router {
                 continue;
             };
 
-            if self.try_reserve_deployment(&deployment, &resolved_name) {
+            if let Some(hold) =
+                self.try_reserve_deployment(&deployment, &resolved_name, estimated_tokens)
+            {
                 self.provider_selected_count.fetch_add(1, Relaxed);
                 self.strategy_used_count.fetch_add(1, Relaxed);
 
@@ -426,7 +453,11 @@ impl Router {
                     "deployment selected for routing"
                 );
 
-                return Ok(DeploymentLease::new(deployment));
+                return Ok(DeploymentLease::new(
+                    deployment,
+                    self.admission.clone(),
+                    hold,
+                ));
             }
 
             if let Some(pos) = routing_contexts
@@ -446,17 +477,28 @@ impl Router {
         Err(RouterError::NoAvailableDeployment(model_name.to_string()))
     }
 
-    fn try_reserve_deployment(&self, deployment: &Deployment, expected_model: &str) -> bool {
+    fn try_reserve_deployment(
+        &self,
+        deployment: &Deployment,
+        expected_model: &str,
+        estimated_tokens: u64,
+    ) -> Option<Option<AdmissionHold>> {
         if deployment.model_name != expected_model {
-            return false;
+            return None;
         }
 
-        match deployment.config.max_parallel_requests {
+        let hold = match self.admission.reserve(deployment, estimated_tokens) {
+            AdmissionReserve::Skipped => None,
+            AdmissionReserve::Denied => return None,
+            AdmissionReserve::Granted(hold) => Some(hold),
+        };
+
+        let local_ok = match deployment.config.max_parallel_requests {
             Some(limit) => {
                 let mut current = deployment.state.active_requests.load(Acquire);
                 loop {
                     if current >= limit {
-                        return false;
+                        break false;
                     }
 
                     match deployment.state.active_requests.compare_exchange_weak(
@@ -465,7 +507,7 @@ impl Router {
                         AcqRel,
                         Acquire,
                     ) {
-                        Ok(_) => return true,
+                        Ok(_) => break true,
                         Err(next) => current = next,
                     }
                 }
@@ -474,7 +516,32 @@ impl Router {
                 deployment.state.active_requests.fetch_add(1, Relaxed);
                 true
             }
+        };
+
+        if local_ok {
+            Some(hold)
+        } else {
+            if let Some(hold) = hold {
+                self.admission.cancel(&hold);
+            }
+            None
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn select_deployment_lease_with_tokens(
+        &self,
+        model_name: &str,
+        estimated_tokens: u64,
+    ) -> Result<DeploymentLease, RouterError> {
+        let snapshot = self.load_routing_snapshot();
+        self.select_deployment_matching(
+            snapshot.as_ref(),
+            model_name,
+            |_| true,
+            None,
+            estimated_tokens,
+        )
     }
 
     /// Release a deployment after request completion
@@ -530,6 +597,7 @@ impl RuntimeHandle {
             model_name,
             |_| true,
             None,
+            0,
         )
     }
 }

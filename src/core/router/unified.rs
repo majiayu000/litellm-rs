@@ -3,6 +3,7 @@
 //! This module provides the unified Router infrastructure that manages deployments,
 //! routing strategies, and intelligent request routing across multiple providers.
 
+use super::admission::AdmissionBackend;
 use super::config::RouterConfig;
 use super::deployment::{Deployment, DeploymentId, LegacySelectorMetadata, current_timestamp};
 use super::error::CooldownReason;
@@ -335,6 +336,8 @@ pub struct Router {
     /// Single supervisor task coordinating all current health probe groups.
     pub(crate) health_probe_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
     pub(crate) health_probe_wakeup: Arc<tokio::sync::Notify>,
+    /// Shared admission backend (local atomics, or Redis when configured).
+    pub(crate) admission: AdmissionBackend,
 }
 
 impl Router {
@@ -351,7 +354,21 @@ impl Router {
             fallback_triggered_count: AtomicU64::new(0),
             health_probe_tasks: Mutex::new(HashMap::new()),
             health_probe_wakeup: Arc::new(tokio::sync::Notify::new()),
+            admission: AdmissionBackend::default(),
         }
+    }
+
+    /// Attach Redis so deployment parallel/RPM/TPM limits are shared across replicas.
+    #[cfg(feature = "gateway")]
+    pub fn with_admission_redis(mut self, pool: Arc<crate::storage::redis::RedisPool>) -> Self {
+        self.admission = AdmissionBackend::redis(pool);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_unavailable_admission(mut self) -> Self {
+        self.admission = AdmissionBackend::Unavailable;
+        self
     }
 
     /// Set fallback configuration for the router (builder pattern)

@@ -19,3 +19,6 @@ mod strategy_impl_tests;
 
 // Selection logic edge case tests (issue #343)
 mod selection_tests;
+
+// Distributed deployment admission (issue #1280)
+mod admission_tests;

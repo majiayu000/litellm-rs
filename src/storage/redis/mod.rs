@@ -12,11 +12,13 @@
 //! - `pubsub` - Pub/Sub operations (temporarily disabled)
 //! - `atomic` - Atomic operations and utilities
 //! - `budget` - Cluster-safe single-key Lua budget leases
+//! - `admission` - Cluster-safe single-key Lua deployment admission
 //! - `tests` - Module tests
 
 #![allow(dead_code)]
 
 // Module declarations
+pub(crate) mod admission;
 mod atomic;
 mod batch;
 pub(crate) mod budget;
