@@ -27,15 +27,29 @@ local function load_state()
   local h = tonumber(redis.call('HGET', KEYS[1], 'h') or '1') or 1
   local owner = redis.call('HGET', KEYS[1], 'owner')
   if not owner then owner = '' end
-  return f, r, tot, fail, opened, consec, e, h, owner
+  local own_until = tonumber(redis.call('HGET', KEYS[1], 'own_until') or '0') or 0
+  return f, r, tot, fail, opened, consec, e, h, owner, own_until
 end
 
-local function save(f, r, tot, fail, opened, consec, e, h, owner)
+local function save(f, r, tot, fail, opened, consec, e, h, owner, own_until)
   redis.call('HSET', KEYS[1], 'f', f, 'r', r, 'tot', tot, 'fail', fail,
-    'opened', opened, 'consec', consec, 'e', e, 'h', h, 'owner', owner)
+    'opened', opened, 'consec', consec, 'e', e, 'h', h, 'owner', owner,
+    'own_until', own_until)
 end
 
-local f, r, tot, fail, opened, consec, e, h, owner = load_state()
+local f, r, tot, fail, opened, consec, e, h, owner, own_until = load_state()
+local function claim_owner()
+  if owner == '' or own_until <= now then
+    owner = token
+    own_until = now + cooldown
+    if own_until < now + 1 then own_until = now + 1 end
+    h = 2
+  end
+end
+local function clear_owner()
+  owner = ''
+  own_until = 0
+end
 if e ~= epoch then
   f = 0
   r = 0
@@ -51,7 +65,7 @@ if op == 'fail' then
     h = 4
   elseif opened > 0 then
     opened = now + cooldown
-    owner = ''
+    clear_owner()
     h = 4
   else
     local trip = 0
@@ -64,7 +78,7 @@ if op == 'fail' then
     end
     if trip == 1 then
       opened = now + cooldown
-      owner = ''
+      clear_owner()
       h = 4
     elseif h == 1 or h == 0 then
       h = 2
@@ -77,14 +91,13 @@ elseif op == 'ok' then
   if opened > now then
     h = 4
   elseif opened > 0 then
-    if owner == token or owner == '' then
+    if owner == token or owner == '' or own_until <= now then
       if consec >= success_th then
         opened = 0
-        owner = ''
+        clear_owner()
         h = 1
       else
-        h = 2
-        if owner == '' then owner = token end
+        claim_owner()
       end
     end
   elseif h == 2 and consec >= success_th then
@@ -99,15 +112,12 @@ if opened > now then
   owned = 0
 elseif opened > 0 then
   status = 2
-  if owner == '' then
-    owner = token
-    h = 2
-  end
+  claim_owner()
   if owner == token then owned = 1 else owned = 0 end
 end
 
 if op ~= 'observe' or opened > 0 then
-  save(f, r, tot, fail, opened, consec, e, h, owner)
+  save(f, r, tot, fail, opened, consec, e, h, owner, own_until)
 end
 return {status, opened, f, consec, h, owned}
 "#;

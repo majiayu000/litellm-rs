@@ -83,6 +83,7 @@ mod redis {
         a.record_failure(&id);
         assert!(a.select_deployment_lease("gpt-4").is_ok());
         b.record_failure(&id);
+        tokio::time::sleep(Duration::from_millis(80)).await;
         assert!(
             a.select_deployment_lease("gpt-4").is_err(),
             "third shared failure must open the circuit on both nodes"
