@@ -8,6 +8,7 @@ mod api_key_owner_migration_tests;
 mod batch_ops;
 mod budget_limit_ops;
 mod connection;
+mod provider_config_ops;
 mod request_ledger_ops;
 mod team_repository;
 #[cfg(test)]

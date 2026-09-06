@@ -10,6 +10,8 @@ pub mod password_reset_token;
 pub mod pricing;
 /// Pricing history entity module
 pub mod pricing_history;
+/// Sanitized provider configuration revision entity module
+pub mod provider_config_revision;
 /// Request ledger entity module
 pub mod request_ledger;
 /// User entity module
@@ -23,6 +25,7 @@ pub use budget_limit_snapshot::Entity as BudgetLimitSnapshot;
 pub use password_reset_token::Entity as PasswordResetToken;
 pub use pricing::Entity as ModelPricing;
 pub use pricing_history::Entity as PricingHistory;
+pub use provider_config_revision::Entity as ProviderConfigRevision;
 pub use request_ledger::Entity as RequestLedger;
 pub use user::Entity as User;
 // UserSession is available but not currently used

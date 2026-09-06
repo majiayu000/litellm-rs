@@ -143,6 +143,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
     super::admin_routing::configure_routes(cfg);
     super::admin_request_ledger::configure_routes(cfg);
+    super::admin_providers::configure_routes(cfg);
 }
 
 #[cfg(test)]
