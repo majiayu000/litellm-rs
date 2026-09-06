@@ -8,11 +8,13 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use tracing::{error, warn};
 
+mod decision;
 mod image_url;
 mod input_scan;
 mod output_scan;
 mod responses_mask;
 mod responses_scan;
+pub(crate) use decision::GuardrailDecisionSink;
 pub(crate) use responses_mask::apply_responses_input;
 
 const FRAGMENT_SEPARATOR: &str = "\n---\n";
@@ -20,14 +22,16 @@ pub(crate) async fn apply_chat_input(
     state: &AppState,
     request: &ChatCompletionRequest,
 ) -> Result<ChatCompletionRequest, GatewayError> {
-    apply_input(state.guardrails().as_ref(), request).await
+    let sink = GuardrailDecisionSink::from_state(state, Some(request.model.as_str()), None, None);
+    apply_input_with_sink(state.guardrails().as_ref(), request, Some(&sink)).await
 }
 
 pub(crate) async fn apply_chat_output(
     state: &AppState,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
-    apply_output_with_engine(state.guardrails().as_ref(), response).await
+    let sink = GuardrailDecisionSink::from_state(state, Some(response.model.as_str()), None, None);
+    apply_output_with_sink(state.guardrails().as_ref(), response, Some(&sink)).await
 }
 
 pub(crate) async fn ensure_chat_input_unmodified(
@@ -39,7 +43,8 @@ pub(crate) async fn ensure_chat_input_unmodified(
         return Ok(());
     }
     let content = input_payload(guardrails.as_ref(), request)?;
-    match enforce(guardrails.check_input(&content).await, "input")? {
+    let sink = GuardrailDecisionSink::from_state(state, Some(request.model.as_str()), None, None);
+    match enforce_with_sink(guardrails.check_input(&content).await, "input", Some(&sink))? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("input")),
     }
@@ -51,7 +56,12 @@ pub(crate) async fn ensure_chat_output_unmodified(
 ) -> Result<(), GatewayError> {
     let guardrails = state.guardrails();
     let content = output_scan::response_payload(guardrails.as_ref(), response)?;
-    match enforce(guardrails.check_output(&content).await, "output")? {
+    let sink = GuardrailDecisionSink::from_state(state, Some(response.model.as_str()), None, None);
+    match enforce_with_sink(
+        guardrails.check_output(&content).await,
+        "output",
+        Some(&sink),
+    )? {
         Enforcement::Pass => Ok(()),
         Enforcement::Mask => Err(projection_error("output")),
     }
@@ -74,15 +84,24 @@ pub(crate) fn reject_unsupported_streaming_mask(state: &AppState) -> Result<(), 
     Ok(())
 }
 
+#[cfg(test)]
 async fn apply_input(
     engine: &GuardrailEngine,
     request: &ChatCompletionRequest,
+) -> Result<ChatCompletionRequest, GatewayError> {
+    apply_input_with_sink(engine, request, None).await
+}
+
+pub(crate) async fn apply_input_with_sink(
+    engine: &GuardrailEngine,
+    request: &ChatCompletionRequest,
+    sink: Option<&GuardrailDecisionSink>,
 ) -> Result<ChatCompletionRequest, GatewayError> {
     if !engine.input_checks_enabled() {
         return Ok(request.clone());
     }
     let content = input_payload(engine, request)?;
-    match enforce(engine.check_input(&content).await, "input")? {
+    match enforce_with_sink(engine.check_input(&content).await, "input", sink)? {
         Enforcement::Pass => Ok(request.clone()),
         Enforcement::Mask => {
             let mut projected = request.clone();
@@ -95,7 +114,7 @@ async fn apply_input(
             mask_metadata(engine, projected.metadata.as_mut())?;
             mask_provider_bound_fields(engine, &mut projected)?;
             let projected_payload = input_payload(engine, &projected)?;
-            match enforce(engine.check_input(&projected_payload).await, "input")? {
+            match enforce_with_sink(engine.check_input(&projected_payload).await, "input", sink)? {
                 Enforcement::Pass => Ok(projected),
                 Enforcement::Mask => Err(projection_error("input")),
             }
@@ -103,12 +122,21 @@ async fn apply_input(
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn apply_output_with_engine(
     engine: &GuardrailEngine,
     response: &ChatCompletionResponse,
 ) -> Result<ChatCompletionResponse, GatewayError> {
+    apply_output_with_sink(engine, response, None).await
+}
+
+pub(crate) async fn apply_output_with_sink(
+    engine: &GuardrailEngine,
+    response: &ChatCompletionResponse,
+    sink: Option<&GuardrailDecisionSink>,
+) -> Result<ChatCompletionResponse, GatewayError> {
     let content = output_scan::response_payload(engine, response)?;
-    match enforce(engine.check_output(&content).await, "output")? {
+    match enforce_with_sink(engine.check_output(&content).await, "output", sink)? {
         Enforcement::Pass => Ok(response.clone()),
         Enforcement::Mask => {
             let mut projected = response.clone();
@@ -118,7 +146,11 @@ pub(crate) async fn apply_output_with_engine(
                 }
             }
             let projected_payload = output_scan::response_payload(engine, &projected)?;
-            match enforce(engine.check_output(&projected_payload).await, "output")? {
+            match enforce_with_sink(
+                engine.check_output(&projected_payload).await,
+                "output",
+                sink,
+            )? {
                 Enforcement::Pass => Ok(projected),
                 Enforcement::Mask => Err(projection_error("output")),
             }
@@ -330,28 +362,34 @@ fn mask_content(
     })
 }
 
-enum Enforcement {
+pub(super) enum Enforcement {
     Pass,
     Mask,
 }
 
-fn enforce(
+pub(super) fn enforce_with_sink(
     result: crate::core::guardrails::GuardrailResult<CheckResult>,
     surface: &str,
+    sink: Option<&GuardrailDecisionSink>,
 ) -> Result<Enforcement, GatewayError> {
     match result {
-        Ok(result) if result.is_blocked() => {
-            let subject = if surface == "output" {
-                "Response"
+        Ok(result) => {
+            decision::emit_if_present(sink, surface, &result);
+            if result.is_blocked() {
+                let subject = if surface == "output" {
+                    "Response"
+                } else {
+                    "Request"
+                };
+                Err(GatewayError::Forbidden(format!(
+                    "{subject} blocked by {surface} guardrails"
+                )))
+            } else if result.is_modified() {
+                Ok(Enforcement::Mask)
             } else {
-                "Request"
-            };
-            Err(GatewayError::Forbidden(format!(
-                "{subject} blocked by {surface} guardrails"
-            )))
+                Ok(Enforcement::Pass)
+            }
         }
-        Ok(result) if result.is_modified() => Ok(Enforcement::Mask),
-        Ok(_) => Ok(Enforcement::Pass),
         Err(cause) => {
             error!(%cause, surface, "Guardrail execution failed closed");
             Err(GatewayError::Internal(format!(

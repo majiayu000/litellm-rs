@@ -51,10 +51,17 @@ pub(super) async fn apply(
         .then(|| continuation_projection(&original_chat, &original_extensions))
         .transpose()
         .map_err(InputGuardrailError::Guardrail)?;
+    let sink = crate::server::guardrails::GuardrailDecisionSink::from_state(
+        state,
+        Some(request.model.as_str()),
+        None,
+        None,
+    );
     let request = crate::server::guardrails::apply_responses_input(
         state.guardrails().as_ref(),
         &request,
         continuation.as_ref(),
+        Some(&sink),
     )
     .await
     .map_err(InputGuardrailError::Guardrail)?;

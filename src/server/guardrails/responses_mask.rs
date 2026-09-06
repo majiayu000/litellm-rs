@@ -10,6 +10,7 @@ pub(crate) async fn apply_responses_input(
     engine: &GuardrailEngine,
     request: &ResponsesApiRequest,
     continuation: Option<&crate::core::models::openai::ChatCompletionRequest>,
+    sink: Option<&super::GuardrailDecisionSink>,
 ) -> Result<ResponsesApiRequest, GatewayError> {
     let input_checks_enabled = engine.input_checks_enabled();
     let output_checks_enabled = engine.is_enabled() && engine.config().check_output;
@@ -24,14 +25,14 @@ pub(crate) async fn apply_responses_input(
             .flat_map(|(key, value)| [key.as_str(), value.as_str()])
             .collect::<Vec<_>>()
             .join(super::FRAGMENT_SEPARATOR);
-        super::enforce(engine.check_output(&content).await, "output")?;
+        super::enforce_with_sink(engine.check_output(&content).await, "output", sink)?;
         super::mask_metadata(engine, projected.metadata.as_mut())?;
     }
     if !input_checks_enabled {
         return Ok(projected);
     }
     let content = super::responses_scan::payload(&projected, continuation)?;
-    match super::enforce(engine.check_input(&content).await, "input")? {
+    match super::enforce_with_sink(engine.check_input(&content).await, "input", sink)? {
         super::Enforcement::Pass => return Ok(projected),
         super::Enforcement::Mask => {}
     }
@@ -187,7 +188,7 @@ async fn mask_responses_input_for_storage(
     engine: &GuardrailEngine,
     request: &ResponsesApiRequest,
 ) -> Result<ResponsesApiRequest, GatewayError> {
-    apply_responses_input(engine, request, None).await
+    apply_responses_input(engine, request, None, None).await
 }
 
 fn mask_tool_output(

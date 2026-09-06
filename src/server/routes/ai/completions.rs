@@ -124,12 +124,7 @@ async fn completions_inner(
         Ok((response, callback)) => {
             let response = if adapter_request.echo {
                 let echoed = chat_response_with_completion_echo(response, &masked_prompt);
-                match crate::server::guardrails::apply_output_with_engine(
-                    state.guardrails().as_ref(),
-                    &echoed,
-                )
-                .await
-                {
+                match crate::server::guardrails::apply_chat_output(&state, &echoed).await {
                     Ok(response) => response,
                     Err(error) => {
                         callback.fail(error.to_string(), "guardrail_output");
