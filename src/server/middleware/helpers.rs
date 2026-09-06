@@ -98,6 +98,7 @@ pub fn is_public_route(path: &str) -> bool {
         "/admin/dashboard/app.css",
         "/admin/dashboard/app.js",
         "/admin/dashboard/budget.js",
+        "/admin/dashboard/providers.js",
         "/admin/dashboard/provider-health.js",
         "/admin/dashboard/routing-inventory.js",
         "/docs",
