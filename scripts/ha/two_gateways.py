@@ -117,10 +117,17 @@ class Gateway:
             data=None if body is None else json.dumps(body).encode(), method=method,
             headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=25) as response:
-                return response.status, json.load(response)
+            response = urllib.request.urlopen(request, timeout=25)
         except urllib.error.HTTPError as error:
-            return error.code, json.load(error)
+            response = error
+        with response:
+            content = response.read().decode("utf-8", errors="replace")
+            try:
+                return response.status, json.loads(content)
+            except json.JSONDecodeError as error:
+                raise AssertionError(
+                    f"{path}: HTTP {response.status} returned non-JSON: {content[:500]!r}"
+                ) from error
 
     def chat(self, model):
         return self.request("/v1/chat/completions", {"model": model,
@@ -193,9 +200,11 @@ def main():
         time.sleep(1.1)
         assert b.revision() == before
         # Drop Pub/Sub connections; both nodes must reconnect and fetch the authority.
-        for client in backend.client_list():
-            if client.get("cmd") == "subscribe" and client["addr"] != "":
-                backend.client_kill_filter(_id=client["id"])
+        subscribers = [client for client in backend.client_list()
+                       if int(client.get("sub", 0)) > 0 or int(client.get("psub", 0)) > 0]
+        assert len(subscribers) >= 3, "both gateways and the capture must be subscribed"
+        for client in subscribers:
+            backend.client_kill_filter(_id=client["id"])
         status, response = a.request(f"/admin/providers/{prefix}", {"weight": 3}, "PATCH")
         assert status == 200, (status, response)
         revision = response["generation"]

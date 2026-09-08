@@ -10,6 +10,7 @@ on:
       - 'src/config/**'
       - 'Cargo.*'
       - 'scripts/ha/**'
+      - 'scripts/bench/gateway-overhead.yaml'
       - '.github/workflows/ha.yml'
   push:
     branches: [main]
@@ -21,6 +22,7 @@ on:
       - 'src/config/**'
       - 'Cargo.*'
       - 'scripts/ha/**'
+      - 'scripts/bench/gateway-overhead.yaml'
       - '.github/workflows/ha.yml'
 permissions:
   contents: read
