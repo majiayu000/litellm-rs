@@ -1,0 +1,7 @@
+apiVersion: v2
+name: litellm-rs
+description: Self-hosted LiteLLM Rust HTTP gateway
+type: application
+version: 0.1.0
+appVersion: "0.6.0"
+kubeVersion: ">=1.25.0-0"

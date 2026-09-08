@@ -1,0 +1,8 @@
+replicaCount: 3
+service:
+  port: 8080
+ingress:
+  enabled: true
+  className: nginx
+  host: gateway.example.com
+  tlsSecretName: gateway-tls
