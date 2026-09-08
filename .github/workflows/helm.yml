@@ -1,0 +1,34 @@
+name: Helm chart
+on:
+  pull_request:
+    paths:
+      - deployment/helm/**
+      - scripts/test/helm-chart.sh
+      - .github/workflows/helm.yml
+  push:
+    branches: [main]
+    paths:
+      - deployment/helm/**
+      - scripts/test/helm-chart.sh
+      - .github/workflows/helm.yml
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+      - run: bash scripts/test/helm-chart.sh
+      - run: helm package deployment/helm/litellm-rs --destination /tmp/chart
+      - uses: actions/upload-artifact@v4
+        with:
+          name: litellm-rs-helm
+          path: /tmp/chart/*.tgz

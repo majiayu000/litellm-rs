@@ -55,6 +55,8 @@ sudo systemctl start rust-litellm-gateway
 kubectl apply -f deployment/kubernetes/
 ```
 
+For a parameterized release, use the [Helm chart](helm/litellm-rs/README.md).
+
 #### Horizontal pod autoscaling
 
 `kubernetes/hpa.yaml` targets the `apps/v1` Deployment `litellm-gateway` in
