@@ -209,8 +209,7 @@ pub(super) fn start(state: AppState) -> Option<ConfigSyncTask> {
             }
             .await;
             if let Err(error) = result {
-                sync.status.write().last_sync_error =
-                    Some("Configuration synchronization failed; retrying".into());
+                sync.status.write().last_sync_error = Some(error.to_string());
                 tracing::error!(error = %error, "Configuration synchronization failed");
             }
             tokio::time::sleep(RECONCILE_INTERVAL).await;

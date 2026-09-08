@@ -193,8 +193,11 @@ impl AppState {
     /// [`Self::config`] observe one consistent generation. Pricing is reused
     /// from [`Self::pricing`] rather than rebuilt.
     pub async fn apply_runtime(&self, candidate: Config) -> Result<u64> {
-        self.apply_runtime_at(candidate, self.pin_runtime().generation)
-            .await
+        let generation = self
+            .apply_runtime_at(candidate, self.pin_runtime().generation)
+            .await?;
+        self.notify_runtime_revision(generation).await?;
+        Ok(generation)
     }
 
     pub(crate) async fn apply_runtime_at(&self, candidate: Config, expected: u64) -> Result<u64> {
@@ -235,6 +238,13 @@ impl AppState {
         self.publish_runtime(revision);
         if let Some(sync) = &self.config_sync {
             sync.status.write().last_apply_error = None;
+        }
+        Ok(generation)
+    }
+
+    /// Notify only after callers have recorded the committed mutation's audit data.
+    pub(crate) async fn notify_runtime_revision(&self, generation: u64) -> Result<()> {
+        if let Some(sync) = &self.config_sync {
             let published = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 self.storage.redis.publish(
@@ -252,7 +262,7 @@ impl AppState {
             }
             sync.status.write().last_sync_error = None;
         }
-        Ok(generation)
+        Ok(())
     }
 
     pub(super) fn publish_runtime(&self, revision: RuntimeRevision) {
