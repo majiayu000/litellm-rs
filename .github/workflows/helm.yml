@@ -26,7 +26,8 @@ jobs:
           go-version: '1.24.x'
           cache: false
       - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
-      - run: bash scripts/test/helm-chart*
+      - run: python3 -m pip install PyYAML==6.0.2
+      - run: bash scripts/test/helm-chart.sh
       - run: helm package deployment/helm/litellm-rs --destination /tmp/chart
       - uses: actions/upload-artifact@v4
         with:
