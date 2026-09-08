@@ -13,6 +13,7 @@
 //! - `atomic` - Atomic operations and utilities
 //! - `budget` - Cluster-safe single-key Lua budget leases
 //! - `admission` - Cluster-safe single-key Lua deployment admission
+//! - `circuit` - Cluster-safe single-key Lua deployment circuit state
 //! - `tests` - Module tests
 
 #![allow(dead_code)]
@@ -23,6 +24,7 @@ mod atomic;
 mod batch;
 pub(crate) mod budget;
 mod cache;
+pub(crate) mod circuit;
 mod collections;
 mod hash;
 mod pool;

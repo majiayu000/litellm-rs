@@ -30,6 +30,7 @@ use url::Url;
 // New modular router components
 pub(crate) mod admission;
 pub mod budget_routing;
+pub(crate) mod circuit;
 pub mod config;
 pub mod deployment;
 pub mod error;

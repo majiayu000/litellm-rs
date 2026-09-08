@@ -22,3 +22,6 @@ mod selection_tests;
 
 // Distributed deployment admission (issue #1280)
 mod admission_tests;
+
+// Distributed deployment circuit breaker (issue #1281)
+mod circuit_tests;

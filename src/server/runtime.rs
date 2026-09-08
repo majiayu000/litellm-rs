@@ -43,7 +43,8 @@ pub(super) async fn build_runtime_revision(
     let unified_router = Arc::new(
         build_router_from_config(&config, pricing)
             .await?
-            .with_admission_redis(Arc::clone(&redis)),
+            .with_admission_redis(Arc::clone(&redis))
+            .with_circuit_redis(Arc::clone(&redis)),
     );
     let guardrails =
         GuardrailEngine::shared(config.gateway.guardrails.clone()).map_err(|error| {
