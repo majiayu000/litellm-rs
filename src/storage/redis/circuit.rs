@@ -40,6 +40,7 @@ end
 local f, r, tot, fail, opened, consec, e, h, owner, own_until = load_state()
 local function claim_owner()
   if owner == '' or own_until <= now then
+    consec = 0
     owner = token
     own_until = now + cooldown
     if own_until < now + 1 then own_until = now + 1 end
@@ -87,11 +88,13 @@ if op == 'fail' then
 elseif op == 'ok' then
   tot = tot + 1
   r = r + 1
-  consec = consec + 1
+  if opened == 0 or (owner == token and own_until > now) then
+    consec = consec + 1
+  end
   if opened > now then
     h = 4
   elseif opened > 0 then
-    if owner == token or owner == '' or own_until <= now then
+    if owner == token and own_until > now then
       if consec >= success_th then
         opened = 0
         clear_owner()
@@ -158,23 +161,23 @@ fn circuit_script() -> &'static redis::Script {
     SCRIPT.get_or_init(|| redis::Script::new(CIRCUIT_SCRIPT))
 }
 
-fn circuit_runtime_connections() -> &'static tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>
+fn circuit_runtime_connections() -> &'static parking_lot::Mutex<HashMap<String, RedisLiveConnection>>
 {
-    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>> =
+    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, RedisLiveConnection>>> =
         OnceLock::new();
-    CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+    CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
 async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
     let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
     {
-        let cache = circuit_runtime_connections().lock().await;
+        let cache = circuit_runtime_connections().lock();
         if let Some(conn) = cache.get(&cache_key) {
             return Ok(conn.clone());
         }
     }
     let conn = pool.open_live_connection().await?;
-    let mut cache = circuit_runtime_connections().lock().await;
+    let mut cache = circuit_runtime_connections().lock();
     Ok(cache.entry(cache_key).or_insert(conn).clone())
 }
 
@@ -241,6 +244,83 @@ impl RedisPool {
 mod tests {
     use super::*;
     use crate::config::models::storage::RedisConfig;
+
+    #[tokio::test]
+    async fn expired_probe_owner_cannot_supply_recovery_successes() {
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return;
+        };
+        let pool = RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap();
+        let key = RedisPool::circuit_key(&uuid::Uuid::new_v4().to_string());
+        async fn invoke(
+            pool: &RedisPool,
+            key: &str,
+            op: &str,
+            now: i64,
+            token: &str,
+        ) -> CircuitState {
+            // This test owns a short-lived runtime; do not populate the
+            // production bridge's process-lifetime connection cache.
+            let mut conn = pool.open_live_connection().await.unwrap();
+            let values = circuit_script()
+                .key(key)
+                .arg(op)
+                .arg(now)
+                .arg(0)
+                .arg(token)
+                .arg(1)
+                .arg(1)
+                .arg(10)
+                .arg(2)
+                .arg(1)
+                .invoke_async(&mut conn)
+                .await
+                .unwrap();
+            parse_circuit_state(values).unwrap()
+        }
+        assert!(
+            invoke(&pool, &key, "fail", 100, "a")
+                .await
+                .blocks_selection()
+        );
+        assert!(
+            !invoke(&pool, &key, "observe", 110, "a")
+                .await
+                .blocks_selection()
+        );
+        assert!(
+            invoke(&pool, &key, "observe", 119, "b")
+                .await
+                .blocks_selection()
+        );
+        assert!(
+            !invoke(&pool, &key, "observe", 120, "b")
+                .await
+                .blocks_selection()
+        );
+        invoke(&pool, &key, "ok", 121, "a").await;
+        let first = invoke(&pool, &key, "ok", 122, "b").await;
+        assert_eq!(
+            first.status, STATUS_HALF,
+            "expired owner's late success must not close the circuit"
+        );
+        assert_eq!(first.consecutive_successes, 1);
+        assert!(
+            invoke(&pool, &key, "observe", 122, "a")
+                .await
+                .blocks_selection()
+        );
+        assert_eq!(invoke(&pool, &key, "ok", 123, "b").await.status, 0);
+        pool.delete(&key).await.unwrap();
+    }
 
     #[test]
     fn parses_circuit_state() {
