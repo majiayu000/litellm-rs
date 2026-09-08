@@ -3,7 +3,10 @@
 Install the gateway using existing configuration and secret resources in the release namespace.
 The ConfigMap must contain the ordinary `gateway.yaml` file. The Secret supplies its environment
 references. Use the validated examples in `deployment/kubernetes/` as the starting point.
-Configure HTTP on 8000 and metrics on 9090, matching the container ports and health probes.
+Configure HTTP on 8000, matching the container port and health probes. `/metrics` uses
+the same HTTP listener and requires gateway authentication when enabled. Configure your
+Prometheus scraper with a gateway credential from its Secret; the chart does not advertise
+an unauthenticated annotation-based scrape or create a separate metrics listener.
 For multiple replicas, configure shared PostgreSQL and Redis; the chart does not deploy databases.
 
 ```bash
@@ -30,5 +33,5 @@ bash scripts/test/helm-chart.sh
 helm package deployment/helm/litellm-rs --destination /tmp
 ```
 
-Validation uses Helm and kubeconform with Kubernetes 1.35.0 schemas. It renders the single,
+Validation uses Python with PyYAML, Helm and kubeconform with Kubernetes 1.35.0 schemas. It renders the single,
 fixed multi-replica (including ingress/TLS), and HPA fixtures before strict schema validation.

@@ -3,13 +3,13 @@ on:
   pull_request:
     paths:
       - deployment/helm/**
-      - scripts/test/helm-chart.sh
+      - scripts/test/helm-chart*
       - .github/workflows/helm.yml
   push:
     branches: [main]
     paths:
       - deployment/helm/**
-      - scripts/test/helm-chart.sh
+      - scripts/test/helm-chart*
       - .github/workflows/helm.yml
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
           go-version: '1.24.x'
           cache: false
       - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
-      - run: bash scripts/test/helm-chart.sh
+      - run: bash scripts/test/helm-chart*
       - run: helm package deployment/helm/litellm-rs --destination /tmp/chart
       - uses: actions/upload-artifact@v4
         with:
