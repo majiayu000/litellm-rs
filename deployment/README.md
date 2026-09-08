@@ -92,6 +92,8 @@ Validate all raw manifests without contacting a cluster using
 kubeconform -strict -summary -kubernetes-version 1.35.0 deployment/kubernetes/*.yaml
 ```
 
+For shared hot configuration across replicas, see [runtime configuration revisions](configuration-revisions/README.md).
+
 ## 📋 Prerequisites
 
 - **Rust 1.85+** for local builds

@@ -83,6 +83,7 @@ fn database_validation_rejects_sqlite_dependent_runtime_modes() {
     assert!(error.to_string().contains("enabled=false"), "got: {error}");
     assert!(error.contains("`sqlite` feature"), "got: {error}");
     let storage = StorageConfig {
+        config_sync_key_env: None,
         database: disabled,
         ..StorageConfig::default()
     };
@@ -187,4 +188,23 @@ fn redis_validation_accepts_standalone_when_enabled() {
         allow_degraded: false,
     };
     assert!(Validate::validate(&config).is_ok());
+}
+
+#[test]
+fn configuration_sync_rejects_permanent_redis_degradation() {
+    let mut config = crate::config::models::storage::StorageConfig {
+        config_sync_key_env: Some("TEST_SYNC_KEY".into()),
+        ..Default::default()
+    };
+    config.database.enabled = true;
+    config.database.url = "postgresql://localhost/litellm".into();
+    config.database.fallback_to_sqlite = false;
+    config.redis.enabled = true;
+    config.redis.allow_degraded = true;
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .contains("without degraded mode")
+    );
 }

@@ -1,62 +1,69 @@
-//! Redis Pub/Sub operations
-//!
-//! This module provides publish/subscribe messaging functionality.
-//! Subscription is stubbed out pending redis crate API stabilisation;
-//! only `publish` is fully operational.
-
-use super::pool::RedisPool;
+//! Redis global Pub/Sub, including subscriptions through Redis Cluster seeds.
+use super::pool::{RedisPool, cluster_seed_urls};
 use crate::utils::error::gateway_error::{GatewayError, Result};
+use futures::StreamExt;
 use redis::AsyncCommands;
+use std::time::Duration;
 
-/// Handle for an active Redis pub/sub subscription.
-///
-/// Subscription is currently disabled at the API level.  When the redis
-/// crate exposes a stable async subscribe API this type will be backed by
-/// a real `redis::aio::PubSub` handle.
+/// A dedicated async Pub/Sub connection.
 pub struct Subscription {
-    _placeholder: (),
+    pubsub: redis::aio::PubSub,
 }
 
 impl RedisPool {
     /// Publish a message to the given channel.
     pub async fn publish(&self, channel: &str, message: &str) -> Result<()> {
         if self.noop_mode {
-            return Ok(());
+            return Err(GatewayError::Storage("Redis Pub/Sub is unavailable".into()));
         }
-
         let mut conn = self.get_connection().await?;
-        if let Some(ref mut c) = conn.conn {
-            let _: () = c
-                .publish(channel, message)
-                .await
-                .map_err(GatewayError::from)?;
-        }
+        let c = conn
+            .conn
+            .as_mut()
+            .ok_or_else(|| GatewayError::Storage("Redis Pub/Sub is unavailable".into()))?;
+        let _: () = c.publish(channel, message).await?;
         Ok(())
     }
 
-    /// Subscribe to one or more Redis channels.
-    ///
-    /// Currently returns an error stub; re-enable once the redis crate
-    /// exposes a stable `async-std`/`tokio` subscribe interface.
-    pub async fn subscribe(&self, _channels: &[String]) -> Result<Subscription> {
+    /// Subscribe through any reachable seed. Global Pub/Sub propagates across cluster nodes.
+    pub async fn subscribe(&self, channels: &[String]) -> Result<Subscription> {
+        if self.noop_mode {
+            return Err(GatewayError::Storage("Redis Pub/Sub is unavailable".into()));
+        }
+        for seed in cluster_seed_urls(&self.config.url) {
+            let attempt = async {
+                let client = redis::Client::open(seed)?;
+                let mut pubsub = client.get_async_pubsub().await?;
+                pubsub.subscribe(channels).await?;
+                Ok::<_, redis::RedisError>(Subscription { pubsub })
+            };
+            if let Ok(Ok(subscription)) =
+                tokio::time::timeout(Duration::from_secs(self.config.connection_timeout), attempt)
+                    .await
+            {
+                return Ok(subscription);
+            }
+        }
         Err(GatewayError::Storage(
-            "PubSub subscribe is not yet implemented".to_string(),
+            "No Redis seed accepted the Pub/Sub subscription".into(),
         ))
     }
 }
 
 impl Subscription {
-    /// Receive the next pub/sub message.
-    ///
-    /// Stub — always returns an error until subscribe is implemented.
+    /// Wait for a message, failing explicitly when the connection closes.
     pub async fn next_message(&mut self) -> Result<redis::Msg> {
-        Err(GatewayError::Storage(
-            "PubSub subscribe is not yet implemented".to_string(),
-        ))
+        self.pubsub
+            .on_message()
+            .next()
+            .await
+            .ok_or_else(|| GatewayError::Storage("Redis subscription disconnected".into()))
     }
 
-    /// Unsubscribe from all channels.
+    /// Remove all subscriptions from this connection.
     pub async fn unsubscribe_all(&mut self) -> Result<()> {
+        self.pubsub.punsubscribe("*").await?;
+        self.pubsub.unsubscribe(&[] as &[String]).await?;
         Ok(())
     }
 }

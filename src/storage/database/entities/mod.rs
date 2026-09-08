@@ -34,3 +34,6 @@ pub use user::Entity as User;
 // UserSession is available but not currently used
 #[allow(unused_imports)]
 pub use user_session::Entity as UserSession;
+
+/// Encrypted authoritative runtime configuration.
+pub mod runtime_config;

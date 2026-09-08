@@ -319,6 +319,31 @@
         }
       }
     },
+    "/admin/routing/revision": {
+      "get": {
+        "operationId": "getRuntimeRevision",
+        "summary": "Inspect this node's active configuration revision",
+        "description": "Requires Admin role. Returns sanitized apply/synchronization diagnostics; no configuration payload or secret values.",
+        "tags": ["Routing"],
+        "responses": {
+          "200": {
+            "description": "Node-local revision status",
+            "content": { "application/json": { "schema": {
+              "type": "object",
+              "required": ["active_revision", "observed_revision", "last_apply_error", "last_sync_error"],
+              "properties": {
+                "active_revision": { "type": "integer", "minimum": 0 },
+                "observed_revision": { "type": "integer", "minimum": 0 },
+                "last_apply_error": { "type": ["string", "null"] },
+                "last_sync_error": { "type": ["string", "null"] }
+              }
+            } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
     "/admin/routing/inventory": {
       "get": {
         "operationId": "getAdminRoutingInventory",

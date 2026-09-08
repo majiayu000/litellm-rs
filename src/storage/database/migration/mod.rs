@@ -18,6 +18,8 @@ mod m20260906_000001_create_request_ledger;
 mod m20260906_000002_create_provider_config_revisions;
 mod m20260906_000003_create_routing_policy_revisions;
 
+mod m20260908_000001_create_runtime_config;
+
 /// Database migrator for SeaORM
 pub struct Migrator;
 
@@ -77,6 +79,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260906_000001_create_request_ledger::Migration),
             Box::new(m20260906_000002_create_provider_config_revisions::Migration),
             Box::new(m20260906_000003_create_routing_policy_revisions::Migration),
+            Box::new(m20260908_000001_create_runtime_config::Migration),
         ]
     }
 }

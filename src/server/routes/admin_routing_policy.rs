@@ -135,17 +135,18 @@ pub(super) async fn put_routing_policy(
         candidate.gateway.model_aliases = model_aliases;
     }
 
-    apply_and_persist(&state, candidate, actor, before).await
+    apply_and_persist(&state, candidate, runtime.generation, actor, before).await
 }
 
 async fn apply_and_persist(
     state: &web::Data<AppState>,
     candidate: Config,
+    expected: u64,
     actor: String,
     before: RoutingPolicyView,
 ) -> actix_web::Result<HttpResponse> {
     let after = policy_from_config(&candidate);
-    match state.apply_runtime(candidate).await {
+    match state.apply_runtime_at(candidate, expected).await {
         Ok(generation) => {
             let payload = json!({
                 "diff": {
@@ -166,6 +167,9 @@ async fn apply_and_persist(
                 ));
             }
             emit_audit(state, &actor, generation, payload).await;
+            if let Err(error) = state.notify_runtime_revision(generation).await {
+                return Ok(apply_failure_response(error));
+            }
             Ok(HttpResponse::Ok().json(RoutingPolicyResponse {
                 success: true,
                 generation,

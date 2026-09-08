@@ -105,6 +105,7 @@ async fn cluster_mode_fails_to_connect_to_unreachable_seed() {
 #[tokio::test]
 async fn storage_unreachable_cluster_fails_startup_unless_degraded() {
     let mut config = StorageConfig {
+        config_sync_key_env: None,
         redis: unreachable_cluster_config(false),
         ..StorageConfig::default()
     };
