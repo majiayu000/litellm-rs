@@ -209,6 +209,9 @@ def main():
         assert status == 200, (status, response)
         revision = response["generation"]
         wait_until(lambda: b.revision()["active_revision"] == revision)
+        old_subscriber_ids = {client["id"] for client in subscribers}
+        wait_until(lambda: len([client for client in backend.client_list()
+            if int(client.get("sub", 0)) > 0 and client["id"] not in old_subscriber_ids]) >= 2)
         results["revision_reconnect_converges"] = True
         # Capture a fresh notification explicitly after reconnection.
         capture.close()
@@ -305,30 +308,34 @@ def main():
         (args.output / "results.json").write_text(json.dumps(results, indent=2))
         print(json.dumps(results, indent=2), flush=True)
     finally:
-        # Keep failure evidence even when a request or assertion fails.
-        diagnostics = {"results": results, "nodes": []}
-        for node in nodes:
-            entry = {"pid": node.process.pid, "exit_code": node.process.poll(), "revision": node.last_revision}
-            if node.process.poll() is None:
-                try:
-                    entry["revision"] = node.revision()
-                    entry["routing"] = node.request("/admin/routing/inventory")[1]
-                except (OSError, urllib.error.URLError, ValueError) as error:
-                    entry["diagnostic_error"] = type(error).__name__
-            diagnostics["nodes"].append(entry)
         try:
-            diagnostics["redis"] = {key: backend.hgetall(key) for key in backend.scan_iter(match=f"*{prefix}*")
-                                    if backend.type(key) == "hash"}
-        except redis.RedisError as error:
-            diagnostics["redis_error"] = type(error).__name__
-        (args.output / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2))
-        upstream.release.set()
-        for node in nodes:
-            node.stop()
-            node.config_path.unlink(missing_ok=True)  # Config may contain service credentials.
-        capture.close()
-        upstream.shutdown()
-        upstream.server_close()
+            # Keep failure evidence even when a request or assertion fails.
+            diagnostics = {"results": results, "nodes": []}
+            for node in nodes:
+                entry = {"pid": node.process.pid, "exit_code": node.process.poll(), "revision": node.last_revision}
+                if node.process.poll() is None:
+                    try:
+                        entry["revision"] = node.revision()
+                        entry["routing"] = node.request("/admin/routing/inventory")[1]
+                    except (OSError, urllib.error.URLError, ValueError, AssertionError) as error:
+                        entry["diagnostic_error"] = type(error).__name__
+                diagnostics["nodes"].append(entry)
+            try:
+                diagnostics["redis"] = {key: backend.hgetall(key) for key in backend.scan_iter(match=f"*{prefix}*")
+                                        if backend.type(key) == "hash"}
+            except redis.RedisError as error:
+                diagnostics["redis_error"] = type(error).__name__
+            (args.output / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2))
+        finally:
+            upstream.release.set()
+            for node in nodes:
+                node.config_path.unlink(missing_ok=True)  # Config may contain service credentials.
+            for node in nodes:
+                node.stop()
+            capture.close()
+            upstream.shutdown()
+            upstream.server_close()
+
 
 
 if __name__ == "__main__":
