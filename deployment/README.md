@@ -10,6 +10,8 @@ deployment/
 │   ├── Dockerfile          # Main Docker image
 │   ├── docker-compose.yml  # Production compose
 │   └── docker-compose.dev.yml # Development compose
+├── 📁 helm/                # Parameterized gateway chart
+│   └── litellm-rs/
 ├── 📁 kubernetes/          # Kubernetes manifests
 │   └── (K8s YAML files)
 ├── 📁 systemd/             # System service files
@@ -54,6 +56,8 @@ sudo systemctl start rust-litellm-gateway
 # Deploy to K8s
 kubectl apply -f deployment/kubernetes/
 ```
+
+For a parameterized release, use the [Helm chart](helm/litellm-rs/README.md).
 
 #### Horizontal pod autoscaling
 
