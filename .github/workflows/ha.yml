@@ -40,14 +40,14 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --user postgres
-          --health-cmd 'pg_isready -U postgres'
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
         image: redis:7-alpine
         ports: ['6379:6379']
         options: >-
           --user redis
-          --health-cmd 'redis-cli ping'
+          --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       HA_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/litellm_ha
