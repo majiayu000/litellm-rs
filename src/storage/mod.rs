@@ -500,6 +500,7 @@ mod tests {
     #[tokio::test]
     async fn test_storage_layer_creation() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig {
                 url: "postgresql://localhost:5432/test".to_string(),
                 max_connections: 5,
@@ -535,6 +536,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let configured_path = temp_dir.path().join("configured-files");
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig::default(),
             redis: RedisConfig::default(),
             files: FileStorageConfig {
@@ -567,6 +569,7 @@ mod tests {
     #[tokio::test]
     async fn default_storage_layer_runs_in_memory_sqlite_migrations() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig::default(),
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
@@ -589,6 +592,7 @@ mod tests {
     #[tokio::test]
     async fn configured_database_without_auto_migrate_requires_existing_schema() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig {
                 url: "sqlite::memory:".to_string(),
                 max_connections: 1,
@@ -620,6 +624,7 @@ mod tests {
     #[tokio::test]
     async fn configured_database_with_auto_migrate_runs_startup_migrations() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: sqlite_db_config(),
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
@@ -642,6 +647,7 @@ mod tests {
     #[tokio::test]
     async fn storage_layer_migrate_is_idempotent_after_startup_migration() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig::default(),
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
@@ -689,6 +695,7 @@ mod tests {
     #[tokio::test]
     async fn redis_enabled_failing_without_allow_degraded_fails_startup() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: sqlite_db_config(),
             redis: unreachable_redis_config(false),
             files: FileStorageConfig::default(),
@@ -706,6 +713,7 @@ mod tests {
     #[tokio::test]
     async fn redis_enabled_failing_with_allow_degraded_continues_with_noop() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: sqlite_db_config(),
             redis: unreachable_redis_config(true),
             files: FileStorageConfig::default(),
@@ -730,6 +738,7 @@ mod tests {
             ..RedisConfig::default()
         };
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: sqlite_db_config(),
             redis,
             files: FileStorageConfig::default(),

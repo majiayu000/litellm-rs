@@ -36,6 +36,7 @@ pub(super) fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/admin/routing")
             .route("/inventory", web::get().to(routing_inventory))
+            .route("/revision", web::get().to(runtime_revision))
             .route(
                 "/policy",
                 web::get().to(super::admin_routing_policy::get_routing_policy),
@@ -341,6 +342,17 @@ fn configured_provider_reason(selector: &str) -> UnavailableReason {
         }
         _ => UnavailableReason::Unavailable,
     }
+}
+
+/// Node-local synchronization status for operators.
+async fn runtime_revision(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> actix_web::Result<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, &state, "inspect runtime revision", ADMIN_ERROR) {
+        return Ok(forbidden);
+    }
+    Ok(HttpResponse::Ok().json(state.config_sync_status()))
 }
 
 #[cfg(test)]

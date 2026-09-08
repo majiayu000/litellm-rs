@@ -39,6 +39,7 @@ pub struct HttpServer {
     tls: Option<crate::server::tls::ListenerTls>,
     /// Background worker that drains budget persistence events on shutdown.
     budget_persistence_task: Option<JoinHandle<()>>,
+    config_sync_task: Option<super::config_sync::ConfigSyncTask>,
     /// Background worker that delivers configured callback events.
     callback_runtime: CallbackRuntime,
 }
@@ -129,16 +130,21 @@ impl HttpServer {
             IpAccessControl::shared(config.gateway.ip_access.clone()).map_err(|error| {
                 GatewayError::Config(format!("Invalid IP access configuration: {error}"))
             })?;
-        let state = AppState::new_with_runtime(revision, auth, storage, pricing, budget_limits)
+        let mut state = AppState::new_with_runtime(revision, auth, storage, pricing, budget_limits)
             .with_callbacks(callback_runtime.dispatcher())
             .with_audit_logger(audit_logger)
             .with_request_policies(guardrails, ip_access);
+
+        state.config_sync = super::config_sync::ConfigSync::from_config(config)?;
+        state.reconcile_runtime_config().await?;
+        let config_sync_task = super::config_sync::start(state.clone());
 
         Ok(Self {
             config: config.gateway.server.clone(),
             state,
             tls,
             budget_persistence_task,
+            config_sync_task,
             callback_runtime,
         })
     }
@@ -316,6 +322,7 @@ impl HttpServer {
         let bind_addr = format!("{}:{}", self.config.host, self.config.port);
         let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
+        let config_sync_task = self.config_sync_task.take();
         let callback_runtime =
             std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
 
@@ -420,6 +427,7 @@ impl HttpServer {
         info!("Draining audit worker");
         let audit_shutdown = audit_logger.shutdown().await;
 
+        drop(config_sync_task);
         info!("Closing storage layer");
         if let Err(e) = storage.close().await {
             warn!("Storage close reported an error: {}", e);

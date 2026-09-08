@@ -155,7 +155,8 @@ async fn create_provider(
         ));
     }
 
-    let mut candidate = (*state.pin_runtime().config).clone();
+    let runtime = state.pin_runtime();
+    let mut candidate = (*runtime.config).clone();
     if candidate
         .gateway
         .providers
@@ -173,7 +174,7 @@ async fn create_provider(
     candidate.gateway.providers.push(incoming);
     apply_and_persist(
         &state,
-        candidate,
+        (candidate, runtime.generation),
         actor,
         "create",
         Some(&created_name),
@@ -196,7 +197,8 @@ async fn update_provider(
     let name = path.into_inner();
     let patch = body.into_inner();
 
-    let mut candidate = (*state.pin_runtime().config).clone();
+    let runtime = state.pin_runtime();
+    let mut candidate = (*runtime.config).clone();
     let Some(index) = candidate
         .gateway
         .providers
@@ -225,7 +227,7 @@ async fn update_provider(
 
     apply_and_persist(
         &state,
-        candidate,
+        (candidate, runtime.generation),
         actor,
         "update",
         Some(&name),
@@ -275,7 +277,7 @@ async fn delete_provider(
     let before = public_providers(&runtime.config, &api_key_refs_from_live(&state).await);
     apply_and_persist(
         &state,
-        candidate,
+        (candidate, runtime.generation),
         actor,
         "delete",
         Some(&name),
@@ -287,7 +289,7 @@ async fn delete_provider(
 
 async fn apply_and_persist(
     state: &web::Data<AppState>,
-    candidate: Config,
+    candidate: (Config, u64),
     actor: String,
     operation: &str,
     focus: Option<&str>,
@@ -304,8 +306,8 @@ async fn apply_and_persist(
         refs.remove(name);
     }
 
-    let after = public_providers(&candidate, &refs);
-    match state.apply_runtime(candidate).await {
+    let after = public_providers(&candidate.0, &refs);
+    match state.apply_runtime_at(candidate.0, candidate.1).await {
         Ok(generation) => {
             let payload = json!({
                 "operation": operation,

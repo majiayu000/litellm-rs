@@ -41,7 +41,7 @@ use super::runtime::{build_response_cache, build_runtime_revision};
 #[derive(Clone)]
 pub struct AppState {
     /// Gateway configuration (atomically swappable by explicit callers)
-    pub config: AtomicValue<Config>,
+    pub config: Arc<AtomicValue<Config>>,
     /// Authentication system
     pub auth: Arc<crate::auth::AuthSystem>,
     /// Storage layer
@@ -64,8 +64,9 @@ pub struct AppState {
     pub audit_logger: Arc<AuditLogger>,
     /// IP policy consumed by the outer HTTP middleware.
     pub ip_access: Arc<IpAccessControl>,
-    runtime: AtomicValue<RuntimeRevision>,
-    apply_lock: Arc<Mutex<()>>,
+    pub(super) runtime: Arc<AtomicValue<RuntimeRevision>>,
+    pub(super) apply_lock: Arc<Mutex<()>>,
+    pub(super) config_sync: Option<Arc<super::config_sync::ConfigSync>>,
 }
 
 impl AppState {
@@ -112,7 +113,7 @@ impl AppState {
             storage.database.clone(),
         ))));
         Self {
-            config: AtomicValue::from(Arc::clone(&revision.config)),
+            config: Arc::new(AtomicValue::from(Arc::clone(&revision.config))),
             auth: Arc::new(auth),
             storage,
             pricing,
@@ -124,8 +125,9 @@ impl AppState {
             callbacks: RuntimeObservability::disabled(),
             audit_logger: Arc::new(AuditLogger::disabled()),
             ip_access: Arc::new(IpAccessControl::disabled()),
-            runtime: AtomicValue::new(revision),
+            runtime: Arc::new(AtomicValue::new(revision)),
             apply_lock: Arc::new(Mutex::new(())),
+            config_sync: None,
         }
     }
 
@@ -191,10 +193,18 @@ impl AppState {
     /// [`Self::config`] observe one consistent generation. Pricing is reused
     /// from [`Self::pricing`] rather than rebuilt.
     pub async fn apply_runtime(&self, candidate: Config) -> Result<u64> {
+        self.apply_runtime_at(candidate, self.pin_runtime().generation)
+            .await
+    }
+
+    pub(crate) async fn apply_runtime_at(&self, candidate: Config, expected: u64) -> Result<u64> {
         let _guard = self.apply_lock.lock().await;
-        let generation = self
-            .pin_runtime()
-            .generation
+        if self.pin_runtime().generation != expected {
+            return Err(GatewayError::Conflict(
+                "Runtime revision changed; reload configuration before retrying".into(),
+            ));
+        }
+        let generation = expected
             .checked_add(1)
             .ok_or_else(|| GatewayError::Config("runtime generation overflow".into()))?;
         let revision = build_runtime_revision(
@@ -203,11 +213,52 @@ impl AppState {
             Arc::clone(&self.pricing),
             Arc::clone(&self.storage.redis),
         )
-        .await?;
+        .await
+        .inspect_err(|_| {
+            if let Some(sync) = &self.config_sync {
+                sync.status.write().last_apply_error =
+                    Some("Runtime candidate validation/build failed".into());
+            }
+        })?;
+        if let Some(sync) = &self.config_sync {
+            let ciphertext = sync.encrypt(&revision.config, generation)?;
+            self.storage
+                .database
+                .commit_runtime_config(expected, ciphertext)
+                .await
+                .inspect_err(|_| {
+                    sync.status.write().last_sync_error =
+                        Some("Authoritative configuration commit failed".into());
+                })?;
+            sync.status.write().observed_revision = generation;
+        }
+        self.publish_runtime(revision);
+        if let Some(sync) = &self.config_sync {
+            sync.status.write().last_apply_error = None;
+            let published = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.storage.redis.publish(
+                    super::config_sync::REVISION_CHANNEL,
+                    &generation.to_string(),
+                ),
+            )
+            .await;
+            if !matches!(published, Ok(Ok(()))) {
+                sync.status.write().last_sync_error =
+                    Some("Revision committed but notification failed".into());
+                return Err(GatewayError::Storage(format!(
+                    "Runtime revision {generation} committed and applied, but notification failed; peers reconcile from the database"
+                )));
+            }
+            sync.status.write().last_sync_error = None;
+        }
+        Ok(generation)
+    }
+
+    pub(super) fn publish_runtime(&self, revision: RuntimeRevision) {
         let config = Arc::clone(&revision.config);
         self.runtime.store(revision);
         self.config.store_arc(config);
-        Ok(generation)
     }
 
     /// Load a snapshot of the current gateway configuration.

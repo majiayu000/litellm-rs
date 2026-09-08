@@ -15,6 +15,10 @@ pub use redis_config::RedisConfig;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
+    /// Environment variable containing a dedicated (at least 32-byte) encryption key.
+    /// Setting this enables authoritative PostgreSQL runtime revisions and Redis notifications.
+    #[serde(default)]
+    pub config_sync_key_env: Option<String>,
     /// Database configuration
     pub database: DatabaseConfig,
     /// Redis configuration
@@ -42,6 +46,9 @@ impl StorageConfig {
         other: Self,
         redis_cluster: Option<bool>,
     ) -> Self {
+        if other.config_sync_key_env.is_some() {
+            self.config_sync_key_env = other.config_sync_key_env;
+        }
         self.database = self.database.merge(other.database);
         self.redis = self
             .redis
@@ -604,6 +611,7 @@ mod tests {
     #[test]
     fn test_storage_config_structure() {
         let config = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig::default(),
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),
@@ -645,6 +653,7 @@ mod tests {
     fn test_storage_config_merge() {
         let base = StorageConfig::default();
         let other = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig {
                 url: "postgresql://new/db".to_string(),
                 connection_timeout: 30,
@@ -712,6 +721,7 @@ mod tests {
     fn test_storage_config_merge_files() {
         let base = StorageConfig::default();
         let other = StorageConfig {
+            config_sync_key_env: None,
             database: DatabaseConfig::default(),
             redis: RedisConfig::default(),
             files: FileStorageConfig {

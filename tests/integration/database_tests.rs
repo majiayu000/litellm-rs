@@ -72,6 +72,7 @@ mod tests {
 
     fn storage_config(database: DatabaseConfig) -> StorageConfig {
         StorageConfig {
+            config_sync_key_env: None,
             database,
             redis: RedisConfig::default(),
             files: FileStorageConfig::default(),

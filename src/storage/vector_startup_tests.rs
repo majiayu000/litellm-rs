@@ -60,6 +60,7 @@ fn storage_with_vector(
     vector_db: Option<crate::config::models::file_storage::VectorDbConfig>,
 ) -> StorageConfig {
     StorageConfig {
+        config_sync_key_env: None,
         database: sqlite_db_config(),
         redis: RedisConfig::default(),
         files: FileStorageConfig::default(),

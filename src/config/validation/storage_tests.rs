@@ -83,6 +83,7 @@ fn database_validation_rejects_sqlite_dependent_runtime_modes() {
     assert!(error.to_string().contains("enabled=false"), "got: {error}");
     assert!(error.contains("`sqlite` feature"), "got: {error}");
     let storage = StorageConfig {
+        config_sync_key_env: None,
         database: disabled,
         ..StorageConfig::default()
     };

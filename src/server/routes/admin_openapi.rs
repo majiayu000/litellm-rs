@@ -46,6 +46,10 @@ struct AdminControlPlaneRoute {
 #[cfg(test)]
 const ADMIN_CONTROL_PLANE_ROUTES: &[AdminControlPlaneRoute] = &[
     AdminControlPlaneRoute {
+        path: "/admin/routing/revision",
+        method: AdminMethod::Get,
+    },
+    AdminControlPlaneRoute {
         path: "/admin/openapi.json",
         method: AdminMethod::Get,
     },
