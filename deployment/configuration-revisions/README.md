@@ -12,6 +12,7 @@ storage:
     fallback_to_sqlite: false
   redis:
     enabled: true
+    allow_degraded: false
     url: "${REDIS_URL}"
 ```
 
@@ -40,7 +41,7 @@ hint; the PostgreSQL row is the authority. Subscribers connect before fetching t
 revision, ignore old/duplicate notifications, and reconcile every second while connected.
 After a disconnect they reconnect and fetch the latest database snapshot. Global Redis
 Pub/Sub works through any reachable configured Cluster seed. A committed update whose
-notification fails returns an explicit error identifying the committed revision; do not assume
+notification fails still records the sanitized revision/audit event, then returns an explicit error identifying the committed revision; do not assume
 that an error means the mutation was rolled back. Missed notifications are repaired by the
 periodic database read/reconnect. Database outages preserve the last active runtime and are
 visible in diagnostics; they never write to a local fallback store.

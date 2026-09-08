@@ -330,6 +330,9 @@ async fn apply_and_persist(
                 ));
             }
             emit_audit(state, &actor, generation, operation, payload).await;
+            if let Err(error) = state.notify_runtime_revision(generation).await {
+                return Ok(apply_failure_response(error));
+            }
             let provider =
                 focus.and_then(|name| after.into_iter().find(|provider| provider.name == name));
             Ok(HttpResponse::Ok().json(ProviderMutationResponse {

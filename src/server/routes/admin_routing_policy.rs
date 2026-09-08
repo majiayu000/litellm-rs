@@ -167,6 +167,9 @@ async fn apply_and_persist(
                 ));
             }
             emit_audit(state, &actor, generation, payload).await;
+            if let Err(error) = state.notify_runtime_revision(generation).await {
+                return Ok(apply_failure_response(error));
+            }
             Ok(HttpResponse::Ok().json(RoutingPolicyResponse {
                 success: true,
                 generation,

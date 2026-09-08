@@ -16,10 +16,11 @@ impl Validate for StorageConfig {
             && (key_env.trim().is_empty()
                 || !self.database.enabled
                 || !self.redis.enabled
+                || self.redis.allow_degraded
                 || !self.database.url.starts_with("postgres")
                 || self.database.fallback_to_sqlite)
         {
-            return Err("config_sync_key_env requires a nonempty env name, PostgreSQL without SQLite fallback, and enabled Redis".into());
+            return Err("config_sync_key_env requires a nonempty env name, PostgreSQL without SQLite fallback, and enabled Redis without degraded mode".into());
         }
         self.database.validate()?;
         if self.redis.enabled {

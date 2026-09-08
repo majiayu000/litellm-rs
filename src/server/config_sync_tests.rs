@@ -53,7 +53,7 @@ async fn two_nodes_converge_and_duplicates_do_not_rebuild() {
     let mut candidate = (*a.config()).clone();
     candidate.gateway.providers[0].weight = 7.0;
     // Disabled Redis makes notification fail after the durable commit.
-    assert!(a.apply_runtime_at(candidate, 0).await.is_err());
+    assert!(a.apply_runtime(candidate).await.is_err());
     assert_eq!(a.pin_runtime().generation, 1);
     assert!(a.config_sync_status().last_sync_error.is_some());
     b.reconcile_runtime_config().await.unwrap();
@@ -77,7 +77,7 @@ async fn concurrent_database_writers_cannot_overwrite_a_new_revision() {
     first.gateway.providers[0].weight = 3.0;
     let mut second = (*b.config()).clone();
     second.gateway.providers[0].weight = 8.0;
-    let (left, right) = tokio::join!(a.apply_runtime_at(first, 0), b.apply_runtime_at(second, 0));
+    let (left, right) = tokio::join!(a.apply_runtime(first), b.apply_runtime(second));
     assert_eq!(
         [left, right]
             .iter()
@@ -102,7 +102,7 @@ async fn one_nodes_decryption_failure_keeps_healthy_nodes_active_and_is_visible(
     b.storage = a.storage.clone();
     b.config_sync = Some(sync(9));
     let before = b.pin_runtime();
-    assert!(a.apply_runtime_at((*a.config()).clone(), 0).await.is_err());
+    assert!(a.apply_runtime((*a.config()).clone()).await.is_err());
     assert!(b.reconcile_runtime_config().await.is_err());
     assert!(Arc::ptr_eq(&before, &b.pin_runtime()));
     assert_eq!(a.pin_runtime().generation, 1);
@@ -196,7 +196,7 @@ async fn redis_broadcasts_only_ids_and_reconnect_reads_latest() {
         .subscribe(&[REVISION_CHANNEL.into()])
         .await
         .unwrap();
-    a.apply_runtime_at((*a.config()).clone(), 0).await.unwrap();
+    a.apply_runtime((*a.config()).clone()).await.unwrap();
     let message = tokio::time::timeout(Duration::from_secs(3), capture.next_message())
         .await
         .unwrap()
@@ -214,8 +214,8 @@ async fn redis_broadcasts_only_ids_and_reconnect_reads_latest() {
     }
     reached(&b, 1).await;
     drop(task); // Lose notifications while disconnected.
-    a.apply_runtime_at((*a.config()).clone(), 1).await.unwrap();
-    a.apply_runtime_at((*a.config()).clone(), 2).await.unwrap();
+    a.apply_runtime((*a.config()).clone()).await.unwrap();
+    a.apply_runtime((*a.config()).clone()).await.unwrap();
     let _task = start(b.clone()).unwrap();
     reached(&b, 3).await;
     let pin = b.pin_runtime();
@@ -235,4 +235,65 @@ async fn redis_broadcasts_only_ids_and_reconnect_reads_latest() {
         "duplicate/out-of-order events must not rebuild"
     );
     capture.unsubscribe_all().await.unwrap();
+}
+
+#[tokio::test]
+async fn notification_failure_preserves_committed_admin_revision_records() {
+    use actix_web::{http::StatusCode, test, web};
+    let state = state().await;
+    let provider = state.config().gateway.providers[0].name.clone();
+    let app = test::init_service(HttpServer::create_app(web::Data::new(state.clone()))).await;
+    for (path, body, method) in [
+        (
+            format!("/admin/providers/{provider}"),
+            serde_json::json!({"weight": 2}),
+            "PATCH",
+        ),
+        (
+            "/admin/routing/policy".into(),
+            serde_json::json!({"model_aliases": {}}),
+            "PUT",
+        ),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::default()
+                .method(method.parse().unwrap())
+                .uri(&path)
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body: serde_json::Value = test::read_body_json(response).await;
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("committed and applied")
+        );
+    }
+    assert_eq!(state.pin_runtime().generation, 2);
+    assert_eq!(
+        state
+            .storage
+            .database
+            .latest_provider_config_revision()
+            .await
+            .unwrap()
+            .unwrap()
+            .generation,
+        1
+    );
+    assert_eq!(
+        state
+            .storage
+            .database
+            .latest_routing_policy_revision()
+            .await
+            .unwrap()
+            .unwrap()
+            .generation,
+        2
+    );
 }
