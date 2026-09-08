@@ -189,6 +189,7 @@ def main():
         assert b.revision()["active_revision"] == 0
         assert a.revision()["active_revision"] == revision
         assert a.chat(model)[0] == 200
+        assert b.chat(model)[0] == 200
         results["failed_node_preserves_old_revision"] = True
         b.stop()
         b = Gateway(args.binary.resolve(), config, key, args.output, "node-b-recovered")
