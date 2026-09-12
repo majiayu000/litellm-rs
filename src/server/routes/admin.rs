@@ -52,15 +52,12 @@ async fn cache_admin_response(state: &web::Data<AppState>) -> CacheAdminResponse
 
 pub(super) fn require_admin(
     req: &HttpRequest,
-    state: &web::Data<AppState>,
+    // Kept for call-site stability; admin routes always require an Admin User
+    // regardless of enable_jwt/enable_api_key/allow_anonymous.
+    _state: &web::Data<AppState>,
     action: &str,
     error: &'static str,
 ) -> Option<HttpResponse> {
-    let cfg = state.config.load();
-    if !cfg.auth().enable_jwt && !cfg.auth().enable_api_key {
-        return None;
-    }
-
     let extensions = req.extensions();
     if let Some(user) = extensions.get::<User>() {
         if user.has_role(&UserRole::Admin) {
@@ -212,6 +209,26 @@ mod tests {
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn cache_status_forbids_anonymous_when_auth_disabled() {
+        // auth disabled + allow_anonymous=true must still fail closed for /admin/*
+        let state = test_state(base_test_config(false)).await;
+        let app = test::init_service(App::new().app_data(state).configure(configure_routes)).await;
+
+        let req = test::TestRequest::get()
+            .uri("/admin/cache/status")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+        assert_eq!(
+            body["error"],
+            "Admin role required for cache administration"
+        );
     }
 
     #[actix_web::test]
