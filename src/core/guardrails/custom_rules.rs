@@ -71,15 +71,18 @@ fn compile_custom_rule_patterns(
         if !rule.enabled {
             continue;
         }
+        // Reject oversized pattern lists before reserving Vec capacity so a
+        // huge `patterns` vec cannot OOM via `with_capacity` ahead of the cap.
+        let remaining = MAX_CUSTOM_RULE_ENABLED_PATTERNS.saturating_sub(enabled_pattern_count);
+        if rule.patterns.len() > remaining {
+            return Err(GuardrailError::Config(format!(
+                "Custom rule '{}' exceeds aggregate enabled pattern limit of {MAX_CUSTOM_RULE_ENABLED_PATTERNS}",
+                rule.name
+            )));
+        }
         let mut patterns = Vec::with_capacity(rule.patterns.len());
         for pattern in &rule.patterns {
             enabled_pattern_count = enabled_pattern_count.saturating_add(1);
-            if enabled_pattern_count > MAX_CUSTOM_RULE_ENABLED_PATTERNS {
-                return Err(GuardrailError::Config(format!(
-                    "Custom rule '{}' exceeds aggregate enabled pattern limit of {MAX_CUSTOM_RULE_ENABLED_PATTERNS}",
-                    rule.name
-                )));
-            }
             let regex = compile_bounded_pattern(pattern).map_err(|error| {
                 GuardrailError::Config(format!(
                     "Invalid custom rule '{}' pattern '{}': {error}",
