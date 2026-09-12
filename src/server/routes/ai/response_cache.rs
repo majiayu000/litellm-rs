@@ -94,6 +94,34 @@ pub(super) async fn store_chat(
         .await
 }
 
+/// Drop a chat response-cache entry so a later identical request re-fetches.
+///
+/// Used when an output guardrail blocks a cached replay: the entry may have
+/// been lawful when stored but is poisoned after a guardrail config change.
+pub(super) async fn invalidate_chat(
+    state: &AppState,
+    request: &ChatCompletionRequest,
+    context: &RequestContext,
+) -> Result<(), GatewayError> {
+    if should_bypass_chat_cache(request, context) {
+        return Ok(());
+    }
+    let Some(cache) = state.response_cache() else {
+        return Ok(());
+    };
+    let identity = cache_identity(context);
+    match cache
+        .invalidate_chat_with_user(request, identity.as_deref())
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            warn!(error = %error, "Chat response cache invalidate failed; continuing");
+            Ok(())
+        }
+    }
+}
+
 pub(super) async fn lookup_embedding(
     state: &AppState,
     request: &EmbeddingRequest,
@@ -359,6 +387,87 @@ mod tests {
         assert_eq!(
             cache_request.user.as_deref(),
             Some("api_key:00000000-0000-0000-0000-00000000002a")
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidate_chat_removes_entry_for_next_lookup() {
+        use crate::core::models::openai::{ChatChoice, ChatMessage, MessageContent, MessageRole};
+
+        let mut config = crate::server::valid_test_config();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.cache.enabled = true;
+
+        let state = crate::server::HttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with response cache")
+            .state()
+            .clone();
+        assert!(
+            state.response_cache().is_some(),
+            "response cache must be enabled for this regression"
+        );
+
+        let request = ChatCompletionRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("hello".to_string())),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            }],
+            ..Default::default()
+        };
+        let response = ChatCompletionResponse {
+            id: "chatcmpl-poisoned".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1,
+            model: "gpt-4".to_string(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: Some(MessageContent::Text("blocked later".to_string())),
+                    name: None,
+                    function_call: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    audio: None,
+                },
+                finish_reason: Some("stop".to_string()),
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: None,
+        };
+        let context = RequestContext::default().with_api_key(Uuid::from_u128(99));
+
+        store_chat(&state, &request, &response, &context)
+            .await
+            .expect("store should succeed");
+        assert!(
+            lookup_chat(&state, &request, &context)
+                .await
+                .expect("lookup should succeed")
+                .is_some(),
+            "cached entry must be present before invalidate"
+        );
+
+        invalidate_chat(&state, &request, &context)
+            .await
+            .expect("invalidate should succeed");
+
+        assert!(
+            lookup_chat(&state, &request, &context)
+                .await
+                .expect("lookup after invalidate should succeed")
+                .is_none(),
+            "output-blocked cache entry must be gone for the next lookup"
         );
     }
 }
