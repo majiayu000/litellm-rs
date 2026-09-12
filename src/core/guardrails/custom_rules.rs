@@ -4,8 +4,9 @@
 //! and prompt-injection, then evaluates them through the shared `Guardrail`
 //! trait. Mask is not implemented; gateway validation rejects it.
 //!
-//! Operator-supplied patterns are untrusted: compile with length, nest, and
-//! compiled-size caps so a single pathological rule cannot blow up heap or
+//! Operator-supplied patterns are untrusted: compile with length, nest,
+//! per-pattern compiled-size, and aggregate pattern/count budgets so neither a
+//! single pathological rule nor many near-limit patterns can blow up heap or
 //! stall the fleet at config apply time. Match-time budgets are deferred;
 //! `regex` matching is linear in the haystack once compilation succeeds.
 
@@ -21,10 +22,17 @@ use super::types::{
 
 /// Cap on pattern string length (bytes). Keeps AST/heap proportional to input.
 const MAX_CUSTOM_RULE_PATTERN_LEN: usize = 512;
-/// Cap on compiled regex heap (~bytes). Default regex crate limit is ~10 MiB.
+/// Cap on compiled regex heap (~bytes) per pattern. Default regex crate limit is ~10 MiB.
 const CUSTOM_RULE_REGEX_SIZE_LIMIT: usize = 100 * 1024;
 /// Cap on AST nesting depth. Default regex nest limit is 250.
 const CUSTOM_RULE_REGEX_NEST_LIMIT: u32 = 32;
+/// Cap on total enabled patterns across the whole `custom_rules` configuration.
+const MAX_CUSTOM_RULE_ENABLED_PATTERNS: usize = 32;
+/// Aggregate compiled-regex budget. Each successful compile debits
+/// [`CUSTOM_RULE_REGEX_SIZE_LIMIT`] (worst case) because the regex crate does
+/// not expose post-compile automaton size. Aligned with the pattern count cap.
+const MAX_CUSTOM_RULE_AGGREGATE_COMPILED_BYTES: usize =
+    MAX_CUSTOM_RULE_ENABLED_PATTERNS * CUSTOM_RULE_REGEX_SIZE_LIMIT;
 
 struct CompiledCustomRule {
     name: String,
@@ -57,18 +65,36 @@ fn compile_custom_rule_patterns(
     rules: &[CustomRuleConfig],
 ) -> GuardrailResult<Vec<CompiledCustomRule>> {
     let mut compiled = Vec::new();
+    let mut enabled_pattern_count = 0usize;
+    let mut aggregate_compiled_bytes = 0usize;
     for rule in rules {
         if !rule.enabled {
             continue;
         }
         let mut patterns = Vec::with_capacity(rule.patterns.len());
         for pattern in &rule.patterns {
+            enabled_pattern_count = enabled_pattern_count.saturating_add(1);
+            if enabled_pattern_count > MAX_CUSTOM_RULE_ENABLED_PATTERNS {
+                return Err(GuardrailError::Config(format!(
+                    "Custom rule '{}' exceeds aggregate enabled pattern limit of {MAX_CUSTOM_RULE_ENABLED_PATTERNS}",
+                    rule.name
+                )));
+            }
             let regex = compile_bounded_pattern(pattern).map_err(|error| {
                 GuardrailError::Config(format!(
                     "Invalid custom rule '{}' pattern '{}': {error}",
                     rule.name, pattern
                 ))
             })?;
+            // Conservative debit: regex does not expose compiled automaton size.
+            aggregate_compiled_bytes =
+                aggregate_compiled_bytes.saturating_add(CUSTOM_RULE_REGEX_SIZE_LIMIT);
+            if aggregate_compiled_bytes > MAX_CUSTOM_RULE_AGGREGATE_COMPILED_BYTES {
+                return Err(GuardrailError::Config(format!(
+                    "Custom rule '{}' exceeds aggregate compiled regex budget of {MAX_CUSTOM_RULE_AGGREGATE_COMPILED_BYTES} bytes",
+                    rule.name
+                )));
+            }
             patterns.push(regex);
         }
         compiled.push(CompiledCustomRule {
@@ -271,6 +297,45 @@ mod tests {
         )])
         .expect_err("pathological pattern must fail validation");
         assert!(err.contains("blowup"), "{err}");
+    }
+
+    #[test]
+    fn rejects_aggregate_enabled_pattern_count() {
+        let patterns = (0..=MAX_CUSTOM_RULE_ENABLED_PATTERNS)
+            .map(|i| format!("token-{i}"))
+            .collect::<Vec<_>>();
+        let oversized = CustomRuleConfig {
+            name: "many-patterns".to_string(),
+            description: None,
+            enabled: true,
+            patterns,
+            action: GuardrailAction::Block,
+            message: None,
+        };
+        let error = match CustomRulesGuardrail::try_from_config(&[oversized]) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("aggregate pattern count must fail closed"),
+        };
+        assert!(error.contains("many-patterns"), "{error}");
+        assert!(error.contains("aggregate enabled pattern limit"), "{error}");
+    }
+
+    #[test]
+    fn accepts_aggregate_pattern_budget_at_limit() {
+        let patterns = (0..MAX_CUSTOM_RULE_ENABLED_PATTERNS)
+            .map(|i| format!("token-{i}"))
+            .collect::<Vec<_>>();
+        let at_limit = CustomRuleConfig {
+            name: "at-limit".to_string(),
+            description: None,
+            enabled: true,
+            patterns,
+            action: GuardrailAction::Block,
+            message: None,
+        };
+        CustomRulesGuardrail::try_from_config(&[at_limit])
+            .expect("exact aggregate pattern budget must succeed")
+            .expect("at-limit config must produce a guardrail");
     }
 
     #[test]
