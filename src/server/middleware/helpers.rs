@@ -101,6 +101,8 @@ pub fn is_public_route(path: &str) -> bool {
         "/admin/dashboard/providers.js",
         "/admin/dashboard/provider-health.js",
         "/admin/dashboard/routing-inventory.js",
+        "/admin/dashboard/request-ledger.js",
+        "/admin/dashboard/routing-policy.js",
         "/docs",
         "/openapi.json",
     ];
