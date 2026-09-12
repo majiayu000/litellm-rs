@@ -206,6 +206,46 @@ mod tests {
     }
 
     #[test]
+    fn gateway_rejects_pathological_custom_rule_regex() {
+        let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+        value["guardrails"] = serde_json::json!({
+            "custom_rules": [{
+                "name": "redos-shape",
+                "patterns": [r"\p{L}{1000}"],
+                "action": "block"
+            }]
+        });
+        let config: GatewayConfig = serde_json::from_value(value).unwrap();
+
+        let error = super::validate_gateway_guardrails(&config.guardrails)
+            .expect_err("pathological regex must fail closed at config validation");
+        assert!(error.contains("redos-shape"), "{error}");
+        assert!(
+            error.contains("size limit") || error.contains("Compiled regex exceeds"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn gateway_rejects_aggregate_custom_rule_pattern_budget() {
+        let patterns: Vec<String> = (0..=32).map(|i| format!("token-{i}")).collect();
+        let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
+        value["guardrails"] = serde_json::json!({
+            "custom_rules": [{
+                "name": "many-patterns",
+                "patterns": patterns,
+                "action": "block"
+            }]
+        });
+        let config: GatewayConfig = serde_json::from_value(value).unwrap();
+
+        let error = super::validate_gateway_guardrails(&config.guardrails)
+            .expect_err("aggregate pattern budget must fail closed at config validation");
+        assert!(error.contains("many-patterns"), "{error}");
+        assert!(error.contains("aggregate enabled pattern limit"), "{error}");
+    }
+
+    #[test]
     fn gateway_accepts_pii_masking_at_the_canonical_dto_boundary() {
         let mut value = serde_json::to_value(GatewayConfig::default()).unwrap();
         value["guardrails"] = serde_json::json!({"pii": {"enabled": true, "action": "mask"}});
