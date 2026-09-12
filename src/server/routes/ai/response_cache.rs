@@ -1,5 +1,6 @@
 //! Shared response-cache helpers for non-streaming AI routes.
 
+use crate::core::cache::LLMCache;
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
@@ -8,6 +9,7 @@ use crate::core::types::context::RequestContext;
 use crate::core::types::embedding::EmbeddingInput;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
+use std::sync::Arc;
 use tracing::warn;
 
 const BYPASS_CHAT_RESPONSE_CACHE_KEY: &str = "bypass_chat_response_cache";
@@ -52,26 +54,35 @@ fn cache_identity(context: &RequestContext) -> Option<String> {
     }
 }
 
+/// Look up a cached chat response, returning the cache instance from the same
+/// runtime generation that performed the lookup.
+///
+/// Callers that later invalidate after an output-guardrail block must use the
+/// returned `Arc<LLMCache>` rather than re-reading `AppState::response_cache()`,
+/// which can point at a newer revision if caching was disabled mid-request.
 pub(super) async fn lookup_chat(
     state: &AppState,
     request: &ChatCompletionRequest,
     context: &RequestContext,
-) -> Result<Option<ChatCompletionResponse>, GatewayError> {
+) -> Result<(Option<Arc<LLMCache>>, Option<ChatCompletionResponse>), GatewayError> {
     if should_bypass_chat_cache(request, context) {
-        return Ok(None);
+        return Ok((None, None));
     }
     let Some(cache) = state.response_cache() else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let identity = cache_identity(context);
     match cache
         .get_chat_response_with_user(request, identity.as_deref())
         .await
     {
-        Ok(cached) => Ok(cached.map(|response| response.as_ref().clone())),
+        Ok(cached) => Ok((
+            Some(cache),
+            cached.map(|response| response.as_ref().clone()),
+        )),
         Err(error) => {
             warn!(error = %error, "Chat response cache lookup failed; treating as miss");
-            Ok(None)
+            Ok((Some(cache), None))
         }
     }
 }
@@ -98,27 +109,24 @@ pub(super) async fn store_chat(
 ///
 /// Used when an output guardrail blocks a cached replay: the entry may have
 /// been lawful when stored but is poisoned after a guardrail config change.
+///
+/// `cache` must be the same instance returned by [`lookup_chat`] for this
+/// request so invalidation still hits Redis/L1 after a mid-request reload that
+/// disables the live `AppState::response_cache()`.
 pub(super) async fn invalidate_chat(
-    state: &AppState,
+    cache: &LLMCache,
     request: &ChatCompletionRequest,
     context: &RequestContext,
-) -> Result<(), GatewayError> {
+) {
     if should_bypass_chat_cache(request, context) {
-        return Ok(());
+        return;
     }
-    let Some(cache) = state.response_cache() else {
-        return Ok(());
-    };
     let identity = cache_identity(context);
-    match cache
+    if let Err(error) = cache
         .invalidate_chat_with_user(request, identity.as_deref())
         .await
     {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            warn!(error = %error, "Chat response cache invalidate failed; continuing");
-            Ok(())
-        }
+        warn!(error = %error, "Chat response cache invalidate failed; continuing");
     }
 }
 
@@ -450,23 +458,22 @@ mod tests {
         store_chat(&state, &request, &response, &context)
             .await
             .expect("store should succeed");
+        let (lookup_cache, before) = lookup_chat(&state, &request, &context)
+            .await
+            .expect("lookup should succeed");
         assert!(
-            lookup_chat(&state, &request, &context)
-                .await
-                .expect("lookup should succeed")
-                .is_some(),
+            before.is_some(),
             "cached entry must be present before invalidate"
         );
+        let cache = lookup_cache.expect("lookup must pin the cache generation used for the hit");
 
-        invalidate_chat(&state, &request, &context)
+        invalidate_chat(&cache, &request, &context).await;
+
+        let (_, after) = lookup_chat(&state, &request, &context)
             .await
-            .expect("invalidate should succeed");
-
+            .expect("lookup after invalidate should succeed");
         assert!(
-            lookup_chat(&state, &request, &context)
-                .await
-                .expect("lookup after invalidate should succeed")
-                .is_none(),
+            after.is_none(),
             "output-blocked cache entry must be gone for the next lookup"
         );
     }

@@ -238,8 +238,8 @@ async fn handle_chat_completion_internal(
         build_core_chat_request(request.as_ref(), requested_model, false)?,
         extensions,
     )?;
-    let cached_response = if opt_in {
-        None
+    let (chat_cache, cached_response) = if opt_in {
+        (None, None)
     } else {
         super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
     };
@@ -447,12 +447,14 @@ async fn handle_chat_completion_internal(
                     }
                     Err(error) if is_output_guardrail_block(&error) => {
                         skip_cached_replay.store(true, Ordering::Relaxed);
-                        let _ = super::response_cache::invalidate_chat(
-                            state,
-                            request.as_ref(),
-                            context.as_ref(),
-                        )
-                        .await;
+                        if let Some(cache) = chat_cache.as_ref() {
+                            super::response_cache::invalidate_chat(
+                                cache,
+                                request.as_ref(),
+                                context.as_ref(),
+                            )
+                            .await;
+                        }
                         excluded_deployments.insert(blocked_deployment.clone());
                         original_deployment.get_or_insert(blocked_deployment);
                         last_output_block = Some(error);
