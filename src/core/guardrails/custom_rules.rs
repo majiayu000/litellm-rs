@@ -3,9 +3,14 @@
 //! Compiles configured `custom_rules` with the same `regex` crate used by PII
 //! and prompt-injection, then evaluates them through the shared `Guardrail`
 //! trait. Mask is not implemented; gateway validation rejects it.
+//!
+//! Operator-supplied patterns are untrusted: compile with length, nest, and
+//! compiled-size caps so a single pathological rule cannot blow up heap or
+//! stall the fleet at config apply time. Match-time budgets are deferred;
+//! `regex` matching is linear in the haystack once compilation succeeds.
 
 use async_trait::async_trait;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use tracing::debug;
 
 use super::config::CustomRuleConfig;
@@ -13,6 +18,13 @@ use super::traits::Guardrail;
 use super::types::{
     CheckResult, GuardrailAction, GuardrailError, GuardrailResult, Violation, ViolationType,
 };
+
+/// Cap on pattern string length (bytes). Keeps AST/heap proportional to input.
+const MAX_CUSTOM_RULE_PATTERN_LEN: usize = 512;
+/// Cap on compiled regex heap (~bytes). Default regex crate limit is ~10 MiB.
+const CUSTOM_RULE_REGEX_SIZE_LIMIT: usize = 100 * 1024;
+/// Cap on AST nesting depth. Default regex nest limit is 250.
+const CUSTOM_RULE_REGEX_NEST_LIMIT: u32 = 32;
 
 struct CompiledCustomRule {
     name: String,
@@ -26,6 +38,20 @@ pub(crate) struct CustomRulesGuardrail {
     rules: Vec<CompiledCustomRule>,
 }
 
+fn compile_bounded_pattern(pattern: &str) -> Result<Regex, String> {
+    if pattern.len() > MAX_CUSTOM_RULE_PATTERN_LEN {
+        return Err(format!(
+            "pattern exceeds maximum length of {MAX_CUSTOM_RULE_PATTERN_LEN} bytes (got {})",
+            pattern.len()
+        ));
+    }
+    RegexBuilder::new(pattern)
+        .size_limit(CUSTOM_RULE_REGEX_SIZE_LIMIT)
+        .nest_limit(CUSTOM_RULE_REGEX_NEST_LIMIT)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
 /// Compile enabled custom rules. Invalid patterns name the rule and pattern.
 fn compile_custom_rule_patterns(
     rules: &[CustomRuleConfig],
@@ -37,7 +63,7 @@ fn compile_custom_rule_patterns(
         }
         let mut patterns = Vec::with_capacity(rule.patterns.len());
         for pattern in &rule.patterns {
-            let regex = Regex::new(pattern).map_err(|error| {
+            let regex = compile_bounded_pattern(pattern).map_err(|error| {
                 GuardrailError::Config(format!(
                     "Invalid custom rule '{}' pattern '{}': {error}",
                     rule.name, pattern
@@ -183,6 +209,68 @@ mod tests {
         };
         assert!(error.contains("no-secrets"), "{error}");
         assert!(error.contains("pattern '['"), "{error}");
+    }
+
+    #[test]
+    fn rejects_oversized_pattern_length() {
+        let pattern = "a".repeat(MAX_CUSTOM_RULE_PATTERN_LEN + 1);
+        let error = match CustomRulesGuardrail::try_from_config(&[rule(
+            "too-long",
+            &pattern,
+            GuardrailAction::Block,
+        )]) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("oversized pattern must fail closed"),
+        };
+        assert!(error.contains("too-long"), "{error}");
+        assert!(error.contains("maximum length"), "{error}");
+    }
+
+    #[test]
+    fn rejects_pathological_compile_size_blowup() {
+        // Counted unicode class expands into a large compiled automaton.
+        let error = match CustomRulesGuardrail::try_from_config(&[rule(
+            "blowup",
+            r"\p{L}{1000}",
+            GuardrailAction::Block,
+        )]) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("size-blowup pattern must fail closed"),
+        };
+        assert!(error.contains("blowup"), "{error}");
+        assert!(
+            error.contains("size limit") || error.contains("Compiled regex exceeds"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_excessive_nesting() {
+        let pattern = format!("{}a{}", "(".repeat(33), ")".repeat(33));
+        let error = match CustomRulesGuardrail::try_from_config(&[rule(
+            "nested",
+            &pattern,
+            GuardrailAction::Block,
+        )]) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("deeply nested pattern must fail closed"),
+        };
+        assert!(error.contains("nested"), "{error}");
+        assert!(
+            error.contains("nested parentheses") || error.contains("nest"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn validate_custom_rule_patterns_fail_closed_on_pathological() {
+        let err = validate_custom_rule_patterns(&[rule(
+            "blowup",
+            r"\p{L}{1000}",
+            GuardrailAction::Block,
+        )])
+        .expect_err("pathological pattern must fail validation");
+        assert!(err.contains("blowup"), "{err}");
     }
 
     #[test]
