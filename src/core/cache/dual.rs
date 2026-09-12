@@ -26,7 +26,10 @@ use tracing::{debug, trace, warn};
 /// - Write to both memory and Redis caches
 ///
 /// Invalidation strategy:
-/// - Invalidate both caches
+/// - Delete from both L1 (memory) and L2 (Redis) when present
+/// - Dual-mode Redis delete errors propagate (same as RedisOnly) so
+///   poisoned-entry invalidation cannot report success while L2 still holds
+///   the value. Dual writes still only warn on Redis failure.
 pub struct DualCache<T> {
     /// In-memory cache layer (L1)
     memory: Arc<InMemoryCache<T>>,
@@ -269,9 +272,11 @@ where
                     deleted = true;
                 }
 
-                // Delete from Redis
+                // Delete from Redis. Propagate L2 failures (unlike Dual writes,
+                // which only warn): invalidation of poisoned entries must not
+                // report success when Redis still holds the value.
                 if let Some(ref redis) = self.redis
-                    && redis.delete(key).await.unwrap_or(false)
+                    && redis.delete(key).await?
                 {
                     deleted = true;
                 }
@@ -531,6 +536,33 @@ mod tests {
         let deleted = cache.delete(&key).await.unwrap();
         assert!(deleted);
         assert!(!cache.exists(&key).await.unwrap());
+    }
+
+    /// Dual mode must not swallow Redis layer results via unwrap_or: with a
+    /// noop Redis pool, delete still clears L1 and returns Ok (L2 is a no-op
+    /// Ok(false)). Real Redis errors propagate via `?` (see Dual delete arm).
+    #[tokio::test]
+    async fn dual_mode_delete_clears_memory_when_redis_is_noop() {
+        let config = DualCacheConfig {
+            mode: CacheMode::Dual,
+            ..DualCacheConfig::default()
+        };
+        let cache: DualCache<String> =
+            DualCache::new(config, Some(Arc::new(RedisPool::create_noop())));
+        let key = CacheKey::new("poisoned-entry");
+
+        cache
+            .set(key.clone(), "blocked-response".to_string())
+            .await
+            .unwrap();
+        assert!(cache.memory.exists(&key).await);
+
+        let deleted = cache
+            .delete(&key)
+            .await
+            .expect("noop Redis must not turn Dual delete into Err");
+        assert!(deleted, "L1 delete must count as success");
+        assert!(!cache.memory.exists(&key).await);
     }
 
     #[tokio::test]
