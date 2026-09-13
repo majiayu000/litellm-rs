@@ -216,6 +216,49 @@ where
         Ok(existed)
     }
 
+    /// Delete only while the live Redis value still satisfies `predicate`.
+    ///
+    /// Reads the raw blob, checks the deserialized value, then CAS-deletes with
+    /// Lua so a concurrent replacement is not removed.
+    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
+    where
+        F: FnOnce(&T) -> bool,
+    {
+        if self.pool.is_noop() {
+            return Ok(false);
+        }
+
+        let redis_key = self.make_redis_key(key);
+        let Some(data) = self.pool.get(&redis_key).await? else {
+            return Ok(false);
+        };
+
+        let entry: SerializableCacheEntry<T> = match self.deserialize(&data) {
+            Ok(entry) => entry,
+            Err(e) => {
+                warn!(key = %key, error = %e, "Failed to deserialize cache entry during conditional delete");
+                let _ = self.pool.delete(&redis_key).await;
+                return Ok(false);
+            }
+        };
+
+        if entry.is_expired() {
+            let _ = self.pool.delete(&redis_key).await;
+            return Ok(false);
+        }
+
+        if !predicate(&entry.value) {
+            return Ok(false);
+        }
+
+        let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
+        if deleted {
+            self.stats.record_deletion();
+            trace!(key = %key, "Redis cache conditional delete");
+        }
+        Ok(deleted)
+    }
+
     /// Clear all Redis entries owned by this cache prefix.
     pub async fn clear(&self) -> Result<usize> {
         if self.pool.is_noop() {

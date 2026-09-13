@@ -287,6 +287,43 @@ where
         Ok(deleted)
     }
 
+    /// Conditionally delete from each configured layer while the live value matches.
+    ///
+    /// Each layer evaluates the predicate against its own current value and deletes
+    /// atomically (DashMap `remove_if` for L1, Redis Lua CAS for L2), so a
+    /// concurrent replacement is not removed after a stale match.
+    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut deleted = false;
+
+        match self.config.mode {
+            CacheMode::MemoryOnly => {
+                deleted = self.memory.delete_if(key, &predicate).await;
+            }
+            CacheMode::RedisOnly => {
+                if let Some(ref redis) = self.redis {
+                    deleted = redis.delete_if(key, &predicate).await?;
+                }
+            }
+            CacheMode::Dual => {
+                if self.memory.delete_if(key, &predicate).await {
+                    deleted = true;
+                }
+                // Propagate L2 failures the same way as unconditional Dual delete.
+                if let Some(ref redis) = self.redis
+                    && redis.delete_if(key, &predicate).await?
+                {
+                    deleted = true;
+                }
+            }
+        }
+
+        trace!(key = %key, deleted = deleted, "Dual cache conditional delete");
+        Ok(deleted)
+    }
+
     /// Check if a key exists in either cache layer
     pub async fn exists(&self, key: &CacheKey) -> Result<bool> {
         match self.config.mode {

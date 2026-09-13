@@ -370,9 +370,9 @@ impl LLMCache {
     /// Invalidate a cached chat response only while it still matches `expected`.
     ///
     /// Key-only deletes can remove a concurrent replacement that another request
-    /// already stored after invalidating the same poisoned entry. Matching on
-    /// completion identity (`id` + `created` + `model`) skips the delete when the
-    /// live value is no longer the rejected payload.
+    /// already stored after invalidating the same poisoned entry. Matching delete
+    /// is atomic per cache layer (DashMap `remove_if` / Redis Lua CAS) so a
+    /// replacement under the same key is not removed after a stale match.
     pub async fn invalidate_chat_with_user_matching(
         &self,
         request: &ChatCompletionRequest,
@@ -385,13 +385,11 @@ impl LLMCache {
             generate_chat_key(request)
         };
 
-        let Some(current) = self.chat_cache.get(&key).await? else {
-            return Ok(false);
-        };
-        if !chat_response_matches_cached(current.response.as_ref(), expected) {
-            return Ok(false);
-        }
-        self.chat_cache.delete(&key).await
+        self.chat_cache
+            .delete_if(&key, |current| {
+                chat_response_matches_cached(current.response.as_ref(), expected)
+            })
+            .await
     }
 
     // ==================== Embedding Methods ====================

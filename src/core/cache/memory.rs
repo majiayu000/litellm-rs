@@ -256,6 +256,29 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
         }
     }
 
+    /// Atomically delete `key` only while the live (non-expired) value matches `predicate`.
+    ///
+    /// Uses DashMap `remove_if` so a concurrent replacement under the same key is
+    /// not removed after a stale match decision.
+    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> bool
+    where
+        F: Fn(&T) -> bool,
+    {
+        let removed = self.cache.remove_if(key, |_k, entry| {
+            !entry.is_expired() && predicate(&entry.value)
+        });
+        if let Some((_, removed)) = removed {
+            self.remove_access_meta(key);
+            self.stats.record_deletion();
+            self.stats.sub_total_size(removed.size_bytes);
+            self.stats.set_entry_count(self.cache.len());
+            trace!(key = %key, "Cache conditional delete");
+            true
+        } else {
+            false
+        }
+    }
+
     /// Check if a key exists in the cache
     pub async fn exists(&self, key: &CacheKey) -> bool {
         // Atomically remove expired entries to avoid TOCTOU race
