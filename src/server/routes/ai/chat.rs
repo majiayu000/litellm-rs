@@ -455,6 +455,7 @@ async fn handle_chat_completion_internal(
                                 cache,
                                 request.as_ref(),
                                 context.as_ref(),
+                                &cached,
                             )
                             .await
                             {
@@ -472,8 +473,11 @@ async fn handle_chat_completion_internal(
                         }
                         // Deterministic masking/projection/scan rejection: drop
                         // the poisoned entry, then return (no content-policy fallback).
-                        let error = last_invalidate_error.take().unwrap_or(error);
-                        callback.fail(error.to_string(), "guardrail_output");
+                        let (error, error_type) = match last_invalidate_error.take() {
+                            Some(invalidate_error) => (invalidate_error, "cache_invalidate"),
+                            None => (error, "guardrail_output"),
+                        };
+                        callback.fail(error.to_string(), error_type);
                         return Err(error);
                     }
                     Err(error) => {
@@ -559,12 +563,17 @@ async fn handle_chat_completion_internal(
             }
         }
     }
+    let error_type = if last_invalidate_error.is_some() {
+        "cache_invalidate"
+    } else {
+        "guardrail_output"
+    };
     let error = last_invalidate_error
         .or(last_output_block)
         .unwrap_or_else(|| {
             GatewayError::Forbidden(crate::server::guardrails::OUTPUT_BLOCK_MESSAGE.to_string())
         });
-    callback.fail(error.to_string(), "guardrail_output");
+    callback.fail(error.to_string(), error_type);
     Err(error)
 }
 

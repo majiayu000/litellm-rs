@@ -368,3 +368,31 @@ async fn test_invalidate_chat_with_user_honors_user_specific_key() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn test_invalidate_chat_with_user_matching_skips_replacement() {
+    let cache = LLMCache::memory_only();
+    let request = create_test_request();
+    let poisoned = create_test_response();
+    let mut replacement = create_test_response();
+    replacement.id = "chatcmpl-safe".to_string();
+    replacement.created = 1234567891;
+
+    cache
+        .cache_chat_response(&request, poisoned.clone())
+        .await
+        .unwrap();
+    cache
+        .cache_chat_response(&request, replacement.clone())
+        .await
+        .unwrap();
+
+    let deleted = cache
+        .invalidate_chat_with_user_matching(&request, None, &poisoned)
+        .await
+        .unwrap();
+    assert!(!deleted);
+
+    let still_there = cache.get_chat_response(&request).await.unwrap().unwrap();
+    assert_eq!(still_there.id, "chatcmpl-safe");
+}

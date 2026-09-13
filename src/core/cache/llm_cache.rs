@@ -367,6 +367,33 @@ impl LLMCache {
         self.chat_cache.delete(&key).await
     }
 
+    /// Invalidate a cached chat response only while it still matches `expected`.
+    ///
+    /// Key-only deletes can remove a concurrent replacement that another request
+    /// already stored after invalidating the same poisoned entry. Matching on
+    /// completion identity (`id` + `created` + `model`) skips the delete when the
+    /// live value is no longer the rejected payload.
+    pub async fn invalidate_chat_with_user_matching(
+        &self,
+        request: &ChatCompletionRequest,
+        user_id: Option<&str>,
+        expected: &ChatCompletionResponse,
+    ) -> Result<bool> {
+        let key = if self.config.user_specific {
+            generate_chat_key_with_user(request, user_id)
+        } else {
+            generate_chat_key(request)
+        };
+
+        let Some(current) = self.chat_cache.get(&key).await? else {
+            return Ok(false);
+        };
+        if !chat_response_matches_cached(current.response.as_ref(), expected) {
+            return Ok(false);
+        }
+        self.chat_cache.delete(&key).await
+    }
+
     // ==================== Embedding Methods ====================
 
     /// Get a cached embedding response
@@ -491,6 +518,19 @@ impl LLMCache {
         self.chat_cache.shutdown();
         self.embedding_cache.shutdown();
     }
+}
+
+/// True when `current` is still the same completion that `expected` rejected.
+///
+/// Completion `id` is unique per provider response; `created` and `model` guard
+/// against accidental id reuse across stores.
+fn chat_response_matches_cached(
+    current: &ChatCompletionResponse,
+    expected: &ChatCompletionResponse,
+) -> bool {
+    current.id == expected.id
+        && current.created == expected.created
+        && current.model == expected.model
 }
 
 /// Combined cache statistics
