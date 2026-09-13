@@ -450,20 +450,19 @@ async fn handle_chat_completion_internal(
                     }
                     Err(error) if should_invalidate_cached_chat_on_output_error(&error) => {
                         skip_cached_replay.store(true, Ordering::Relaxed);
-                        if let Some(cache) = chat_cache.as_ref() {
-                            if let Err(invalidate_error) = super::response_cache::invalidate_chat(
+                        if let Some(cache) = chat_cache.as_ref()
+                            && let Err(invalidate_error) = super::response_cache::invalidate_chat(
                                 cache,
                                 request.as_ref(),
                                 context.as_ref(),
                                 &cached,
                             )
                             .await
-                            {
-                                // Prefer live fallbacks (they may overwrite the
-                                // key). If none succeed, surface this so callers
-                                // know Redis may still hold the poisoned entry.
-                                last_invalidate_error = Some(invalidate_error);
-                            }
+                        {
+                            // Prefer live fallbacks (they may overwrite the
+                            // key). If none succeed, surface this so callers
+                            // know Redis may still hold the poisoned entry.
+                            last_invalidate_error = Some(invalidate_error);
                         }
                         if is_output_guardrail_block(&error) {
                             excluded_deployments.insert(blocked_deployment.clone());

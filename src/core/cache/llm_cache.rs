@@ -249,8 +249,18 @@ impl CacheWriteIdentity for CachedEmbeddingResponse {
 impl LLMCache {
     /// Create a new LLM cache with the given configuration
     pub fn new(config: LLMCacheConfig, redis_pool: Option<Arc<RedisPool>>) -> Self {
-        let chat_cache = DualCache::new(config.cache_config.clone(), redis_pool.clone());
-        let embedding_cache = DualCache::new(config.cache_config.clone(), redis_pool);
+        // Provide payload-only identity for wrappers that embed `cached_at`, so
+        // Dual stale-write barriers stay off the general DualCache API bound.
+        let chat_cache = DualCache::with_write_identity(
+            config.cache_config.clone(),
+            redis_pool.clone(),
+            <CachedChatResponse as CacheWriteIdentity>::cache_write_identity,
+        );
+        let embedding_cache = DualCache::with_write_identity(
+            config.cache_config.clone(),
+            redis_pool,
+            <CachedEmbeddingResponse as CacheWriteIdentity>::cache_write_identity,
+        );
 
         Self {
             chat_cache,

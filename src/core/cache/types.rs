@@ -554,6 +554,10 @@ impl CacheStatsSnapshot {
 /// concurrent `set` of the same logical payload cannot recreate a just-deleted
 /// entry. Wrappers that embed wall-clock metadata (e.g. `cached_at`) must hash
 /// only the payload that matching invalidation compares.
+///
+/// This trait is **not** a bound on the public `DualCache` API. Ordinary caches
+/// default to [`serialize_write_identity`]; LLM wrappers supply a custom hasher
+/// via [`crate::core::cache::DualCache::with_write_identity`].
 pub trait CacheWriteIdentity {
     /// Stable fingerprint of the logical value (not wrapper metadata).
     fn cache_write_identity(&self) -> u64;
