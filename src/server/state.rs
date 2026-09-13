@@ -266,6 +266,13 @@ impl AppState {
     }
 
     pub(super) fn publish_runtime(&self, revision: RuntimeRevision) {
+        // Stop cleanup tasks on the obsolete response cache before publishing.
+        // DualCache also shuts down on Drop, but in-flight Arc pins can keep the
+        // old revision alive; explicit shutdown avoids leaking barrier loops
+        // across every configuration reload.
+        if let Some(previous) = self.runtime.load().response_cache.as_ref() {
+            previous.shutdown();
+        }
         let config = Arc::clone(&revision.config);
         self.runtime.store(revision);
         self.config.store_arc(config);

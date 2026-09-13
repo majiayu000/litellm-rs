@@ -81,9 +81,12 @@ impl Drop for L1FillLockLease {
 ///
 /// Invalidation strategy:
 /// - Delete from both L1 (memory) and L2 (Redis) when present
-/// - Dual-mode Redis delete errors propagate (same as RedisOnly) so
-///   poisoned-entry invalidation cannot report success while L2 still holds
-///   the value. Dual writes still only warn on Redis failure.
+/// - Dual-mode unconditional `delete`/`delete_many` keep Redis best-effort
+///   (warn on L2 failure; L1 success still returns `Ok`) so transient Redis
+///   outages do not abort otherwise successful cleanup. Poisoned-entry
+///   `delete_if` still propagates Redis failures so callers can observe an
+///   incomplete conditional invalidation. Dual writes still only warn on
+///   Redis failure.
 /// - L1 fills from L2 take the same per-key lock as Dual deletes and
 ///   perform a single Redis read under that lock so invalidation cannot be
 ///   raced by read-through and hit/miss stats are not double-counted.
@@ -578,13 +581,17 @@ where
                     deleted = true;
                 }
 
-                // Delete from Redis. Propagate L2 failures (unlike Dual writes,
-                // which only warn): invalidation of poisoned entries must not
-                // report success when Redis still holds the value.
-                if let Some(ref redis) = self.redis
-                    && redis.delete(key).await?
-                {
-                    deleted = true;
+                // Best-effort Redis delete (same contract as Dual writes): L1
+                // success still yields Ok. Poisoned-entry conditional
+                // invalidation propagates L2 failures via `delete_if` only.
+                if let Some(ref redis) = self.redis {
+                    match redis.delete(key).await {
+                        Ok(true) => deleted = true,
+                        Ok(false) => {}
+                        Err(e) => {
+                            warn!(key = %key, error = %e, "Redis delete failed in dual cache mode");
+                        }
+                    }
                 }
             }
         }
@@ -635,7 +642,8 @@ where
                     self.install_stale_write_barrier(key, &removed);
                     deleted = true;
                     // L1 matched: purge L2 regardless of payload (match or diverge).
-                    // Propagate L2 failures the same way as unconditional Dual delete.
+                    // Propagate L2 failures so poisoned conditional invalidation
+                    // cannot report success while Redis still holds a value.
                     // Do not barrier divergent L2 identities — only the poisoned L1
                     // match is proven rejected by the current predicate.
                     if let Some(ref redis) = self.redis
@@ -794,6 +802,15 @@ where
     pub fn shutdown(&self) {
         self.barrier_cleanup_shutdown.notify_waiters();
         self.memory.shutdown();
+    }
+}
+
+impl<T> Drop for DualCache<T> {
+    fn drop(&mut self) {
+        // Stop the barrier cleanup task even when callers forget `shutdown`
+        // (e.g. runtime revision replace dropping an obsolete LLMCache).
+        // InMemoryCache shuts down via its own Drop when the last Arc is released.
+        self.barrier_cleanup_shutdown.notify_waiters();
     }
 }
 
@@ -961,9 +978,9 @@ mod tests {
         assert!(!cache.exists(&key).await.unwrap());
     }
 
-    /// Dual mode must not swallow Redis layer results via unwrap_or: with a
-    /// noop Redis pool, delete still clears L1 and returns Ok (L2 is a no-op
-    /// Ok(false)). Real Redis errors propagate via `?` (see Dual delete arm).
+    /// Dual unconditional delete stays best-effort: with a noop Redis pool,
+    /// delete still clears L1 and returns Ok (L2 is a no-op Ok(false)). Redis
+    /// transport errors are warned, not returned; `delete_if` propagates them.
     #[tokio::test]
     async fn dual_mode_delete_clears_memory_when_redis_is_noop() {
         let config = DualCacheConfig {
