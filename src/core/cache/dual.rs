@@ -18,9 +18,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 
-/// Shard count for locks that serialize L2→L1 read-through fills with deletes.
-const L1_FILL_LOCK_SHARDS: usize = 64;
-
 /// Short-lived barrier that rejects recreating a just-invalidated logical value.
 #[derive(Clone, Debug)]
 struct StaleWriteBarrier {
@@ -37,7 +34,7 @@ struct StaleWriteBarrier {
 ///
 /// Write strategy:
 /// - Write to both memory and Redis caches
-/// - Dual-mode writes take the same per-key shard lock as invalidation and
+/// - Dual-mode writes take the same per-key lock as invalidation and
 ///   refuse payloads matching a recent conditional-delete barrier so a stale
 ///   `store` cannot recreate a just-invalidated entry
 ///
@@ -46,12 +43,15 @@ struct StaleWriteBarrier {
 /// - Dual-mode Redis delete errors propagate (same as RedisOnly) so
 ///   poisoned-entry invalidation cannot report success while L2 still holds
 ///   the value. Dual writes still only warn on Redis failure.
-/// - L1 fills from L2 take the same per-key shard lock as Dual deletes and
+/// - L1 fills from L2 take the same per-key lock as Dual deletes and
 ///   perform a single Redis read under that lock so invalidation cannot be
 ///   raced by read-through and hit/miss stats are not double-counted.
 /// - Dual-mode `delete_if` records a write-identity barrier for each removed
 ///   value so concurrent writers that skip the lock window still cannot
 ///   recreate the same logical payload until the barrier expires.
+/// - Per-key locks may be held across Redis I/O for that key only; unrelated
+///   keys never share a mutex, so a slow Redis round trip cannot serialize
+///   traffic for other cache keys.
 pub struct DualCache<T> {
     /// In-memory cache layer (L1)
     memory: Arc<InMemoryCache<T>>,
@@ -61,8 +61,8 @@ pub struct DualCache<T> {
     config: DualCacheConfig,
     /// Shared statistics
     stats: Arc<AtomicCacheStats>,
-    /// Serializes Dual-mode L2→L1 population with L1/L2 invalidation/writes.
-    l1_fill_locks: Arc<Vec<Mutex<()>>>,
+    /// Per-key mutexes serializing Dual-mode L2→L1 fills with invalidation/writes.
+    l1_fill_locks: Arc<DashMap<CacheKey, Arc<Mutex<()>>>>,
     /// Per-key barriers rejecting stale recreation of conditionally deleted values.
     stale_write_barriers: Arc<DashMap<CacheKey, Vec<StaleWriteBarrier>>>,
 }
@@ -103,7 +103,7 @@ where
             redis,
             config,
             stats,
-            l1_fill_locks: Arc::new((0..L1_FILL_LOCK_SHARDS).map(|_| Mutex::new(())).collect()),
+            l1_fill_locks: Arc::new(DashMap::new()),
             stale_write_barriers: Arc::new(DashMap::new()),
         }
     }
@@ -125,8 +125,20 @@ where
         self.memory.start_cleanup_task();
     }
 
-    fn l1_fill_lock(&self, key: &CacheKey) -> &Mutex<()> {
-        &self.l1_fill_locks[key.hash_value() as usize % self.l1_fill_locks.len()]
+    /// Returns the per-key coordination lock (creating it on first use).
+    fn l1_fill_lock(&self, key: &CacheKey) -> Arc<Mutex<()>> {
+        self.l1_fill_locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    /// Drop the caller's lock handle and remove the map entry when idle.
+    fn release_l1_fill_lock(&self, key: &CacheKey, lock: Arc<Mutex<()>>) {
+        // Drop the caller's clone first so an idle key is held only by the map.
+        drop(lock);
+        self.l1_fill_locks
+            .remove_if(key, |_, existing| Arc::strong_count(existing) == 1);
     }
 
     fn install_stale_write_barrier(&self, key: &CacheKey, value: &T) {
@@ -219,7 +231,7 @@ where
 
     /// Fill L1 from L2 under the fill/invalidate lock with a single Redis read.
     ///
-    /// Holding the same shard lock as Dual deletes while reading L2 prevents a
+    /// Holding the same per-key lock as Dual deletes while reading L2 prevents a
     /// concurrent invalidation from leaving a resurrected L1 entry. Doing the
     /// Redis read only under that lock (after an L1 recheck) avoids a second
     /// Redis round trip and double-counting hit/miss stats on every L1 miss.
@@ -229,31 +241,37 @@ where
             None => return Ok(None),
         };
 
-        let _guard = self.l1_fill_lock(key).lock().await;
+        let lock = self.l1_fill_lock(key);
+        let result = {
+            let _guard = lock.lock().await;
 
-        // Non-accounting recheck: the outer get_dual already recorded the L1 miss.
-        if let Some(value) = self.memory.peek(key).await {
-            return Ok(Some(value));
-        }
-
-        match redis.get(key).await? {
-            Some(fresh) => {
-                if self.is_stale_write_blocked(key, &fresh) {
-                    trace!(
-                        key = %key,
-                        "Dual cache skipped L1 fill for invalidated logical value"
-                    );
-                    return Ok(None);
+            // Non-accounting recheck: the outer get_dual already recorded the L1 miss.
+            if let Some(value) = self.memory.peek(key).await {
+                Ok(Some(value))
+            } else {
+                match redis.get(key).await? {
+                    Some(fresh) => {
+                        if self.is_stale_write_blocked(key, &fresh) {
+                            trace!(
+                                key = %key,
+                                "Dual cache skipped L1 fill for invalidated logical value"
+                            );
+                            Ok(None)
+                        } else {
+                            self.memory.set(key.clone(), fresh.clone()).await;
+                            trace!(key = %key, "Dual cache L2 hit, populated L1");
+                            Ok(Some(fresh))
+                        }
+                    }
+                    None => {
+                        trace!(key = %key, "Dual cache miss");
+                        Ok(None)
+                    }
                 }
-                self.memory.set(key.clone(), fresh.clone()).await;
-                trace!(key = %key, "Dual cache L2 hit, populated L1");
-                Ok(Some(fresh))
             }
-            None => {
-                trace!(key = %key, "Dual cache miss");
-                Ok(None)
-            }
-        }
+        };
+        self.release_l1_fill_lock(key, lock);
+        result
     }
 
     /// Get an entry with metadata from the cache
@@ -281,34 +299,40 @@ where
             None => return Ok(None),
         };
 
-        let _guard = self.l1_fill_lock(key).lock().await;
+        let lock = self.l1_fill_lock(key);
+        let result = {
+            let _guard = lock.lock().await;
 
-        // Non-accounting recheck: the outer get_entry_dual already recorded the miss.
-        if let Some(existing) = self.memory.peek_entry(key).await {
-            return Ok(Some(existing));
-        }
-
-        match redis.get_entry(key).await? {
-            Some(fresh) => {
-                if self.is_stale_write_blocked(key, &fresh.value) {
-                    trace!(
-                        key = %key,
-                        "Dual cache skipped L1 entry fill for invalidated logical value"
-                    );
-                    return Ok(None);
+            // Non-accounting recheck: the outer get_entry_dual already recorded the miss.
+            if let Some(existing) = self.memory.peek_entry(key).await {
+                Ok(Some(existing))
+            } else {
+                match redis.get_entry(key).await? {
+                    Some(fresh) => {
+                        if self.is_stale_write_blocked(key, &fresh.value) {
+                            trace!(
+                                key = %key,
+                                "Dual cache skipped L1 entry fill for invalidated logical value"
+                            );
+                            Ok(None)
+                        } else {
+                            self.memory
+                                .set_with_size(
+                                    key.clone(),
+                                    fresh.value.clone(),
+                                    fresh.ttl,
+                                    fresh.size_bytes,
+                                )
+                                .await;
+                            Ok(Some(fresh))
+                        }
+                    }
+                    None => Ok(None),
                 }
-                self.memory
-                    .set_with_size(
-                        key.clone(),
-                        fresh.value.clone(),
-                        fresh.ttl,
-                        fresh.size_bytes,
-                    )
-                    .await;
-                Ok(Some(fresh))
             }
-            None => Ok(None),
-        }
+        };
+        self.release_l1_fill_lock(key, lock);
+        result
     }
 
     /// Set a value in the cache with the default TTL
@@ -336,34 +360,39 @@ where
 
     /// Set in both cache layers under the fill/invalidate lock.
     ///
-    /// Holding the lock serializes writers with Dual `delete`/`delete_if`. A
-    /// write-identity barrier installed by conditional invalidation rejects
+    /// Holding the per-key lock serializes writers with Dual `delete`/`delete_if`.
+    /// A write-identity barrier installed by conditional invalidation rejects
     /// recreating the same logical payload after a successful CAS delete.
     async fn set_dual(&self, key: CacheKey, value: T, ttl: Duration) -> Result<()> {
-        let _guard = self.l1_fill_lock(&key).lock().await;
-        if self.is_stale_write_blocked(&key, &value) {
-            trace!(
-                key = %key,
-                "Dual cache rejected stale write after conditional invalidation"
-            );
-            return Ok(());
-        }
+        let lock = self.l1_fill_lock(&key);
+        let result = {
+            let _guard = lock.lock().await;
+            if self.is_stale_write_blocked(&key, &value) {
+                trace!(
+                    key = %key,
+                    "Dual cache rejected stale write after conditional invalidation"
+                );
+                Ok(())
+            } else {
+                // Write to memory cache
+                self.memory
+                    .set_with_ttl(key.clone(), value.clone(), ttl)
+                    .await;
 
-        // Write to memory cache
-        self.memory
-            .set_with_ttl(key.clone(), value.clone(), ttl)
-            .await;
+                // Write to Redis cache (asynchronous)
+                if let Some(ref redis) = self.redis
+                    && let Err(e) = redis.set_with_ttl(key.clone(), value, ttl).await
+                {
+                    warn!(key = %key, error = %e, "Failed to write to Redis cache");
+                    // Don't fail the operation if Redis write fails
+                }
 
-        // Write to Redis cache (asynchronous)
-        if let Some(ref redis) = self.redis
-            && let Err(e) = redis.set_with_ttl(key.clone(), value, ttl).await
-        {
-            warn!(key = %key, error = %e, "Failed to write to Redis cache");
-            // Don't fail the operation if Redis write fails
-        }
-
-        trace!(key = %key, ttl_secs = ttl.as_secs(), "Dual cache set");
-        Ok(())
+                trace!(key = %key, ttl_secs = ttl.as_secs(), "Dual cache set");
+                Ok(())
+            }
+        };
+        self.release_l1_fill_lock(&key, lock);
+        result
     }
 
     /// Set a value with size tracking
@@ -387,25 +416,31 @@ where
                 }
             }
             CacheMode::Dual => {
-                let _guard = self.l1_fill_lock(&key).lock().await;
-                if self.is_stale_write_blocked(&key, &value) {
-                    trace!(
-                        key = %key,
-                        "Dual cache rejected stale sized write after conditional invalidation"
-                    );
-                    return Ok(());
-                }
-                self.memory
-                    .set_with_size(key.clone(), value.clone(), ttl, size_bytes)
-                    .await;
-                if let Some(ref redis) = self.redis
-                    && let Err(e) = redis
-                        .set_with_size(key.clone(), value, ttl, size_bytes)
-                        .await
-                {
-                    warn!(key = %key, error = %e, "Redis write failed in dual cache mode");
-                }
-                Ok(())
+                let lock = self.l1_fill_lock(&key);
+                let result = {
+                    let _guard = lock.lock().await;
+                    if self.is_stale_write_blocked(&key, &value) {
+                        trace!(
+                            key = %key,
+                            "Dual cache rejected stale sized write after conditional invalidation"
+                        );
+                        Ok(())
+                    } else {
+                        self.memory
+                            .set_with_size(key.clone(), value.clone(), ttl, size_bytes)
+                            .await;
+                        if let Some(ref redis) = self.redis
+                            && let Err(e) = redis
+                                .set_with_size(key.clone(), value, ttl, size_bytes)
+                                .await
+                        {
+                            warn!(key = %key, error = %e, "Redis write failed in dual cache mode");
+                        }
+                        Ok(())
+                    }
+                };
+                self.release_l1_fill_lock(&key, lock);
+                result
             }
         }
     }
@@ -424,21 +459,28 @@ where
                 }
             }
             CacheMode::Dual => {
-                // Hold the fill lock so an in-flight L2→L1 populate cannot
+                // Hold the per-key fill lock so an in-flight L2→L1 populate cannot
                 // resurrect this key after we clear both layers.
-                let _guard = self.l1_fill_lock(key).lock().await;
-                if self.memory.delete(key).await {
-                    deleted = true;
-                }
+                let lock = self.l1_fill_lock(key);
+                let result: Result<bool> = {
+                    let _guard = lock.lock().await;
+                    let mut deleted = false;
+                    if self.memory.delete(key).await {
+                        deleted = true;
+                    }
 
-                // Delete from Redis. Propagate L2 failures (unlike Dual writes,
-                // which only warn): invalidation of poisoned entries must not
-                // report success when Redis still holds the value.
-                if let Some(ref redis) = self.redis
-                    && redis.delete(key).await?
-                {
-                    deleted = true;
-                }
+                    // Delete from Redis. Propagate L2 failures (unlike Dual writes,
+                    // which only warn): invalidation of poisoned entries must not
+                    // report success when Redis still holds the value.
+                    if let Some(ref redis) = self.redis
+                        && redis.delete(key).await?
+                    {
+                        deleted = true;
+                    }
+                    Ok(deleted)
+                };
+                self.release_l1_fill_lock(key, lock);
+                deleted = result?;
             }
         }
 
@@ -451,7 +493,7 @@ where
     /// Each layer evaluates the predicate against its own current value and deletes
     /// atomically (DashMap `remove_if` for L1, Redis Lua CAS for L2), so a
     /// concurrent replacement is not removed after a stale match. Dual mode also
-    /// holds the L1-fill lock so read-through cannot repopulate L1 after a
+    /// holds the per-key fill lock so read-through cannot repopulate L1 after a
     /// successful layer delete, and installs a write-identity barrier so a
     /// concurrent Dual `set` cannot recreate the same logical payload.
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
@@ -470,18 +512,25 @@ where
                 }
             }
             CacheMode::Dual => {
-                let _guard = self.l1_fill_lock(key).lock().await;
-                if let Some(removed) = self.memory.delete_if(key, &predicate).await {
-                    self.install_stale_write_barrier(key, &removed);
-                    deleted = true;
-                }
-                // Propagate L2 failures the same way as unconditional Dual delete.
-                if let Some(ref redis) = self.redis
-                    && let Some(removed) = redis.delete_if(key, &predicate).await?
-                {
-                    self.install_stale_write_barrier(key, &removed);
-                    deleted = true;
-                }
+                let lock = self.l1_fill_lock(key);
+                let result: Result<bool> = {
+                    let _guard = lock.lock().await;
+                    let mut deleted = false;
+                    if let Some(removed) = self.memory.delete_if(key, &predicate).await {
+                        self.install_stale_write_barrier(key, &removed);
+                        deleted = true;
+                    }
+                    // Propagate L2 failures the same way as unconditional Dual delete.
+                    if let Some(ref redis) = self.redis
+                        && let Some(removed) = redis.delete_if(key, &predicate).await?
+                    {
+                        self.install_stale_write_barrier(key, &removed);
+                        deleted = true;
+                    }
+                    Ok(deleted)
+                };
+                self.release_l1_fill_lock(key, lock);
+                deleted = result?;
             }
         }
 
@@ -558,6 +607,7 @@ where
         // Admin/cache clear must also drop write-identity barriers so a later
         // store of a previously-invalidated logical value is accepted again.
         self.stale_write_barriers.clear();
+        self.l1_fill_locks.clear();
 
         debug!(redis_deleted, "Dual cache cleared");
         Ok(())
@@ -667,27 +717,42 @@ where
                 continue;
             }
 
-            let _guard = self.l1_fill_lock(key).lock().await;
-            if self.memory.exists(key).await {
-                continue;
-            }
-            // Single L2 read under the fill lock: avoid double Redis traffic and
-            // keep warming from resurrecting a concurrently invalidated entry.
-            let fresh = match redis.get_entry(key).await {
-                Ok(Some(entry)) => entry,
-                Ok(None) => continue,
-                Err(e) => {
-                    warn!(key = %key, error = %e, "Failed to warm key from Redis; skipping");
-                    continue;
+            let lock = self.l1_fill_lock(key);
+            let warmed_key = {
+                let _guard = lock.lock().await;
+                if self.memory.exists(key).await {
+                    false
+                } else {
+                    // Single L2 read under the fill lock: avoid double Redis traffic and
+                    // keep warming from resurrecting a concurrently invalidated entry.
+                    match redis.get_entry(key).await {
+                        Ok(Some(fresh)) => {
+                            if self.is_stale_write_blocked(key, &fresh.value) {
+                                false
+                            } else {
+                                self.memory
+                                    .set_with_size(
+                                        key.clone(),
+                                        fresh.value,
+                                        fresh.ttl,
+                                        fresh.size_bytes,
+                                    )
+                                    .await;
+                                true
+                            }
+                        }
+                        Ok(None) => false,
+                        Err(e) => {
+                            warn!(key = %key, error = %e, "Failed to warm key from Redis; skipping");
+                            false
+                        }
+                    }
                 }
             };
-            if self.is_stale_write_blocked(key, &fresh.value) {
-                continue;
+            self.release_l1_fill_lock(key, lock);
+            if warmed_key {
+                warmed += 1;
             }
-            self.memory
-                .set_with_size(key.clone(), fresh.value, fresh.ttl, fresh.size_bytes)
-                .await;
-            warmed += 1;
         }
 
         debug!(count = warmed, "Warmed memory cache from Redis");
@@ -1026,6 +1091,33 @@ mod tests {
         let result = cache.get(&key).await.unwrap();
 
         assert_eq!(result, Some(value));
+    }
+
+    #[tokio::test]
+    async fn dual_fill_locks_are_per_key_not_sharded() {
+        let cache: DualCache<String> = DualCache::with_defaults();
+        let key_a = CacheKey::new("lock-a");
+        let key_b = CacheKey::new("lock-b");
+
+        let lock_a = cache.l1_fill_lock(&key_a);
+        let lock_b = cache.l1_fill_lock(&key_b);
+        assert!(
+            !Arc::ptr_eq(&lock_a, &lock_b),
+            "unrelated keys must not share a fill/invalidate mutex"
+        );
+        let lock_a_again = cache.l1_fill_lock(&key_a);
+        assert!(
+            Arc::ptr_eq(&lock_a, &lock_a_again),
+            "same key must reuse its per-key mutex"
+        );
+        drop(lock_a_again);
+
+        cache.release_l1_fill_lock(&key_a, lock_a);
+        cache.release_l1_fill_lock(&key_b, lock_b);
+        assert!(
+            cache.l1_fill_locks.is_empty(),
+            "idle per-key locks must be reclaimed"
+        );
     }
 
     #[tokio::test]
