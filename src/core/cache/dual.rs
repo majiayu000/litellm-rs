@@ -34,8 +34,9 @@ const L1_FILL_LOCK_SHARDS: usize = 64;
 /// - Dual-mode Redis delete errors propagate (same as RedisOnly) so
 ///   poisoned-entry invalidation cannot report success while L2 still holds
 ///   the value. Dual writes still only warn on Redis failure.
-/// - L1 fills from L2 take the same per-key shard lock as Dual deletes so a
-///   concurrent read-through cannot resurrect an entry after invalidation.
+/// - L1 fills from L2 take the same per-key shard lock as Dual deletes and
+///   perform a single Redis read under that lock so invalidation cannot be
+///   raced by read-through and hit/miss stats are not double-counted.
 pub struct DualCache<T> {
     /// In-memory cache layer (L1)
     memory: Arc<InMemoryCache<T>>,
@@ -136,27 +137,24 @@ where
             return Ok(Some(value));
         }
 
-        // L2: Check Redis cache
-        if let Some(ref redis) = self.redis
-            && let Some(value) = redis.get(key).await?
-        {
-            return self.populate_l1_from_l2_value(key, value).await;
+        if self.redis.is_none() {
+            trace!(key = %key, "Dual cache miss");
+            return Ok(None);
         }
 
-        trace!(key = %key, "Dual cache miss");
-        Ok(None)
+        self.fill_l1_from_l2(key).await
     }
 
-    /// Re-validate L2 under the fill/invalidate lock before populating L1.
+    /// Fill L1 from L2 under the fill/invalidate lock with a single Redis read.
     ///
-    /// A concurrent Dual delete may remove L1 and L2 after this task already
-    /// observed an L2 hit; populating L1 from that stale observation would
-    /// resurrect the poisoned entry. Holding the same shard lock as Dual
-    /// deletes and re-reading L2 closes that window.
-    async fn populate_l1_from_l2_value(&self, key: &CacheKey, observed: T) -> Result<Option<T>> {
+    /// Holding the same shard lock as Dual deletes while reading L2 prevents a
+    /// concurrent invalidation from leaving a resurrected L1 entry. Doing the
+    /// Redis read only under that lock (after an L1 recheck) avoids a second
+    /// Redis round trip and double-counting hit/miss stats on every L1 miss.
+    async fn fill_l1_from_l2(&self, key: &CacheKey) -> Result<Option<T>> {
         let redis = match self.redis.as_ref() {
             Some(redis) => redis,
-            None => return Ok(Some(observed)),
+            None => return Ok(None),
         };
 
         let _guard = self.l1_fill_lock(key).lock().await;
@@ -172,10 +170,7 @@ where
                 Ok(Some(fresh))
             }
             None => {
-                // L2 was invalidated (or expired) after the first read; do not
-                // resurrect into L1. Treat as a miss so callers refetch.
-                let _stale = observed;
-                trace!(key = %key, "Dual cache L2 invalidated before L1 fill");
+                trace!(key = %key, "Dual cache miss");
                 Ok(None)
             }
         }
@@ -205,10 +200,6 @@ where
             Some(redis) => redis,
             None => return Ok(None),
         };
-
-        if redis.get_entry(key).await?.is_none() {
-            return Ok(None);
-        }
 
         let _guard = self.l1_fill_lock(key).lock().await;
 
@@ -544,7 +535,9 @@ where
 {
     /// Warm the memory cache from Redis
     ///
-    /// Loads entries from Redis into memory for specified keys
+    /// Loads entries from Redis into memory for specified keys. Per-key Redis
+    /// failures are skipped so a transient error on one key does not abort the
+    /// rest of the batch.
     pub async fn warm_from_redis(&self, keys: &[CacheKey]) -> Result<usize> {
         let redis = match self.redis.as_ref() {
             Some(r) if self.config.mode != CacheMode::MemoryOnly => r,
@@ -558,18 +551,19 @@ where
                 continue;
             }
 
-            if redis.get_entry(key).await?.is_none() {
-                continue;
-            }
-
             let _guard = self.l1_fill_lock(key).lock().await;
             if self.memory.exists(key).await {
                 continue;
             }
-            // Re-check L2 under the fill lock so warming cannot resurrect an
-            // entry that was invalidated after the first Redis read.
-            let Some(fresh) = redis.get_entry(key).await? else {
-                continue;
+            // Single L2 read under the fill lock: avoid double Redis traffic and
+            // keep warming from resurrecting a concurrently invalidated entry.
+            let fresh = match redis.get_entry(key).await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => continue,
+                Err(e) => {
+                    warn!(key = %key, error = %e, "Failed to warm key from Redis; skipping");
+                    continue;
+                }
             };
             self.memory
                 .set_with_size(key.clone(), fresh.value, fresh.ttl, fresh.size_bytes)

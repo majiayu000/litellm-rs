@@ -249,8 +249,19 @@ where
             };
 
             if entry.is_expired() {
-                let _ = self.pool.delete(&redis_key).await;
-                return Ok(false);
+                // CAS-delete the exact expired blob so a concurrent safe
+                // replacement written in the logical-expiry/TTL race window is
+                // not removed by an unconditional DEL.
+                let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
+                if deleted {
+                    return Ok(false);
+                }
+                warn!(
+                    key = %key,
+                    attempt,
+                    "Redis expired cleanup CAS miss; re-reading live value"
+                );
+                continue;
             }
 
             if !predicate(&entry.value) {
