@@ -243,6 +243,66 @@ async fn test_cache_stale_eviction_candidate_keeps_reinserted_metadata() {
 }
 
 #[tokio::test]
+async fn test_delete_if_preserves_replacement_access_meta() {
+    let cache: InMemoryCache<String> = InMemoryCache::with_defaults();
+    let key = CacheKey::new("delete-if-meta");
+
+    cache.set(key.clone(), "poison".to_string()).await;
+    let meta_before = cache
+        .access_shard(&key)
+        .get(&key)
+        .map(|meta| meta.snapshot())
+        .expect("poison entry must have access metadata");
+
+    // Simulate the race: remove_if succeeds on poison, then a replacement is
+    // inserted and resets access meta before bookkeeping runs.
+    let removed = cache
+        .cache
+        .remove_if(&key, |_k, entry| entry.value == "poison");
+    assert!(removed.is_some());
+    cache.set(key.clone(), "safe".to_string()).await;
+    let meta_after_replace = cache
+        .access_shard(&key)
+        .get(&key)
+        .map(|meta| meta.snapshot())
+        .expect("replacement must have access metadata");
+    assert_ne!(
+        meta_before, meta_after_replace,
+        "replacement should reset access metadata"
+    );
+
+    cache.remove_access_meta_if_unchanged(&key, meta_before.0, meta_before.1);
+
+    assert!(
+        cache.access_shard(&key).contains_key(&key),
+        "delete_if must not clear replacement access metadata"
+    );
+    assert_eq!(
+        cache
+            .access_shard(&key)
+            .get(&key)
+            .map(|meta| meta.snapshot()),
+        Some(meta_after_replace),
+        "stale delete bookkeeping must leave the replacement's access tick intact"
+    );
+    assert_eq!(cache.get(&key).await, Some("safe".to_string()));
+}
+
+#[tokio::test]
+async fn test_delete_if_clears_matching_entry_and_meta() {
+    let cache: InMemoryCache<String> = InMemoryCache::with_defaults();
+    let key = CacheKey::new("delete-if-match");
+
+    cache.set(key.clone(), "poison".to_string()).await;
+    assert!(cache.delete_if(&key, |v| v == "poison").await);
+    assert!(cache.get(&key).await.is_none());
+    assert!(
+        !cache.access_shard(&key).contains_key(&key),
+        "matching delete_if should clear access metadata for the removed entry"
+    );
+}
+
+#[tokio::test]
 async fn test_cache_stats_hits_misses() {
     let cache: InMemoryCache<String> = InMemoryCache::with_defaults();
     let key = CacheKey::new("stats-key");

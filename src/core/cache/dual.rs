@@ -13,7 +13,11 @@ use crate::utils::error::gateway_error::Result;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
+
+/// Shard count for locks that serialize L2→L1 read-through fills with deletes.
+const L1_FILL_LOCK_SHARDS: usize = 64;
 
 /// Dual-layer cache combining in-memory and Redis caches
 ///
@@ -30,6 +34,8 @@ use tracing::{debug, trace, warn};
 /// - Dual-mode Redis delete errors propagate (same as RedisOnly) so
 ///   poisoned-entry invalidation cannot report success while L2 still holds
 ///   the value. Dual writes still only warn on Redis failure.
+/// - L1 fills from L2 take the same per-key shard lock as Dual deletes so a
+///   concurrent read-through cannot resurrect an entry after invalidation.
 pub struct DualCache<T> {
     /// In-memory cache layer (L1)
     memory: Arc<InMemoryCache<T>>,
@@ -39,6 +45,8 @@ pub struct DualCache<T> {
     config: DualCacheConfig,
     /// Shared statistics
     stats: Arc<AtomicCacheStats>,
+    /// Serializes Dual-mode L2→L1 population with L1/L2 invalidation.
+    l1_fill_locks: Arc<Vec<Mutex<()>>>,
 }
 
 impl<T> DualCache<T>
@@ -77,6 +85,7 @@ where
             redis,
             config,
             stats,
+            l1_fill_locks: Arc::new((0..L1_FILL_LOCK_SHARDS).map(|_| Mutex::new(())).collect()),
         }
     }
 
@@ -95,6 +104,10 @@ where
     /// Start the background cleanup task for the memory cache
     pub fn start_cleanup_task(&self) {
         self.memory.start_cleanup_task();
+    }
+
+    fn l1_fill_lock(&self, key: &CacheKey) -> &Mutex<()> {
+        &self.l1_fill_locks[key.hash_value() as usize % self.l1_fill_locks.len()]
     }
 
     /// Get a value from the cache
@@ -127,14 +140,45 @@ where
         if let Some(ref redis) = self.redis
             && let Some(value) = redis.get(key).await?
         {
-            // Populate memory cache with the value from Redis
-            self.memory.set(key.clone(), value.clone()).await;
-            trace!(key = %key, "Dual cache L2 hit, populated L1");
-            return Ok(Some(value));
+            return self.populate_l1_from_l2_value(key, value).await;
         }
 
         trace!(key = %key, "Dual cache miss");
         Ok(None)
+    }
+
+    /// Re-validate L2 under the fill/invalidate lock before populating L1.
+    ///
+    /// A concurrent Dual delete may remove L1 and L2 after this task already
+    /// observed an L2 hit; populating L1 from that stale observation would
+    /// resurrect the poisoned entry. Holding the same shard lock as Dual
+    /// deletes and re-reading L2 closes that window.
+    async fn populate_l1_from_l2_value(&self, key: &CacheKey, observed: T) -> Result<Option<T>> {
+        let redis = match self.redis.as_ref() {
+            Some(redis) => redis,
+            None => return Ok(Some(observed)),
+        };
+
+        let _guard = self.l1_fill_lock(key).lock().await;
+
+        if let Some(value) = self.memory.get(key).await {
+            return Ok(Some(value));
+        }
+
+        match redis.get(key).await? {
+            Some(fresh) => {
+                self.memory.set(key.clone(), fresh.clone()).await;
+                trace!(key = %key, "Dual cache L2 hit, populated L1");
+                Ok(Some(fresh))
+            }
+            None => {
+                // L2 was invalidated (or expired) after the first read; do not
+                // resurrect into L1. Treat as a miss so callers refetch.
+                let _stale = observed;
+                trace!(key = %key, "Dual cache L2 invalidated before L1 fill");
+                Ok(None)
+            }
+        }
     }
 
     /// Get an entry with metadata from the cache
@@ -148,30 +192,43 @@ where
                     Ok(None)
                 }
             }
-            CacheMode::Dual => {
-                // Check memory first
-                if let Some(entry) = self.memory.get_entry(key).await {
-                    return Ok(Some(entry));
-                }
+            CacheMode::Dual => self.get_entry_dual(key).await,
+        }
+    }
 
-                // Check Redis
-                if let Some(ref redis) = self.redis
-                    && let Some(entry) = redis.get_entry(key).await?
-                {
-                    // Populate memory cache
-                    self.memory
-                        .set_with_size(
-                            key.clone(),
-                            entry.value.clone(),
-                            entry.ttl,
-                            entry.size_bytes,
-                        )
-                        .await;
-                    return Ok(Some(entry));
-                }
+    async fn get_entry_dual(&self, key: &CacheKey) -> Result<Option<CacheEntry<T>>> {
+        if let Some(entry) = self.memory.get_entry(key).await {
+            return Ok(Some(entry));
+        }
 
-                Ok(None)
+        let redis = match self.redis.as_ref() {
+            Some(redis) => redis,
+            None => return Ok(None),
+        };
+
+        if redis.get_entry(key).await?.is_none() {
+            return Ok(None);
+        }
+
+        let _guard = self.l1_fill_lock(key).lock().await;
+
+        if let Some(existing) = self.memory.get_entry(key).await {
+            return Ok(Some(existing));
+        }
+
+        match redis.get_entry(key).await? {
+            Some(fresh) => {
+                self.memory
+                    .set_with_size(
+                        key.clone(),
+                        fresh.value.clone(),
+                        fresh.ttl,
+                        fresh.size_bytes,
+                    )
+                    .await;
+                Ok(Some(fresh))
             }
+            None => Ok(None),
         }
     }
 
@@ -267,7 +324,9 @@ where
                 }
             }
             CacheMode::Dual => {
-                // Delete from memory
+                // Hold the fill lock so an in-flight L2→L1 populate cannot
+                // resurrect this key after we clear both layers.
+                let _guard = self.l1_fill_lock(key).lock().await;
                 if self.memory.delete(key).await {
                     deleted = true;
                 }
@@ -291,7 +350,9 @@ where
     ///
     /// Each layer evaluates the predicate against its own current value and deletes
     /// atomically (DashMap `remove_if` for L1, Redis Lua CAS for L2), so a
-    /// concurrent replacement is not removed after a stale match.
+    /// concurrent replacement is not removed after a stale match. Dual mode also
+    /// holds the L1-fill lock so read-through cannot repopulate L1 after a
+    /// successful layer delete.
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
     where
         F: Fn(&T) -> bool,
@@ -308,6 +369,7 @@ where
                 }
             }
             CacheMode::Dual => {
+                let _guard = self.l1_fill_lock(key).lock().await;
                 if self.memory.delete_if(key, &predicate).await {
                     deleted = true;
                 }
@@ -496,13 +558,23 @@ where
                 continue;
             }
 
-            // Try to load from Redis
-            if let Ok(Some(entry)) = redis.get_entry(key).await {
-                self.memory
-                    .set_with_size(key.clone(), entry.value, entry.ttl, entry.size_bytes)
-                    .await;
-                warmed += 1;
+            if redis.get_entry(key).await?.is_none() {
+                continue;
             }
+
+            let _guard = self.l1_fill_lock(key).lock().await;
+            if self.memory.exists(key).await {
+                continue;
+            }
+            // Re-check L2 under the fill lock so warming cannot resurrect an
+            // entry that was invalidated after the first Redis read.
+            let Some(fresh) = redis.get_entry(key).await? else {
+                continue;
+            };
+            self.memory
+                .set_with_size(key.clone(), fresh.value, fresh.ttl, fresh.size_bytes)
+                .await;
+            warmed += 1;
         }
 
         debug!(count = warmed, "Warmed memory cache from Redis");

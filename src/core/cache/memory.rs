@@ -259,16 +259,21 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
     /// Atomically delete `key` only while the live (non-expired) value matches `predicate`.
     ///
     /// Uses DashMap `remove_if` so a concurrent replacement under the same key is
-    /// not removed after a stale match decision.
+    /// not removed after a stale match decision. Access metadata is cleared only
+    /// when it still matches the pre-delete snapshot, so a replacement inserted
+    /// after `remove_if` keeps its eviction bookkeeping.
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> bool
     where
         F: Fn(&T) -> bool,
     {
+        let meta_snapshot = self.access_shard(key).get(key).map(|meta| meta.snapshot());
         let removed = self.cache.remove_if(key, |_k, entry| {
             !entry.is_expired() && predicate(&entry.value)
         });
         if let Some((_, removed)) = removed {
-            self.remove_access_meta(key);
+            if let Some((last_access_tick, access_count)) = meta_snapshot {
+                self.remove_access_meta_if_unchanged(key, last_access_tick, access_count);
+            }
             self.stats.record_deletion();
             self.stats.sub_total_size(removed.size_bytes);
             self.stats.set_entry_count(self.cache.len());
