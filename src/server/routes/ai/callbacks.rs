@@ -374,6 +374,9 @@ fn safe_callback_error_message(error_type: &str) -> &'static str {
         "timeout" => "provider request timed out",
         "client_disconnect" => "client disconnected",
         "cache_error" => "response cache operation failed",
+        // Poisoned-entry delete can fail after a live provider fallback succeeded;
+        // keep that distinct from a generic provider failure in callbacks.
+        "cache_invalidate" => "response cache invalidation failed",
         "pricing_error" => "request pricing calculation failed",
         "serialization_error" => "response serialization failed",
         "conversion_error" => "provider response conversion failed",
@@ -751,5 +754,21 @@ mod tests {
         assert_eq!(start_count.load(Ordering::SeqCst), 0);
         assert_eq!(end_count.load(Ordering::SeqCst), 0);
         assert_eq!(error_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn cache_invalidate_callback_message_is_not_provider_failure() {
+        assert_eq!(
+            safe_callback_error_message("cache_invalidate"),
+            "response cache invalidation failed"
+        );
+        assert_ne!(
+            safe_callback_error_message("cache_invalidate"),
+            "provider request failed"
+        );
+        assert_eq!(
+            safe_callback_error_message("cache_error"),
+            "response cache operation failed"
+        );
     }
 }

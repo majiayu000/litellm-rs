@@ -368,3 +368,127 @@ async fn test_invalidate_chat_with_user_honors_user_specific_key() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn test_invalidate_chat_with_user_matching_skips_replacement() {
+    let cache = LLMCache::memory_only();
+    let request = create_test_request();
+    let poisoned = create_test_response();
+    let mut replacement = create_test_response();
+    replacement.id = "chatcmpl-safe".to_string();
+    replacement.created = 1234567891;
+
+    cache
+        .cache_chat_response(&request, poisoned.clone())
+        .await
+        .unwrap();
+    cache
+        .cache_chat_response(&request, replacement.clone())
+        .await
+        .unwrap();
+
+    let deleted = cache
+        .invalidate_chat_with_user_matching(&request, None, &poisoned)
+        .await
+        .unwrap();
+    assert!(!deleted);
+
+    let still_there = cache.get_chat_response(&request).await.unwrap().unwrap();
+    assert_eq!(still_there.id, "chatcmpl-safe");
+}
+
+#[tokio::test]
+async fn test_invalidate_matching_compares_full_payload_not_just_metadata() {
+    // Azure-style defaults: empty id + second-resolution created can collide for
+    // distinct completions. Matching must include choice bodies so a safe
+    // replacement with the same metadata is not deleted.
+    let cache = LLMCache::memory_only();
+    let request = create_test_request();
+    let mut poisoned = create_test_response();
+    poisoned.id = String::new();
+    poisoned.created = 1_700_000_000;
+    poisoned.choices[0].message = create_assistant_message("blocked later");
+
+    let mut replacement = poisoned.clone();
+    replacement.choices[0].message = create_assistant_message("safe replacement");
+
+    cache
+        .cache_chat_response(&request, poisoned.clone())
+        .await
+        .unwrap();
+    cache
+        .cache_chat_response(&request, replacement.clone())
+        .await
+        .unwrap();
+
+    let deleted = cache
+        .invalidate_chat_with_user_matching(&request, None, &poisoned)
+        .await
+        .unwrap();
+    assert!(!deleted);
+
+    let still_there = cache.get_chat_response(&request).await.unwrap().unwrap();
+    let content = still_there.choices[0]
+        .message
+        .content
+        .as_ref()
+        .and_then(|c| match c {
+            MessageContent::Text(text) => Some(text.as_str()),
+            _ => None,
+        });
+    assert_eq!(content, Some("safe replacement"));
+}
+
+#[tokio::test]
+async fn test_invalidate_matching_is_atomic_against_concurrent_replacement() {
+    use std::sync::Arc;
+
+    let cache = Arc::new(LLMCache::memory_only());
+    let request = create_test_request();
+    let poisoned = create_test_response();
+    let mut replacement = create_test_response();
+    replacement.id = "chatcmpl-safe".to_string();
+    replacement.created = 1234567891;
+
+    for _ in 0..64 {
+        cache
+            .cache_chat_response(&request, poisoned.clone())
+            .await
+            .unwrap();
+
+        let cache_invalidate = Arc::clone(&cache);
+        let request_invalidate = request.clone();
+        let poisoned_invalidate = poisoned.clone();
+        let invalidate = tokio::spawn(async move {
+            cache_invalidate
+                .invalidate_chat_with_user_matching(&request_invalidate, None, &poisoned_invalidate)
+                .await
+        });
+
+        let cache_replace = Arc::clone(&cache);
+        let request_replace = request.clone();
+        let replacement_store = replacement.clone();
+        let replace = tokio::spawn(async move {
+            cache_replace
+                .cache_chat_response(&request_replace, replacement_store)
+                .await
+        });
+
+        let deleted = invalidate.await.unwrap().unwrap();
+        replace.await.unwrap().unwrap();
+
+        let live = cache.get_chat_response(&request).await.unwrap();
+        if deleted {
+            // Invalidate won the race against the original poison; replacement may
+            // or may not have been written afterward.
+            if let Some(live) = live {
+                assert_eq!(live.id, "chatcmpl-safe");
+            }
+        } else {
+            // Invalidate observed a non-matching live value and must not have
+            // deleted the concurrent replacement.
+            let live = live.expect("replacement must remain after skipped invalidate");
+            assert_eq!(live.id, "chatcmpl-safe");
+        }
+    }
+}

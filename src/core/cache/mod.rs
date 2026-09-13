@@ -112,8 +112,8 @@ pub use llm_cache::{
 pub use memory::InMemoryCache;
 pub use redis_cache::RedisCache;
 pub use types::{
-    AtomicCacheStats, CacheEntry, CacheKey, CacheMode, CacheStatsSnapshot, DualCacheConfig,
-    EvictionPolicy, SerializableCacheEntry,
+    AtomicCacheStats, CacheEntry, CacheKey, CacheMode, CacheStatsSnapshot, CacheWriteIdentity,
+    DualCacheConfig, EvictionPolicy, SerializableCacheEntry, serialize_write_identity,
 };
 
 // Cloud cache re-exports

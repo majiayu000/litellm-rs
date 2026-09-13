@@ -7,7 +7,9 @@ use super::dual::DualCache;
 use super::key_generator::{
     generate_chat_key, generate_chat_key_with_user, generate_embedding_key,
 };
-use super::types::{CacheKey, CacheStatsSnapshot, DualCacheConfig};
+use super::types::{
+    CacheKey, CacheStatsSnapshot, CacheWriteIdentity, DualCacheConfig, serialize_write_identity,
+};
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
@@ -179,6 +181,13 @@ impl CachedChatResponse {
     }
 }
 
+impl CacheWriteIdentity for CachedChatResponse {
+    fn cache_write_identity(&self) -> Option<u64> {
+        // Match invalidate comparison: ignore wrapper `cached_at` metadata.
+        serialize_write_identity(self.response.as_ref())
+    }
+}
+
 /// Cached embedding response wrapper
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedEmbeddingResponse {
@@ -231,11 +240,27 @@ impl CachedEmbeddingResponse {
     }
 }
 
+impl CacheWriteIdentity for CachedEmbeddingResponse {
+    fn cache_write_identity(&self) -> Option<u64> {
+        serialize_write_identity(self.response.as_ref())
+    }
+}
+
 impl LLMCache {
     /// Create a new LLM cache with the given configuration
     pub fn new(config: LLMCacheConfig, redis_pool: Option<Arc<RedisPool>>) -> Self {
-        let chat_cache = DualCache::new(config.cache_config.clone(), redis_pool.clone());
-        let embedding_cache = DualCache::new(config.cache_config.clone(), redis_pool);
+        // Provide payload-only identity for wrappers that embed `cached_at`, so
+        // Dual stale-write barriers stay off the general DualCache API bound.
+        let chat_cache = DualCache::with_write_identity(
+            config.cache_config.clone(),
+            redis_pool.clone(),
+            <CachedChatResponse as CacheWriteIdentity>::cache_write_identity,
+        );
+        let embedding_cache = DualCache::with_write_identity(
+            config.cache_config.clone(),
+            redis_pool,
+            <CachedEmbeddingResponse as CacheWriteIdentity>::cache_write_identity,
+        );
 
         Self {
             chat_cache,
@@ -367,6 +392,35 @@ impl LLMCache {
         self.chat_cache.delete(&key).await
     }
 
+    /// Invalidate a cached chat response only while it still matches `expected`.
+    ///
+    /// Key-only deletes can remove a concurrent replacement that another request
+    /// already stored after invalidating the same poisoned entry. Matching delete
+    /// is atomic per cache layer (DashMap `remove_if` / Redis Lua CAS) so a
+    /// replacement under the same key is not removed after a stale match.
+    /// Dual-mode matching also purges a divergent L2 value when L1 matched, so a
+    /// prior best-effort Redis write failure cannot leave a second poisoned
+    /// payload to warm back into L1. Only the predicate-matched L1 identity is
+    /// barriered; divergent L2 payloads are deleted without a write barrier.
+    pub async fn invalidate_chat_with_user_matching(
+        &self,
+        request: &ChatCompletionRequest,
+        user_id: Option<&str>,
+        expected: &ChatCompletionResponse,
+    ) -> Result<bool> {
+        let key = if self.config.user_specific {
+            generate_chat_key_with_user(request, user_id)
+        } else {
+            generate_chat_key(request)
+        };
+
+        self.chat_cache
+            .delete_if(&key, |current| {
+                chat_response_matches_cached(current.response.as_ref(), expected)
+            })
+            .await
+    }
+
     // ==================== Embedding Methods ====================
 
     /// Get a cached embedding response
@@ -490,6 +544,24 @@ impl LLMCache {
     pub fn shutdown(&self) {
         self.chat_cache.shutdown();
         self.embedding_cache.shutdown();
+    }
+}
+
+/// True when `current` is still the same completion that `expected` rejected.
+///
+/// Compares the full serialized payload. Metadata-only checks (`id`/`created`/
+/// `model`) collide when OpenAI-compatible upstreams (notably Azure) default a
+/// missing `id` to `""` and `created` to second resolution — two distinct
+/// completions for the same model in the same second then look identical.
+fn chat_response_matches_cached(
+    current: &ChatCompletionResponse,
+    expected: &ChatCompletionResponse,
+) -> bool {
+    match (serde_json::to_vec(current), serde_json::to_vec(expected)) {
+        (Ok(left), Ok(right)) => left == right,
+        // Serialization failure is unexpected; refuse the match so we do not
+        // delete a possibly-distinct replacement.
+        _ => false,
     }
 }
 

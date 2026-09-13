@@ -1,5 +1,6 @@
 //! Shared response-cache helpers for non-streaming AI routes.
 
+use crate::core::cache::LLMCache;
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
@@ -8,7 +9,8 @@ use crate::core::types::context::RequestContext;
 use crate::core::types::embedding::EmbeddingInput;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
-use tracing::warn;
+use std::sync::Arc;
+use tracing::{error, warn};
 
 const BYPASS_CHAT_RESPONSE_CACHE_KEY: &str = "bypass_chat_response_cache";
 
@@ -52,26 +54,35 @@ fn cache_identity(context: &RequestContext) -> Option<String> {
     }
 }
 
+/// Look up a cached chat response, returning the cache instance from the same
+/// runtime generation that performed the lookup.
+///
+/// Callers that later invalidate after an output-guardrail block must use the
+/// returned `Arc<LLMCache>` rather than re-reading `AppState::response_cache()`,
+/// which can point at a newer revision if caching was disabled mid-request.
 pub(super) async fn lookup_chat(
     state: &AppState,
     request: &ChatCompletionRequest,
     context: &RequestContext,
-) -> Result<Option<ChatCompletionResponse>, GatewayError> {
+) -> Result<(Option<Arc<LLMCache>>, Option<ChatCompletionResponse>), GatewayError> {
     if should_bypass_chat_cache(request, context) {
-        return Ok(None);
+        return Ok((None, None));
     }
     let Some(cache) = state.response_cache() else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let identity = cache_identity(context);
     match cache
         .get_chat_response_with_user(request, identity.as_deref())
         .await
     {
-        Ok(cached) => Ok(cached.map(|response| response.as_ref().clone())),
+        Ok(cached) => Ok((
+            Some(cache),
+            cached.map(|response| response.as_ref().clone()),
+        )),
         Err(error) => {
             warn!(error = %error, "Chat response cache lookup failed; treating as miss");
-            Ok(None)
+            Ok((Some(cache), None))
         }
     }
 }
@@ -92,6 +103,67 @@ pub(super) async fn store_chat(
     cache
         .cache_chat_response_with_user(request, response.clone(), identity.as_deref())
         .await
+}
+
+/// Drop a chat response-cache entry so a later identical request re-fetches.
+///
+/// Used when an output guardrail blocks a cached replay: the entry may have
+/// been lawful when stored but is poisoned after a guardrail config change.
+///
+/// `cache` must be the same instance returned by [`lookup_chat`] for this
+/// request so invalidation still hits Redis/L1 after a mid-request reload that
+/// disables the live `AppState::response_cache()`.
+///
+/// `expected` is the rejected cached payload. Invalidation is skipped when the
+/// live entry no longer matches (another request may already have stored a
+/// safe replacement under the same key).
+///
+/// Returns `Err` when Redis/L2 deletion fails so callers can surface the
+/// failure (and avoid treating a still-poisoned entry as cleared). Transient
+/// Dual-mode L2 errors are retried briefly before propagating.
+pub(super) async fn invalidate_chat(
+    cache: &LLMCache,
+    request: &ChatCompletionRequest,
+    context: &RequestContext,
+    expected: &ChatCompletionResponse,
+) -> Result<(), GatewayError> {
+    if should_bypass_chat_cache(request, context) {
+        return Ok(());
+    }
+    let identity = cache_identity(context);
+    let mut last_error = None;
+    for attempt in 1..=3u8 {
+        match cache
+            .invalidate_chat_with_user_matching(request, identity.as_deref(), expected)
+            .await
+        {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                // Absent or non-matching across every probed layer. Dual
+                // propagates Redis errors as `Err`, so a prior L2 failure does
+                // not surface as Ok(false); accepting Ok(false) clears stale
+                // retry errors once the poison is verified gone/replaced.
+                return Ok(());
+            }
+            Err(error) => {
+                warn!(
+                    attempt,
+                    error = %error,
+                    "Chat response cache invalidate failed"
+                );
+                last_error = Some(error);
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(25 * u64::from(attempt)))
+                        .await;
+                }
+            }
+        }
+    }
+    let error = last_error.expect("invalidate retries always record an error");
+    error!(error = %error, "Chat response cache invalidate exhausted retries");
+    Err(GatewayError::Internal(format!(
+        "Chat response cache invalidate failed: {error}"
+    )))
 }
 
 pub(super) async fn lookup_embedding(
@@ -360,5 +432,183 @@ mod tests {
             cache_request.user.as_deref(),
             Some("api_key:00000000-0000-0000-0000-00000000002a")
         );
+    }
+
+    #[tokio::test]
+    async fn invalidate_chat_removes_entry_for_next_lookup() {
+        use crate::core::models::openai::{ChatChoice, ChatMessage, MessageContent, MessageRole};
+
+        let mut config = crate::server::valid_test_config();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.cache.enabled = true;
+
+        let state = crate::server::HttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with response cache")
+            .state()
+            .clone();
+        assert!(
+            state.response_cache().is_some(),
+            "response cache must be enabled for this regression"
+        );
+
+        let request = ChatCompletionRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("hello".to_string())),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            }],
+            ..Default::default()
+        };
+        let response = ChatCompletionResponse {
+            id: "chatcmpl-poisoned".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1,
+            model: "gpt-4".to_string(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: Some(MessageContent::Text("blocked later".to_string())),
+                    name: None,
+                    function_call: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    audio: None,
+                },
+                finish_reason: Some("stop".to_string()),
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: None,
+        };
+        let context = RequestContext::default().with_api_key(Uuid::from_u128(99));
+
+        store_chat(&state, &request, &response, &context)
+            .await
+            .expect("store should succeed");
+        let (lookup_cache, before) = lookup_chat(&state, &request, &context)
+            .await
+            .expect("lookup should succeed");
+        assert!(
+            before.is_some(),
+            "cached entry must be present before invalidate"
+        );
+        let cache = lookup_cache.expect("lookup must pin the cache generation used for the hit");
+
+        invalidate_chat(&cache, &request, &context, &response)
+            .await
+            .expect("invalidate should succeed against memory-only cache");
+
+        let (_, after) = lookup_chat(&state, &request, &context)
+            .await
+            .expect("lookup after invalidate should succeed");
+        assert!(
+            after.is_none(),
+            "output-blocked cache entry must be gone for the next lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidate_chat_skips_delete_when_entry_was_replaced() {
+        use crate::core::models::openai::{ChatChoice, ChatMessage, MessageContent, MessageRole};
+
+        let mut config = crate::server::valid_test_config();
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        config.gateway.cache.enabled = true;
+
+        let state = crate::server::HttpServer::new(&config)
+            .await
+            .expect("gateway should initialize with response cache")
+            .state()
+            .clone();
+        let cache = state
+            .response_cache()
+            .expect("response cache must be enabled");
+
+        let request = ChatCompletionRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("hello".to_string())),
+                name: None,
+                function_call: None,
+                tool_calls: None,
+                tool_call_id: None,
+                audio: None,
+            }],
+            ..Default::default()
+        };
+        let poisoned = ChatCompletionResponse {
+            id: "chatcmpl-poisoned".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1,
+            model: "gpt-4".to_string(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: Some(MessageContent::Text("blocked later".to_string())),
+                    name: None,
+                    function_call: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    audio: None,
+                },
+                finish_reason: Some("stop".to_string()),
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: None,
+        };
+        let replacement = ChatCompletionResponse {
+            id: "chatcmpl-safe".to_string(),
+            object: "chat.completion".to_string(),
+            created: 2,
+            model: "gpt-4".to_string(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: Some(MessageContent::Text("safe replacement".to_string())),
+                    name: None,
+                    function_call: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    audio: None,
+                },
+                finish_reason: Some("stop".to_string()),
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: None,
+        };
+        let context = RequestContext::default().with_api_key(Uuid::from_u128(99));
+
+        store_chat(&state, &request, &poisoned, &context)
+            .await
+            .expect("store poisoned should succeed");
+        store_chat(&state, &request, &replacement, &context)
+            .await
+            .expect("store replacement should succeed");
+
+        invalidate_chat(&cache, &request, &context, &poisoned)
+            .await
+            .expect("stale invalidate must not fail");
+
+        let (_, after) = lookup_chat(&state, &request, &context)
+            .await
+            .expect("lookup after stale invalidate should succeed");
+        let after = after.expect("replacement must survive stale invalidate");
+        assert_eq!(after.id, "chatcmpl-safe");
     }
 }

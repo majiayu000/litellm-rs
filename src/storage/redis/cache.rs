@@ -57,6 +57,36 @@ impl RedisPool {
         Ok(())
     }
 
+    /// Delete `key` only when its current string value still equals `expected`.
+    ///
+    /// Single-key Lua keeps this cluster-safe and closes the get-then-delete race
+    /// used by conditional cache invalidation.
+    pub async fn delete_if_equals(&self, key: &str, expected: &str) -> Result<bool> {
+        if self.noop_mode {
+            return Ok(false);
+        }
+
+        const SCRIPT: &str = r#"
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"#;
+
+        let mut conn = self.get_connection().await?;
+        if let Some(ref mut c) = conn.conn {
+            let deleted: i64 = redis::Script::new(SCRIPT)
+                .key(key)
+                .arg(expected)
+                .invoke_async(c)
+                .await
+                .map_err(GatewayError::from)?;
+            Ok(deleted > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Delete all keys whose Redis key starts with the provided prefix.
     pub async fn delete_by_prefix(&self, prefix: &str) -> Result<usize> {
         if self.noop_mode {

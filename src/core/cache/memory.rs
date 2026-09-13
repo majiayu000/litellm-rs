@@ -168,6 +168,29 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
         }
     }
 
+    /// Peek a value without recording hit/miss statistics.
+    ///
+    /// Used for under-lock Dual L1 rechecks after an accounting miss so a single
+    /// client lookup is not double-counted. Still updates eviction access meta on
+    /// a live hit and still removes expired entries.
+    pub async fn peek(&self, key: &CacheKey) -> Option<T> {
+        if let Some((_, removed)) = self.cache.remove_if(key, |_k, v| v.is_expired()) {
+            self.remove_access_meta(key);
+            self.stats.sub_total_size(removed.size_bytes);
+            self.stats.set_entry_count(self.cache.len());
+            return None;
+        }
+
+        if let Some(entry) = self.cache.get(key) {
+            let value = entry.value.clone();
+            drop(entry);
+            self.record_access(key);
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     /// Get an entry with metadata from the cache
     pub async fn get_entry(&self, key: &CacheKey) -> Option<CacheEntry<T>> {
         // Atomically remove expired entries to avoid TOCTOU race
@@ -189,6 +212,27 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             Some(snapshot)
         } else {
             self.stats.record_memory_miss();
+            None
+        }
+    }
+
+    /// Peek an entry without recording hit/miss statistics (see [`Self::peek`]).
+    pub async fn peek_entry(&self, key: &CacheKey) -> Option<CacheEntry<T>> {
+        if let Some((_, removed)) = self.cache.remove_if(key, |_k, v| v.is_expired()) {
+            self.remove_access_meta(key);
+            self.stats.sub_total_size(removed.size_bytes);
+            self.stats.set_entry_count(self.cache.len());
+            return None;
+        }
+
+        if let Some(entry) = self.cache.get(key) {
+            let mut snapshot = entry.clone();
+            drop(entry);
+            let access_count = self.record_access(key);
+            snapshot.access_count = access_count;
+            snapshot.last_accessed = Instant::now();
+            Some(snapshot)
+        } else {
             None
         }
     }
@@ -253,6 +297,36 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             true
         } else {
             false
+        }
+    }
+
+    /// Atomically delete `key` only while the live (non-expired) value matches `predicate`.
+    ///
+    /// Uses DashMap `remove_if` so a concurrent replacement under the same key is
+    /// not removed after a stale match decision. Access metadata is cleared only
+    /// when it still matches the pre-delete snapshot, so a replacement inserted
+    /// after `remove_if` keeps its eviction bookkeeping.
+    ///
+    /// Returns the removed value when a matching entry was deleted.
+    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Option<T>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let meta_snapshot = self.access_shard(key).get(key).map(|meta| meta.snapshot());
+        let removed = self.cache.remove_if(key, |_k, entry| {
+            !entry.is_expired() && predicate(&entry.value)
+        });
+        if let Some((_, removed)) = removed {
+            if let Some((last_access_tick, access_count)) = meta_snapshot {
+                self.remove_access_meta_if_unchanged(key, last_access_tick, access_count);
+            }
+            self.stats.record_deletion();
+            self.stats.sub_total_size(removed.size_bytes);
+            self.stats.set_entry_count(self.cache.len());
+            trace!(key = %key, "Cache conditional delete");
+            Some(removed.value)
+        } else {
+            None
         }
     }
 
