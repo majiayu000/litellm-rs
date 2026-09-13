@@ -398,6 +398,48 @@ async fn test_invalidate_chat_with_user_matching_skips_replacement() {
 }
 
 #[tokio::test]
+async fn test_invalidate_matching_compares_full_payload_not_just_metadata() {
+    // Azure-style defaults: empty id + second-resolution created can collide for
+    // distinct completions. Matching must include choice bodies so a safe
+    // replacement with the same metadata is not deleted.
+    let cache = LLMCache::memory_only();
+    let request = create_test_request();
+    let mut poisoned = create_test_response();
+    poisoned.id = String::new();
+    poisoned.created = 1_700_000_000;
+    poisoned.choices[0].message = create_assistant_message("blocked later");
+
+    let mut replacement = poisoned.clone();
+    replacement.choices[0].message = create_assistant_message("safe replacement");
+
+    cache
+        .cache_chat_response(&request, poisoned.clone())
+        .await
+        .unwrap();
+    cache
+        .cache_chat_response(&request, replacement.clone())
+        .await
+        .unwrap();
+
+    let deleted = cache
+        .invalidate_chat_with_user_matching(&request, None, &poisoned)
+        .await
+        .unwrap();
+    assert!(!deleted);
+
+    let still_there = cache.get_chat_response(&request).await.unwrap().unwrap();
+    let content = still_there.choices[0]
+        .message
+        .content
+        .as_ref()
+        .and_then(|c| match c {
+            MessageContent::Text(text) => Some(text.as_str()),
+            _ => None,
+        });
+    assert_eq!(content, Some("safe replacement"));
+}
+
+#[tokio::test]
 async fn test_invalidate_matching_is_atomic_against_concurrent_replacement() {
     use std::sync::Arc;
 

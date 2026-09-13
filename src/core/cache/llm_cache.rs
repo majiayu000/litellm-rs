@@ -520,15 +520,20 @@ impl LLMCache {
 
 /// True when `current` is still the same completion that `expected` rejected.
 ///
-/// Completion `id` is unique per provider response; `created` and `model` guard
-/// against accidental id reuse across stores.
+/// Compares the full serialized payload. Metadata-only checks (`id`/`created`/
+/// `model`) collide when OpenAI-compatible upstreams (notably Azure) default a
+/// missing `id` to `""` and `created` to second resolution — two distinct
+/// completions for the same model in the same second then look identical.
 fn chat_response_matches_cached(
     current: &ChatCompletionResponse,
     expected: &ChatCompletionResponse,
 ) -> bool {
-    current.id == expected.id
-        && current.created == expected.created
-        && current.model == expected.model
+    match (serde_json::to_vec(current), serde_json::to_vec(expected)) {
+        (Ok(left), Ok(right)) => left == right,
+        // Serialization failure is unexpected; refuse the match so we do not
+        // delete a possibly-distinct replacement.
+        _ => false,
+    }
 }
 
 /// Combined cache statistics

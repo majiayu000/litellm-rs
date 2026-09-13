@@ -139,20 +139,11 @@ pub(super) async fn invalidate_chat(
         {
             Ok(true) => return Ok(()),
             Ok(false) => {
-                // Absent or replaced. If a prior Dual attempt deleted L1 then
-                // failed on Redis, L1 may already show a safe replacement while
-                // L2 still holds poison — do not treat Ok(false) as success.
-                if last_error.is_none() {
-                    return Ok(());
-                }
-                warn!(
-                    attempt,
-                    "Chat response cache invalidate saw non-matching entry after prior L2 failure; retrying"
-                );
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_millis(25 * u64::from(attempt)))
-                        .await;
-                }
+                // Absent or non-matching across every probed layer. Dual
+                // propagates Redis errors as `Err`, so a prior L2 failure does
+                // not surface as Ok(false); accepting Ok(false) clears stale
+                // retry errors once the poison is verified gone/replaced.
+                return Ok(());
             }
             Err(error) => {
                 warn!(

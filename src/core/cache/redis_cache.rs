@@ -219,44 +219,61 @@ where
     /// Delete only while the live Redis value still satisfies `predicate`.
     ///
     /// Reads the raw blob, checks the deserialized value, then CAS-deletes with
-    /// Lua so a concurrent replacement is not removed.
+    /// Lua so a concurrent replacement is not removed. A CAS miss is re-read and
+    /// retried: an in-flight rewrite of still-matching poison changes the
+    /// serialized blob and would otherwise return false while L2 stays poisoned
+    /// (Dual can then report success after an L1-only delete).
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
     where
-        F: FnOnce(&T) -> bool,
+        F: Fn(&T) -> bool,
     {
         if self.pool.is_noop() {
             return Ok(false);
         }
 
         let redis_key = self.make_redis_key(key);
-        let Some(data) = self.pool.get(&redis_key).await? else {
-            return Ok(false);
-        };
+        // Bound retries so a pathological rewrite livelock cannot hang forever.
+        const MAX_CAS_ATTEMPTS: u8 = 8;
+        for attempt in 1..=MAX_CAS_ATTEMPTS {
+            let Some(data) = self.pool.get(&redis_key).await? else {
+                return Ok(false);
+            };
 
-        let entry: SerializableCacheEntry<T> = match self.deserialize(&data) {
-            Ok(entry) => entry,
-            Err(e) => {
-                warn!(key = %key, error = %e, "Failed to deserialize cache entry during conditional delete");
+            let entry: SerializableCacheEntry<T> = match self.deserialize(&data) {
+                Ok(entry) => entry,
+                Err(e) => {
+                    warn!(key = %key, error = %e, "Failed to deserialize cache entry during conditional delete");
+                    let _ = self.pool.delete(&redis_key).await;
+                    return Ok(false);
+                }
+            };
+
+            if entry.is_expired() {
                 let _ = self.pool.delete(&redis_key).await;
                 return Ok(false);
             }
-        };
 
-        if entry.is_expired() {
-            let _ = self.pool.delete(&redis_key).await;
-            return Ok(false);
+            if !predicate(&entry.value) {
+                return Ok(false);
+            }
+
+            let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
+            if deleted {
+                self.stats.record_deletion();
+                trace!(key = %key, "Redis cache conditional delete");
+                return Ok(true);
+            }
+
+            warn!(
+                key = %key,
+                attempt,
+                "Redis conditional delete CAS miss; re-reading live value"
+            );
         }
 
-        if !predicate(&entry.value) {
-            return Ok(false);
-        }
-
-        let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
-        if deleted {
-            self.stats.record_deletion();
-            trace!(key = %key, "Redis cache conditional delete");
-        }
-        Ok(deleted)
+        Err(GatewayError::Internal(format!(
+            "Redis conditional delete exhausted CAS retries for key {redis_key}"
+        )))
     }
 
     /// Clear all Redis entries owned by this cache prefix.
