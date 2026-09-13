@@ -32,7 +32,9 @@ use super::budgeted::ApiKeyBudgetPolicy;
 use super::callbacks::CallbackLifecycle;
 use super::execution::execute_with_selected_deployment_matching;
 use super::openai_errors;
-use super::output_fallback::{self, SelectedAttempt, is_output_guardrail_block};
+use super::output_fallback::{
+    self, SelectedAttempt, is_output_guardrail_block, should_invalidate_cached_chat_on_output_error,
+};
 #[path = "chat_delta.rs"]
 mod chat_delta;
 use chat_delta::{convert_function_call_delta, convert_tool_call_delta};
@@ -404,6 +406,7 @@ async fn handle_chat_completion_internal(
     let mut excluded_deployments = HashSet::new();
     let mut original_deployment = None;
     let mut last_output_block = None;
+    let mut last_invalidate_error = None;
     for (attempt_idx, model) in output_fallback::models_to_try(unified_router, &requested_model)
         .into_iter()
         .enumerate()
@@ -445,20 +448,33 @@ async fn handle_chat_completion_internal(
                                 .map_err(GatewayError::internal)?;
                         return Ok((response, callback));
                     }
-                    Err(error) if is_output_guardrail_block(&error) => {
+                    Err(error) if should_invalidate_cached_chat_on_output_error(&error) => {
                         skip_cached_replay.store(true, Ordering::Relaxed);
                         if let Some(cache) = chat_cache.as_ref() {
-                            super::response_cache::invalidate_chat(
+                            if let Err(invalidate_error) = super::response_cache::invalidate_chat(
                                 cache,
                                 request.as_ref(),
                                 context.as_ref(),
                             )
-                            .await;
+                            .await
+                            {
+                                // Prefer live fallbacks (they may overwrite the
+                                // key). If none succeed, surface this so callers
+                                // know Redis may still hold the poisoned entry.
+                                last_invalidate_error = Some(invalidate_error);
+                            }
                         }
-                        excluded_deployments.insert(blocked_deployment.clone());
-                        original_deployment.get_or_insert(blocked_deployment);
-                        last_output_block = Some(error);
-                        continue;
+                        if is_output_guardrail_block(&error) {
+                            excluded_deployments.insert(blocked_deployment.clone());
+                            original_deployment.get_or_insert(blocked_deployment);
+                            last_output_block = Some(error);
+                            continue;
+                        }
+                        // Deterministic masking/projection rejection: drop the
+                        // poisoned entry, then return (no content-policy fallback).
+                        let error = last_invalidate_error.take().unwrap_or(error);
+                        callback.fail(error.to_string(), "guardrail_output");
+                        return Err(error);
                     }
                     Err(error) => {
                         callback.fail(error.to_string(), "guardrail_output");
@@ -536,9 +552,11 @@ async fn handle_chat_completion_internal(
             }
         }
     }
-    let error = last_output_block.unwrap_or_else(|| {
-        GatewayError::Forbidden(crate::server::guardrails::OUTPUT_BLOCK_MESSAGE.to_string())
-    });
+    let error = last_invalidate_error
+        .or(last_output_block)
+        .unwrap_or_else(|| {
+            GatewayError::Forbidden(crate::server::guardrails::OUTPUT_BLOCK_MESSAGE.to_string())
+        });
     callback.fail(error.to_string(), "guardrail_output");
     Err(error)
 }

@@ -25,6 +25,24 @@ pub(super) fn is_output_guardrail_block(error: &GatewayError) -> bool {
     matches!(error, GatewayError::Forbidden(message) if message == OUTPUT_BLOCK_MESSAGE)
 }
 
+/// Deterministic output masking/projection rejections (e.g. PII in tool-call
+/// arguments) return `GatewayError::Internal`, not Forbidden. Cached replays
+/// that hit these must still be invalidated; transient guardrail *execution*
+/// failures stay separate so a one-off engine blip does not drop a good entry.
+pub(super) fn is_deterministic_output_masking_rejection(error: &GatewayError) -> bool {
+    matches!(
+        error,
+        GatewayError::Internal(message)
+            if message.contains("guardrail masking cannot be projected")
+    )
+}
+
+/// Cached chat entries that fail output policy this way must be dropped before
+/// fallbacks continue (Forbidden block) or the error is returned (masking).
+pub(super) fn should_invalidate_cached_chat_on_output_error(error: &GatewayError) -> bool {
+    is_output_guardrail_block(error) || is_deterministic_output_masking_rejection(error)
+}
+
 pub(super) fn allow_uncommitted_stream_fallback(
     error: StreamGuardrailError,
     committed: bool,
@@ -117,6 +135,21 @@ mod tests {
         assert!(!is_output_guardrail_block(&GatewayError::BadRequest(
             OUTPUT_BLOCK_MESSAGE.to_string()
         )));
+    }
+
+    #[test]
+    fn masking_projection_rejection_invalidates_but_execution_failure_does_not() {
+        let projection = GatewayError::Internal(
+            "output guardrail masking cannot be projected to canonical text content".to_string(),
+        );
+        let execution = GatewayError::Internal("output guardrail execution failed".to_string());
+        assert!(is_deterministic_output_masking_rejection(&projection));
+        assert!(should_invalidate_cached_chat_on_output_error(&projection));
+        assert!(!is_deterministic_output_masking_rejection(&execution));
+        assert!(!should_invalidate_cached_chat_on_output_error(&execution));
+        assert!(should_invalidate_cached_chat_on_output_error(
+            &GatewayError::Forbidden(OUTPUT_BLOCK_MESSAGE.to_string())
+        ));
     }
 
     #[test]

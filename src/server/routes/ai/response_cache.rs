@@ -10,7 +10,7 @@ use crate::core::types::embedding::EmbeddingInput;
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{error, warn};
 
 const BYPASS_CHAT_RESPONSE_CACHE_KEY: &str = "bypass_chat_response_cache";
 
@@ -113,21 +113,45 @@ pub(super) async fn store_chat(
 /// `cache` must be the same instance returned by [`lookup_chat`] for this
 /// request so invalidation still hits Redis/L1 after a mid-request reload that
 /// disables the live `AppState::response_cache()`.
+///
+/// Returns `Err` when Redis/L2 deletion fails so callers can surface the
+/// failure (and avoid treating a still-poisoned entry as cleared). Transient
+/// Dual-mode L2 errors are retried briefly before propagating.
 pub(super) async fn invalidate_chat(
     cache: &LLMCache,
     request: &ChatCompletionRequest,
     context: &RequestContext,
-) {
+) -> Result<(), GatewayError> {
     if should_bypass_chat_cache(request, context) {
-        return;
+        return Ok(());
     }
     let identity = cache_identity(context);
-    if let Err(error) = cache
-        .invalidate_chat_with_user(request, identity.as_deref())
-        .await
-    {
-        warn!(error = %error, "Chat response cache invalidate failed; continuing");
+    let mut last_error = None;
+    for attempt in 1..=3u8 {
+        match cache
+            .invalidate_chat_with_user(request, identity.as_deref())
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                warn!(
+                    attempt,
+                    error = %error,
+                    "Chat response cache invalidate failed"
+                );
+                last_error = Some(error);
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(25 * u64::from(attempt)))
+                        .await;
+                }
+            }
+        }
     }
+    let error = last_error.expect("invalidate retries always record an error");
+    error!(error = %error, "Chat response cache invalidate exhausted retries");
+    Err(GatewayError::Internal(format!(
+        "Chat response cache invalidate failed: {error}"
+    )))
 }
 
 pub(super) async fn lookup_embedding(
@@ -467,7 +491,9 @@ mod tests {
         );
         let cache = lookup_cache.expect("lookup must pin the cache generation used for the hit");
 
-        invalidate_chat(&cache, &request, &context).await;
+        invalidate_chat(&cache, &request, &context)
+            .await
+            .expect("invalidate should succeed against memory-only cache");
 
         let (_, after) = lookup_chat(&state, &request, &context)
             .await
