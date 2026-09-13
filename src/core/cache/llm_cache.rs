@@ -398,6 +398,9 @@ impl LLMCache {
     /// already stored after invalidating the same poisoned entry. Matching delete
     /// is atomic per cache layer (DashMap `remove_if` / Redis Lua CAS) so a
     /// replacement under the same key is not removed after a stale match.
+    /// Dual-mode matching also purges a divergent L2 value when L1 matched, so a
+    /// prior best-effort Redis write failure cannot leave a second poisoned
+    /// payload to warm back into L1.
     pub async fn invalidate_chat_with_user_matching(
         &self,
         request: &ChatCompletionRequest,

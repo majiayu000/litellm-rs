@@ -75,9 +75,9 @@ impl Drop for L1FillLockLease {
 ///
 /// Write strategy:
 /// - Write to both memory and Redis caches
-/// - Dual-mode writes take the same per-key lock as invalidation and
-///   refuse payloads matching a recent conditional-delete barrier so a stale
-///   `store` cannot recreate a just-invalidated entry
+/// - Dual- and MemoryOnly-mode writes take the same per-key lock as
+///   invalidation and refuse payloads matching a recent conditional-delete
+///   barrier so a stale `store` cannot recreate a just-invalidated entry
 ///
 /// Invalidation strategy:
 /// - Delete from both L1 (memory) and L2 (Redis) when present
@@ -87,12 +87,18 @@ impl Drop for L1FillLockLease {
 /// - L1 fills from L2 take the same per-key lock as Dual deletes and
 ///   perform a single Redis read under that lock so invalidation cannot be
 ///   raced by read-through and hit/miss stats are not double-counted.
-/// - Dual-mode `delete_if` records a write-identity barrier for each removed
-///   value so concurrent writers that skip the lock window still cannot
-///   recreate the same logical payload until the barrier expires.
+/// - Dual- and MemoryOnly-mode `delete_if` records a write-identity barrier
+///   for each removed value so concurrent writers that skip the lock window
+///   still cannot recreate the same logical payload until the barrier expires.
+/// - Dual-mode `delete_if` that matches L1 also purges any L2 value for the
+///   key: under the per-key lock a non-matching L2 payload is pre-existing
+///   layer divergence (best-effort Dual writes update L1 before L2), not a
+///   concurrent safe replacement.
 /// - Per-key locks may be held across Redis I/O for that key only; unrelated
 ///   keys never share a mutex, so a slow Redis round trip cannot serialize
 ///   traffic for other cache keys.
+/// - `clear` waits on live per-key locks and retains entries that still have
+///   RAII leases so in-flight ops keep coordinating on the same mutex.
 pub struct DualCache<T> {
     /// In-memory cache layer (L1)
     memory: Arc<InMemoryCache<T>>,
@@ -385,10 +391,7 @@ where
     /// Set a value in the cache with a specific TTL
     pub async fn set_with_ttl(&self, key: CacheKey, value: T, ttl: Duration) -> Result<()> {
         match self.config.mode {
-            CacheMode::MemoryOnly => {
-                self.memory.set_with_ttl(key, value, ttl).await;
-                Ok(())
-            }
+            CacheMode::MemoryOnly => self.set_memory_only(key, value, ttl).await,
             CacheMode::RedisOnly => {
                 if let Some(ref redis) = self.redis {
                     redis.set_with_ttl(key, value, ttl).await
@@ -398,6 +401,21 @@ where
             }
             CacheMode::Dual => self.set_dual(key, value, ttl).await,
         }
+    }
+
+    /// MemoryOnly set under the fill/invalidate lock with stale-write barriers.
+    async fn set_memory_only(&self, key: CacheKey, value: T, ttl: Duration) -> Result<()> {
+        let lease = self.acquire_l1_fill_lock(&key);
+        let _guard = lease.mutex().lock().await;
+        if self.is_stale_write_blocked(&key, &value) {
+            trace!(
+                key = %key,
+                "Memory-only cache rejected stale write after conditional invalidation"
+            );
+            return Ok(());
+        }
+        self.memory.set_with_ttl(key, value, ttl).await;
+        Ok(())
     }
 
     /// Set in both cache layers under the fill/invalidate lock.
@@ -443,6 +461,15 @@ where
     ) -> Result<()> {
         match self.config.mode {
             CacheMode::MemoryOnly => {
+                let lease = self.acquire_l1_fill_lock(&key);
+                let _guard = lease.mutex().lock().await;
+                if self.is_stale_write_blocked(&key, &value) {
+                    trace!(
+                        key = %key,
+                        "Memory-only cache rejected stale sized write after conditional invalidation"
+                    );
+                    return Ok(());
+                }
                 self.memory.set_with_size(key, value, ttl, size_bytes).await;
                 Ok(())
             }
@@ -484,6 +511,8 @@ where
 
         match self.config.mode {
             CacheMode::MemoryOnly => {
+                let lease = self.acquire_l1_fill_lock(key);
+                let _guard = lease.mutex().lock().await;
                 deleted = self.memory.delete(key).await;
             }
             CacheMode::RedisOnly => {
@@ -519,10 +548,15 @@ where
     ///
     /// Each layer evaluates the predicate against its own current value and deletes
     /// atomically (DashMap `remove_if` for L1, Redis Lua CAS for L2), so a
-    /// concurrent replacement is not removed after a stale match. Dual mode also
-    /// holds the per-key fill lock so read-through cannot repopulate L1 after a
-    /// successful layer delete, and installs a write-identity barrier so a
-    /// concurrent Dual `set` cannot recreate the same logical payload.
+    /// concurrent replacement is not removed after a stale match. Dual and
+    /// MemoryOnly modes also hold the per-key fill lock so read-through cannot
+    /// repopulate L1 after a successful layer delete, and install a
+    /// write-identity barrier so a concurrent `set` cannot recreate the same
+    /// logical payload. When Dual mode removes a matching L1 value, any L2
+    /// value for the key is purged as well: under the lock a divergent L2
+    /// payload is stale layer skew from a prior best-effort Redis write
+    /// failure, not a verified concurrent safe replacement (those update L1
+    /// first).
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
     where
         F: Fn(&T) -> bool,
@@ -531,7 +565,12 @@ where
 
         match self.config.mode {
             CacheMode::MemoryOnly => {
-                deleted = self.memory.delete_if(key, &predicate).await.is_some();
+                let lease = self.acquire_l1_fill_lock(key);
+                let _guard = lease.mutex().lock().await;
+                if let Some(removed) = self.memory.delete_if(key, &predicate).await {
+                    self.install_stale_write_barrier(key, &removed);
+                    deleted = true;
+                }
             }
             CacheMode::RedisOnly => {
                 if let Some(ref redis) = self.redis {
@@ -544,11 +583,18 @@ where
                 if let Some(removed) = self.memory.delete_if(key, &predicate).await {
                     self.install_stale_write_barrier(key, &removed);
                     deleted = true;
-                }
-                // Propagate L2 failures the same way as unconditional Dual delete.
-                if let Some(ref redis) = self.redis
+                    // L1 matched: purge L2 regardless of payload (match or diverge).
+                    // Propagate L2 failures the same way as unconditional Dual delete.
+                    if let Some(ref redis) = self.redis
+                        && let Some(removed_l2) = redis.delete_if(key, |_| true).await?
+                    {
+                        self.install_stale_write_barrier(key, &removed_l2);
+                        deleted = true;
+                    }
+                } else if let Some(ref redis) = self.redis
                     && let Some(removed) = redis.delete_if(key, &predicate).await?
                 {
+                    // L1 miss/mismatch: only CAS-delete a matching L2 value.
                     self.install_stale_write_barrier(key, &removed);
                     deleted = true;
                 }
@@ -615,6 +661,21 @@ where
 
     /// Clear all entries from both cache layers
     pub async fn clear(&self) -> Result<()> {
+        // Wait out in-flight Dual/MemoryOnly ops that already own a per-key
+        // mutex, then wipe layers under those locks so a mid-flight store cannot
+        // finish after Redis/memory were emptied. Keep map entries that still
+        // have RAII leases so the next acquire reuses the same mutex instead of
+        // racing a second mutex for the same key.
+        let active_locks: Vec<Arc<Mutex<()>>> = self
+            .l1_fill_locks
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+        let mut guards = Vec::with_capacity(active_locks.len());
+        for lock in &active_locks {
+            guards.push(lock.lock().await);
+        }
+
         // Clear memory cache
         self.memory.clear().await;
 
@@ -628,7 +689,11 @@ where
         // Admin/cache clear must also drop write-identity barriers so a later
         // store of a previously-invalidated logical value is accepted again.
         self.stale_write_barriers.clear();
-        self.l1_fill_locks.clear();
+
+        drop(guards);
+        drop(active_locks);
+        self.l1_fill_locks
+            .retain(|_, lock| Arc::strong_count(lock) > 1);
 
         debug!(redis_deleted, "Dual cache cleared");
         Ok(())
@@ -1174,6 +1239,55 @@ mod tests {
         // A distinct replacement must still be accepted.
         cache.set(key.clone(), "safe".to_string()).await.unwrap();
         assert_eq!(cache.get(&key).await.unwrap(), Some("safe".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_only_delete_if_blocks_stale_recreate_of_same_logical_value() {
+        let cache: DualCache<String> = DualCache::memory_only(DualCacheConfig::default());
+        let key = CacheKey::new("memory-stale-write");
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert!(cache.delete_if(&key, |v| v == "poison").await.unwrap());
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            None,
+            "MemoryOnly stale recreate of invalidated payload must be rejected"
+        );
+
+        cache.set(key.clone(), "safe".to_string()).await.unwrap();
+        assert_eq!(cache.get(&key).await.unwrap(), Some("safe".to_string()));
+    }
+
+    #[tokio::test]
+    async fn dual_clear_preserves_active_per_key_locks() {
+        let cache: DualCache<String> = DualCache::with_defaults();
+        let key = CacheKey::new("clear-active-lock");
+
+        let lease = cache.acquire_l1_fill_lock(&key);
+        let before = Arc::as_ptr(lease.mutex());
+        assert_eq!(cache.l1_fill_locks.len(), 1);
+
+        cache.clear().await.unwrap();
+        assert!(
+            cache.l1_fill_locks.contains_key(&key),
+            "clear must retain lock map entries that still have RAII leases"
+        );
+
+        let lease_again = cache.acquire_l1_fill_lock(&key);
+        assert!(
+            Arc::ptr_eq(lease.mutex(), lease_again.mutex()),
+            "post-clear acquire must reuse the active per-key mutex"
+        );
+        assert_eq!(Arc::as_ptr(lease_again.mutex()), before);
+
+        drop(lease_again);
+        drop(lease);
+        assert!(
+            cache.l1_fill_locks.is_empty(),
+            "idle locks must still be reclaimed after the last lease drops"
+        );
     }
 
     #[tokio::test]

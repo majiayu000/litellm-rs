@@ -550,7 +550,8 @@ impl CacheStatsSnapshot {
 
 /// Logical identity of a cache value for stale-write rejection after invalidation.
 ///
-/// Dual-mode `delete_if` records this fingerprint as a short-lived barrier so a
+/// Dual- and MemoryOnly-mode `delete_if` records this fingerprint as a short-lived
+/// barrier so a
 /// concurrent `set` of the same logical payload cannot recreate a just-deleted
 /// entry. Wrappers that embed wall-clock metadata (e.g. `cached_at`) must hash
 /// only the payload that matching invalidation compares.
