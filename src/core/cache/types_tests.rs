@@ -306,3 +306,27 @@ fn test_cache_stats_snapshot_combined() {
     assert_eq!(snapshot.total_misses(), 30);
     assert_eq!(snapshot.total_requests(), 110);
 }
+
+#[test]
+fn test_serialize_write_identity_ok() {
+    let a = serialize_write_identity(&"hello".to_string()).expect("string must serialize");
+    let b = serialize_write_identity(&"hello".to_string()).expect("string must serialize");
+    let c = serialize_write_identity(&"other".to_string()).expect("string must serialize");
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
+#[test]
+fn test_serialize_write_identity_failure_is_none() {
+    struct FailSerialize;
+    impl Serialize for FailSerialize {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("intentional failure"))
+        }
+    }
+
+    assert!(
+        serialize_write_identity(&FailSerialize).is_none(),
+        "serialization failure must return None, not a shared empty digest"
+    );
+}

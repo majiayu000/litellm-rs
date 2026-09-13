@@ -559,28 +559,35 @@ impl CacheStatsSnapshot {
 /// This trait is **not** a bound on the public `DualCache` API. Ordinary caches
 /// default to [`serialize_write_identity`]; LLM wrappers supply a custom hasher
 /// via [`crate::core::cache::DualCache::with_write_identity`].
+///
+/// Returning `None` means identity is unavailable (e.g. serialization failed);
+/// DualCache skips installing/matching barriers for that value instead of
+/// collapsing unrelated failures into one fingerprint.
 pub trait CacheWriteIdentity {
     /// Stable fingerprint of the logical value (not wrapper metadata).
-    fn cache_write_identity(&self) -> u64;
+    fn cache_write_identity(&self) -> Option<u64>;
 }
 
 /// SHA-256 truncated fingerprint of a JSON-serialized value.
-pub fn serialize_write_identity<T: Serialize>(value: &T) -> u64 {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+///
+/// Returns `None` when serialization fails so callers do not treat unrelated
+/// non-serializable values as the same empty identity.
+pub fn serialize_write_identity<T: Serialize>(value: &T) -> Option<u64> {
+    let bytes = serde_json::to_vec(value).ok()?;
     let digest = Sha256::digest(&bytes);
     let mut out = [0u8; 8];
     out.copy_from_slice(&digest[..8]);
-    u64::from_be_bytes(out)
+    Some(u64::from_be_bytes(out))
 }
 
 impl CacheWriteIdentity for String {
-    fn cache_write_identity(&self) -> u64 {
+    fn cache_write_identity(&self) -> Option<u64> {
         serialize_write_identity(self)
     }
 }
 
 impl CacheWriteIdentity for &str {
-    fn cache_write_identity(&self) -> u64 {
+    fn cache_write_identity(&self) -> Option<u64> {
         serialize_write_identity(self)
     }
 }

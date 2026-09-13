@@ -182,7 +182,7 @@ impl CachedChatResponse {
 }
 
 impl CacheWriteIdentity for CachedChatResponse {
-    fn cache_write_identity(&self) -> u64 {
+    fn cache_write_identity(&self) -> Option<u64> {
         // Match invalidate comparison: ignore wrapper `cached_at` metadata.
         serialize_write_identity(self.response.as_ref())
     }
@@ -241,7 +241,7 @@ impl CachedEmbeddingResponse {
 }
 
 impl CacheWriteIdentity for CachedEmbeddingResponse {
-    fn cache_write_identity(&self) -> u64 {
+    fn cache_write_identity(&self) -> Option<u64> {
         serialize_write_identity(self.response.as_ref())
     }
 }
@@ -400,7 +400,8 @@ impl LLMCache {
     /// replacement under the same key is not removed after a stale match.
     /// Dual-mode matching also purges a divergent L2 value when L1 matched, so a
     /// prior best-effort Redis write failure cannot leave a second poisoned
-    /// payload to warm back into L1.
+    /// payload to warm back into L1. Only the predicate-matched L1 identity is
+    /// barriered; divergent L2 payloads are deleted without a write barrier.
     pub async fn invalidate_chat_with_user_matching(
         &self,
         request: &ChatCompletionRequest,

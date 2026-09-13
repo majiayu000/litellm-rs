@@ -15,7 +15,7 @@ use dashmap::DashMap;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::{debug, trace, warn};
 
 /// Short-lived barrier that rejects recreating a just-invalidated logical value.
@@ -88,12 +88,18 @@ impl Drop for L1FillLockLease {
 ///   perform a single Redis read under that lock so invalidation cannot be
 ///   raced by read-through and hit/miss stats are not double-counted.
 /// - Dual- and MemoryOnly-mode `delete_if` records a write-identity barrier
-///   for each removed value so concurrent writers that skip the lock window
-///   still cannot recreate the same logical payload until the barrier expires.
+///   for each **predicate-matched** removed value so concurrent writers that
+///   skip the lock window still cannot recreate the same logical payload
+///   until the barrier expires.
 /// - Dual-mode `delete_if` that matches L1 also purges any L2 value for the
 ///   key: under the per-key lock a non-matching L2 payload is pre-existing
 ///   layer divergence (best-effort Dual writes update L1 before L2), not a
-///   concurrent safe replacement.
+///   concurrent safe replacement. Divergent L2 payloads are deleted without
+///   installing a barrier so a later guardrail-passing store of that safe
+///   identity is not rejected.
+/// - Expired write-identity barriers are swept on the memory cleanup interval
+///   (and on access) so one-off invalidated keys cannot grow the barrier map
+///   without bound.
 /// - Per-key locks may be held across Redis I/O for that key only; unrelated
 ///   keys never share a mutex, so a slow Redis round trip cannot serialize
 ///   traffic for other cache keys.
@@ -112,13 +118,16 @@ pub struct DualCache<T> {
     l1_fill_locks: Arc<DashMap<CacheKey, Arc<Mutex<()>>>>,
     /// Per-key barriers rejecting stale recreation of conditionally deleted values.
     stale_write_barriers: Arc<DashMap<CacheKey, Vec<StaleWriteBarrier>>>,
+    /// Signals the barrier-map cleanup task to exit.
+    barrier_cleanup_shutdown: Arc<Notify>,
     /// Logical write fingerprint used by Dual stale-write barriers.
     ///
     /// Defaults to JSON/SHA-256 of the full value (`serialize_write_identity`).
     /// Callers with wrapper metadata (e.g. `cached_at`) supply a payload-only
     /// hasher via [`DualCache::with_write_identity`] so ordinary `DualCache<T>`
     /// does not require a public `CacheWriteIdentity` bound.
-    write_identity: fn(&T) -> u64,
+    /// Returning `None` skips barrier install/match for that value.
+    write_identity: fn(&T) -> Option<u64>,
 }
 
 impl<T> DualCache<T>
@@ -134,10 +143,12 @@ where
     ///
     /// Use this when the serialized value includes wrapper metadata that must
     /// be ignored for stale-write barriers after conditional invalidation.
+    /// Return `None` from the hasher when identity cannot be computed; DualCache
+    /// then skips barrier install/match for that value.
     pub fn with_write_identity(
         config: DualCacheConfig,
         redis_pool: Option<Arc<RedisPool>>,
-        write_identity: fn(&T) -> u64,
+        write_identity: fn(&T) -> Option<u64>,
     ) -> Self {
         let stats = Arc::new(AtomicCacheStats::new());
         let memory = Arc::new(InMemoryCache::with_stats(
@@ -171,6 +182,7 @@ where
             stats,
             l1_fill_locks: Arc::new(DashMap::new()),
             stale_write_barriers: Arc::new(DashMap::new()),
+            barrier_cleanup_shutdown: Arc::new(Notify::new()),
             write_identity,
         }
     }
@@ -187,9 +199,27 @@ where
         Self::new(DualCacheConfig::default(), None)
     }
 
-    /// Start the background cleanup task for the memory cache
+    /// Start the background cleanup task for the memory cache and expired
+    /// stale-write barriers (independent of per-key access).
     pub fn start_cleanup_task(&self) {
         self.memory.start_cleanup_task();
+
+        let barriers = Arc::clone(&self.stale_write_barriers);
+        let shutdown = Arc::clone(&self.barrier_cleanup_shutdown);
+        let interval = self.config.cleanup_interval;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        Self::prune_expired_barriers_map(&barriers);
+                    }
+                    _ = shutdown.notified() => {
+                        debug!("Dual cache barrier cleanup task shutting down");
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     /// Acquire a cancellation-safe per-key coordination lease.
@@ -197,8 +227,24 @@ where
         L1FillLockLease::acquire(&self.l1_fill_locks, key)
     }
 
+    /// Drop expired write-identity barriers across the whole map.
+    ///
+    /// Runs on the cleanup interval so one-off invalidated keys cannot leave
+    /// expired entries behind forever when those keys are never reused.
+    fn prune_expired_barriers_map(barriers: &DashMap<CacheKey, Vec<StaleWriteBarrier>>) {
+        let now = Instant::now();
+        barriers.retain(|_, entries| {
+            entries.retain(|b| b.expires_at > now);
+            !entries.is_empty()
+        });
+    }
+
     fn install_stale_write_barrier(&self, key: &CacheKey, value: &T) {
-        let identity = (self.write_identity)(value);
+        let Some(identity) = (self.write_identity)(value) else {
+            // Serialization/identity failure: do not collapse distinct failures
+            // into one empty fingerprint barrier.
+            return;
+        };
         let expires_at = Instant::now() + self.config.default_ttl;
         let now = Instant::now();
         self.stale_write_barriers
@@ -237,8 +283,11 @@ where
                     remove_empty = true;
                     false
                 } else {
-                    let identity = (self.write_identity)(value);
-                    barriers.iter().any(|b| b.identity == identity)
+                    match (self.write_identity)(value) {
+                        Some(identity) => barriers.iter().any(|b| b.identity == identity),
+                        // Unknown identity cannot safely match a barrier.
+                        None => false,
+                    }
                 }
             }
         };
@@ -556,7 +605,9 @@ where
     /// value for the key is purged as well: under the lock a divergent L2
     /// payload is stale layer skew from a prior best-effort Redis write
     /// failure, not a verified concurrent safe replacement (those update L1
-    /// first).
+    /// first). Only predicate-matched (poisoned) identities are barriered;
+    /// divergent L2 payloads are deleted without a barrier so a later
+    /// guardrail-passing store of that safe identity is accepted.
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
     where
         F: Fn(&T) -> bool,
@@ -585,10 +636,11 @@ where
                     deleted = true;
                     // L1 matched: purge L2 regardless of payload (match or diverge).
                     // Propagate L2 failures the same way as unconditional Dual delete.
+                    // Do not barrier divergent L2 identities — only the poisoned L1
+                    // match is proven rejected by the current predicate.
                     if let Some(ref redis) = self.redis
-                        && let Some(removed_l2) = redis.delete_if(key, |_| true).await?
+                        && redis.delete_if(key, |_| true).await?.is_some()
                     {
-                        self.install_stale_write_barrier(key, &removed_l2);
                         deleted = true;
                     }
                 } else if let Some(ref redis) = self.redis
@@ -740,6 +792,7 @@ where
 
     /// Shutdown the cache
     pub fn shutdown(&self) {
+        self.barrier_cleanup_shutdown.notify_waiters();
         self.memory.shutdown();
     }
 }
@@ -1344,6 +1397,59 @@ mod tests {
         assert!(
             cache.stale_write_barriers.is_empty(),
             "empty expired barrier entries must be removed from the map"
+        );
+    }
+
+    #[tokio::test]
+    async fn dual_prune_expired_barriers_without_key_reuse() {
+        let config = DualCacheConfig {
+            mode: CacheMode::Dual,
+            default_ttl: Duration::from_millis(20),
+            ..DualCacheConfig::default()
+        };
+        let cache: DualCache<String> =
+            DualCache::new(config, Some(Arc::new(RedisPool::create_noop())));
+
+        for i in 0..5 {
+            let key = CacheKey::new(format!("one-off-{i}"));
+            cache.set(key.clone(), "poison".to_string()).await.unwrap();
+            assert!(cache.delete_if(&key, |v| v == "poison").await.unwrap());
+        }
+        assert_eq!(cache.stale_write_barriers.len(), 5);
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // No key reuse / is_stale_write_blocked — global prune must still clear.
+        DualCache::<String>::prune_expired_barriers_map(&cache.stale_write_barriers);
+        assert!(
+            cache.stale_write_barriers.is_empty(),
+            "expired barriers must be pruned independently of key reuse"
+        );
+    }
+
+    #[tokio::test]
+    async fn dual_identity_failure_does_not_install_barrier() {
+        fn always_none(_: &String) -> Option<u64> {
+            None
+        }
+
+        let config = DualCacheConfig {
+            mode: CacheMode::MemoryOnly,
+            ..DualCacheConfig::default()
+        };
+        let cache: DualCache<String> = DualCache::with_write_identity(config, None, always_none);
+        let key = CacheKey::new("no-identity");
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert!(cache.delete_if(&key, |v| v == "poison").await.unwrap());
+        assert!(
+            cache.stale_write_barriers.is_empty(),
+            "failed identity must not install a collapsed empty barrier"
+        );
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            Some("poison".to_string()),
+            "writes must proceed when identity cannot be computed"
         );
     }
 }
