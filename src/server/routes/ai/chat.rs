@@ -470,8 +470,8 @@ async fn handle_chat_completion_internal(
                             last_output_block = Some(error);
                             continue;
                         }
-                        // Deterministic masking/projection rejection: drop the
-                        // poisoned entry, then return (no content-policy fallback).
+                        // Deterministic masking/projection/scan rejection: drop
+                        // the poisoned entry, then return (no content-policy fallback).
                         let error = last_invalidate_error.take().unwrap_or(error);
                         callback.fail(error.to_string(), "guardrail_output");
                         return Err(error);
@@ -540,6 +540,13 @@ async fn handle_chat_completion_internal(
                     .await
                 {
                     callback.fail(error.to_string(), "cache_error");
+                    return Err(error);
+                }
+                // Dual-mode store only warns on L2 write failure and can no-op
+                // after a reload disables caching, so a live fallback must not
+                // hide a prior poisoned-entry invalidate failure.
+                if let Some(error) = last_invalidate_error.take() {
+                    callback.fail(error.to_string(), "cache_invalidate");
                     return Err(error);
                 }
                 let response =

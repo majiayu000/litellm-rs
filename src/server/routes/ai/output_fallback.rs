@@ -37,10 +37,25 @@ pub(super) fn is_deterministic_output_masking_rejection(error: &GatewayError) ->
     )
 }
 
+/// Deterministic output-scan / document-decode failures (malformed textual
+/// documents, invalid JSON bodies, etc.) also return `Internal`. They are
+/// stable for a given cached payload, so replaying the entry only repeats the
+/// 500 until TTL expiry — invalidate those entries too.
+pub(super) fn is_deterministic_output_scan_failure(error: &GatewayError) -> bool {
+    matches!(
+        error,
+        GatewayError::Internal(message)
+            if message.contains("output guardrail cannot scan")
+                || message.contains("guardrail cannot scan response document")
+    )
+}
+
 /// Cached chat entries that fail output policy this way must be dropped before
-/// fallbacks continue (Forbidden block) or the error is returned (masking).
+/// fallbacks continue (Forbidden block) or the error is returned (masking/scan).
 pub(super) fn should_invalidate_cached_chat_on_output_error(error: &GatewayError) -> bool {
-    is_output_guardrail_block(error) || is_deterministic_output_masking_rejection(error)
+    is_output_guardrail_block(error)
+        || is_deterministic_output_masking_rejection(error)
+        || is_deterministic_output_scan_failure(error)
 }
 
 pub(super) fn allow_uncommitted_stream_fallback(
@@ -142,10 +157,23 @@ mod tests {
         let projection = GatewayError::Internal(
             "output guardrail masking cannot be projected to canonical text content".to_string(),
         );
+        let scan = GatewayError::Internal(
+            "output guardrail cannot scan response document: invalid JSON document: eof"
+                .to_string(),
+        );
+        let remapped_doc = GatewayError::Internal(
+            "guardrail cannot scan response document: invalid base64 document data: InvalidByte"
+                .to_string(),
+        );
         let execution = GatewayError::Internal("output guardrail execution failed".to_string());
         assert!(is_deterministic_output_masking_rejection(&projection));
         assert!(should_invalidate_cached_chat_on_output_error(&projection));
+        assert!(is_deterministic_output_scan_failure(&scan));
+        assert!(should_invalidate_cached_chat_on_output_error(&scan));
+        assert!(is_deterministic_output_scan_failure(&remapped_doc));
+        assert!(should_invalidate_cached_chat_on_output_error(&remapped_doc));
         assert!(!is_deterministic_output_masking_rejection(&execution));
+        assert!(!is_deterministic_output_scan_failure(&execution));
         assert!(!should_invalidate_cached_chat_on_output_error(&execution));
         assert!(should_invalidate_cached_chat_on_output_error(
             &GatewayError::Forbidden(OUTPUT_BLOCK_MESSAGE.to_string())
