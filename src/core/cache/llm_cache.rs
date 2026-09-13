@@ -7,7 +7,9 @@ use super::dual::DualCache;
 use super::key_generator::{
     generate_chat_key, generate_chat_key_with_user, generate_embedding_key,
 };
-use super::types::{CacheKey, CacheStatsSnapshot, DualCacheConfig};
+use super::types::{
+    CacheKey, CacheStatsSnapshot, CacheWriteIdentity, DualCacheConfig, serialize_write_identity,
+};
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse,
 };
@@ -179,6 +181,13 @@ impl CachedChatResponse {
     }
 }
 
+impl CacheWriteIdentity for CachedChatResponse {
+    fn cache_write_identity(&self) -> u64 {
+        // Match invalidate comparison: ignore wrapper `cached_at` metadata.
+        serialize_write_identity(self.response.as_ref())
+    }
+}
+
 /// Cached embedding response wrapper
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedEmbeddingResponse {
@@ -228,6 +237,12 @@ impl CachedEmbeddingResponse {
     /// Get the underlying response
     pub fn into_response(self) -> EmbeddingResponse {
         Arc::try_unwrap(self.response).unwrap_or_else(|response| (*response).clone())
+    }
+}
+
+impl CacheWriteIdentity for CachedEmbeddingResponse {
+    fn cache_write_identity(&self) -> u64 {
+        serialize_write_identity(self.response.as_ref())
     }
 }
 

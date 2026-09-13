@@ -548,6 +548,38 @@ impl CacheStatsSnapshot {
     }
 }
 
+/// Logical identity of a cache value for stale-write rejection after invalidation.
+///
+/// Dual-mode `delete_if` records this fingerprint as a short-lived barrier so a
+/// concurrent `set` of the same logical payload cannot recreate a just-deleted
+/// entry. Wrappers that embed wall-clock metadata (e.g. `cached_at`) must hash
+/// only the payload that matching invalidation compares.
+pub trait CacheWriteIdentity {
+    /// Stable fingerprint of the logical value (not wrapper metadata).
+    fn cache_write_identity(&self) -> u64;
+}
+
+/// SHA-256 truncated fingerprint of a JSON-serialized value.
+pub fn serialize_write_identity<T: Serialize>(value: &T) -> u64 {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let digest = Sha256::digest(&bytes);
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(out)
+}
+
+impl CacheWriteIdentity for String {
+    fn cache_write_identity(&self) -> u64 {
+        serialize_write_identity(self)
+    }
+}
+
+impl CacheWriteIdentity for &str {
+    fn cache_write_identity(&self) -> u64 {
+        serialize_write_identity(self)
+    }
+}
+
 #[cfg(test)]
 #[path = "types_tests.rs"]
 mod tests;

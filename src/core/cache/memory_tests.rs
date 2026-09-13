@@ -294,7 +294,7 @@ async fn test_delete_if_clears_matching_entry_and_meta() {
     let key = CacheKey::new("delete-if-match");
 
     cache.set(key.clone(), "poison".to_string()).await;
-    assert!(cache.delete_if(&key, |v| v == "poison").await);
+    assert!(cache.delete_if(&key, |v| v == "poison").await.is_some());
     assert!(cache.get(&key).await.is_none());
     assert!(
         !cache.access_shard(&key).contains_key(&key),

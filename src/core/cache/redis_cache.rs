@@ -223,12 +223,13 @@ where
     /// retried: an in-flight rewrite of still-matching poison changes the
     /// serialized blob and would otherwise return false while L2 stays poisoned
     /// (Dual can then report success after an L1-only delete).
-    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
+    /// Returns the deleted value when a matching live entry was removed.
+    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<Option<T>>
     where
         F: Fn(&T) -> bool,
     {
         if self.pool.is_noop() {
-            return Ok(false);
+            return Ok(None);
         }
 
         let redis_key = self.make_redis_key(key);
@@ -236,7 +237,7 @@ where
         const MAX_CAS_ATTEMPTS: u8 = 8;
         for attempt in 1..=MAX_CAS_ATTEMPTS {
             let Some(data) = self.pool.get(&redis_key).await? else {
-                return Ok(false);
+                return Ok(None);
             };
 
             let entry: SerializableCacheEntry<T> = match self.deserialize(&data) {
@@ -244,7 +245,7 @@ where
                 Err(e) => {
                     warn!(key = %key, error = %e, "Failed to deserialize cache entry during conditional delete");
                     let _ = self.pool.delete(&redis_key).await;
-                    return Ok(false);
+                    return Ok(None);
                 }
             };
 
@@ -254,7 +255,7 @@ where
                 // not removed by an unconditional DEL.
                 let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
                 if deleted {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 warn!(
                     key = %key,
@@ -265,14 +266,14 @@ where
             }
 
             if !predicate(&entry.value) {
-                return Ok(false);
+                return Ok(None);
             }
 
             let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
             if deleted {
                 self.stats.record_deletion();
                 trace!(key = %key, "Redis cache conditional delete");
-                return Ok(true);
+                return Ok(Some(entry.value));
             }
 
             warn!(

@@ -6,18 +6,27 @@
 use super::memory::InMemoryCache;
 use super::redis_cache::RedisCache;
 use super::types::{
-    AtomicCacheStats, CacheEntry, CacheKey, CacheMode, CacheStatsSnapshot, DualCacheConfig,
+    AtomicCacheStats, CacheEntry, CacheKey, CacheMode, CacheStatsSnapshot, CacheWriteIdentity,
+    DualCacheConfig,
 };
 use crate::storage::redis::RedisPool;
 use crate::utils::error::gateway_error::Result;
+use dashmap::DashMap;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 
 /// Shard count for locks that serialize L2→L1 read-through fills with deletes.
 const L1_FILL_LOCK_SHARDS: usize = 64;
+
+/// Short-lived barrier that rejects recreating a just-invalidated logical value.
+#[derive(Clone, Debug)]
+struct StaleWriteBarrier {
+    identity: u64,
+    expires_at: Instant,
+}
 
 /// Dual-layer cache combining in-memory and Redis caches
 ///
@@ -28,6 +37,9 @@ const L1_FILL_LOCK_SHARDS: usize = 64;
 ///
 /// Write strategy:
 /// - Write to both memory and Redis caches
+/// - Dual-mode writes take the same per-key shard lock as invalidation and
+///   refuse payloads matching a recent conditional-delete barrier so a stale
+///   `store` cannot recreate a just-invalidated entry
 ///
 /// Invalidation strategy:
 /// - Delete from both L1 (memory) and L2 (Redis) when present
@@ -37,6 +49,9 @@ const L1_FILL_LOCK_SHARDS: usize = 64;
 /// - L1 fills from L2 take the same per-key shard lock as Dual deletes and
 ///   perform a single Redis read under that lock so invalidation cannot be
 ///   raced by read-through and hit/miss stats are not double-counted.
+/// - Dual-mode `delete_if` records a write-identity barrier for each removed
+///   value so concurrent writers that skip the lock window still cannot
+///   recreate the same logical payload until the barrier expires.
 pub struct DualCache<T> {
     /// In-memory cache layer (L1)
     memory: Arc<InMemoryCache<T>>,
@@ -46,13 +61,15 @@ pub struct DualCache<T> {
     config: DualCacheConfig,
     /// Shared statistics
     stats: Arc<AtomicCacheStats>,
-    /// Serializes Dual-mode L2→L1 population with L1/L2 invalidation.
+    /// Serializes Dual-mode L2→L1 population with L1/L2 invalidation/writes.
     l1_fill_locks: Arc<Vec<Mutex<()>>>,
+    /// Per-key barriers rejecting stale recreation of conditionally deleted values.
+    stale_write_barriers: Arc<DashMap<CacheKey, Vec<StaleWriteBarrier>>>,
 }
 
 impl<T> DualCache<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + CacheWriteIdentity + 'static,
 {
     /// Create a new dual cache with the given configuration
     pub fn new(config: DualCacheConfig, redis_pool: Option<Arc<RedisPool>>) -> Self {
@@ -87,6 +104,7 @@ where
             config,
             stats,
             l1_fill_locks: Arc::new((0..L1_FILL_LOCK_SHARDS).map(|_| Mutex::new(())).collect()),
+            stale_write_barriers: Arc::new(DashMap::new()),
         }
     }
 
@@ -109,6 +127,39 @@ where
 
     fn l1_fill_lock(&self, key: &CacheKey) -> &Mutex<()> {
         &self.l1_fill_locks[key.hash_value() as usize % self.l1_fill_locks.len()]
+    }
+
+    fn install_stale_write_barrier(&self, key: &CacheKey, value: &T) {
+        let identity = value.cache_write_identity();
+        let expires_at = Instant::now() + self.config.default_ttl;
+        let now = Instant::now();
+        self.stale_write_barriers
+            .entry(key.clone())
+            .and_modify(|barriers| {
+                barriers.retain(|b| b.expires_at > now);
+                if !barriers.iter().any(|b| b.identity == identity) {
+                    barriers.push(StaleWriteBarrier {
+                        identity,
+                        expires_at,
+                    });
+                }
+            })
+            .or_insert_with(|| {
+                vec![StaleWriteBarrier {
+                    identity,
+                    expires_at,
+                }]
+            });
+    }
+
+    fn is_stale_write_blocked(&self, key: &CacheKey, value: &T) -> bool {
+        let identity = value.cache_write_identity();
+        let now = Instant::now();
+        let Some(mut barriers) = self.stale_write_barriers.get_mut(key) else {
+            return false;
+        };
+        barriers.retain(|b| b.expires_at > now);
+        barriers.iter().any(|b| b.identity == identity)
     }
 
     /// Get a value from the cache
@@ -165,6 +216,13 @@ where
 
         match redis.get(key).await? {
             Some(fresh) => {
+                if self.is_stale_write_blocked(key, &fresh) {
+                    trace!(
+                        key = %key,
+                        "Dual cache skipped L1 fill for invalidated logical value"
+                    );
+                    return Ok(None);
+                }
                 self.memory.set(key.clone(), fresh.clone()).await;
                 trace!(key = %key, "Dual cache L2 hit, populated L1");
                 Ok(Some(fresh))
@@ -209,6 +267,13 @@ where
 
         match redis.get_entry(key).await? {
             Some(fresh) => {
+                if self.is_stale_write_blocked(key, &fresh.value) {
+                    trace!(
+                        key = %key,
+                        "Dual cache skipped L1 entry fill for invalidated logical value"
+                    );
+                    return Ok(None);
+                }
                 self.memory
                     .set_with_size(
                         key.clone(),
@@ -246,8 +311,21 @@ where
         }
     }
 
-    /// Set in both cache layers
+    /// Set in both cache layers under the fill/invalidate lock.
+    ///
+    /// Holding the lock serializes writers with Dual `delete`/`delete_if`. A
+    /// write-identity barrier installed by conditional invalidation rejects
+    /// recreating the same logical payload after a successful CAS delete.
     async fn set_dual(&self, key: CacheKey, value: T, ttl: Duration) -> Result<()> {
+        let _guard = self.l1_fill_lock(&key).lock().await;
+        if self.is_stale_write_blocked(&key, &value) {
+            trace!(
+                key = %key,
+                "Dual cache rejected stale write after conditional invalidation"
+            );
+            return Ok(());
+        }
+
         // Write to memory cache
         self.memory
             .set_with_ttl(key.clone(), value.clone(), ttl)
@@ -286,6 +364,14 @@ where
                 }
             }
             CacheMode::Dual => {
+                let _guard = self.l1_fill_lock(&key).lock().await;
+                if self.is_stale_write_blocked(&key, &value) {
+                    trace!(
+                        key = %key,
+                        "Dual cache rejected stale sized write after conditional invalidation"
+                    );
+                    return Ok(());
+                }
                 self.memory
                     .set_with_size(key.clone(), value.clone(), ttl, size_bytes)
                     .await;
@@ -343,7 +429,8 @@ where
     /// atomically (DashMap `remove_if` for L1, Redis Lua CAS for L2), so a
     /// concurrent replacement is not removed after a stale match. Dual mode also
     /// holds the L1-fill lock so read-through cannot repopulate L1 after a
-    /// successful layer delete.
+    /// successful layer delete, and installs a write-identity barrier so a
+    /// concurrent Dual `set` cannot recreate the same logical payload.
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Result<bool>
     where
         F: Fn(&T) -> bool,
@@ -352,22 +439,24 @@ where
 
         match self.config.mode {
             CacheMode::MemoryOnly => {
-                deleted = self.memory.delete_if(key, &predicate).await;
+                deleted = self.memory.delete_if(key, &predicate).await.is_some();
             }
             CacheMode::RedisOnly => {
                 if let Some(ref redis) = self.redis {
-                    deleted = redis.delete_if(key, &predicate).await?;
+                    deleted = redis.delete_if(key, &predicate).await?.is_some();
                 }
             }
             CacheMode::Dual => {
                 let _guard = self.l1_fill_lock(key).lock().await;
-                if self.memory.delete_if(key, &predicate).await {
+                if let Some(removed) = self.memory.delete_if(key, &predicate).await {
+                    self.install_stale_write_barrier(key, &removed);
                     deleted = true;
                 }
                 // Propagate L2 failures the same way as unconditional Dual delete.
                 if let Some(ref redis) = self.redis
-                    && redis.delete_if(key, &predicate).await?
+                    && let Some(removed) = redis.delete_if(key, &predicate).await?
                 {
+                    self.install_stale_write_barrier(key, &removed);
                     deleted = true;
                 }
             }
@@ -495,7 +584,7 @@ where
 /// Batch operations for dual cache
 impl<T> DualCache<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + CacheWriteIdentity + 'static,
 {
     /// Get multiple values from the cache
     pub async fn get_many(&self, keys: &[CacheKey]) -> Result<Vec<Option<T>>> {
@@ -531,7 +620,7 @@ where
 /// Cache warming operations
 impl<T> DualCache<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + CacheWriteIdentity + 'static,
 {
     /// Warm the memory cache from Redis
     ///
@@ -565,6 +654,9 @@ where
                     continue;
                 }
             };
+            if self.is_stale_write_blocked(key, &fresh.value) {
+                continue;
+            }
             self.memory
                 .set_with_size(key.clone(), fresh.value, fresh.ttl, fresh.size_bytes)
                 .await;
@@ -888,6 +980,12 @@ mod tests {
             scores: Vec<f64>,
         }
 
+        impl CacheWriteIdentity for ComplexValue {
+            fn cache_write_identity(&self) -> u64 {
+                super::super::types::serialize_write_identity(self)
+            }
+        }
+
         let cache: DualCache<ComplexValue> = DualCache::memory_only(DualCacheConfig::default());
         let key = CacheKey::new("complex-key");
 
@@ -901,5 +999,31 @@ mod tests {
         let result = cache.get(&key).await.unwrap();
 
         assert_eq!(result, Some(value));
+    }
+
+    #[tokio::test]
+    async fn dual_delete_if_blocks_stale_recreate_of_same_logical_value() {
+        let config = DualCacheConfig {
+            mode: CacheMode::Dual,
+            ..DualCacheConfig::default()
+        };
+        let cache: DualCache<String> =
+            DualCache::new(config, Some(Arc::new(RedisPool::create_noop())));
+        let key = CacheKey::new("stale-write");
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert!(cache.delete_if(&key, |v| v == "poison").await.unwrap());
+
+        // Stale writer recreates the same logical payload after invalidation.
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            None,
+            "stale recreate of invalidated payload must be rejected"
+        );
+
+        // A distinct replacement must still be accepted.
+        cache.set(key.clone(), "safe".to_string()).await.unwrap();
+        assert_eq!(cache.get(&key).await.unwrap(), Some("safe".to_string()));
     }
 }

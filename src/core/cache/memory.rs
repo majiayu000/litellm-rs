@@ -262,7 +262,9 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
     /// not removed after a stale match decision. Access metadata is cleared only
     /// when it still matches the pre-delete snapshot, so a replacement inserted
     /// after `remove_if` keeps its eviction bookkeeping.
-    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> bool
+    ///
+    /// Returns the removed value when a matching entry was deleted.
+    pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Option<T>
     where
         F: Fn(&T) -> bool,
     {
@@ -278,9 +280,9 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             self.stats.sub_total_size(removed.size_bytes);
             self.stats.set_entry_count(self.cache.len());
             trace!(key = %key, "Cache conditional delete");
-            true
+            Some(removed.value)
         } else {
-            false
+            None
         }
     }
 
