@@ -152,9 +152,7 @@ mod redis {
             .select_deployment_lease("gpt-4")
             .expect("cooldown expiry must allow one probe");
         a.record_failure_with_reason(&id, CooldownReason::ConsecutiveFailures);
-        // Allow Redis circuit state to propagate to the peer replica; 80ms was
-        // flaky under CI load (half-open failure must reopen cooldown).
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
         assert!(
             b.select_deployment_lease("gpt-4").is_err(),
             "half-open failure must re-open cooldown on the other replica"
