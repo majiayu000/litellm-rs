@@ -168,6 +168,29 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
         }
     }
 
+    /// Peek a value without recording hit/miss statistics.
+    ///
+    /// Used for under-lock Dual L1 rechecks after an accounting miss so a single
+    /// client lookup is not double-counted. Still updates eviction access meta on
+    /// a live hit and still removes expired entries.
+    pub async fn peek(&self, key: &CacheKey) -> Option<T> {
+        if let Some((_, removed)) = self.cache.remove_if(key, |_k, v| v.is_expired()) {
+            self.remove_access_meta(key);
+            self.stats.sub_total_size(removed.size_bytes);
+            self.stats.set_entry_count(self.cache.len());
+            return None;
+        }
+
+        if let Some(entry) = self.cache.get(key) {
+            let value = entry.value.clone();
+            drop(entry);
+            self.record_access(key);
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     /// Get an entry with metadata from the cache
     pub async fn get_entry(&self, key: &CacheKey) -> Option<CacheEntry<T>> {
         // Atomically remove expired entries to avoid TOCTOU race
@@ -189,6 +212,27 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             Some(snapshot)
         } else {
             self.stats.record_memory_miss();
+            None
+        }
+    }
+
+    /// Peek an entry without recording hit/miss statistics (see [`Self::peek`]).
+    pub async fn peek_entry(&self, key: &CacheKey) -> Option<CacheEntry<T>> {
+        if let Some((_, removed)) = self.cache.remove_if(key, |_k, v| v.is_expired()) {
+            self.remove_access_meta(key);
+            self.stats.sub_total_size(removed.size_bytes);
+            self.stats.set_entry_count(self.cache.len());
+            return None;
+        }
+
+        if let Some(entry) = self.cache.get(key) {
+            let mut snapshot = entry.clone();
+            drop(entry);
+            let access_count = self.record_access(key);
+            snapshot.access_count = access_count;
+            snapshot.last_accessed = Instant::now();
+            Some(snapshot)
+        } else {
             None
         }
     }

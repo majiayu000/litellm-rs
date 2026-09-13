@@ -152,14 +152,35 @@ where
             });
     }
 
+    /// Returns true when a recent conditional delete blocks recreating `value`.
+    ///
+    /// Looks up the barrier map first and only hashes the payload when a live
+    /// barrier exists for the key, so ordinary Dual writes/fills pay no identity
+    /// cost. Empty (fully expired) map entries are removed so historically
+    /// invalidated keys cannot grow unbounded process memory.
     fn is_stale_write_blocked(&self, key: &CacheKey, value: &T) -> bool {
-        let identity = value.cache_write_identity();
         let now = Instant::now();
-        let Some(mut barriers) = self.stale_write_barriers.get_mut(key) else {
-            return false;
+        let mut remove_empty = false;
+        let blocked = match self.stale_write_barriers.get_mut(key) {
+            None => return false,
+            Some(mut barriers) => {
+                barriers.retain(|b| b.expires_at > now);
+                if barriers.is_empty() {
+                    remove_empty = true;
+                    false
+                } else {
+                    let identity = value.cache_write_identity();
+                    barriers.iter().any(|b| b.identity == identity)
+                }
+            }
         };
-        barriers.retain(|b| b.expires_at > now);
-        barriers.iter().any(|b| b.identity == identity)
+        if remove_empty {
+            // Only drop the entry if it is still empty (a concurrent install may
+            // have added a fresh barrier after we released the map guard).
+            self.stale_write_barriers
+                .remove_if(key, |_, barriers| barriers.is_empty());
+        }
+        blocked
     }
 
     /// Get a value from the cache
@@ -210,7 +231,8 @@ where
 
         let _guard = self.l1_fill_lock(key).lock().await;
 
-        if let Some(value) = self.memory.get(key).await {
+        // Non-accounting recheck: the outer get_dual already recorded the L1 miss.
+        if let Some(value) = self.memory.peek(key).await {
             return Ok(Some(value));
         }
 
@@ -261,7 +283,8 @@ where
 
         let _guard = self.l1_fill_lock(key).lock().await;
 
-        if let Some(existing) = self.memory.get_entry(key).await {
+        // Non-accounting recheck: the outer get_entry_dual already recorded the miss.
+        if let Some(existing) = self.memory.peek_entry(key).await {
             return Ok(Some(existing));
         }
 
@@ -531,6 +554,10 @@ where
         {
             redis_deleted = redis.clear().await?;
         }
+
+        // Admin/cache clear must also drop write-identity barriers so a later
+        // store of a previously-invalidated logical value is accepted again.
+        self.stale_write_barriers.clear();
 
         debug!(redis_deleted, "Dual cache cleared");
         Ok(())
@@ -1025,5 +1052,62 @@ mod tests {
         // A distinct replacement must still be accepted.
         cache.set(key.clone(), "safe".to_string()).await.unwrap();
         assert_eq!(cache.get(&key).await.unwrap(), Some("safe".to_string()));
+    }
+
+    #[tokio::test]
+    async fn dual_clear_removes_stale_write_barriers() {
+        let config = DualCacheConfig {
+            mode: CacheMode::Dual,
+            ..DualCacheConfig::default()
+        };
+        let cache: DualCache<String> =
+            DualCache::new(config, Some(Arc::new(RedisPool::create_noop())));
+        let key = CacheKey::new("clear-barriers");
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert!(cache.delete_if(&key, |v| v == "poison").await.unwrap());
+        assert!(
+            !cache.stale_write_barriers.is_empty(),
+            "conditional delete must install a barrier"
+        );
+
+        cache.clear().await.unwrap();
+        assert!(
+            cache.stale_write_barriers.is_empty(),
+            "clear must drop write-identity barriers"
+        );
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            Some("poison".to_string()),
+            "same logical value must be writable after admin clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn dual_expired_barrier_map_entry_is_removed() {
+        let config = DualCacheConfig {
+            mode: CacheMode::Dual,
+            default_ttl: Duration::from_millis(20),
+            ..DualCacheConfig::default()
+        };
+        let cache: DualCache<String> =
+            DualCache::new(config, Some(Arc::new(RedisPool::create_noop())));
+        let key = CacheKey::new("expired-barrier");
+
+        cache.set(key.clone(), "poison".to_string()).await.unwrap();
+        assert!(cache.delete_if(&key, |v| v == "poison").await.unwrap());
+        assert_eq!(cache.stale_write_barriers.len(), 1);
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !cache.is_stale_write_blocked(&key, &"other".to_string()),
+            "expired barriers must not block unrelated writes"
+        );
+        assert!(
+            cache.stale_write_barriers.is_empty(),
+            "empty expired barrier entries must be removed from the map"
+        );
     }
 }

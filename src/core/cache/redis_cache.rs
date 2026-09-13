@@ -243,9 +243,20 @@ where
             let entry: SerializableCacheEntry<T> = match self.deserialize(&data) {
                 Ok(entry) => entry,
                 Err(e) => {
+                    // CAS-delete the exact malformed blob so a concurrent safe
+                    // replacement written after this GET is not removed by an
+                    // unconditional DEL (same guarantee as expired cleanup).
                     warn!(key = %key, error = %e, "Failed to deserialize cache entry during conditional delete");
-                    let _ = self.pool.delete(&redis_key).await;
-                    return Ok(None);
+                    let deleted = self.pool.delete_if_equals(&redis_key, &data).await?;
+                    if deleted {
+                        return Ok(None);
+                    }
+                    warn!(
+                        key = %key,
+                        attempt,
+                        "Redis malformed cleanup CAS miss; re-reading live value"
+                    );
+                    continue;
                 }
             };
 
