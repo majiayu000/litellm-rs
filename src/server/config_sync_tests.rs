@@ -13,7 +13,10 @@ async fn state() -> AppState {
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.pricing.source = None;
-    config.gateway.auth.enable_jwt = false;
+    // These requests exercise config sync, not the process-wide metrics counters.
+    config.gateway.monitoring.metrics.enabled = false;
+    config.gateway.auth.enable_jwt = true;
+    config.gateway.auth.jwt_secret = format!("Aa1!{}", uuid::Uuid::new_v4());
     config.gateway.auth.enable_api_key = false;
     config.gateway.auth.allow_anonymous = true;
     let server = HttpServer::new(&config).await.unwrap();
@@ -144,11 +147,13 @@ async fn invalid_candidate_never_changes_authoritative_revision() {
 async fn revision_diagnostics_require_authentication_and_never_return_ciphertext() {
     use actix_web::{http::StatusCode, test, web};
     let state = state().await;
+    let token = crate::server::test_admin_token(&state).await;
     let app = test::init_service(HttpServer::create_app(web::Data::new(state.clone()))).await;
     let response = test::call_service(
         &app,
         test::TestRequest::get()
             .uri("/admin/routing/revision")
+            .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request(),
     )
     .await;
@@ -241,6 +246,7 @@ async fn redis_broadcasts_only_ids_and_reconnect_reads_latest() {
 async fn notification_failure_preserves_committed_admin_revision_records() {
     use actix_web::{http::StatusCode, test, web};
     let state = state().await;
+    let token = crate::server::test_admin_token(&state).await;
     let provider = state.config().gateway.providers[0].name.clone();
     let app = test::init_service(HttpServer::create_app(web::Data::new(state.clone()))).await;
     for (path, body, method) in [
@@ -260,6 +266,7 @@ async fn notification_failure_preserves_committed_admin_revision_records() {
             test::TestRequest::default()
                 .method(method.parse().unwrap())
                 .uri(&path)
+                .insert_header(("Authorization", format!("Bearer {token}")))
                 .set_json(body)
                 .to_request(),
         )

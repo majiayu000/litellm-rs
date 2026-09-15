@@ -15,9 +15,10 @@ python3 scripts/ha/two_gateways.py --binary target/debug/gateway --output /tmp/h
 ```
 
 Use a **fresh disposable database** and isolated Redis service for each run. The suite kills
-Pub/Sub connections to exercise reconnect and writes global runtime configuration. It disables
-gateway auth only on loopback listeners for the test. It generates a dedicated configuration
-key per run and removes generated gateway config files from evidence, leaving node logs,
+Pub/Sub connections to exercise reconnect and writes global runtime configuration. It requires the PostgreSQL `psql` client and enables JWT authentication on loopback listeners.
+Each node registers a test account, activates it as an administrator in the disposable database,
+and logs in through the real HTTP endpoint. It generates dedicated JWT and configuration
+keys per run and removes generated gateway config files from evidence, leaving node logs,
 active/observed revision diagnostics, relevant Redis circuit/admission/budget hashes, and assertions.
 A failed assertion exits nonzero and still captures diagnostics. A completed run takes about
 11 minutes after compilation, mostly waiting for the actual owner lease expiration.

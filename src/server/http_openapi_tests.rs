@@ -62,7 +62,8 @@ async fn app_factory_serves_admin_openapi_without_merging_into_inference_contrac
     let mut config = valid_http_test_config();
     config.gateway.providers[0].api_key = SENTINEL_API_KEY.to_string();
     config.gateway.providers[0].name = SENTINEL_PROVIDER_NAME.to_string();
-    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_jwt = true;
+    config.gateway.auth.jwt_secret = format!("Aa1!{}", uuid::Uuid::new_v4());
     config.gateway.auth.enable_api_key = false;
     config.gateway.auth.allow_anonymous = true;
     config.gateway.monitoring.metrics.enabled = false;
@@ -74,13 +75,15 @@ async fn app_factory_serves_admin_openapi_without_merging_into_inference_contrac
         Ok(server) => server,
         Err(error) => panic!("server startup failed: {error}"),
     };
-    let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+    let token = crate::server::test_admin_token(server.state()).await;
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
         server.state().clone(),
     )))
     .await;
 
     let admin_request = actix_test::TestRequest::get()
         .uri("/admin/openapi.json")
+            .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let admin_response = actix_test::call_service(&app, admin_request).await;
     assert_eq!(admin_response.status(), StatusCode::OK);
