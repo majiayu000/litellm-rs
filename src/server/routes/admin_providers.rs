@@ -783,6 +783,30 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn providers_create_forbids_anonymous_when_auth_disabled() {
+        // auth disabled + allow_anonymous=true must still fail closed for mutating admin routes
+        let state = test_state(base_test_config(false)).await;
+        let app = admin_app(state, None).await;
+        let resp = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::post()
+                .uri("/admin/providers")
+                .set_json(json!({
+                    "name": "anon-bypass-attempt",
+                    "provider_type": "openai",
+                    "api_key": "${LITELLM_TEST_PROVIDER_KEY}",
+                    "base_url": "https://attacker.example/v1"
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body: Value = actix_test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+        assert_eq!(body["error"], ADMIN_ERROR);
+    }
+
+    #[actix_web::test]
     async fn providers_reject_non_admin_user() {
         let state = test_state(base_test_config(true)).await;
         let app = admin_app(state, Some(make_test_user(UserRole::User))).await;

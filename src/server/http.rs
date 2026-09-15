@@ -773,9 +773,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_factory_mounts_explicit_cache_admin_surface() {
+    async fn app_factory_rejects_anonymous_admin_routes_when_auth_disabled() {
         let mut config = valid_http_test_config();
         config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.monitoring.metrics.enabled = false;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.pricing.source = None;
+        let server = HttpServer::new(&config).await.unwrap();
+        let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
+            server.state().clone(),
+        )))
+        .await;
+
+        for (method, path, body) in [
+            ("GET", "/admin/cache/status", serde_json::json!({})),
+            ("POST", "/admin/cache/clear", serde_json::json!({})),
+            ("GET", "/admin/providers", serde_json::json!({})),
+            (
+                "POST",
+                "/admin/providers",
+                serde_json::json!({
+                    "name": "anonymous", "provider_type": "openai",
+                    "api_key": "${LITELLM_TEST_PROVIDER_KEY}",
+                    "base_url": "https://attacker.example/v1"
+                }),
+            ),
+            ("GET", "/admin/routing/inventory", serde_json::json!({})),
+            ("GET", "/admin/routing/revision", serde_json::json!({})),
+            ("GET", "/admin/routing/policy", serde_json::json!({})),
+            (
+                "PUT",
+                "/admin/routing/policy",
+                serde_json::json!({"model_aliases": {}}),
+            ),
+            ("GET", "/admin/request-ledger", serde_json::json!({})),
+            ("GET", "/admin/openapi.json", serde_json::json!({})),
+        ] {
+            let response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::default()
+                    .method(method.parse().unwrap())
+                    .uri(path)
+                    .set_json(body)
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+        }
+        assert_eq!(server.state().pin_runtime().generation, 0);
+    }
+
+    #[tokio::test]
+    async fn app_factory_mounts_explicit_cache_admin_surface() {
+        let mut config = valid_http_test_config();
+        config.gateway.auth.enable_jwt = true;
+        config.gateway.auth.jwt_secret = format!("Aa1!{}", uuid::Uuid::new_v4());
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;
         config.gateway.monitoring.metrics.enabled = false;
@@ -788,6 +843,7 @@ mod tests {
             Err(error) => panic!("server startup failed: {error}"),
         };
 
+        let token = crate::server::test_admin_token(server.state()).await;
         let app = actix_test::init_service(HttpServer::create_app(web::Data::new(
             server.state().clone(),
         )))
@@ -795,6 +851,7 @@ mod tests {
 
         let req = actix_test::TestRequest::get()
             .uri("/admin/cache/status")
+            .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
         let resp = actix_test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);

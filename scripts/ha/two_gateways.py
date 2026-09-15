@@ -88,6 +88,7 @@ class Handler(BaseHTTPRequestHandler):
 class Gateway:
     def __init__(self, binary, config, key, output, name):
         self.last_revision = None
+        self.token = None
         self.port = free_port()
         config = copy.deepcopy(config)
         config["server"]["port"] = self.port
@@ -107,6 +108,20 @@ class Gateway:
                 return False
         try:
             wait_until(live, 30)
+            # Provision a real active administrator in the isolated test database.
+            username = "ha" + secrets.token_hex(8)
+            password = "Aa1!" + secrets.token_urlsafe(32)
+            status, body = self.request("/auth/register", {
+                "username": username, "email": f"{username}@example.test", "password": password,
+            })
+            assert status == 201, (status, body)
+            subprocess.run(["psql", config["storage"]["database"]["url"],
+                "-X", "--set", "ON_ERROR_STOP=1", "--set", f"user_id={body['data']['user_id']}"],
+                input="UPDATE users SET role = 'admin', status = 'active', email_verified = true WHERE id = :'user_id'::uuid;",
+                text=True, check=True, capture_output=True)
+            status, body = self.request("/auth/login", {"username": username, "password": password})
+            assert status == 200, (status, body)
+            self.token = body["data"]["access_token"]
         except BaseException:
             self.stop()
             self.config_path.unlink(missing_ok=True)
@@ -115,7 +130,8 @@ class Gateway:
     def request(self, path, body=None, method=None):
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
             data=None if body is None else json.dumps(body).encode(), method=method,
-            headers={"Content-Type": "application/json"})
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {self.token}"} if self.token else {})})
         try:
             response = urllib.request.urlopen(request, timeout=25)
         except urllib.error.HTTPError as error:
@@ -171,6 +187,7 @@ def main():
     config["storage"]["redis"].update(enabled=True, url=redis_url, allow_degraded=False)
     config["storage"]["config_sync_key_env"] = "LITELLM_HA_CONFIG_KEY"
     config["pricing"]["unpriced_fallback_cost_per_1k_tokens"] = 1000.0
+    config["auth"].update(enable_jwt=True, jwt_secret="Aa1!" + secrets.token_urlsafe(48))
     key = secrets.token_hex(32)
     nodes = []
     results = {}

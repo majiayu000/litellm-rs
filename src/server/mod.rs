@@ -44,3 +44,22 @@ mod tests;
 
 #[cfg(test)]
 mod http_capacity_tests;
+
+#[cfg(test)]
+pub(crate) async fn test_admin_token(state: &state::AppState) -> String {
+    use crate::core::models::user::types::{User, UserRole, UserStatus};
+    let mut user = User::new(
+        "test-admin".into(),
+        "admin@example.test".into(),
+        String::new(),
+    );
+    user.role = UserRole::Admin;
+    user.status = UserStatus::Active;
+    state.storage.database.create_user(&user).await.unwrap();
+    state
+        .auth
+        .jwt()
+        .create_access_token(user.id(), user.role.to_string(), vec![], None, None)
+        .await
+        .unwrap()
+}
