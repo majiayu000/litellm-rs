@@ -26,13 +26,13 @@ Run the primary supported product from source:
 git clone https://github.com/majiayu000/litellm-rs.git
 cd litellm-rs
 cp config/gateway.dev.yaml.example config/gateway.yaml
-cargo run --bin gateway
+cargo run --bin gateway --features sqlite
 ```
 
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --bin gateway
+cargo install litellm-rs --bin gateway --features sqlite
 mkdir -p config
 curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
@@ -164,23 +164,30 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 
 ## Installation
 
+On the development branch, default features select the reusable library with
+metrics and tracing. Gateway and database dependencies are opt-in. Published
+0.7.0 still uses gateway defaults; until the next release, library consumers can
+select `default-features = false, features = ["lite"]`.
+
 ```toml
-# Full gateway with SQLite + Redis (default)
+# Library with metrics and tracing
 [dependencies]
-litellm-rs = "0.6"
+litellm-rs = { version = "0.7", default-features = false, features = ["lite"] }
 
-# API-only - lightweight, no actix-web/argon2/aes-gcm/clap
+# Library without optional observability
 [dependencies]
-litellm-rs = { version = "0.6", default-features = false }
+litellm-rs = { version = "0.7", default-features = false }
 
-# API-only with metrics
+# Gateway with SQLite (also enables Redis support)
 [dependencies]
-litellm-rs = { version = "0.6", default-features = false, features = ["lite"] }
-
-# Gateway modules in library context (not standalone gateway binary runtime)
-[dependencies]
-litellm-rs = { version = "0.6", default-features = false, features = ["gateway"] }
+litellm-rs = { version = "0.7", features = ["sqlite"] }
 ```
+
+Use the crate root or `litellm_rs::prelude` for completion and embedding APIs.
+Advanced types have explicit module paths: `core::providers` for provider
+construction, `core::router` for deployment management, and
+`core::models::openai` for HTTP wire models. Hidden root re-exports of these
+advanced types have been removed on the development branch.
 
 ## Provider Support
 

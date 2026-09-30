@@ -653,6 +653,7 @@ impl Router {
         deployment.record_success(tokens, latency_us);
         match self.circuit.record_success(deployment, &self.config) {
             CircuitWrite::Local => self.promote_from_local_success(deployment),
+            #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {}
             #[cfg(feature = "gateway")]
             CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
@@ -706,6 +707,7 @@ impl Router {
             .record_failure(deployment, &self.config, reason)
         {
             CircuitWrite::Local => self.record_local_failure(deployment, reason),
+            #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {
                 let _ = deployment.record_failure_with_minute_counters();
                 deployment.enter_cooldown(self.config.cooldown_time_secs);
@@ -758,6 +760,7 @@ impl Router {
     pub(crate) fn deployment_is_selectable(&self, deployment: &Deployment) -> bool {
         match self.circuit.observe(deployment, &self.config) {
             CircuitObserve::UseLocal => !deployment.is_in_cooldown() && deployment.is_healthy(),
+            #[cfg(any(feature = "gateway", test))]
             CircuitObserve::Blocked => false,
             #[cfg(feature = "gateway")]
             CircuitObserve::Shared(state) => {

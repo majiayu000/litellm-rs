@@ -2,6 +2,7 @@ use crate::core::pricing_service::{PricingService, PricingSnapshot};
 use crate::core::providers::registry::model_catalog_authority::{
     CatalogAuthority, CatalogResolution,
 };
+#[cfg(feature = "gateway")]
 use crate::core::types::model::ProviderCapability;
 use crate::core::types::model_id::ModelIdRef;
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,7 @@ enum PricingIdentityScope {
     ChatOnly,
 }
 
+#[cfg(feature = "gateway")]
 pub(crate) enum DeploymentPricingIdentity<'a> {
     Priced { provider: &'a str, model: &'a str },
     Unpriced,
@@ -140,6 +142,7 @@ impl DeploymentModelIdentity {
         self.pricing.as_ref().map(ExactPricingIdentity::model)
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn pricing_identity_for_surface(
         &self,
         surface: &ProviderCapability,

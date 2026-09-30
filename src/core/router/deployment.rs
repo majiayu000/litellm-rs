@@ -432,7 +432,7 @@ pub(crate) struct MinuteCounters {
 ///
 /// ```rust,no_run
 /// # use litellm_rs::core::router::deployment::{Deployment, DeploymentConfig};
-/// # use litellm_rs::Provider;
+/// # use litellm_rs::core::providers::Provider;
 /// # fn example(provider: Provider) {
 /// let deployment = Deployment::new(
 ///     "openai-gpt4-primary".to_string(),

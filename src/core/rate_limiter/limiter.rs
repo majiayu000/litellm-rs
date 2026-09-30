@@ -1,13 +1,16 @@
 //! Core rate limiter implementation
 
 use super::types::{RateLimitEntry, RateLimitResult};
-use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy, RedisFailureMode};
+#[cfg(feature = "gateway")]
+use crate::config::models::rate_limit::RedisFailureMode;
+use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy};
 #[cfg(feature = "gateway")]
 use crate::utils::error::gateway_error::Result;
 #[cfg(feature = "gateway")]
 use async_trait::async_trait;
 use dashmap::DashMap;
 use std::collections::BTreeMap;
+#[cfg(feature = "gateway")]
 use std::fmt;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -19,12 +22,14 @@ static REDIS_DEGRADED_METRICS: LazyLock<
 > = LazyLock::new(|| parking_lot::Mutex::new(BTreeMap::new()));
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "gateway")]
 enum RedisRateLimitOperation {
     Check,
     CheckAndRecord,
     Release,
 }
 
+#[cfg(feature = "gateway")]
 impl RedisRateLimitOperation {
     fn as_str(self) -> &'static str {
         match self {
@@ -88,6 +93,7 @@ impl RedisRateLimitBackend for crate::storage::redis::RedisPool {
     }
 }
 
+#[cfg(feature = "gateway")]
 fn record_redis_degraded(
     operation: RedisRateLimitOperation,
     mode: RedisFailureMode,
@@ -125,12 +131,12 @@ pub fn render_degraded_metrics() -> String {
     rendered
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gateway"))]
 pub(crate) fn reset_degraded_metrics_for_tests() {
     REDIS_DEGRADED_METRICS.lock().clear();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gateway"))]
 pub(crate) fn degraded_metric_count_for_tests(operation: &str, mode: &str) -> u64 {
     REDIS_DEGRADED_METRICS
         .lock()
@@ -144,6 +150,7 @@ pub(crate) fn degraded_metric_count_for_tests(operation: &str, mode: &str) -> u6
 pub(crate) enum RateLimitRecordSource {
     Disabled,
     Local,
+    #[cfg(any(feature = "gateway", test))]
     Distributed,
 }
 
@@ -164,7 +171,11 @@ impl RateLimitReservation {
     fn new(source: RateLimitRecordSource, recorded_at: Instant, reset_after_secs: u64) -> Self {
         let expires_at = match source {
             RateLimitRecordSource::Disabled => None,
-            RateLimitRecordSource::Local | RateLimitRecordSource::Distributed => {
+            RateLimitRecordSource::Local => {
+                Some(recorded_at + Duration::from_secs(reset_after_secs.max(1)))
+            }
+            #[cfg(any(feature = "gateway", test))]
+            RateLimitRecordSource::Distributed => {
                 Some(recorded_at + Duration::from_secs(reset_after_secs.max(1)))
             }
         };
@@ -303,6 +314,7 @@ impl RateLimiter {
         }
     }
 
+    #[cfg(feature = "gateway")]
     fn redis_fail_closed_result(&self, limit: u32) -> RateLimitResult {
         let reset_after_secs = self.window.as_secs().max(1);
         RateLimitResult {
@@ -502,8 +514,11 @@ impl RateLimiter {
 
                 self.release_local(key, Some(reservation.recorded_at));
             }
+            #[cfg(any(feature = "gateway", test))]
             RateLimitRecordSource::Distributed => {
+                #[cfg(feature = "gateway")]
                 let remaining_window_secs = reservation.remaining_window_secs();
+                #[cfg(feature = "gateway")]
                 if remaining_window_secs == 0 {
                     return;
                 }

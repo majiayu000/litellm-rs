@@ -5,13 +5,17 @@
 //! multiply limits. Redis errors fail closed.
 
 use super::deployment::Deployment;
+#[cfg(any(feature = "gateway", test))]
 use tracing::warn;
 
+#[cfg(feature = "gateway")]
 pub(crate) const DEFAULT_LEASE_TTL_MS: i64 = 600_000;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AdmissionHold {
+    #[cfg(feature = "gateway")]
     pub lease_id: String,
+    #[cfg(feature = "gateway")]
     pub deployment_id: String,
 }
 
@@ -30,7 +34,9 @@ pub(crate) enum AdmissionBackend {
 
 pub(crate) enum AdmissionReserve {
     Skipped,
+    #[cfg(any(feature = "gateway", test))]
     Denied,
+    #[cfg(feature = "gateway")]
     Granted(AdmissionHold),
 }
 
@@ -52,6 +58,8 @@ impl AdmissionBackend {
         deployment: &Deployment,
         estimated_tokens: u64,
     ) -> AdmissionReserve {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (estimated_tokens,);
         let max_parallel = option_limit(deployment.config.max_parallel_requests.map(i64::from));
         let max_rpm = option_limit(deployment.config.rpm_limit.map(to_i64));
         let max_tpm = option_limit(deployment.config.tpm_limit.map(to_i64));
@@ -119,6 +127,8 @@ impl AdmissionBackend {
     }
 
     fn finish(&self, hold: &AdmissionHold, op: &'static str, actual_tpm: i64) {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (hold, op, actual_tpm);
         match self {
             Self::InProcess => {}
             #[cfg(test)]

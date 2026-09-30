@@ -1,6 +1,6 @@
-use super::{
-    BudgetReservationError, ModelLimitConfig, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits,
-};
+#[cfg(feature = "gateway")]
+use super::ModelLimitConfig;
+use super::{BudgetReservationError, ProviderLimitConfig, ResetPeriod, UnifiedBudgetLimits};
 
 #[test]
 fn unavailable_backend_fails_closed_without_overspend() {

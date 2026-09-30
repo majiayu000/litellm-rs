@@ -99,6 +99,7 @@ pub mod failure;
 pub mod provider_error_conversions;
 pub mod provider_registry;
 pub mod registry; // Data-driven Tier 1 provider catalog
+#[cfg(feature = "gateway")]
 mod rerank_dispatch;
 pub mod unified_provider;
 #[cfg(test)]
@@ -113,15 +114,17 @@ use crate::core::types::{
     image::{ImageEditRequest, ImageGenerationRequest},
 };
 use crate::core::types::{context::RequestContext, model::ProviderCapability};
+#[cfg(any(feature = "gateway", test))]
+pub(crate) use chat_continuation::ChatContinuationRequest;
 pub(crate) use chat_continuation::{
-    AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
-    ChatMessageContinuation,
+    AnthropicContentBlockOrder, ChatContinuationResponse, ChatMessageContinuation,
 };
 pub use contextual_error::ContextualError;
 pub use failure::{ProviderFailureFacts, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
 pub use unified_provider::ProviderError;
 #[derive(Debug, Clone)]
+#[cfg(any(feature = "gateway", test))]
 pub(crate) struct GeminiNativeRequest {
     pub(crate) api_version: String,
     pub(crate) model: String,
@@ -129,6 +132,7 @@ pub(crate) struct GeminiNativeRequest {
     pub(crate) stream: bool,
     pub(crate) body: serde_json::Value,
 }
+#[cfg(any(feature = "gateway", test))]
 pub(crate) fn gemini_native_url(
     base_url: &str,
     api_key: &str,
@@ -162,6 +166,7 @@ pub(crate) fn gemini_native_url(
     drop(query);
     Ok(url)
 }
+#[cfg(any(feature = "gateway", test))]
 pub(crate) async fn gemini_response_or_provider_error(
     response: reqwest::Response,
     api_key: &str,
@@ -194,6 +199,7 @@ pub(crate) async fn gemini_response_or_provider_error(
         ProviderError::api_error("gemini_proxy", status, message)
     })
 }
+#[cfg(any(feature = "gateway", test))]
 fn redact_gemini_key(body: &str, api_key: &str) -> String {
     if api_key.is_empty() {
         return body.to_string();
@@ -202,6 +208,7 @@ fn redact_gemini_key(body: &str, api_key: &str) -> String {
     body.replace(api_key, "[REDACTED]")
         .replace(&encoded, "[REDACTED]")
 }
+#[cfg(any(feature = "gateway", test))]
 pub(crate) fn gemini_transport_error(is_timeout: bool) -> ProviderError {
     let message = "Gemini upstream request failed";
     if is_timeout {
@@ -539,6 +546,7 @@ impl Provider {
         }
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) async fn gemini_generate_content(
         &self,
         request: GeminiNativeRequest,
@@ -668,6 +676,7 @@ impl Provider {
         dispatch_provider!(async_err, self, chat_completion, request, context)
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) async fn chat_completion_with_continuation(
         &self,
         envelope: ChatContinuationRequest,

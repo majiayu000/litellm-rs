@@ -30,6 +30,7 @@ pub struct VoyageRerankProvider {
 }
 
 impl VoyageRerankProvider {
+    #[cfg(feature = "gateway")]
     pub(crate) fn from_transport(
         api_key: String,
         base_url: String,

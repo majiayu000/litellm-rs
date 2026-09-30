@@ -238,6 +238,7 @@ impl PricingService {
 }
 
 impl PricingSnapshot {
+    #[cfg(feature = "gateway")]
     pub(crate) fn get_model_info(&self, model: &str) -> Option<LiteLLMModelInfo> {
         self.data.models.get(model).cloned()
     }

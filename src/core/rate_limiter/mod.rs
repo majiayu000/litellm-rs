@@ -13,6 +13,7 @@ mod tests;
 // Re-export public types
 #[cfg(test)]
 pub(crate) use limiter::RateLimitRecordSource;
+#[cfg(any(feature = "gateway", test))]
 pub(crate) use limiter::RateLimitReservation;
 pub use limiter::{RateLimiter, render_degraded_metrics};
 pub use types::RateLimitResult;

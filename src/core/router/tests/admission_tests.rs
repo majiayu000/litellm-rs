@@ -3,6 +3,7 @@ use crate::core::router::config::RouterConfig;
 use crate::core::router::deployment::{Deployment, DeploymentConfig};
 use crate::core::router::error::RouterError;
 use crate::core::router::unified::Router;
+#[cfg(feature = "gateway")]
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 

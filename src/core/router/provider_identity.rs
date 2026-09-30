@@ -2,6 +2,7 @@
 
 use super::deployment::{Deployment, DeploymentState, LegacySelectorMetadata};
 use super::unified::{Router, RoutingSnapshot};
+#[cfg(feature = "gateway")]
 use std::sync::Arc;
 
 impl RoutingSnapshot {
@@ -49,6 +50,7 @@ impl RoutingSnapshot {
 }
 
 impl Router {
+    #[cfg(feature = "gateway")]
     pub(crate) fn configured_provider_name(&self, deployment_id: &str) -> Option<String> {
         self.load_routing_snapshot()
             .provider_names
@@ -58,6 +60,7 @@ impl Router {
 
     /// Return one consistent snapshot of deployments created for a configured
     /// provider name. Ad-hoc deployments retain their provider's canonical name.
+    #[cfg(feature = "gateway")]
     pub(crate) fn deployments_for_provider(&self, provider_name: &str) -> Vec<Arc<Deployment>> {
         let snapshot = self.load_routing_snapshot();
         snapshot

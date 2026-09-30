@@ -1,9 +1,12 @@
 //! OpenAI-Like Provider Implementation
+#[cfg(any(feature = "gateway", test))]
+use crate::core::providers::base::header_owned;
 use futures::Stream;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(any(feature = "gateway", test))]
 use std::time::Duration;
 
 use crate::core::audio::types::{
@@ -11,7 +14,7 @@ use crate::core::audio::types::{
     TranslationResponse,
 };
 use crate::core::providers::base::{
-    GlobalPoolManager, HeaderPair, HttpMethod, header_owned, read_streaming_error_body,
+    GlobalPoolManager, HeaderPair, HttpMethod, read_streaming_error_body,
 };
 use crate::core::providers::openai::{OpenAIResponseTransformer, models::OpenAIChatResponse};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
@@ -32,7 +35,9 @@ use super::{
     models::{OpenAILikeModelRegistry, get_openai_like_registry},
     request_headers::build_request_headers,
 };
-use crate::core::providers::{GeminiNativeRequest, ProviderError, gemini_transport_error};
+use crate::core::providers::ProviderError;
+#[cfg(any(feature = "gateway", test))]
+use crate::core::providers::{GeminiNativeRequest, gemini_transport_error};
 
 pub(crate) static OPENAI_LIKE_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
@@ -68,6 +73,7 @@ pub struct OpenAILikeProvider {
 }
 
 impl OpenAILikeProvider {
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) async fn gemini_generate_content(
         &self,
         request: GeminiNativeRequest,
@@ -122,6 +128,7 @@ impl OpenAILikeProvider {
         crate::core::providers::gemini_response_or_provider_error(response, api_key).await
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn map_gemini_stream_response<T>(
         result: Result<Result<T, ProviderError>, tokio::time::error::Elapsed>,
     ) -> Result<T, ProviderError> {
@@ -674,6 +681,7 @@ impl OpenAILikeProvider {
     }
 }
 
+#[cfg(any(feature = "gateway", test))]
 fn gemini_openai_like_transport_error(error: ProviderError) -> ProviderError {
     match error {
         ProviderError::Configuration { message, .. } => {

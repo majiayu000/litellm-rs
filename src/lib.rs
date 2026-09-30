@@ -53,7 +53,7 @@
 //!
 //! ## Gateway Mode
 //!
-//! Requires the `gateway` feature (enabled by default via `storage`):
+//! Requires a storage backend such as `sqlite` or `postgres` (which enables `gateway`):
 //!
 //! ```rust,ignore
 //! use litellm_rs::{Gateway, Config};
@@ -131,26 +131,9 @@ pub use core::types::message::{MessageContent, MessageRole};
 
 // Export core functionality
 pub use core::models::RequestContext;
-#[doc(hidden)]
-pub use core::models::openai::{
-    AudioContent, AudioDelta, AudioParams, CacheControl, ChatChoice, ChatChoiceDelta,
-    ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
-    ChatMessageDelta, CompletionChoice, CompletionRequest, CompletionTokensDetails, ContentLogprob,
-    DocumentSource, EmbeddingObject, EmbeddingRequest, EmbeddingUsage, Function, FunctionCall,
-    FunctionCallDelta, ImageGenerationRequest, ImageGenerationResponse, ImageObject, ImageSource,
-    ImageUrl, Logprobs, Model, ModelListResponse, PromptTokensDetails, ResponseFormat,
-    StreamOptions, Tool, ToolCall, ToolCallDelta, ToolChoice, ToolChoiceFunction,
-    ToolChoiceFunctionSpec, TopLogprob,
-};
-#[doc(hidden)]
-pub use core::providers::{Provider, ProviderError, ProviderRegistry, ProviderType};
-
-// Export unified router
-#[doc(hidden)]
-pub use core::router::{
-    CooldownReason, Deployment, DeploymentConfig, FallbackConfig, FallbackType, RouterConfig,
-    RouterError, UnifiedRouter, UnifiedRoutingStrategy as RoutingStrategy,
-};
+// Provider failures are useful to library callers. Provider construction, wire
+// models, and deployment management live under their explicit core module paths.
+pub use core::providers::ProviderError;
 
 #[cfg(feature = "gateway")]
 use tracing::info;
