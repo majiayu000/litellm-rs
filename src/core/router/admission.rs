@@ -81,8 +81,6 @@ impl AdmissionBackend {
                 let pool = std::sync::Arc::clone(pool);
                 let key = crate::storage::redis::RedisPool::admission_key(&deployment.id);
                 let ttl_ms = *lease_ttl_ms;
-                let now_ms = now_ms();
-                let window_epoch = window_epoch_secs();
                 let lease_id_for_fut = lease_id.clone();
                 let deployment_id = deployment.id.clone();
                 let state = match run_redis(&deployment_id, "reserve", async move {
@@ -94,8 +92,6 @@ impl AdmissionBackend {
                         rpm_inc,
                         tpm_inc,
                         lease_id: &lease_id_for_fut,
-                        now_ms,
-                        window_epoch,
                         ttl_ms,
                     })
                     .await
@@ -132,16 +128,12 @@ impl AdmissionBackend {
                 let pool = std::sync::Arc::clone(pool);
                 let key = crate::storage::redis::RedisPool::admission_key(&hold.deployment_id);
                 let lease_id = hold.lease_id.clone();
-                let window_epoch = window_epoch_secs();
-                let now_ms = now_ms();
                 let deployment_id = hold.deployment_id.clone();
                 let _ = run_redis(&deployment_id, op, async move {
                     if op == "settle" {
-                        pool.admission_settle(&key, &lease_id, actual_tpm, window_epoch, now_ms)
-                            .await
+                        pool.admission_settle(&key, &lease_id, actual_tpm).await
                     } else {
-                        pool.admission_cancel(&key, &lease_id, window_epoch, now_ms)
-                            .await
+                        pool.admission_cancel(&key, &lease_id).await
                     }
                 });
             }
@@ -155,22 +147,6 @@ fn option_limit(limit: Option<i64>) -> i64 {
 
 fn to_i64(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-#[cfg(feature = "gateway")]
-fn window_epoch_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| (duration.as_secs() / 60) as i64)
-        .unwrap_or(0)
-}
-
-#[cfg(feature = "gateway")]
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(feature = "gateway")]
@@ -260,14 +236,16 @@ mod tests {
         let mut conn = pool.open_live_connection().await.unwrap();
         let backend = AdmissionBackend::redis(pool.clone());
         for op in ["settle", "cancel"] {
-            let epoch = window_epoch_secs();
+            let (seconds, micros): (i64, i64) =
+                redis::cmd("TIME").query_async(&mut conn).await.unwrap();
+            let epoch = seconds / 60;
             let deployment_id = uuid::Uuid::new_v4().to_string();
             let key = RedisPool::admission_key(&deployment_id);
             let hold = AdmissionHold {
                 lease_id: "old".into(),
                 deployment_id,
             };
-            // Another replica has already carried this old lease into the current window.
+            // Finish a lease from the previous window through the production backend.
             redis::cmd("HSET")
                 .arg(&key)
                 .arg("p")
@@ -277,11 +255,12 @@ mod tests {
                 .arg("t")
                 .arg(10)
                 .arg("e")
-                .arg(epoch)
+                .arg(epoch - 1)
                 .arg("l:old")
                 .arg(format!(
-                    "1:1:10:{epoch}:{}",
-                    now_ms() + DEFAULT_LEASE_TTL_MS
+                    "1:1:10:{}:{}",
+                    epoch - 1,
+                    seconds * 1_000 + micros / 1_000 + DEFAULT_LEASE_TTL_MS
                 ))
                 .query_async::<i64>(&mut conn)
                 .await
@@ -293,10 +272,12 @@ mod tests {
                 .query_async(&mut conn)
                 .await
                 .unwrap();
-            let (rpm, tpm) = if op == "settle" { (1, 4) } else { (0, 0) };
+            let tpm = if op == "settle" { 4 } else { 0 };
+            let (after, _): (i64, i64) = redis::cmd("TIME").query_async(&mut conn).await.unwrap();
+            assert!((epoch..=after / 60).contains(&state.0));
             assert_eq!(
-                state,
-                (epoch, 0, rpm, tpm),
+                (state.1, state.2, state.3),
+                (0, 0, tpm),
                 "{op} must use the current window"
             );
             pool.delete(&key).await.unwrap();
