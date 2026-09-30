@@ -1,6 +1,9 @@
 # LiteLLM-RS Documentation
 
-A high-performance AI Gateway written in Rust that provides unified access to 100+ AI providers through OpenAI-compatible APIs.
+A self-hosted Rust LLM gateway with OpenAI-compatible HTTP APIs, routing,
+load balancing, and failover. The gateway is the primary product; Rust APIs
+and legacy adapters have narrower coverage. See the current
+[provider support matrix](../README.md#provider-support).
 
 ## 📚 Documentation Structure
 
@@ -14,28 +17,28 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 - [Architecture Improvements](./architecture/improvements.md) - Historical improvements and optimizations
 
 ### Implementation Guides
-- [Getting Started](./guides/getting-started.md) - Quick start guide and basic usage
-- [Configuration](./guides/configuration.md) - Configuration management and environment setup
+- [Getting Started](../README.md#quick-start-self-hosted-gateway) - Quick start guide and basic usage
+- [Configuration](../README.md#gateway-configuration) - Configuration management and environment setup
 - [Codex](./guides/codex.md) - Use Codex with the Responses API compatibility layer
-- [Deployment](./guides/deployment.md) - Production deployment strategies
-- [Testing](./guides/testing.md) - Testing strategies and best practices
+- [Deployment](../deployment/README.md) - Production deployment strategies
+- [Testing](../CONTRIBUTING.md#testing) - Testing strategies and best practices
 
 ### Provider Documentation
 - [Provider Overview](./providers/README.md) - Supported providers and capabilities
 - [DeepSeek](./providers/deepseek.md) - DeepSeek V4 integration guide
 - [Xiaomi MiMo](./providers/xiaomi-mimo.md) - Xiaomi MiMo V2.5 OpenAI-compatible guide
-- [OpenAI](./providers/openai.md) - OpenAI and compatible providers
-- [Anthropic](./providers/anthropic.md) - Claude models integration
-- [Adding Providers](./providers/adding-new-provider.md) - Step-by-step provider implementation
+- [OpenAI implementation](../src/core/providers/openai/) - OpenAI request and response handling
+- [Anthropic implementation](../src/core/providers/anthropic/) - Claude request and response handling
+- [Adding Providers](./architecture/provider-implementation.md) - Step-by-step provider implementation
 
 ### Experimental protocol libraries
 - [MCP library](./protocols/mcp.md) - Default-off `mcp` feature; no HTTP gateway route
 - [A2A library](./protocols/a2a.md) - Default-off `a2a` feature; no HTTP gateway route
 
 ### Examples & Tutorials
-- [Basic Examples](./examples/basic-usage.md) - Simple completion examples
-- [Advanced Features](./examples/advanced-features.md) - Streaming, function calling, etc.
-- [Integration Examples](./examples/integrations.md) - Web frameworks and service integrations
+- [Basic Examples](../examples/README.md) - Simple completion examples
+- [Advanced Features](../examples/) - Streaming, function calling, etc.
+- [Integration Examples](../examples/) - Web frameworks and service integrations
 
 ## 🚀 Quick Start
 
@@ -53,18 +56,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
     ).await?;
     
-    println!("Response: {}", response.choices[0].message.content);
+    if let Some(content) = &response.choices[0].message.content {
+        println!("Response: {}", content);
+    }
     Ok(())
 }
 ```
 
 ## 🏗️ Architecture Highlights
 
-- **High Performance**: Built with Rust and Tokio for maximum throughput (10,000+ req/s)
-- **OpenAI Compatible**: Drop-in replacement for OpenAI API
-- **100+ Providers**: Unified interface to all major AI providers
+- **High Performance**: Rust and Tokio, with a reproducible [gateway-overhead benchmark](./benchmarks/gateway-overhead.md)
+- **OpenAI Compatible**: [Versioned inference contract](./openapi/inference.json)
+- **Provider Coverage**: [Runtime and legacy adapter support](../README.md#provider-support) varies by provider and capability
 - **Intelligent Routing**: Smart load balancing and failover
-- **Enterprise Ready**: Authentication, monitoring, cost tracking
+- **Gateway Controls**: Authentication, monitoring, and cost tracking
 - **Type Safety**: Compile-time guarantees and zero-cost abstractions
 - **Experimental MCP library**: Default-off protocol types and client orchestration; no mounted gateway route
 - **Experimental A2A library**: Default-off agent protocol types; no mounted gateway route
@@ -182,8 +187,8 @@ make docker           # Build Docker image
 ## 🤝 Contributing
 
 1. Read the [Provider Implementation Guide](./architecture/provider-implementation.md)
-2. Check existing [issues](https://github.com/your-org/litellm-rs/issues)
-3. Follow the [development setup](./guides/getting-started.md#development-setup)
+2. Check existing [issues](https://github.com/majiayu000/litellm-rs/issues)
+3. Follow the [development setup](../CONTRIBUTING.md#development-setup)
 4. Submit PRs with tests and documentation
 
 ## 📄 License

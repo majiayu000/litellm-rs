@@ -404,7 +404,7 @@ See [SECURITY.md](./SECURITY.md) for security policy and vulnerability reporting
 
 This project is one layer of an open-source stack for running coding agents (Claude Code, Codex) as serious infrastructure. Every piece works standalone; together they close the loop:
 
-`litellm-rs` is the **Route** layer — the gateway underneath everything else, speaking OpenAI format to 100+ providers.
+`litellm-rs` is the **Route** layer — a self-hosted OpenAI-compatible gateway. See [Provider Support](#provider-support) for runtime and adapter coverage.
 
 | Layer | Project | What it does |
 |---|---|---|
@@ -414,7 +414,7 @@ This project is one layer of an open-source stack for running coding agents (Cla
 | Trust | [vibeguard](https://github.com/majiayu000/vibeguard) | Rules, hooks, and guards against hallucinated or unverified agent changes |
 | Remember | [remem](https://github.com/majiayu000/remem) | Local-first persistent memory for Claude Code and Codex sessions |
 | Orchestrate | [harness](https://github.com/majiayu000/harness) | Rust agent orchestration platform — rules, skills, GC, observability |
-| Route | [litellm-rs](https://github.com/majiayu000/litellm-rs) **◀ you are here** | High-performance Rust AI gateway — 100+ LLM APIs via OpenAI format |
+| Route | [litellm-rs](https://github.com/majiayu000/litellm-rs) **◀ you are here** | Self-hosted Rust LLM gateway with OpenAI-compatible APIs, routing, and failover |
 | Keep | [keepline](https://github.com/majiayu000/keepline) | Session command center — monitor, recover, never lose agent work |
 
 ---
