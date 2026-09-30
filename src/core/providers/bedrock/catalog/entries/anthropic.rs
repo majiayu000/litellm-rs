@@ -2,12 +2,70 @@
 
 use super::super::super::model_config::{BedrockApiType, BedrockModelFamily};
 use super::super::{
-    BedrockCatalogEntry, BedrockPricing, BedrockVendor, EndpointSupport, ModelCapabilities,
-    ModelLifecycle, ModelLimits, SourceMetadata,
+    BedrockCatalogEntry, BedrockPricing, BedrockVendor, EndpointSupport, InferenceProfileScope,
+    ModelCapabilities, ModelLifecycle, ModelLimits, SourceMetadata,
 };
 use super::builder::{COMMON_GEO, NO_PROFILES, entry};
 
 pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
+    // AWS model cards reviewed 2026-10-01; inference scopes differ per model.
+    for (id, name, input, output, profiles) in [
+        (
+            "anthropic.claude-fable-5-1",
+            "Claude Fable 5.1",
+            0.010,
+            0.050,
+            &[
+                InferenceProfileScope::Global,
+                InferenceProfileScope::UnitedStates,
+            ][..],
+        ),
+        (
+            "anthropic.claude-opus-5-5",
+            "Claude Opus 5.5",
+            0.004,
+            0.020,
+            &[
+                InferenceProfileScope::Global,
+                InferenceProfileScope::UnitedStates,
+                InferenceProfileScope::Europe,
+                InferenceProfileScope::Australia,
+                InferenceProfileScope::Japan,
+            ][..],
+        ),
+        (
+            "anthropic.claude-sonnet-5-5",
+            "Claude Sonnet 5.5",
+            0.002,
+            0.010,
+            &[InferenceProfileScope::Global][..],
+        ),
+    ] {
+        out.push(entry(
+            id,
+            name,
+            BedrockVendor::Anthropic,
+            BedrockModelFamily::Claude,
+            BedrockApiType::Converse,
+            ModelLifecycle::Live,
+            EndpointSupport::CONVERSE,
+            profiles,
+            ModelLimits {
+                max_context_length: 1_000_000,
+                max_output_length: Some(128_000),
+            },
+            ModelCapabilities {
+                thinking: true,
+                ..ModelCapabilities::CHAT_MULTIMODAL
+            },
+            Some(BedrockPricing::per_1k(input, output)),
+            None,
+            SourceMetadata {
+                url: "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
+                verified_date: "2026-10-01",
+            },
+        ));
+    }
     // Modern Claude 3 / 3.5 / 4 / 4.5 / 4.6 — converse API, multimodal.
     let modern: &[(&str, &str, u32, f64, f64)] = &[
         (

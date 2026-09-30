@@ -537,15 +537,16 @@ pub(super) fn get_deepseek_pricing_at(
             updated_at: pricing_time,
             ..Default::default()
         },
-        m if m.contains("deepseek-v4-flash")
+        m if m == "deepseek-flash"
+            || m.contains("deepseek-v4-flash")
             || m.contains("deepseek-chat")
             || m.contains("deepseek-reasoner") =>
         {
             ModelPricing {
                 model: model.to_string(),
-                input_cost_per_1k_tokens: 0.00022 * multiplier,
-                output_cost_per_1k_tokens: 0.00066 * multiplier,
-                cache_read_input_token_cost: Some(0.000007 * multiplier),
+                input_cost_per_1k_tokens: 0.00015 * multiplier,
+                output_cost_per_1k_tokens: 0.00060 * multiplier,
+                cache_read_input_token_cost: Some(0.000003 * multiplier),
                 currency: "USD".to_string(),
                 updated_at: pricing_time,
                 ..Default::default()

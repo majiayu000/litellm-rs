@@ -19,6 +19,43 @@ type StaticModelEntry = (
 /// Return the full list of static OpenAI model definitions.
 pub(super) fn static_model_entries() -> Vec<StaticModelEntry> {
     vec![
+        // https://developers.openai.com/api/docs/models (2026-10-01)
+        (
+            "gpt-6-astra",
+            "GPT-6 Astra",
+            OpenAIModelFamily::GPT6Astra,
+            1_050_000,
+            Some(128_000),
+            0.01,
+            0.05,
+        ),
+        (
+            "gpt-6-sol",
+            "GPT-6 Sol",
+            OpenAIModelFamily::GPT6Sol,
+            1_050_000,
+            Some(128_000),
+            0.002,
+            0.01,
+        ),
+        (
+            "gpt-6.1-sol",
+            "GPT-6.1 Sol",
+            OpenAIModelFamily::GPT61Sol,
+            1_050_000,
+            Some(128_000),
+            0.002,
+            0.01,
+        ),
+        (
+            "gpt-6-luna",
+            "GPT-6 Luna",
+            OpenAIModelFamily::GPT6Luna,
+            1_050_000,
+            Some(128_000),
+            0.0001,
+            0.0005,
+        ),
         // ==================== GPT-4O Models (2024-2025) ====================
         (
             "gpt-4o",

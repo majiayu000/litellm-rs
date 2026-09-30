@@ -96,6 +96,12 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
             },
         },
     );
+    // Gemini 3.8 retains the documented 3.7 limits, capabilities and promotional rates.
+    let mut current = registry.get_model_spec("gemini-3.7-flash").unwrap().clone();
+    current.model_info.id = "gemini-3.8-flash".to_string();
+    current.model_info.name = "Gemini 3.8 Flash".to_string();
+    current.family = GeminiModelFamily::Gemini38Flash;
+    registry.register_model("gemini-3.8-flash", current);
     #[cfg(test)]
     {
         let mut unpriced = registry.get_model_spec("gemini-3.7-flash").unwrap().clone();

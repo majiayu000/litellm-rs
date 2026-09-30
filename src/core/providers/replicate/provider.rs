@@ -516,6 +516,18 @@ impl LLMProvider for ReplicateProvider {
         // Replicate pricing is per-second of compute time, not per token
         // We approximate based on model type and token counts
         if let Some(spec) = super::models::get_replicate_registry().get_model_spec(model) {
+            if spec
+                .model_info
+                .metadata
+                .get("pricing_unit")
+                .and_then(Value::as_str)
+                == Some("megapixel")
+            {
+                return Err(ProviderError::not_supported(
+                    "replicate",
+                    "Image dimensions are required to calculate this model's cost",
+                ));
+            }
             let input_cost = spec.model_info.input_cost_per_1k_tokens.unwrap_or(0.0)
                 * (input_tokens as f64 / 1000.0);
             let output_cost = spec.model_info.output_cost_per_1k_tokens.unwrap_or(0.0)
@@ -763,6 +775,12 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(
+            provider
+                .calculate_cost("black-forest-labs/flux-2-pro", 0, 0)
+                .await
+                .is_err()
+        );
         assert!(cost >= 0.0);
     }
 

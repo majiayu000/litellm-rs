@@ -61,17 +61,17 @@ impl CloudflareProvider {
             .iter()
             .filter_map(|id| get_model_info(id))
             .map(|info| {
-                let capabilities = vec![
-                    ProviderCapability::ChatCompletion,
-                    ProviderCapability::ChatCompletionStream,
-                ];
+                let mut capabilities = vec![ProviderCapability::ChatCompletion];
+                if info.supports_streaming {
+                    capabilities.push(ProviderCapability::ChatCompletionStream);
+                }
 
                 ModelInfo {
                     id: format!("cloudflare/{}", info.model_id),
                     name: info.display_name.to_string(),
                     provider: "cloudflare".to_string(),
                     max_context_length: info.max_context_length,
-                    max_output_length: Some(info.max_output_length),
+                    max_output_length: info.max_output_length,
                     supports_streaming: info.supports_streaming,
                     supports_tools: info.supports_tools,
                     supports_multimodal: info.supports_multimodal,

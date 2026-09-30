@@ -910,6 +910,7 @@ async fn current_xai_reasoning_normalizes_after_extra_merge() {
     for (model, effort, expected) in [
         ("grok-4.5", "xhigh", "high"),
         ("grok-4.6", "xhigh", "xhigh"),
+        ("grok-4.7", "xhigh", "xhigh"),
     ] {
         let request = ChatRequest {
             model: model.to_string(),

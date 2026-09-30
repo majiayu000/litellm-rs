@@ -534,7 +534,7 @@ fn embedded_authority_enforces_reviewed_and_unreviewed_rows_without_inference() 
     );
     assert_eq!(
         authority.classification("openai", "chatgpt-4o-latest"),
-        CatalogClassification::PricingOnly
+        CatalogClassification::Unknown
     );
     assert_eq!(
         authority.resolve_model("azure", "azure-openai/container"),

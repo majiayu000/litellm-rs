@@ -402,6 +402,11 @@ impl ElevenLabsProvider {
                 "elevenlabs",
                 &[
                     (
+                        "scribe_v2",
+                        ProviderCapability::AudioTranscription,
+                        "audio_second",
+                    ),
+                    (
                         "scribe_v1",
                         ProviderCapability::AudioTranscription,
                         "audio_second",

@@ -49,8 +49,8 @@ pub struct FalAIModel {
     pub name: String,
     /// Model description
     pub description: String,
-    /// Cost per image in USD
-    pub cost_per_image: f64,
+    /// Fixed cost per image in USD; None for dimension-dependent pricing.
+    pub cost_per_image: Option<f64>,
     /// Supported image sizes
     pub supported_sizes: Vec<String>,
     /// Maximum number of images per request
@@ -66,7 +66,7 @@ impl FalAIModel {
             id: id.to_string(),
             name: name.to_string(),
             description: description.to_string(),
-            cost_per_image,
+            cost_per_image: Some(cost_per_image),
             supported_sizes: vec![
                 "square".to_string(),
                 "square_hd".to_string(),
@@ -204,6 +204,23 @@ impl FalAIModelRegistry {
             ),
         );
 
+        // First-party fal model cards, reviewed 2026-10-01.
+        for (id, name, fixed_cost) in [
+            ("fal-ai/recraft/v4/text-to-image", "Recraft V4", Some(0.04)),
+            (
+                "fal-ai/recraft/v4/pro/text-to-image",
+                "Recraft V4 Pro",
+                Some(0.25),
+            ),
+            ("fal-ai/flux-2-pro", "FLUX.2 Pro", None),
+            ("fal-ai/flux-2-flex", "FLUX.2 Flex", None),
+            ("ideogram/v4", "Ideogram V4", None),
+        ] {
+            let mut model = FalAIModel::new(id, name, "Text-to-image generation", 0.0);
+            model.cost_per_image = fixed_cost;
+            models.insert(id.to_string(), model);
+        }
+
         Self { models }
     }
 
@@ -223,11 +240,11 @@ impl FalAIModelRegistry {
     }
 
     /// Get cost per image for a model
-    pub fn get_cost_per_image(&self, model_id: &str) -> f64 {
+    pub fn get_cost_per_image(&self, model_id: &str) -> Option<f64> {
         self.models
             .get(model_id)
             .map(|m| m.cost_per_image)
-            .unwrap_or(0.0)
+            .unwrap_or(Some(0.0))
     }
 
     /// Register a custom model
@@ -331,14 +348,14 @@ mod tests {
     fn test_model_registry_cost() {
         let registry = FalAIModelRegistry::new();
         let cost = registry.get_cost_per_image("fal-ai/flux/schnell");
-        assert!(cost > 0.0);
+        assert!(cost.unwrap() > 0.0);
     }
 
     #[test]
     fn test_model_registry_unknown() {
         let registry = FalAIModelRegistry::new();
         assert!(!registry.is_supported("unknown-model"));
-        assert_eq!(registry.get_cost_per_image("unknown-model"), 0.0);
+        assert_eq!(registry.get_cost_per_image("unknown-model"), Some(0.0));
     }
 
     #[test]

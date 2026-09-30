@@ -37,7 +37,7 @@ async fn vertex_cost_uses_shared_per_token_pricing() {
     assert!((preview - 0.002).abs() < 1e-12);
 
     for (model, expected) in [
-        ("gemini-2.0-flash", 0.0003),
+        ("gemini-2.0-flash", 0.00045),
         ("gemini-1.5-pro-002", 0.00875),
         ("gemini-1.5-flash-002", 0.000225),
         ("claude-3-opus@20240229", 0.0525),

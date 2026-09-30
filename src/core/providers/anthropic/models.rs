@@ -41,10 +41,13 @@ pub enum ModelFeature {
 pub enum AnthropicModelFamily {
     /// Claude Fable 5 models
     ClaudeFable5,
+    ClaudeFable51,
     /// Claude Opus 5 models
     ClaudeOpus5,
+    ClaudeOpus55,
     /// Claude Sonnet 5 models
     ClaudeSonnet5,
+    ClaudeSonnet55,
     /// Claude Opus 4.8 models
     ClaudeOpus48,
     /// Claude Opus 4.7 models
@@ -213,6 +216,9 @@ impl AnthropicModelRegistry {
     /// Get model family from name
     pub fn from_model_name(model_name: &str) -> Option<AnthropicModelFamily> {
         match model_name {
+            "claude-fable-5-1" => return Some(AnthropicModelFamily::ClaudeFable51),
+            "claude-opus-5-5" => return Some(AnthropicModelFamily::ClaudeOpus55),
+            "claude-sonnet-5-5" => return Some(AnthropicModelFamily::ClaudeSonnet55),
             "claude-fable-5" => return Some(AnthropicModelFamily::ClaudeFable5),
             "claude-opus-5" => return Some(AnthropicModelFamily::ClaudeOpus5),
             "claude-sonnet-5" => return Some(AnthropicModelFamily::ClaudeSonnet5),

@@ -141,6 +141,8 @@ pub enum InferenceProfileScope {
     UnitedStates,
     Europe,
     AsiaPacific,
+    Australia,
+    Japan,
     SouthAmerica,
     Canada,
     MiddleEast,

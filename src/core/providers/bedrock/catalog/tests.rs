@@ -236,3 +236,27 @@ fn lookup_helpers_return_seeded_entry() {
     assert_eq!(thinking.limits.max_output_length, Some(16_000));
     assert!(!thinking.capabilities.multimodal);
 }
+
+#[test]
+fn current_bedrock_models_keep_platform_specific_limits_and_scopes() {
+    use super::InferenceProfileScope;
+    let premier = get_catalog_entry("amazon.nova-premier-v1:0").unwrap();
+    assert_eq!(premier.limits.max_output_length, Some(25_000));
+    assert_eq!(
+        premier.inference_profiles,
+        &[InferenceProfileScope::UnitedStates]
+    );
+    let sol = get_catalog_entry("openai.gpt-6.1-sol").unwrap();
+    assert_eq!(sol.limits.max_output_length, Some(131_072));
+    assert_eq!(
+        sol.inference_profiles,
+        &[InferenceProfileScope::UnitedStates]
+    );
+    assert_eq!(
+        sol.pricing.as_ref().unwrap().input_cost_per_1k_tokens,
+        0.0022
+    );
+    let sonnet = get_catalog_entry("anthropic.claude-sonnet-5-5").unwrap();
+    assert_eq!(sonnet.inference_profiles, &[InferenceProfileScope::Global]);
+    assert!(sonnet.capabilities.thinking);
+}

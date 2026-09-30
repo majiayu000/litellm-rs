@@ -536,6 +536,19 @@ impl LLMProvider for OpenAIProvider {
         // Return parameters based on model capabilities
         if let Some(model_spec) = self.model_registry.get_model_spec(model) {
             match model_spec.family {
+                super::models::OpenAIModelFamily::GPT6Astra
+                | super::models::OpenAIModelFamily::GPT61Sol => &[
+                    "messages",
+                    "model",
+                    "max_completion_tokens",
+                    "stream",
+                    "response_format",
+                    "reasoning_effort",
+                    "store",
+                    "metadata",
+                    "service_tier",
+                    "user",
+                ],
                 super::models::OpenAIModelFamily::GPT5
                 | super::models::OpenAIModelFamily::GPT5Mini
                 | super::models::OpenAIModelFamily::GPT5Nano
@@ -550,7 +563,9 @@ impl LLMProvider for OpenAIProvider {
                 | super::models::OpenAIModelFamily::GPT56Sol
                 | super::models::OpenAIModelFamily::GPT56Terra
                 | super::models::OpenAIModelFamily::GPT56Luna
-                | super::models::OpenAIModelFamily::GPT56Cyber => &[
+                | super::models::OpenAIModelFamily::GPT56Cyber
+                | super::models::OpenAIModelFamily::GPT6Sol
+                | super::models::OpenAIModelFamily::GPT6Luna => &[
                     "messages",
                     "model",
                     "temperature",

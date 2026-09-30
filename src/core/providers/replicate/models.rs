@@ -168,6 +168,36 @@ impl ReplicateModelRegistry {
 
     /// Add image generation models to the registry
     fn add_image_models(&mut self) {
+        self.models.insert(
+            "black-forest-labs/flux-2-pro".to_string(),
+            ReplicateModelSpec {
+                model_info: ModelInfo {
+                    id: "black-forest-labs/flux-2-pro".to_string(),
+                    name: "FLUX.2 Pro".to_string(),
+                    provider: "replicate".to_string(),
+                    max_context_length: 0,
+                    max_output_length: None,
+                    supports_streaming: false,
+                    supports_tools: false,
+                    supports_multimodal: false,
+                    input_cost_per_1k_tokens: None,
+                    output_cost_per_1k_tokens: None,
+                    currency: "USD".to_string(),
+                    capabilities: vec![ProviderCapability::ImageGeneration],
+                    created_at: None,
+                    updated_at: None,
+                    metadata: HashMap::from([
+                        ("pricing_unit".to_string(), serde_json::json!("megapixel")),
+                        (
+                            "source".to_string(),
+                            serde_json::json!("https://replicate.com/black-forest-labs/flux-2-pro"),
+                        ),
+                    ]),
+                },
+                model_type: ReplicateModelType::ImageGeneration,
+                default_params: HashMap::new(),
+            },
+        );
         let image_models = vec![
             // Stable Diffusion XL
             (

@@ -8,12 +8,77 @@
 
 use super::super::super::model_config::{BedrockApiType, BedrockModelFamily};
 use super::super::{
-    BedrockCatalogEntry, BedrockPricing, BedrockVendor, EndpointSupport, ModelCapabilities,
-    ModelLifecycle, ModelLimits, SourceMetadata,
+    BedrockCatalogEntry, BedrockPricing, BedrockVendor, EndpointSupport, InferenceProfileScope,
+    ModelCapabilities, ModelLifecycle, ModelLimits, SourceMetadata,
 };
 use super::builder::{US_GLOBAL, entry};
 
 pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
+    // GPT-6 Converse support and limits from AWS model cards (2026-10-01).
+    // 6.1 Sol has only a US runtime profile, with AWS's 10% regional premium.
+    for (id, name, input, output, context, max_out, profiles) in [
+        (
+            "openai.gpt-6-astra",
+            "GPT-6 Astra",
+            0.010,
+            0.050,
+            1_050_000,
+            128_000,
+            US_GLOBAL,
+        ),
+        (
+            "openai.gpt-6-sol",
+            "GPT-6 Sol",
+            0.002,
+            0.010,
+            1_050_000,
+            128_000,
+            US_GLOBAL,
+        ),
+        (
+            "openai.gpt-6-luna",
+            "GPT-6 Luna",
+            0.0001,
+            0.0005,
+            1_050_000,
+            128_000,
+            US_GLOBAL,
+        ),
+        (
+            "openai.gpt-6.1-sol",
+            "GPT-6.1 Sol",
+            0.0022,
+            0.011,
+            1_000_000,
+            131_072,
+            &[InferenceProfileScope::UnitedStates][..],
+        ),
+    ] {
+        out.push(entry(
+            id,
+            name,
+            BedrockVendor::OpenAI,
+            BedrockModelFamily::Nova,
+            BedrockApiType::Converse,
+            ModelLifecycle::Live,
+            EndpointSupport::CONVERSE,
+            profiles,
+            ModelLimits {
+                max_context_length: context,
+                max_output_length: Some(max_out),
+            },
+            ModelCapabilities {
+                thinking: true,
+                ..ModelCapabilities::CHAT_MULTIMODAL
+            },
+            Some(BedrockPricing::per_1k(input, output)),
+            None,
+            SourceMetadata {
+                url: "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
+                verified_date: "2026-10-01",
+            },
+        ));
+    }
     let generic: &[(&str, &str, BedrockVendor)] = &[
         (
             "amazon.nova-2-lite-v1:0",
@@ -182,6 +247,11 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
     ];
 
     for (id, name, vendor) in generic {
+        let (context, output_limit, input_price, output_price) = match *id {
+            "amazon.nova-2-lite-v1:0" => (1_000_000, 64_000, 0.0003, 0.0025),
+            "amazon.nova-premier-v1:0" => (1_000_000, 25_000, 0.0025, 0.0125),
+            _ => (300_000, 8192, 0.0008, 0.0032),
+        };
         out.push(entry(
             id,
             name,
@@ -193,13 +263,17 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             BedrockApiType::Converse,
             ModelLifecycle::Live,
             EndpointSupport::CONVERSE,
-            US_GLOBAL,
+            if *id == "amazon.nova-premier-v1:0" {
+                &[InferenceProfileScope::UnitedStates]
+            } else {
+                US_GLOBAL
+            },
             ModelLimits {
-                max_context_length: 300_000,
-                max_output_length: Some(8192),
+                max_context_length: context,
+                max_output_length: Some(output_limit),
             },
             ModelCapabilities::CHAT_MULTIMODAL,
-            Some(BedrockPricing::per_1k(0.0008, 0.0032)),
+            Some(BedrockPricing::per_1k(input_price, output_price)),
             None,
             SourceMetadata::AWS_BEDROCK_PRICING,
         ));

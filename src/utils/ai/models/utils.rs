@@ -12,7 +12,9 @@ impl ModelUtils {
             .rsplit_once('/')
             .map_or(model, |(_, local)| local)
             .to_ascii_lowercase();
-        if local_lower.starts_with("gemini-3.7") && gemini_context_window(model).is_none() {
+        if (local_lower.starts_with("gemini-3.7") || local_lower.starts_with("gemini-3.8"))
+            && gemini_context_window(model).is_none()
+        {
             return ModelCapabilities::default();
         }
 
@@ -476,6 +478,7 @@ impl ModelUtils {
             "claude-3",
             "claude-2",
             "gemini",
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
             "gemini-3.6-flash",
             "gemini-3.5-flash",
@@ -488,7 +491,7 @@ impl ModelUtils {
         ];
 
         let model_lower = model.to_lowercase();
-        if model_lower.contains("gpt-5.6") {
+        if model_lower.contains("gpt-5.6") || model_lower.contains("gpt-6") {
             return gpt56_catalog_id(model).is_some();
         }
         if model_lower.contains("gpt-realtime-2") {
@@ -551,7 +554,7 @@ impl ModelUtils {
         });
 
         let model_matches = if provider.eq_ignore_ascii_case("openai") {
-            if model_lower.contains("gpt-5.6") {
+            if model_lower.contains("gpt-5.6") || model_lower.contains("gpt-6") {
                 gpt56_catalog_id(model).is_some()
             } else if model_lower.contains("gpt-realtime-2") {
                 realtime2_catalog_id(model).is_some()
@@ -563,7 +566,10 @@ impl ModelUtils {
         } else if provider.eq_ignore_ascii_case("google") {
             compatible_models.iter().any(|compatible_model| {
                 let compatible_model = compatible_model.to_lowercase();
-                if compatible_model == "gemini-3.7-flash" {
+                if matches!(
+                    compatible_model.as_str(),
+                    "gemini-3.7-flash" | "gemini-3.8-flash"
+                ) {
                     model_for_exact_match == compatible_model
                 } else {
                     model_for_match.starts_with(&compatible_model)
@@ -639,6 +645,7 @@ impl ModelUtils {
                 "claude-instant".to_string(),
             ],
             "google" => vec![
+                "gemini-3.8-flash".to_string(),
                 "gemini-3.7-flash".to_string(),
                 "gemini-3.6-flash".to_string(),
                 "gemini-3.5-flash-lite".to_string(),
@@ -698,6 +705,10 @@ pub(crate) fn openai_realtime2_limits(model: &str) -> Option<(usize, usize)> {
 fn gpt56_catalog_id(model: &str) -> Option<&'static str> {
     let model_id = model.strip_prefix("openai/").unwrap_or(model);
     match model_id {
+        "gpt-6-astra" => Some("gpt-6-astra"),
+        "gpt-6-sol" => Some("gpt-6-sol"),
+        "gpt-6.1-sol" => Some("gpt-6.1-sol"),
+        "gpt-6-luna" => Some("gpt-6-luna"),
         "gpt-5.6" => Some("gpt-5.6"),
         "gpt-5.6-sol" => Some("gpt-5.6-sol"),
         "gpt-5.6-terra" => Some("gpt-5.6-terra"),

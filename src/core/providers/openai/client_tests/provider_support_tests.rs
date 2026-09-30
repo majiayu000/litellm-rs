@@ -312,3 +312,18 @@ fn test_get_supported_openai_params_unknown() {
     assert!(params.contains(&"model"));
     assert!(params.contains(&"temperature"));
 }
+
+#[test]
+fn gpt6_chat_parameter_contract_keeps_responses_only_tools_out() {
+    let provider = create_test_provider();
+    for id in ["gpt-6-astra", "gpt-6.1-sol"] {
+        let params = provider.get_supported_openai_params(id);
+        assert!(params.contains(&"reasoning_effort"));
+        assert!(params.contains(&"stream"));
+        assert!(!params.contains(&"tools"));
+        assert!(!params.contains(&"temperature"));
+    }
+    for id in ["gpt-6-sol", "gpt-6-luna"] {
+        assert!(provider.get_supported_openai_params(id).contains(&"tools"));
+    }
+}

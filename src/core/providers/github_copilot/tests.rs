@@ -26,8 +26,19 @@ fn test_github_copilot_model_info_completeness() {
         let info = get_model_info(model_id).unwrap();
         assert!(!info.model_id.is_empty());
         assert!(!info.display_name.is_empty());
-        assert!(info.max_context_length > 0);
-        assert!(info.max_output_length > 0);
+        if matches!(
+            model_id,
+            "gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna" | "claude-opus-5.5"
+        ) {
+            assert_eq!(
+                info.max_context_length, 0,
+                "unpublished account limits are unknown"
+            );
+            assert_eq!(info.max_output_length, None);
+        } else {
+            assert!(info.max_context_length > 0);
+            assert!(info.max_output_length.is_some_and(|limit| limit > 0));
+        }
     }
 }
 

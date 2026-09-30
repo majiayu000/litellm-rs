@@ -98,8 +98,8 @@ const COHERE_MODELS: &[CohereModelEntry] = &[
         false,
         "chat",
         "live",
-        Some(0.003),
-        Some(0.015),
+        Some(0.0025),
+        Some(0.010),
     ),
     (
         "command-r-08-2024",
@@ -110,8 +110,8 @@ const COHERE_MODELS: &[CohereModelEntry] = &[
         false,
         "chat",
         "live",
-        Some(0.0005),
-        Some(0.0015),
+        Some(0.00015),
+        Some(0.0006),
     ),
     (
         "command-r-plus",
