@@ -35,7 +35,7 @@ end
 
 local function reclaim()
   local p, r, t, e = nums()
-  local window_changed = e ~= epoch
+  local window_changed = epoch > e
   if window_changed then
     r = 0
     t = 0
@@ -429,6 +429,52 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn delayed_commands_cannot_erase_the_current_window() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", 59_000, "old", 10, 2)
+                .await
+                .allowed
+        );
+        assert!(
+            !invoke_script(&mut conn, &key, "reserve", 60_000, "new", 1, 2)
+                .await
+                .allowed
+        );
+        let settled = invoke_script(&mut conn, &key, "settle", 60_001, "old", 4, 2).await;
+        assert_eq!((settled.parallel, settled.rpm, settled.tpm), (0, 1, 4));
+        let delayed = invoke_script(&mut conn, &key, "reserve", 59_999, "new", 6, 2).await;
+        assert!(delayed.allowed);
+        assert_eq!((delayed.parallel, delayed.rpm, delayed.tpm), (1, 2, 10));
+        let denied = invoke_script(&mut conn, &key, "reserve", 60_002, "third", 1, 2).await;
+        assert!(
+            !denied.allowed,
+            "settled usage must survive a delayed command"
+        );
+        assert_eq!((denied.parallel, denied.rpm, denied.tpm), (1, 2, 10));
+        let cancelled = invoke_script(&mut conn, &key, "cancel", 59_998, "new", 0, 2).await;
+        assert_eq!(
+            (cancelled.parallel, cancelled.rpm, cancelled.tpm),
+            (0, 1, 4)
+        );
+        let epoch: i64 = redis::cmd("HGET")
+            .arg(&key)
+            .arg("e")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(epoch, 1);
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
