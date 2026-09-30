@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-01
+
+### Fixed
+- Preserve Anthropic streaming input and cache usage from `message_start`; merge cumulative counters, honor explicit zeros, and isolate usage between messages and transformer clones (#1348, #1349). Thanks to @allenrchan for the reproduction and fix.
+- Require the Admin role for `/admin` even when general authentication is disabled; invalidate output-blocked chat cache entries and bound custom guardrail regex compilation (#1340, #1343, #1344).
+- Update rustls to address the handshake vulnerability and improve provider protocol, pricing, and streaming error handling.
+
+### Added
+- Provider and routing-policy administration, runtime routing inventory, provider/model budgets, and a metadata-only request log explorer.
+- Redis-backed distributed budget reservations, deployment admission limits, circuit-breaker coordination, runtime revision synchronization, and Redis Cluster configuration.
+- Native media, audio, retrieval, and enterprise inference providers, plus generic OpenAI-compatible embedding, image, and audio operations.
+- Custom guardrail rules, sanitized decision events, output fallback routing, Helm deployment assets, and Kubernetes autoscaling/disruption budgets.
+
+### Breaking changes and migration
+- Public `TokenCounter` methods and `StreamingHandler::create_sse_stream` require an explicit `TokenizerIdentity` instead of inferring a tokenizer from a raw model name (#1208, #1245).
+- Import `TokenizerIdentity` from `litellm_rs::utils::ai::counter::token_counter`. Use `TokenizerIdentity::exact_openai(model)` for exact OpenAI tokenization, or `TokenizerIdentity::approximate(provider, model)` when explicitly choosing an estimate. Pass the identity by reference to token-counting methods and by value as the final argument to `create_sse_stream`; propagate returned errors.
+- Previously deprecated provider and subsystem symbols remain available in this release. The removals proposed in the GH837/GH838 migration plans are not part of v0.7.0.
+
 ## [0.6.0] - 2026-08-12
 
 ### Added
