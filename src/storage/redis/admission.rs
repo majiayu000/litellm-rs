@@ -35,7 +35,8 @@ end
 
 local function reclaim()
   local p, r, t, e = nums()
-  if e ~= epoch then
+  local window_changed = e ~= epoch
+  if window_changed then
     r = 0
     t = 0
     e = epoch
@@ -60,6 +61,14 @@ local function reclaim()
           end
         end
         redis.call('HDEL', KEYS[1], fields[i])
+      elseif window_changed then
+        -- Live reservations occupy every window until they finish or expire.
+        r = r + rpmInc
+        t = t + tpmInc
+        redis.call(
+          'HSET', KEYS[1], fields[i],
+          tostring(pInc) .. ':' .. tostring(rpmInc) .. ':' .. tostring(tpmInc) .. ':' .. tostring(e) .. ':' .. tostring(expiry)
+        )
       end
     end
   end
@@ -106,8 +115,6 @@ if op == 'settle' or op == 'cancel' then
       else
         t = t - tpmInc + actual_tpm
       end
-    elseif op == 'settle' then
-      t = t + actual_tpm
     end
     redis.call('HDEL', KEYS[1], field)
     save(p, r, t, e)
@@ -316,6 +323,146 @@ impl RedisPool {
 mod tests {
     use super::*;
     use crate::config::models::storage::RedisConfig;
+
+    async fn live_connection() -> Option<RedisLiveConnection> {
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return None;
+        };
+        let pool = RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap();
+        // Keep these short-lived test runtimes out of the bridge's connection cache.
+        Some(pool.open_live_connection().await.unwrap())
+    }
+
+    async fn invoke_script(
+        conn: &mut RedisLiveConnection,
+        key: &str,
+        op: &str,
+        now_ms: i64,
+        lease_id: &str,
+        tokens: i64,
+        max_rpm: i64,
+    ) -> AdmissionState {
+        let values = admission_script()
+            .key(key)
+            .arg(op)
+            .arg(now_ms)
+            .arg(now_ms / 60_000)
+            .arg(-1)
+            .arg(max_rpm)
+            .arg(10)
+            .arg(1)
+            .arg(tokens)
+            .arg(lease_id)
+            .arg(600_000)
+            .arg(tokens)
+            .invoke_async(conn)
+            .await
+            .unwrap();
+        parse_admission_state(values).unwrap()
+    }
+
+    #[tokio::test]
+    async fn window_rollover_carries_live_reservations_until_finish() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        for op in ["settle", "cancel", "expire"] {
+            let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+            assert!(
+                invoke_script(&mut conn, &key, "reserve", 59_000, "old", 10, 2)
+                    .await
+                    .allowed
+            );
+            for now in [60_000, 60_001, 120_000] {
+                let denied = invoke_script(&mut conn, &key, "reserve", now, "new", 1, 2).await;
+                assert!(!denied.allowed, "live TPM must survive rollover ({op})");
+                assert_eq!((denied.parallel, denied.rpm, denied.tpm), (1, 1, 10));
+            }
+
+            let now = if op == "expire" { 659_000 } else { 120_001 };
+            if op == "expire" {
+                assert!(
+                    !invoke_script(&mut conn, &key, "reserve", 600_000, "new", 1, 2)
+                        .await
+                        .allowed
+                );
+            }
+            let finish_op = if op == "expire" { "cancel" } else { op };
+            let finished = invoke_script(&mut conn, &key, finish_op, now, "old", 4, 2).await;
+            let (rpm, tpm) = if op == "settle" { (1, 4) } else { (0, 0) };
+            assert_eq!(
+                (finished.parallel, finished.rpm, finished.tpm),
+                (0, rpm, tpm)
+            );
+
+            let admitted = invoke_script(&mut conn, &key, "reserve", now, "new", 10 - tpm, 2).await;
+            assert!(admitted.allowed, "finish must release the carried estimate");
+            assert_eq!(
+                (admitted.parallel, admitted.rpm, admitted.tpm),
+                (1, rpm + 1, 10)
+            );
+            let repeated = invoke_script(&mut conn, &key, finish_op, now, "old", 4, 2).await;
+            assert_eq!(
+                repeated, admitted,
+                "duplicate finish must leave other leases intact"
+            );
+            let next_window = (now / 60_000 + 1) * 60_000;
+            let carried =
+                invoke_script(&mut conn, &key, "reserve", next_window, "third", 5, 2).await;
+            assert!(!carried.allowed);
+            assert_eq!(
+                (carried.parallel, carried.rpm, carried.tpm),
+                (1, 1, 10 - tpm),
+                "only outstanding usage should carry into the next window"
+            );
+            redis::cmd("DEL")
+                .arg(&key)
+                .query_async::<i64>(&mut conn)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn window_rollover_carries_rpm_until_the_settled_window_ends() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", 59_000, "old", 0, 1)
+                .await
+                .allowed
+        );
+        let denied = invoke_script(&mut conn, &key, "reserve", 60_000, "new", 0, 1).await;
+        assert!(!denied.allowed, "outstanding RPM must survive rollover");
+        assert_eq!((denied.parallel, denied.rpm, denied.tpm), (1, 1, 0));
+        let settled = invoke_script(&mut conn, &key, "settle", 60_001, "old", 0, 1).await;
+        assert_eq!((settled.parallel, settled.rpm, settled.tpm), (0, 1, 0));
+        assert!(
+            !invoke_script(&mut conn, &key, "reserve", 60_002, "new", 0, 1)
+                .await
+                .allowed
+        );
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", 120_000, "new", 0, 1)
+                .await
+                .allowed
+        );
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn parses_admission_state() {
