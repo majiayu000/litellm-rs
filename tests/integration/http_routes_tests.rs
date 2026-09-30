@@ -655,7 +655,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         let state = build_openai_alias_state_with_cache(&format!("http://{address}")).await;
-        let app = test::init_service(build_test_app(state)).await;
+        let app = test::init_service(build_test_app(state.clone())).await;
 
         for _ in 0..2 {
             let req = test::TestRequest::post()
@@ -674,13 +674,29 @@ mod tests {
             assert!((first_value - 0.1).abs() < 0.000_001);
         }
 
+        assert_eq!(captured_requests.lock().unwrap().len(), 1);
+        let router = state.unified_router();
+        let ids = router.get_deployments_for_model("text-embedding-3-small");
+        assert_eq!(ids.len(), 1);
+        let mut replacement = (*router.get_deployment(&ids[0]).unwrap()).clone();
+        router.remove_deployment(&ids[0]);
+        replacement.id = "replacement-embedding-deployment".into();
+        router.add_deployment(replacement);
+        for _ in 0..2 {
+            let req = test::TestRequest::post()
+                .uri("/v1/embeddings")
+                .set_json(serde_json::json!({"model":"text-embedding-3-small","input":"hello"}))
+                .to_request();
+            assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+        }
+
         handle.stop(true).await;
         let _ = task.await;
 
         assert_eq!(
             captured_requests.lock().unwrap().len(),
-            1,
-            "second identical embedding request should hit cache"
+            2,
+            "each deployment must execute once, then reuse only its own cached vector"
         );
     }
 

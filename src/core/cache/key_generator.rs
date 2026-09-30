@@ -74,16 +74,18 @@ pub fn generate_chat_key_with_user(
 
 /// Generate a cache key for an embedding request
 pub fn generate_embedding_key(request: &EmbeddingRequest) -> CacheKey {
-    generate_embedding_key_with_user(request, None)
+    generate_embedding_key_with_user(request, None, None)
 }
 
 /// Generate a cache key for an embedding request with optional user ID
 pub fn generate_embedding_key_with_user(
     request: &EmbeddingRequest,
     user_id: Option<&str>,
+    deployment_id: Option<&str>,
 ) -> CacheKey {
     let payload = json!({
         "kind": "embedding",
+        "deployment_id": deployment_id,
         "schema_version": CACHE_KEY_SCHEMA_VERSION,
         "model": &request.model,
         "input": &request.input,
