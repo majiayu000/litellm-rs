@@ -1,4 +1,7 @@
 //! Single-key Lua budget lease operations (cluster-safe: `KEYS[1]` only).
+//!
+//! Expiry and period reset release the lease's authority over budget counters.
+//! Finishing an absent lease is a no-op; historical cost recording is independent.
 
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -43,7 +46,8 @@ local function maybe_period_reset()
     return
   end
   local _, _, epoch = read_state()
-  if epoch ~= period_epoch then
+  -- A late finish carries its reservation's epoch and must not rewind the period.
+  if period_epoch > epoch then
     delete_leases()
     write_state(0, 0, period_epoch)
   end
@@ -124,8 +128,8 @@ if op == 'settle' then
       if outstanding < 0 then outstanding = 0 end
     end
     redis.call('HDEL', KEYS[1], field)
+    committed = committed + actual
   end
-  committed = committed + actual
   write_state(committed, outstanding, epoch)
   return {1, committed, outstanding}
 end
@@ -368,6 +372,80 @@ mod tests {
         assert!(!denied.allowed);
         assert!(parse_budget_lease_state(vec![-1, 0, 0]).is_err());
         assert!(parse_budget_lease_state(vec![1, 0]).is_err());
+    }
+
+    #[tokio::test]
+    async fn lease_finish_is_idempotent_after_settlement_expiry_and_rollover() {
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return;
+        };
+        let pool = RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap();
+        let mut conn = pool.open_live_connection().await.unwrap();
+
+        for scenario in ["settled", "cancelled", "expired", "rollover"] {
+            let key = RedisPool::budget_lease_key("provider", &uuid::Uuid::new_v4().to_string());
+            let steps = match scenario {
+                "settled" => vec![
+                    ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
+                    ("settle", 1_001, 10, 10, 4, "old", 4, 0),
+                    ("settle", 1_002, 10, 10, 4, "old", 4, 0),
+                ],
+                "cancelled" => vec![
+                    ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
+                    ("cancel", 1_001, 10, 10, 0, "old", 0, 0),
+                    ("reserve", 1_002, 10, 10, 10, "new", 0, 10),
+                    ("settle", 1_003, 10, 10, 4, "old", 0, 10),
+                ],
+                "expired" => vec![
+                    ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
+                    ("reserve", 1_101, 10, 10, 10, "new", 0, 10),
+                    ("settle", 1_102, 10, 10, 4, "old", 0, 10),
+                    ("settle", 1_103, 10, 10, 3, "new", 3, 0),
+                ],
+                _ => vec![
+                    ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
+                    ("reserve", 1_001, 11, 10, 10, "new", 0, 10),
+                    ("settle", 1_002, 10, 10, 4, "old", 0, 10),
+                    ("cancel", 1_003, 10, 10, 0, "old", 0, 10),
+                    ("settle", 1_004, 11, 10, 3, "new", 3, 0),
+                ],
+            };
+            for (op, now, epoch, amount, actual_or_max, lease, committed, outstanding) in steps {
+                let values = redis::Script::new(BUDGET_LEASE_SCRIPT)
+                    .key(&key)
+                    .arg(op)
+                    .arg(now)
+                    .arg(epoch)
+                    .arg(amount)
+                    .arg(actual_or_max)
+                    .arg(0)
+                    .arg(lease)
+                    .arg(100)
+                    .invoke_async(&mut conn)
+                    .await
+                    .unwrap();
+                let state = parse_budget_lease_state(values).unwrap();
+                assert!(state.allowed, "{scenario}: {op}");
+                assert_eq!(
+                    (state.committed, state.outstanding),
+                    (committed, outstanding),
+                    "{scenario}: {op} {lease}"
+                );
+            }
+            redis::cmd("DEL")
+                .arg(&key)
+                .query_async::<i64>(&mut conn)
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]
