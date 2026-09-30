@@ -59,6 +59,7 @@ struct Outcome {
 #[derive(Clone, Copy)]
 enum StreamMode {
     Normal,
+    ToolsAndUsage,
     MidFail,
     HangAfterChunk,
 }
@@ -254,6 +255,23 @@ async fn handle_conn(mut socket: TcpStream, ctl: Arc<MockCtl>) {
     match mode {
         StreamMode::Normal => {
             let body = format!("{chunk}data: [DONE]\n\n");
+            write_http(&mut socket, 200, "text/event-stream", &body).await;
+        }
+        StreamMode::ToolsAndUsage => {
+            let frames = [
+                json!({"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"plan","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"weather","arguments":"{\"city\":"}}]},"finish_reason":null}]}),
+                json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Paris\"}"}}]},"finish_reason":"tool_calls"}]}),
+                json!({"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23,"prompt_tokens_details":{"cache_creation_tokens":4,"cache_read_tokens":6,"cached_tokens":6}}}),
+            ];
+            let mut body = String::new();
+            for mut frame in frames {
+                frame["id"] = json!("chatcmpl-tools");
+                frame["object"] = json!("chat.completion.chunk");
+                frame["created"] = json!(1);
+                frame["model"] = json!(model);
+                body.push_str(&format!("data: {frame}\n\n"));
+            }
+            body.push_str("data: [DONE]\n\n");
             write_http(&mut socket, 200, "text/event-stream", &body).await;
         }
         StreamMode::MidFail => {
@@ -759,6 +777,62 @@ async fn http_sdk_and_completion_chat_entries_conform() {
     for case in cases {
         run_case(&app, &ctl, &router, &binding, case).await;
     }
+    prepare(&ctl, &router, &binding);
+    *ctl.stream_mode.lock().unwrap() = StreamMode::ToolsAndUsage;
+    let mut stream = completion_stream(GROUP, vec![user_message("hello")], None)
+        .await
+        .unwrap();
+    let first = stream.next().await.unwrap().unwrap();
+    let delta = &first.choices[0].delta;
+    assert_eq!(delta.thinking_content(), Some("plan"));
+    let tool = &delta.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tool.index, 0);
+    assert_eq!(tool.id.as_deref(), Some("call_1"));
+    assert_eq!(
+        tool.function.as_ref().unwrap().name.as_deref(),
+        Some("weather")
+    );
+    let second = stream.next().await.unwrap().unwrap();
+    let tail = &second.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    assert!(tail.id.is_none());
+    let arguments = format!(
+        "{}{}",
+        tool.function
+            .as_ref()
+            .unwrap()
+            .arguments
+            .as_deref()
+            .unwrap(),
+        tail.function
+            .as_ref()
+            .unwrap()
+            .arguments
+            .as_deref()
+            .unwrap()
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&arguments).unwrap(),
+        json!({"city":"Paris"})
+    );
+    assert_eq!(
+        second.choices[0].finish_reason,
+        Some(litellm_rs::core::types::responses::FinishReason::ToolCalls)
+    );
+    let usage = stream.next().await.unwrap().unwrap().usage.unwrap();
+    assert_eq!(
+        (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens
+        ),
+        (20, 3, 23)
+    );
+    let details = usage.prompt_tokens_details.unwrap();
+    assert_eq!(details.cache_creation_tokens, Some(4));
+    assert_eq!(details.cache_read_tokens, Some(6));
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    wait_idle(&router).await;
     mock.stop();
 }
 
