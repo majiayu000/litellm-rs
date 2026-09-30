@@ -7,15 +7,18 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_FEATURES: postgres,sqlite,redis,s3,metrics,tracing,websockets,analytics,providers-extra,providers-extended,mcp-validation
 
 permissions:
   contents: read
 
 jobs:
+  validate-release:
+    uses: ./.github/workflows/ci-disabled-modules.yml
+
   # Create GitHub release
   create-release:
-    name: Create Release
+    name: Create Draft Release
+    needs: validate-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,7 +30,7 @@ jobs:
 
     - name: Get version
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
     - name: Create or update Release
       env:
@@ -40,20 +43,22 @@ jobs:
             --title "Release $version" \
             --notes-file CHANGELOG.md \
             --target "$target" \
-            --draft=false \
             --prerelease=false
         else
           gh release create "$version" \
             --title "Release $version" \
             --notes-file CHANGELOG.md \
             --target "$target" \
-            --verify-tag
+            --verify-tag \
+            --draft
         fi
 
   # Build and upload binaries
   build-release:
     name: Build Release
-    needs: create-release
+    needs: [create-release, validate-release]
+    env:
+      RELEASE_FEATURES: ${{ needs.validate-release.outputs.features }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -118,7 +123,7 @@ jobs:
 
     - name: Build release binary
       shell: bash
-      run: cargo build --release --target ${{ matrix.target }} --bin gateway --no-default-features --features "$RELEASE_FEATURES"
+      run: cargo build --locked --release --target ${{ matrix.target }} --bin gateway --no-default-features --features "$RELEASE_FEATURES"
 
     - name: Create archive (Unix)
       if: matrix.os != 'windows-latest'
@@ -222,7 +227,7 @@ jobs:
   # Publish to crates.io
   publish-crate:
     name: Publish to crates.io
-    needs: create-release
+    needs: [create-release, build-release]
     runs-on: ubuntu-latest
     steps:
     - name: Check crates.io token
@@ -269,10 +274,24 @@ jobs:
         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       run: cargo publish --token "$CRATES_IO_TOKEN"
 
+  publish-release:
+    name: Publish GitHub Release
+    needs: [create-release, build-release, publish-crate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Publish validated release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+        RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+      run: gh release edit "$RELEASE_VERSION" --draft=false
+
   # Update Homebrew formula from the published macOS release asset
   homebrew-release:
     name: Update Homebrew Formula
-    needs: [create-release, build-release]
+    needs: [create-release, publish-release]
     runs-on: ubuntu-latest
     if: github.repository == 'majiayu000/litellm-rs'
     steps:
