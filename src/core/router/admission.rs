@@ -13,7 +13,6 @@ pub(crate) const DEFAULT_LEASE_TTL_MS: i64 = 600_000;
 pub(crate) struct AdmissionHold {
     pub lease_id: String,
     pub deployment_id: String,
-    pub period_epoch: i64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -110,7 +109,6 @@ impl AdmissionBackend {
                 AdmissionReserve::Granted(AdmissionHold {
                     lease_id,
                     deployment_id,
-                    period_epoch: window_epoch,
                 })
             }
         }
@@ -134,7 +132,7 @@ impl AdmissionBackend {
                 let pool = std::sync::Arc::clone(pool);
                 let key = crate::storage::redis::RedisPool::admission_key(&hold.deployment_id);
                 let lease_id = hold.lease_id.clone();
-                let window_epoch = hold.period_epoch;
+                let window_epoch = window_epoch_secs();
                 let now_ms = now_ms();
                 let deployment_id = hold.deployment_id.clone();
                 let _ = run_redis(&deployment_id, op, async move {
@@ -239,6 +237,71 @@ where
 #[cfg(all(test, feature = "gateway"))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn finishing_old_lease_keeps_the_current_window() {
+        use crate::config::models::storage::RedisConfig;
+        use crate::storage::redis::RedisPool;
+
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return;
+        };
+        let pool = std::sync::Arc::new(
+            RedisPool::new(&RedisConfig {
+                url,
+                enabled: true,
+                allow_degraded: false,
+                ..RedisConfig::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let backend = AdmissionBackend::redis(pool.clone());
+        for op in ["settle", "cancel"] {
+            let epoch = window_epoch_secs();
+            let deployment_id = uuid::Uuid::new_v4().to_string();
+            let key = RedisPool::admission_key(&deployment_id);
+            let hold = AdmissionHold {
+                lease_id: "old".into(),
+                deployment_id,
+            };
+            // Another replica has already carried this old lease into the current window.
+            redis::cmd("HSET")
+                .arg(&key)
+                .arg("p")
+                .arg(1)
+                .arg("r")
+                .arg(1)
+                .arg("t")
+                .arg(10)
+                .arg("e")
+                .arg(epoch)
+                .arg("l:old")
+                .arg(format!(
+                    "1:1:10:{epoch}:{}",
+                    now_ms() + DEFAULT_LEASE_TTL_MS
+                ))
+                .query_async::<i64>(&mut conn)
+                .await
+                .unwrap();
+            backend.finish(&hold, op, 4);
+            let state: (i64, i64, i64, i64) = redis::cmd("HMGET")
+                .arg(&key)
+                .arg(&["e", "p", "r", "t"])
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            let (rpm, tpm) = if op == "settle" { (1, 4) } else { (0, 0) };
+            assert_eq!(
+                state,
+                (epoch, 0, rpm, tpm),
+                "{op} must use the current window"
+            );
+            pool.delete(&key).await.unwrap();
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_redis_does_not_panic_on_current_thread_runtime() {
