@@ -31,11 +31,11 @@ help: ## Show this help message
 
 start: ## Quick start (auto-loads config/gateway.yaml)
 	@echo "🚀 Starting Rust LiteLLM Gateway..."
-	cargo run
+	cargo run --bin gateway --features sqlite
 
 dev: deps dev-services ## Start development environment
 	@echo "Starting development server..."
-	RUST_LOG=debug cargo run --bin gateway -- --config config/dev.yaml
+	RUST_LOG=debug cargo run --bin gateway --features postgres -- --config config/dev.yaml
 
 dev-services: ## Start development services (PostgreSQL, Redis, etc.)
 	@echo "Starting development services..."
@@ -69,7 +69,7 @@ build-release: ## Build optimized release version
 prod: build-release ## Build production release (alias for build-release)
 
 install: build-release ## Install binaries to system
-	cargo install --path . --force
+	cargo install --path . --force --bin gateway --features "$(STANDARD_FEATURES)"
 
 # =============================================================================
 # TESTING
@@ -188,7 +188,7 @@ docker-tag: ## Tag image for registry (usage: make docker-tag TAG=v1.0.0)
 # =============================================================================
 
 db-migrate: ## Run database migrations
-	cargo run --bin gateway -- --config config/dev.yaml --migrate
+	cargo run --bin gateway --features postgres -- --config config/dev.yaml --migrate
 
 db-reset: ## Reset development database
 	docker-compose -f docker-compose.dev.yml down postgres-dev
@@ -309,7 +309,7 @@ jaeger: ## Open Jaeger UI
 # =============================================================================
 
 config-validate: ## Validate configuration
-	cargo run --bin gateway -- --config config/dev.yaml --validate
+	cargo run --bin gateway --features postgres -- --config config/dev.yaml --validate
 
 config-example: ## Copy example configurations
 	cp config/gateway.yaml.example config/gateway.yaml

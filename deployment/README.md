@@ -33,7 +33,7 @@ deployment/
 ./deployment/scripts/start.sh
 
 # Or manually
-cargo run
+cargo run --bin gateway --features sqlite
 ```
 
 ### 2. Docker

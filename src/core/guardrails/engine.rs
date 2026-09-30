@@ -131,6 +131,7 @@ impl GuardrailEngine {
     }
 
     /// Apply configured masks while skipping policies that cannot mutate content.
+    #[cfg(feature = "gateway")]
     pub(crate) fn mask_content(&self, content: &str) -> GuardrailResult<Option<String>> {
         let mut masked = None;
         for guardrail in &self.guardrails {

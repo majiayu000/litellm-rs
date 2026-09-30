@@ -17,6 +17,30 @@ env:
   FEATURES: "postgres sqlite redis s3 metrics tracing websockets analytics"
 
 jobs:
+  library-default:
+    name: Default library profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # v1
+        with:
+          toolchain: 1.96.1
+          components: clippy
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-library-default-${{ hashFiles('**/Cargo.lock') }}
+      - name: Lint default library
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test default library
+        run: cargo test --locked
+
   catalog-authority:
     name: Model Catalog Authority
     runs-on: ubuntu-latest

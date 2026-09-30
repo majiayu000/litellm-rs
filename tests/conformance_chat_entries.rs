@@ -9,6 +9,7 @@ use futures::StreamExt;
 use litellm_rs::config::models::provider::{ProviderConfig, RetryConfig};
 use litellm_rs::core::net::ProviderEndpointAccess;
 use litellm_rs::core::providers::ProviderError;
+use litellm_rs::core::router::UnifiedRoutingStrategy as RoutingStrategy;
 use litellm_rs::core::router::{
     Deployment, RuntimeBinding, UnifiedRouter, install_default_runtime, replace_default_runtime,
 };
@@ -19,9 +20,7 @@ use litellm_rs::sdk::types::{ChatOptions, Content, Message as SdkMessage, Role, 
 use litellm_rs::server::HttpServer as GatewayHttpServer;
 use litellm_rs::server::middleware::AuthMiddleware;
 use litellm_rs::server::routes::ai::configure_routes;
-use litellm_rs::{
-    Config, GatewayError, RoutingStrategy, completion, completion_stream, user_message,
-};
+use litellm_rs::{Config, GatewayError, completion, completion_stream, user_message};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::io;

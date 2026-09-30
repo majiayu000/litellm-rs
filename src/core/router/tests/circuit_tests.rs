@@ -1,6 +1,8 @@
 use super::router_tests::create_test_deployment;
 use crate::core::router::config::RouterConfig;
-use crate::core::router::error::{CooldownReason, RouterError};
+#[cfg(feature = "gateway")]
+use crate::core::router::error::CooldownReason;
+use crate::core::router::error::RouterError;
 use crate::core::router::unified::Router;
 
 #[tokio::test]

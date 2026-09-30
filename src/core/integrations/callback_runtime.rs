@@ -13,11 +13,17 @@ use crate::core::traits::integration::{
 };
 
 pub(crate) trait CallbackMetrics: Send + Sync {
+    #[cfg(any(feature = "gateway", test))]
     fn begin_llm_lifecycle(&self, event: &LlmStartEvent);
+    #[cfg(any(feature = "gateway", test))]
     fn finish_llm_lifecycle(&self, event: &LlmEndEvent);
+    #[cfg(feature = "gateway")]
     fn fail_llm_lifecycle(&self, event: &LlmErrorEvent);
+    #[cfg(any(feature = "gateway", test))]
     fn cancel_llm_lifecycle(&self, event: &LlmStartEvent);
+    #[cfg(feature = "gateway")]
     fn record_embedding_start(&self, event: &EmbeddingStartEvent);
+    #[cfg(feature = "gateway")]
     fn record_embedding_end(&self, event: &EmbeddingEndEvent);
     fn render(&self) -> String;
 }
@@ -90,8 +96,10 @@ impl CallbackTerminalPermit {
     }
 }
 
+#[cfg(any(feature = "gateway", test))]
 enum CallbackMetricsKind {
     Llm(Box<LlmStartEvent>),
+    #[cfg(feature = "gateway")]
     Embedding,
 }
 
@@ -101,13 +109,16 @@ enum CallbackMetricsKind {
 /// queue admission keeps its public failure semantics, while metrics never
 /// enter that queue. Dropping an unfinished LLM guard releases the active
 /// request gauge during cancellation, task abortion, or panic unwinding.
+#[cfg(any(feature = "gateway", test))]
 pub(crate) struct CallbackMetricsPermit {
     recorder: CallbackMetricsRecorder,
     kind: CallbackMetricsKind,
     completed: bool,
 }
 
+#[cfg(any(feature = "gateway", test))]
 impl CallbackMetricsPermit {
+    #[cfg(feature = "gateway")]
     pub(crate) fn update_llm_target(&mut self, model: &str, provider: &str) {
         if let CallbackMetricsKind::Llm(event) = &mut self.kind {
             event.model = model.to_string();
@@ -120,6 +131,7 @@ impl CallbackMetricsPermit {
         self.completed = true;
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn emit_error(mut self, event: &LlmErrorEvent) {
         if matches!(self.kind, CallbackMetricsKind::Llm(_)) {
             self.recorder.fail_llm_lifecycle(event);
@@ -127,16 +139,19 @@ impl CallbackMetricsPermit {
         self.completed = true;
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn emit_embedding_end(mut self, event: &EmbeddingEndEvent) {
         self.recorder.record_embedding_end(event);
         self.completed = true;
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn emit_embedding_error(mut self) {
         self.completed = true;
     }
 }
 
+#[cfg(any(feature = "gateway", test))]
 impl Drop for CallbackMetricsPermit {
     fn drop(&mut self) {
         if !self.completed
@@ -223,6 +238,7 @@ impl CallbackDispatcher {
         }
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn begin_llm_metrics(&self, event: &LlmStartEvent) -> Option<CallbackMetricsPermit> {
         let recorder = self.callback_metrics.clone()?;
         recorder.begin_llm_lifecycle(event);
@@ -233,6 +249,7 @@ impl CallbackDispatcher {
         })
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn begin_embedding_metrics(
         &self,
         event: &EmbeddingStartEvent,
@@ -333,6 +350,7 @@ impl CallbackRuntime {
         self.dispatcher.clone()
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn with_callback_metrics(
         mut self,
         metrics: Option<CallbackMetricsRecorder>,

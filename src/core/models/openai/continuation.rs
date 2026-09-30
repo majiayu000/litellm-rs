@@ -3,16 +3,19 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _, ser::Error as _};
 use serde_json::Value;
 
+#[cfg(feature = "gateway")]
 use super::{
     messages::MessageRole,
+    responses::Usage,
+    responses_api::{ResponseInput, ResponseInputItem, ResponseOutputItem},
+};
+use super::{
     requests::ChatCompletionRequest,
-    responses::{ChatCompletionResponse, Usage},
-    responses_api::{
-        ResponseInput, ResponseInputItem, ResponseOutputItem, ResponsesApiRequest,
-        ResponsesApiResponse,
-    },
+    responses::ChatCompletionResponse,
+    responses_api::{ResponsesApiRequest, ResponsesApiResponse},
 };
 use crate::core::providers::ChatMessageContinuation;
+#[cfg(feature = "gateway")]
 use crate::core::types::codex::domain::{CodexTurn, CodexTurnError, CodexTurnItem};
 
 /// A Chat Completions request with one typed extension carrier per message.
@@ -42,20 +45,24 @@ impl ChatCompletionRequestWithExtensions {
         })
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn legacy(&self) -> &ChatCompletionRequest {
         &self.request
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn message_extensions(&self) -> &[ChatMessageContinuation] {
         &self.message_extensions
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn has_continuation(&self) -> bool {
         self.message_extensions
             .iter()
             .any(|extension| !extension.is_empty())
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn into_parts(self) -> (ChatCompletionRequest, Vec<ChatMessageContinuation>) {
         (self.request, self.message_extensions)
     }
@@ -118,9 +125,11 @@ impl ChatCompletionResponseWithExtensions {
             .any(|extension| !extension.is_empty())
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn into_parts(self) -> (ChatCompletionResponse, Vec<ChatMessageContinuation>) {
         (self.response, self.choice_extensions)
     }
+    #[cfg(feature = "gateway")]
     pub(crate) fn usage(&self) -> Option<&Usage> {
         self.response.usage.as_ref()
     }
@@ -182,10 +191,12 @@ impl ResponsesApiRequestWithExtensions {
         })
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn legacy(&self) -> &ResponsesApiRequest {
         &self.request
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn has_continuation(&self) -> bool {
         self.input_extensions
             .iter()
@@ -193,6 +204,7 @@ impl ResponsesApiRequestWithExtensions {
             .any(|extension| !extension.is_empty())
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn into_parts(self) -> (ResponsesApiRequest, Vec<Option<ChatMessageContinuation>>) {
         (self.request, self.input_extensions)
     }
@@ -283,6 +295,7 @@ impl<'de> Deserialize<'de> for ResponsesApiResponseWithExtensions {
     }
 }
 
+#[cfg(feature = "gateway")]
 pub(crate) fn attach_responses_choice_extensions(
     response: &mut ResponsesApiResponse,
     choice_extensions: Vec<ChatMessageContinuation>,
@@ -309,6 +322,7 @@ pub(crate) fn attach_responses_choice_extensions(
     Ok(output_extensions)
 }
 
+#[cfg(feature = "gateway")]
 pub(crate) fn map_responses_input_extensions(
     request: &ResponsesApiRequest,
     chat: &ChatCompletionRequest,
@@ -371,6 +385,7 @@ pub(crate) fn map_responses_input_extensions(
     Ok(mapped)
 }
 
+#[cfg(feature = "gateway")]
 fn map_tool_call(
     mapped: &mut Vec<ChatMessageContinuation>,
     chat: &ChatCompletionRequest,
@@ -394,6 +409,7 @@ fn map_tool_call(
     Ok(())
 }
 
+#[cfg(feature = "gateway")]
 fn map_tool_output(
     mapped: &mut Vec<ChatMessageContinuation>,
     chat: &ChatCompletionRequest,
@@ -429,6 +445,7 @@ fn response_input_len(request: &ResponsesApiRequest) -> usize {
     }
 }
 
+#[cfg(feature = "gateway")]
 pub(crate) fn build_responses_continuation_turn(
     request: &ResponsesApiRequest,
     extensions: &[Option<ChatMessageContinuation>],

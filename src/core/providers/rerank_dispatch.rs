@@ -15,6 +15,7 @@ fn cohere_rerank_api_base(api_base: &str) -> String {
 }
 
 impl Provider {
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn rerank_adapter(&self) -> Result<Arc<dyn RerankProvider>, ProviderError> {
         match self {
             Provider::Enterprise(EnterpriseProvider::Oci(provider)) => {

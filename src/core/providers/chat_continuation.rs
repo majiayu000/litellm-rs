@@ -2,7 +2,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 use super::ProviderError;
 use crate::core::types::anthropic_continuation::{AnthropicThinkingContent, ChatMessageExtensions};
-use crate::core::types::{chat::ChatRequest, responses::ChatResponse};
+#[cfg(any(feature = "gateway", test))]
+use crate::core::types::chat::ChatRequest;
+use crate::core::types::responses::ChatResponse;
 
 /// Payload-free ordering metadata for replaying Anthropic response blocks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +50,7 @@ impl ChatMessageContinuation {
         self
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn without_anthropic_block_order(mut self) -> Self {
         self.anthropic_block_order = None;
         self
@@ -57,10 +60,12 @@ impl ChatMessageContinuation {
         self.extensions.anthropic_thinking()
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn anthropic_block_order(&self) -> Option<&[AnthropicContentBlockOrder]> {
         self.anthropic_block_order.as_deref()
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn has_visible_thinking(&self) -> bool {
         self.anthropic_thinking()
             .and_then(|thinking| thinking.as_text())
@@ -127,11 +132,13 @@ impl<'de> Deserialize<'de> for ChatMessageContinuation {
 
 /// Internal synchronous request plus one continuation sidecar per message.
 #[derive(Debug, Clone)]
+#[cfg(any(feature = "gateway", test))]
 pub(crate) struct ChatContinuationRequest {
     request: ChatRequest,
     message_continuations: Vec<ChatMessageContinuation>,
 }
 
+#[cfg(any(feature = "gateway", test))]
 impl ChatContinuationRequest {
     pub(crate) fn new(
         request: ChatRequest,
@@ -153,10 +160,12 @@ impl ChatContinuationRequest {
         })
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn request(&self) -> &ChatRequest {
         &self.request
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn has_continuation(&self) -> bool {
         self.message_continuations
             .iter()
@@ -196,6 +205,7 @@ impl ChatContinuationResponse {
         })
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn response(&self) -> &ChatResponse {
         &self.response
     }

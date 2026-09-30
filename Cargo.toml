@@ -182,8 +182,8 @@ opt-level = 0
 
 # Feature flags
 [features]
-# Default: gateway with SQLite storage (use --all-features or --features providers-extra,providers-extended for full provider set)
-default = ["sqlite", "redis", "metrics", "tracing"]
+# Default: reusable API library; opt into sqlite or postgres for the gateway binary.
+default = ["lite"]
 
 # Gateway mode: HTTP server with full middleware stack
 gateway = [
@@ -193,8 +193,7 @@ gateway = [
     "dep:argon2", "dep:aes-gcm", "dep:clap"
 ]
 
-# Lite mode: API-only, no storage (use with --no-default-features)
-# Example: cargo build --no-default-features --features "metrics,tracing"
+# Lite mode: API-only with observability, no gateway or storage dependencies.
 lite = ["metrics", "tracing"]
 
 # Provider compilation tiers (for reducing build size when using --no-default-features)
@@ -267,6 +266,7 @@ harness = false
 [[bench]]
 name = "in_memory_cache_benchmarks"
 harness = false
+required-features = ["storage"]
 
 [[example]]
 name = "azure_ai_chat"

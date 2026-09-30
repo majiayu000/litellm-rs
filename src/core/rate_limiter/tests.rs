@@ -1,5 +1,8 @@
 //! Tests for rate limiter
 
+#[cfg(feature = "gateway")]
+use crate::config::models::rate_limit::RedisFailureMode;
+
 #[cfg(test)]
 use super::limiter::RateLimiter;
 #[cfg(feature = "gateway")]
@@ -9,7 +12,7 @@ use super::limiter::{
 };
 use super::types::RateLimitEntry;
 use super::{RateLimitRecordSource, RateLimitReservation};
-use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy, RedisFailureMode};
+use crate::config::models::rate_limit::{RateLimitConfig, RateLimitStrategy};
 #[cfg(feature = "gateway")]
 use crate::utils::error::gateway_error::{GatewayError, Result};
 #[cfg(feature = "gateway")]
