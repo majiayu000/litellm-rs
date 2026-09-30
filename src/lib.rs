@@ -1,14 +1,15 @@
 //! # LiteLLM-RS
 //!
-//! A Rust implementation of Python LiteLLM - call 100+ LLM APIs using OpenAI format.
-//! High-performance AI Gateway with unified interface for multiple providers.
+//! A self-hosted Rust LLM gateway with OpenAI-compatible HTTP APIs.
+//! This crate provides the reusable gateway kernel. Runtime-backed APIs and legacy
+//! adapters have distinct support policies; consult the
+//! [provider support matrix](https://github.com/majiayu000/litellm-rs#provider-support).
 //!
 //! ## Features
 //!
-//! - **Python LiteLLM Compatible**: Drop-in replacement with same API design
-//! - **OpenAI Compatible**: Full compatibility with OpenAI API format
-//! - **Multi-Provider**: Support for 100+ AI providers (OpenAI, Anthropic, Azure, Google, etc.)
-//! - **Unified Interface**: Call any LLM using the same function signature
+//! - **OpenAI-Compatible Gateway**: Versioned HTTP inference contract
+//! - **Multi-Provider**: Runtime and adapter coverage varies by provider and capability
+//! - **Unified Interface**: Shared request types for supported model deployments
 //! - **High Performance**: Built with Rust and Tokio for maximum throughput
 //! - **Intelligent Routing**: Smart load balancing and failover across providers
 //! - **Cost Optimization**: Automatic cost tracking and provider selection
