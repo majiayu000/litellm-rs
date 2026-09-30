@@ -2,6 +2,8 @@ use super::streaming::OllamaStream;
 use super::{OllamaConfig, OllamaProvider};
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::unified_provider::ProviderError;
+use crate::core::router::RouterConfig;
+use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::content::{ContentPart, ImageUrl};
@@ -562,10 +564,11 @@ async fn embeddings_preserve_prompt_token_usage() -> Result<(), Box<dyn std::err
             .await
             .expect("test server accepts request");
         let mut buffer = [0_u8; 4096];
-        socket
+        let read = socket
             .read(&mut buffer)
             .await
             .expect("test server reads request");
+        assert!(read > 0, "test server should receive a request");
         let body = r#"{"embeddings":[[0.1,0.2]],"prompt_eval_count":7}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -728,6 +731,10 @@ async fn embeddings_reject_malformed_vectors_and_count_mismatches() {
             .await
             .expect_err("malformed embedding response must fail visibly");
         assert!(matches!(error, ProviderError::ResponseParsing { .. }));
-        assert!(!error.is_retryable());
+        assert!(
+            !RetryPolicy
+                .decide(&RouterConfig::default(), &error, RetryContext::unary(1, 2))
+                .should_retry
+        );
     }
 }

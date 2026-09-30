@@ -37,7 +37,7 @@ async fn image_edit_routes_stability_to_native_inpaint_transport() {
             }
         }
         *captured_for_server.lock().expect("capture lock") = request;
-        let body = b"native-edited-png";
+        let body = b"\x89PNG\r\n\x1a\nnative-edited-png";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -66,6 +66,18 @@ async fn image_edit_routes_stability_to_native_inpaint_transport() {
     )
     .await;
     let boundary = "native-stability-boundary";
+    let mut payload = Vec::new();
+    add_text_field(&mut payload, boundary, "model", "inpaint");
+    add_text_field(&mut payload, boundary, "prompt", "make it lighter");
+    add_file_field(
+        &mut payload,
+        boundary,
+        "image",
+        "input.png",
+        "image/png",
+        b"png-bytes",
+    );
+    payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
     let response = test::call_service(
         &app,
@@ -75,14 +87,18 @@ async fn image_edit_routes_stability_to_native_inpaint_transport() {
                 "content-type",
                 format!("multipart/form-data; boundary={boundary}"),
             ))
-            .set_payload(image_edit_multipart_body_for_model(boundary, "inpaint"))
+            .set_payload(payload)
             .to_request(),
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let body: Value = test::read_body_json(response).await;
-    assert_eq!(body["data"][0]["b64_json"], "bmF0aXZlLWVkaXRlZC1wbmc=");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"][0]["b64_json"],
+        "iVBORw0KGgpuYXRpdmUtZWRpdGVkLXBuZw=="
+    );
     server.await.expect("mock server should finish");
     let captured = captured.lock().expect("capture lock");
     let request = String::from_utf8_lossy(&captured);

@@ -8,15 +8,18 @@ use super::SSETransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::message::MessageRole;
 use crate::core::types::responses::{
-    ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, FunctionCallDelta, PromptTokensDetails,
-    ToolCallDelta, Usage,
+    ChatChunk, ChatDelta, ChatStreamChoice, FinishReason, FunctionCallDelta, ToolCallDelta, Usage,
 };
 use crate::core::types::thinking::ThinkingDelta;
 
 #[path = "anthropic_state.rs"]
 mod state;
 
+#[path = "anthropic_usage.rs"]
+mod usage;
+
 use state::{ActiveContentBlock, AnthropicThinkingStreamState, DeltaDisposition};
+use usage::AnthropicUsageState;
 
 /// Anthropic SSE Transformer
 ///
@@ -28,6 +31,7 @@ pub struct AnthropicTransformer {
     tool_name_map: HashMap<String, String>,
     message_id: Mutex<Option<String>>,
     thinking_state: Mutex<AnthropicThinkingStreamState>,
+    usage_state: Mutex<AnthropicUsageState>,
 }
 
 impl Clone for AnthropicTransformer {
@@ -37,6 +41,7 @@ impl Clone for AnthropicTransformer {
             tool_name_map: self.tool_name_map.clone(),
             message_id: Mutex::new(None),
             thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
+            usage_state: Mutex::new(AnthropicUsageState::default()),
         }
     }
 }
@@ -48,6 +53,7 @@ impl AnthropicTransformer {
             tool_name_map: HashMap::new(),
             message_id: Mutex::new(None),
             thinking_state: Mutex::new(AnthropicThinkingStreamState::default()),
+            usage_state: Mutex::new(AnthropicUsageState::default()),
         }
     }
 
@@ -114,6 +120,14 @@ impl AnthropicTransformer {
                 format!("Anthropic {event} content index {index} exceeds u32"),
             )
         })
+    }
+
+    fn with_usage_state<T>(&self, operation: impl FnOnce(&mut AnthropicUsageState) -> T) -> T {
+        let mut state = match self.usage_state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        operation(&mut state)
     }
 
     fn parse_anthropic_finish_reason(reason: &str) -> FinishReason {
@@ -183,6 +197,12 @@ impl SSETransformer for AnthropicTransformer {
         match event_type {
             "message_start" => {
                 self.with_thinking_state(AnthropicThinkingStreamState::begin_message)?;
+                self.with_usage_state(|state| {
+                    *state = AnthropicUsageState::default();
+                    if let Some(usage) = json.pointer("/message/usage") {
+                        state.merge(usage);
+                    }
+                });
                 let message_id = json
                     .get("message")
                     .and_then(|m| m.get("id"))
@@ -407,38 +427,9 @@ impl SSETransformer for AnthropicTransformer {
                     })?;
                 }
 
-                let usage = json.get("usage").map(|u| {
-                    let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let output =
-                        u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let cache_creation_tokens = u
-                        .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .map(|t| t as u32);
-                    let cache_read_tokens = u
-                        .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .map(|t| t as u32);
-                    let prompt_tokens_details =
-                        if cache_creation_tokens.is_some() || cache_read_tokens.is_some() {
-                            Some(PromptTokensDetails {
-                                cached_tokens: cache_read_tokens,
-                                cache_creation_tokens,
-                                cache_read_tokens,
-                                audio_tokens: None,
-                            })
-                        } else {
-                            None
-                        };
-                    Usage {
-                        prompt_tokens: input,
-                        completion_tokens: output,
-                        total_tokens: input + output,
-                        completion_tokens_details: None,
-                        prompt_tokens_details,
-                        thinking_usage: None,
-                    }
-                });
+                let usage = json
+                    .get("usage")
+                    .map(|usage| self.with_usage_state(|state| state.merge(usage)));
 
                 Ok(Some(self.chunk_with_choice(
                     created,
@@ -451,6 +442,7 @@ impl SSETransformer for AnthropicTransformer {
                 self.with_thinking_state(AnthropicThinkingStreamState::end_message)?;
                 let message_id = self.current_message_id();
                 self.clear_message_id();
+                self.with_usage_state(|state| *state = AnthropicUsageState::default());
                 Ok(Some(ChatChunk {
                     id: message_id,
                     object: "chat.completion.chunk".to_string(),
@@ -529,8 +521,9 @@ mod tests {
             }),
         );
         let usage = chunk.usage.as_ref().expect("usage must be present");
-        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.prompt_tokens, 3012);
         assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(usage.total_tokens, 3062);
         let details = usage
             .prompt_tokens_details
             .as_ref()
@@ -538,6 +531,163 @@ mod tests {
         assert_eq!(details.cache_creation_tokens, Some(1000));
         assert_eq!(details.cache_read_tokens, Some(2000));
         assert_eq!(details.cached_tokens, Some(2000));
+    }
+
+    #[test]
+    fn test_message_delta_retains_start_input_and_cache_usage() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start",
+                "message": {"id": "msg_usage", "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 4,
+                    "cache_read_input_tokens": 6,
+                    "output_tokens": 0
+                }}
+            }),
+        );
+        let chunk = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 3}
+            }),
+        );
+        let usage = chunk.usage.expect("cumulative terminal usage");
+        assert_eq!(usage.prompt_tokens, 20);
+        assert_eq!(usage.completion_tokens, 3);
+        assert_eq!(usage.total_tokens, 23);
+        let details = usage
+            .prompt_tokens_details
+            .expect("start-frame cache detail");
+        assert_eq!(details.cache_creation_tokens, Some(4));
+        assert_eq!(details.cache_read_tokens, Some(6));
+    }
+
+    #[test]
+    fn test_message_delta_repeated_counters_are_cumulative() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start", "message": {"usage": {
+                    "input_tokens": 10, "cache_creation_input_tokens": 4,
+                    "cache_read_input_tokens": 6, "output_tokens": 0
+                }}
+            }),
+        );
+        let intermediate = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "usage": {"output_tokens": 1}
+            }),
+        )
+        .usage
+        .expect("intermediate usage");
+        assert_eq!(intermediate.total_tokens, 21);
+        let terminal = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 3, "cache_creation_input_tokens": 4,
+                          "cache_read_input_tokens": 6}
+            }),
+        )
+        .usage
+        .expect("terminal usage");
+        assert_eq!(terminal.prompt_tokens, 20);
+        assert_eq!(terminal.completion_tokens, 3);
+        assert_eq!(terminal.total_tokens, 23);
+    }
+
+    #[test]
+    fn test_message_delta_explicit_zeros_replace_start_counters() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start", "message": {"usage": {
+                    "input_tokens": 10, "cache_creation_input_tokens": 4,
+                    "cache_read_input_tokens": 6, "output_tokens": 1
+                }}
+            }),
+        );
+        let usage = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"input_tokens": 0, "output_tokens": 0,
+                          "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+            }),
+        )
+        .usage
+        .expect("explicit zero usage");
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        let details = usage
+            .prompt_tokens_details
+            .expect("reported zero cache detail");
+        assert_eq!(details.cache_creation_tokens, Some(0));
+        assert_eq!(details.cache_read_tokens, Some(0));
+        assert_eq!(details.cached_tokens, Some(0));
+    }
+
+    #[test]
+    fn test_message_usage_does_not_leak_to_clone_or_next_message() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start", "message": {"usage": {
+                    "input_tokens": 10, "cache_creation_input_tokens": 4,
+                    "cache_read_input_tokens": 6, "output_tokens": 0
+                }}
+            }),
+        );
+        let cloned = transformer.clone();
+        let cloned_usage = chunk_from_event(
+            &cloned,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"input_tokens": 2, "output_tokens": 1}
+            }),
+        )
+        .usage
+        .expect("independent cloned usage");
+        assert_eq!(cloned_usage.total_tokens, 3);
+        assert!(cloned_usage.prompt_tokens_details.is_none());
+
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 3}
+            }),
+        );
+        chunk_from_event(&transformer, serde_json::json!({"type": "message_stop"}));
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start", "message": {"usage": {"input_tokens": 4, "output_tokens": 0}}
+            }),
+        );
+        let next_usage = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 2}
+            }),
+        )
+        .usage
+        .expect("next message usage");
+        assert_eq!(next_usage.prompt_tokens, 4);
+        assert_eq!(next_usage.completion_tokens, 2);
+        assert_eq!(next_usage.total_tokens, 6);
+        assert!(next_usage.prompt_tokens_details.is_none());
     }
 
     #[test]

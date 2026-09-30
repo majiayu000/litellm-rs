@@ -388,10 +388,11 @@ mod tests {
                 .await
                 .expect("Fal AI test server should accept request");
             let mut request = [0_u8; 4096];
-            socket
+            let read = socket
                 .read(&mut request)
                 .await
                 .expect("Fal AI test server should read request");
+            assert!(read > 0, "Fal AI test server should receive a request");
             let body = r#"{"detail":"model access denied"}"#;
             let response = format!(
                 "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
