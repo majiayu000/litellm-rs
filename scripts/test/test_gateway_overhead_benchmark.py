@@ -23,6 +23,14 @@ CONFIG_PATH = REPO_ROOT / "scripts" / "bench" / "gateway-overhead.yaml"
 METHODOLOGY_PATH = REPO_ROOT / "docs" / "benchmarks" / "gateway-overhead.md"
 COMPARATOR_PATH = REPO_ROOT / "scripts" / "bench" / "compare_gateway_overhead.py"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "gateway-overhead-benchmark.yml"
+BUILD_FLAGS = [
+    "--release",
+    "--bin",
+    "gateway",
+    "--no-default-features",
+    "--features",
+    "sqlite,redis,metrics,tracing",
+]
 
 
 def load_mock_module():
@@ -54,7 +62,7 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
                     "source": {
                         "git_sha": git_sha,
                         "git_dirty": False,
-                        "build_flags": ["--release", "--bin", "gateway"],
+                        "build_flags": BUILD_FLAGS,
                     },
                     "environment": {
                         "hardware": {
@@ -246,6 +254,8 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
         self.assertIn("--max-time", runner)
         self.assertIn("/proc/cpuinfo", runner)
         self.assertIn("%Y-%m-%dT%H%M%SZ", methodology)
+        self.assertIn(f"build_flags: {json.dumps(BUILD_FLAGS)}", runner)
+        self.assertIn(f'"build_flags": {json.dumps(BUILD_FLAGS)}', methodology)
         self.assertNotIn("\ntarget/release/gateway", runner)
         self.assertNotIn(" target/release/gateway", runner)
 
@@ -330,12 +340,15 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
                 textwrap.dedent(
                     f"""\
                     #!/usr/bin/env python3
+                    import json
                     import os
                     import pathlib
                     import sys
 
                     target = os.environ.get("CARGO_TARGET_DIR", "")
-                    pathlib.Path({str(probe_log)!r}).write_text(target)
+                    pathlib.Path({str(probe_log)!r}).write_text(
+                        json.dumps({{"target_dir": target, "args": sys.argv[1:]}})
+                    )
                     if len(sys.argv) >= 2 and sys.argv[1] in ("-V", "--version"):
                         print("cargo 1.96.1 (test)")
                         raise SystemExit(0)
@@ -382,7 +395,9 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0, result.stderr)
             self.assertTrue(probe_log.exists(), result.stderr)
-            target_dir = Path(probe_log.read_text(encoding="utf-8"))
+            build_probe = json.loads(probe_log.read_text(encoding="utf-8"))
+            self.assertEqual(build_probe["args"], ["build", *BUILD_FLAGS])
+            target_dir = Path(build_probe["target_dir"])
             self.assertTrue(str(target_dir), result.stderr)
             self.assertNotEqual(target_dir.resolve(), (probe_repo / "target").resolve())
             self.assertEqual(target_dir.name, "cargo-target")
@@ -463,6 +478,24 @@ class GatewayOverheadBenchmarkContractTests(unittest.TestCase):
 
                     self.assertEqual(invalid.returncode, 2)
                     self.assertIn(missing_field, invalid.stderr)
+
+    def test_comparator_rejects_implicit_default_build_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp_dir = Path(directory)
+            baseline = temp_dir / "baseline.json"
+            candidate = temp_dir / "candidate.json"
+            report = temp_dir / "comparison.json"
+            self.write_artifact(baseline, git_sha="a" * 40)
+            self.write_artifact(candidate, git_sha="b" * 40)
+            artifact = json.loads(candidate.read_text(encoding="utf-8"))
+            artifact["source"]["build_flags"] = ["--release", "--bin", "gateway"]
+            candidate.write_text(json.dumps(artifact), encoding="utf-8")
+
+            invalid = self.run_comparison(baseline, candidate, report)
+
+            self.assertEqual(invalid.returncode, 2)
+            self.assertIn("build_flags do not match the benchmark contract", invalid.stderr)
+            self.assertFalse(report.exists())
 
     def test_comparator_rejects_nonzero_error_rate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
