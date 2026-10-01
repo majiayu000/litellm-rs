@@ -272,7 +272,34 @@ jobs:
       if: steps.crates_token.outputs.available == 'true'
       env:
         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-      run: cargo publish --token "$CRATES_IO_TOKEN"
+      run: |
+        set -euo pipefail
+        version="$(cargo metadata --format-version 1 --no-deps | jq -er '
+          . as $metadata | .packages[]
+          | select(.manifest_path == ($metadata.workspace_root + "/Cargo.toml"))
+          | .version
+        ')"
+        response="$(mktemp)"
+        trap 'rm -f "$response"' EXIT
+        status="$(curl --silent --show-error --location --connect-timeout 10 --max-time 30 \
+          --user-agent 'litellm-rs-release (https://github.com/majiayu000/litellm-rs)' \
+          --output "$response" --write-out '%{http_code}' \
+          "https://crates.io/api/v1/crates/litellm-rs/$version")"
+        case "$status" in
+          200)
+            jq -e --arg version "$version" \
+              '.version.crate == "litellm-rs" and .version.num == $version' \
+              "$response" >/dev/null
+            echo "litellm-rs $version is already published; skipping upload."
+            ;;
+          404)
+            cargo publish --token "$CRATES_IO_TOKEN"
+            ;;
+          *)
+            echo "::error::crates.io version check failed (HTTP $status)." >&2
+            exit 1
+            ;;
+        esac
 
   publish-release:
     name: Publish GitHub Release
