@@ -50,6 +50,8 @@ versioned source is
 control-plane contract is served at `GET /admin/openapi.json` (admin-authenticated)
 from [`docs/openapi/admin.json`](./docs/openapi/admin.json).
 
+For a first HTTP request or setup failure, use the [gateway setup and compatibility questions](docs/README.md#start-with-an-http-request).
+
 ## Supported Product Surfaces
 
 | Surface | Support policy |
