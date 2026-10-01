@@ -24,34 +24,70 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      is_draft: ${{ steps.create_release.outputs.is_draft }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Get version
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      run: |
+        set -euo pipefail
+        version="${GITHUB_REF#refs/tags/}"
+        package_version="$(cargo metadata --format-version 1 --no-deps | jq -er '
+          . as $metadata | .packages[]
+          | select(.manifest_path == ($metadata.workspace_root + "/Cargo.toml"))
+          | .version
+        ')"
+        if [ "${version#v}" != "$package_version" ]; then
+          echo "::error::Release tag $version does not match Cargo version $package_version." >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
 
     - name: Create or update Release
+      id: create_release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
       run: |
+        set -euo pipefail
         version="${{ steps.get_version.outputs.version }}"
         target="$(git rev-list -n 1 "$version")"
-        if gh release view "$version" >/dev/null 2>&1; then
-          gh release edit "$version" \
-            --title "Release $version" \
-            --notes-file CHANGELOG.md \
-            --target "$target" \
-            --prerelease=false
+        response="$(mktemp)"
+        trap 'rm -f "$response"' EXIT
+        if gh api --include --jq '.draft' "repos/$GH_REPO/releases/tags/$version" > "$response"; then
+          is_draft="$(tail -n 1 "$response")"
+          case "$is_draft" in
+            true)
+              gh release edit "$version" \
+                --title "Release $version" \
+                --notes-file CHANGELOG.md \
+                --target "$target" \
+                --prerelease=false
+              ;;
+            false)
+              echo "Release $version is already public; leaving it unchanged."
+              ;;
+            *)
+              echo "::error::GitHub returned an invalid release draft status." >&2
+              exit 1
+              ;;
+          esac
         else
+          lookup_exit=$?
+          if [[ ! "$(head -n 1 "$response")" =~ ^HTTP/[0-9.]+[[:space:]]404[[:space:]] ]]; then
+            exit "$lookup_exit"
+          fi
           gh release create "$version" \
             --title "Release $version" \
             --notes-file CHANGELOG.md \
             --target "$target" \
             --verify-tag \
             --draft
+          is_draft=true
         fi
+        echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
 
   # Build and upload binaries
   build-release:
@@ -140,14 +176,14 @@ jobs:
         cd ../../..
 
     - name: Upload Release Asset (Unix)
-      if: matrix.os != 'windows-latest'
+      if: matrix.os != 'windows-latest' && needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz" --clobber
 
     - name: Upload Release Asset (Windows)
-      if: matrix.os == 'windows-latest'
+      if: matrix.os == 'windows-latest' && needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -303,12 +339,13 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [create-release, build-release, publish-crate]
+    needs: [create-release, build-release, publish-crate, docker-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
     - name: Publish validated release
+      if: needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GH_REPO: ${{ github.repository }}
