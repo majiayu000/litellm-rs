@@ -411,6 +411,18 @@ jobs:
         formula_rel="Formula/rust-litellm-gateway.rb"
         formula_path="homebrew-tap/${formula_rel}"
         version="${RELEASE_VERSION#v}"
+        if [ -f "$formula_path" ]; then
+          tap_is_newer="$(ruby -r rubygems/version - "$formula_path" "$version" <<'RUBY'
+        current = File.read(ARGV.fetch(0))[/^\s*version\s+"([0-9][^"]*)"\s*$/, 1]
+        abort "Cannot read the current Homebrew formula version." unless current
+        puts Gem::Version.new(current) > Gem::Version.new(ARGV.fetch(1))
+        RUBY
+          )"
+          if [ "$tap_is_newer" = true ]; then
+            echo "::notice title=Homebrew formula newer::Skipping older release ${RELEASE_VERSION}."
+            exit 0
+          fi
+        fi
         arm_url="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_VERSION}/rust-litellm-gateway-${RELEASE_VERSION}-macos-aarch64.tar.gz"
         intel_url="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_VERSION}/rust-litellm-gateway-${RELEASE_VERSION}-macos-x86_64.tar.gz"
         arm_sha="$(curl -fsSL "$arm_url" | shasum -a 256 | awk '{print $1}')"
