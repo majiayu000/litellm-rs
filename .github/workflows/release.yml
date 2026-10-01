@@ -56,8 +56,8 @@ jobs:
         target="$(git rev-list -n 1 "$version")"
         response="$(mktemp)"
         trap 'rm -f "$response"' EXIT
-        if gh api --include --jq '.draft' "repos/$GH_REPO/releases/tags/$version" > "$response"; then
-          is_draft="$(tail -n 1 "$response")"
+        if gh api --include --jq '[.draft, .target_commitish] | @tsv' "repos/$GH_REPO/releases/tags/$version" > "$response"; then
+          IFS=$'\t' read -r is_draft recorded_target < <(tail -n 1 "$response")
           case "$is_draft" in
             true)
               gh release edit "$version" \
@@ -67,6 +67,10 @@ jobs:
                 --prerelease=false
               ;;
             false)
+              if [ "$recorded_target" != "$target" ]; then
+                echo "::error::Public release $version recorded target does not match the tag commit; cannot verify rerun identity." >&2
+                exit 1
+              fi
               echo "Release $version is already public; leaving it unchanged."
               ;;
             *)
