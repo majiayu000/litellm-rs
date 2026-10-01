@@ -192,7 +192,7 @@ jobs:
   # Build and push Docker image
   docker-release:
     name: Docker Release
-    needs: create-release
+    needs: [create-release, validate-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -258,6 +258,8 @@ jobs:
       with:
         context: .
         file: ./deployment/docker/Dockerfile
+        build-args: |
+          RELEASE_FEATURES=${{ needs.validate-release.outputs.features }}
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
