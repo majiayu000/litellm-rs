@@ -40,8 +40,10 @@ RUN rm -rf src/*
 # Copy source code and necessary files
 COPY src ./src
 COPY config ./config
+COPY docs/openapi/admin.json docs/openapi/inference.json ./docs/openapi/
 
 # Build the application
+RUN cargo clean --release -p litellm-rs
 RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
 
 # Runtime stage
