@@ -204,6 +204,7 @@ jobs:
     steps:
     - name: Check Docker credentials
       id: docker_credentials
+      if: needs.create-release.outputs.is_draft == 'true'
       env:
         DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
         DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -216,26 +217,26 @@ jobs:
         fi
 
     - name: Checkout code
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: actions/checkout@v4
 
     - name: Set up QEMU
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/setup-buildx-action@v3
 
     - name: Login to Docker Hub
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Login to GitHub Container Registry
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -243,7 +244,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract metadata
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       id: meta
       uses: docker/metadata-action@v5
       with:
@@ -257,7 +258,7 @@ jobs:
           type=semver,pattern={{major}}
 
     - name: Build and push Docker image
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -321,11 +322,12 @@ jobs:
         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       run: |
         set -euo pipefail
-        version="$(cargo metadata --format-version 1 --no-deps | jq -er '
+        metadata="$(cargo metadata --format-version 1 --no-deps)"
+        version="$(jq -er '
           . as $metadata | .packages[]
           | select(.manifest_path == ($metadata.workspace_root + "/Cargo.toml"))
           | .version
-        ')"
+        ' <<< "$metadata")"
         response="$(mktemp)"
         trap 'rm -f "$response"' EXIT
         status="$(curl --silent --show-error --location --connect-timeout 10 --max-time 30 \
@@ -337,10 +339,18 @@ jobs:
             jq -e --arg version "$version" \
               '.version.crate == "litellm-rs" and .version.num == $version' \
               "$response" >/dev/null
+            expected_checksum="$(jq -er '.version.checksum | select(type == "string" and test("^[0-9a-f]{64}$"))' "$response")"
+            cargo package --locked --no-verify --package litellm-rs
+            target_directory="$(jq -er '.target_directory' <<< "$metadata")"
+            actual_checksum="$(sha256sum "$target_directory/package/litellm-rs-$version.crate" | cut -d ' ' -f 1)"
+            if [ "$actual_checksum" != "$expected_checksum" ]; then
+              echo "::error::Published litellm-rs $version does not match the current source package." >&2
+              exit 1
+            fi
             echo "litellm-rs $version is already published; skipping upload."
             ;;
           404)
-            cargo publish --token "$CRATES_IO_TOKEN"
+            cargo publish --locked --token "$CRATES_IO_TOKEN"
             ;;
           *)
             echo "::error::crates.io version check failed (HTTP $status)." >&2
