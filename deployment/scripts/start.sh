@@ -48,7 +48,7 @@ check_prerequisites() {
     # Check if the gateway binary exists
     if [ ! -f "./target/release/gateway" ] && [ ! -f "./target/debug/gateway" ]; then
         print_error "Gateway binary not found. Please build the project first:"
-        echo "  cargo build --release"
+        echo "  cargo build --release --bin gateway --features sqlite"
         exit 1
     fi
     
