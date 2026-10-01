@@ -5,6 +5,55 @@ load balancing, and failover. The gateway is the primary product; Rust APIs
 and legacy adapters have narrower coverage. See the current
 [provider support matrix](../README.md#provider-support).
 
+## Start with an HTTP request
+
+For the self-hosted gateway, follow the [source quick start](../README.md#quick-start-self-hosted-gateway)
+with [the development config](../config/gateway.dev.yaml.example). That config
+binds the gateway to `127.0.0.1:8080`, permits anonymous local development, and
+routes `local-model` to a separate local vLLM service at port 8000. It does not
+start vLLM or download a model for you.
+
+```sh
+curl --fail-with-body http://127.0.0.1:8080/openapi.json
+# Requires a running vLLM endpoint serving the configured local-model:
+curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"local-model","messages":[{"role":"user","content":"Say hello."}],"stream":false}'
+```
+
+The OpenAPI fetch verifies the HTTP contract is reachable; a generated reply
+additionally requires a configured, reachable provider and a model it serves.
+For a remote provider, use the [production-style config](../config/gateway.yaml.example)
+and configure its credentials and gateway auth. Do not expose the anonymous
+development config outside loopback.
+
+## Gateway and Rust API questions
+
+**Is this the Python LiteLLM SDK or a drop-in replacement?** This repository is
+[majiayu000/litellm-rs](https://github.com/majiayu000/litellm-rs), a Rust gateway
+and reusable kernel. Python LiteLLM has its own [proxy configuration](https://docs.litellm.ai/docs/proxy/quick_start).
+Use this repository's schema, [inference contract](openapi/inference.json), and
+[support matrix](../README.md#provider-support); matching names do not guarantee
+configuration, provider, SDK, or feature parity.
+
+**Which client path should I choose?** Use HTTP for an existing OpenAI-compatible
+application, [Codex setup](guides/codex.md) for its Responses integration, or the
+[Runtime-backed Rust API policy](../README.md#supported-product-surfaces) when
+embedding the kernel. The library snippet below is a separate path from starting
+the HTTP gateway. Legacy selector adapters have their own narrower matrix.
+
+**A server starts but generation fails. What should I check?** Confirm the actual
+provider endpoint, model identity and supported capability, then its authentication.
+The development vLLM prerequisite is separate from gateway readiness. For native
+Bedrock versus an OpenAI-compatible Bedrock proxy, follow the distinct
+[native guide](providers/bedrock.md) and [proxy guide](providers/openai-compatible-bedrock-proxy.md).
+
+**Why does docs.rs differ from main?** [docs.rs](https://docs.rs/litellm-rs) renders
+published crate versions. GitHub main may contain unreleased changes; check
+[Releases](https://github.com/majiayu000/litellm-rs/releases) and
+[CHANGELOG](../CHANGELOG.md) before using source-only APIs. Bugs belong in
+[Issues](https://github.com/majiayu000/litellm-rs/issues); source license is [MIT](../LICENSE).
+
 ## 📚 Documentation Structure
 
 ### Architecture & Design
