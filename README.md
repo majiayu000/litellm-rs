@@ -60,11 +60,19 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 | Runtime-backed Rust APIs | Reusable gateway kernel. `LLMClient::from_runtime`, `DefaultRouter::from_runtime`, and runtime-configured `completion()` derive support from the selected deployment and fail unsupported capabilities with typed errors. |
 | Legacy SDK and selector adapters | Compatibility surfaces with narrower coverage. The [legacy adapter matrix](#legacy-adapter-matrix) is authoritative for these paths and is not a canonical runtime capability matrix. |
 
+## Container distribution status
+
+The public `ghcr.io/majiayu000/litellm-rs:latest` tag is a historical `main`
+image from December 16, 2025 (revision `5fefe416b95d2545d5ce38fa80ac174d3c589b5a`),
+not the current 0.7.0 release. For 0.7.0, use the
+[published crate](https://crates.io/crates/litellm-rs/0.7.0) or
+[GitHub Release downloads](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0).
+
 ## Rust Crate
 
 ```toml
 [dependencies]
-litellm-rs = { version = "0.6", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.7", default-features = false, features = ["lite"] }
 ```
 
 No `make` step is required for crate consumers.
