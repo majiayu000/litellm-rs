@@ -1,5 +1,6 @@
 # Multi-stage build for LiteLLM-RS
 FROM rust:1.92-bookworm AS builder
+ARG RELEASE_FEATURES="postgres sqlite redis s3 metrics tracing websockets analytics"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -33,7 +34,7 @@ RUN mkdir -p src/bin && \
     echo "fn main() {}" > benches/e2e_benchmarks.rs
 
 # Build dependencies (this layer will be cached)
-RUN cargo build --release --locked --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
 RUN rm -rf src/*
 
 # Copy source code and necessary files
@@ -41,7 +42,7 @@ COPY src ./src
 COPY config ./config
 
 # Build the application
-RUN cargo build --release --locked --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
 
 # Runtime stage
 FROM debian:bookworm-slim
