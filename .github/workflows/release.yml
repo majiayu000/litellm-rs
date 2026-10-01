@@ -215,6 +215,10 @@ jobs:
       if: steps.docker_credentials.outputs.available == 'true'
       uses: actions/checkout@v4
 
+    - name: Set up QEMU
+      if: steps.docker_credentials.outputs.available == 'true'
+      uses: docker/setup-qemu-action@v3
+
     - name: Set up Docker Buildx
       if: steps.docker_credentials.outputs.available == 'true'
       uses: docker/setup-buildx-action@v3
@@ -253,6 +257,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: ./deployment/docker/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
