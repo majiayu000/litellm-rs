@@ -12,6 +12,8 @@ type CapturedRequest = (Value, String, String, String);
 #[derive(Clone)]
 struct Upstream {
     seen: Arc<Mutex<Vec<CapturedRequest>>>,
+    counted: Arc<Mutex<Vec<Value>>>,
+    count_result: Arc<Mutex<Value>>,
     status: StatusCode,
     broken: bool,
     fault: Arc<Mutex<Option<&'static str>>>,
@@ -106,6 +108,18 @@ async fn upstream(
     }
     HttpResponse::Ok().json(output())
 }
+async fn count_tokens(
+    data: web::Data<Upstream>,
+    req: HttpRequest,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    assert_eq!(
+        req.headers().get("x-api-key").unwrap(),
+        "sk-ant-test-not-a-real-key-1234567890123456789"
+    );
+    data.counted.lock().unwrap().push(body.into_inner());
+    HttpResponse::Ok().json(data.count_result.lock().unwrap().clone())
+}
 async fn fixture(
     status: StatusCode,
     broken: bool,
@@ -113,6 +127,8 @@ async fn fixture(
 ) -> (AppState, Upstream, actix_web::dev::ServerHandle) {
     let upstream_state = Upstream {
         seen: Arc::default(),
+        counted: Arc::default(),
+        count_result: Arc::new(Mutex::new(json!({"input_tokens": 100}))),
         status,
         broken,
         fault: Arc::default(),
@@ -124,6 +140,7 @@ async fn fixture(
         App::new()
             .app_data(web::Data::new(data.clone()))
             .route("/v1/messages", web::post().to(upstream))
+            .route("/v1/messages/count_tokens", web::post().to(count_tokens))
     })
     .workers(1)
     .listen(listener)
@@ -540,5 +557,91 @@ async fn native_messages_body_limit_keeps_413_and_native_error_type() {
     let value: Value = test::read_body_json(response).await;
     assert_eq!(value["error"]["type"], "request_too_large");
     assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn native_counted_media_and_cold_cache_costs_gate_generation() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    for (input_tokens, cache) in [(2000, false), (1000, true)] {
+        let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+        *upstream.count_result.lock().unwrap() = json!({"input_tokens": input_tokens});
+        state.budget_limits.models.set_model_limit(
+            "claude-opus-5",
+            ModelLimitConfig::new(0.006, ResetPeriod::Monthly),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let mut body = request(false);
+        body["max_tokens"] = json!(1);
+        body["messages"][0]["content"] = json!([
+            {"type":"image","source":{"type":"url","url":"https://example.test/image.png"}},
+            {"type":"document","source":{"type":"file","file_id":"file-count-test"}}
+        ]);
+        if !cache {
+            body["system"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("cache_control");
+        }
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/messages")
+                .set_json(&body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYMENT_REQUIRED,
+            "{}",
+            String::from_utf8_lossy(&test::read_body(response).await)
+        );
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        let counted = upstream.counted.lock().unwrap().clone();
+        assert_eq!(counted.len(), 1);
+        assert_eq!(counted[0]["messages"], body["messages"]);
+        assert_eq!(counted[0]["tools"], body["tools"]);
+        assert_eq!(counted[0]["thinking"], body["thinking"]);
+        for excluded in ["stream", "max_tokens", "future_input"] {
+            assert!(counted[0].get(excluded).is_none());
+        }
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn malformed_native_token_count_never_starts_generation() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    for value in [
+        json!({}),
+        json!({"input_tokens":-1}),
+        json!({"input_tokens":"100"}),
+        json!({"input_tokens":4294967296u64}),
+    ] {
+        *upstream.count_result.lock().unwrap() = value;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/messages")
+                .set_json(request(false))
+                .to_request(),
+        )
+        .await;
+        assert!(response.status().is_server_error());
+    }
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    assert_eq!(upstream.counted.lock().unwrap().len(), 4);
     handle.stop(false).await;
 }

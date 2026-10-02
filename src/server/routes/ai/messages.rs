@@ -1,9 +1,6 @@
 //! Native Anthropic Messages through the gateway's existing policy and spend chain.
 use super::{budgeted, callbacks::CallbackLifecycle, execution::StreamingDeploymentLease, spend};
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
-use crate::core::models::openai::{
-    ChatCompletionRequest, ChatMessage, MessageContent, MessageRole,
-};
 use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::request_ledger::SharedRequestLedgerFacts;
@@ -145,26 +142,34 @@ async fn create(
                         &model,
                         ProviderCapability::ChatCompletion,
                     )?;
-                    let budget_request = ChatCompletionRequest {
-                        model: model.clone(),
-                        messages: vec![ChatMessage {
-                            role: MessageRole::User,
-                            content: Some(MessageContent::Text(body.to_string())),
-                            name: None,
-                            function_call: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                            audio: None,
-                        }],
-                        max_tokens: Some(max_tokens),
-                        ..Default::default()
-                    };
                     let Provider::Anthropic(native) = provider else {
                         return Err(ProviderError::not_supported(
                             "anthropic",
                             "Native Messages for this provider",
                         ));
                     };
+                    let count_body = token_count_body(&body);
+                    let mut counted = native
+                        .native_count_tokens(count_body, version.clone(), beta.clone())
+                        .await?;
+                    let counted = read_json(&mut counted).await.map_err(|error| match error {
+                        GatewayError::Provider(error) => error,
+                        _ => ProviderError::response_parsing(
+                            "anthropic",
+                            "Invalid token count response",
+                        ),
+                    })?;
+                    let input_tokens = counted
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .and_then(|tokens| u32::try_from(tokens).ok())
+                        .ok_or_else(|| {
+                            ProviderError::response_parsing(
+                                "anthropic",
+                                "Invalid input_tokens count",
+                            )
+                        })?;
+                    let estimated_usage = reservation_usage(&body, input_tokens, max_tokens)?;
                     let limits = state.budgeted.budget_limits();
                     let (response, reservations) = state
                         .budgeted
@@ -176,13 +181,13 @@ async fn create(
                         )
                         .reserve_call(
                             |_| {
-                                spend::reserve_chat_completion_budget_with_request_pricing(
+                                spend::reserve_pricing_usage_budget_with_request_pricing(
                                     &pricing,
                                     &state.config().gateway.pricing,
                                     &limits,
                                     &provider_name,
                                     &model,
-                                    spend::ChatCompletionBudgetRequest::from(&budget_request),
+                                    &estimated_usage,
                                 )
                             },
                             || {
@@ -282,6 +287,70 @@ async fn create(
         })?;
     callback.complete_pricing_usage(usage.as_ref().map(|usage| &usage.pricing), "success");
     Ok(HttpResponse::Ok().json(value))
+}
+
+// Count the original structured input, including image/document sources and tool
+// schemas, on the selected account. Generation-only fields are not count API fields.
+fn token_count_body(body: &Value) -> Value {
+    let mut count = serde_json::Map::new();
+    for field in [
+        "model",
+        "messages",
+        "system",
+        "tools",
+        "tool_choice",
+        "thinking",
+    ] {
+        if let Some(value) = body.get(field) {
+            count.insert(field.into(), value.clone());
+        }
+    }
+    Value::Object(count)
+}
+
+fn reservation_usage(body: &Value, input: u32, output: u32) -> Result<PricingUsage, ProviderError> {
+    fn cache_ttl(value: &Value) -> u8 {
+        match value {
+            Value::Array(values) => values.iter().map(cache_ttl).max().unwrap_or(0),
+            Value::Object(fields) => {
+                let own = fields
+                    .get("cache_control")
+                    .filter(|v| v.is_object())
+                    .map_or(0, |v| {
+                        if v.get("ttl").and_then(Value::as_str) == Some("1h") {
+                            2
+                        } else {
+                            1
+                        }
+                    });
+                own.max(fields.get("content").map_or(0, cache_ttl))
+            }
+            _ => 0,
+        }
+    }
+    let ttl = [
+        Some(body),
+        body.get("messages"),
+        body.get("system"),
+        body.get("tools"),
+    ]
+    .into_iter()
+    .flatten()
+    .map(cache_ttl)
+    .max()
+    .unwrap_or(0);
+    Ok(PricingUsage {
+        prompt_tokens: input,
+        completion_tokens: output,
+        total_tokens: input.checked_add(output).ok_or_else(|| {
+            ProviderError::invalid_request("anthropic", "Token count exceeds supported range")
+        })?,
+        // Reserving all input at the most expensive requested cache-write TTL
+        // covers a cold cache. Settlement uses the actual category counts.
+        cache_creation_tokens: (ttl > 0).then_some(input),
+        cache_creation_1h_tokens: (ttl == 2).then_some(input),
+        ..Default::default()
+    })
 }
 
 struct NativeUsage {

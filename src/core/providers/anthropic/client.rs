@@ -84,6 +84,28 @@ impl AnthropicClient {
         version: Option<String>,
         beta: Option<String>,
     ) -> Result<Response, ProviderError> {
+        self.native_message_request(body, version, beta, false)
+            .await
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_count_tokens(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+    ) -> Result<Response, ProviderError> {
+        self.native_message_request(body, version, beta, true).await
+    }
+
+    #[cfg(feature = "gateway")]
+    async fn native_message_request(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+        count_tokens: bool,
+    ) -> Result<Response, ProviderError> {
         let model = body
             .get("model")
             .and_then(Value::as_str)
@@ -119,7 +141,12 @@ impl AnthropicClient {
         } else {
             &self.http_client
         };
-        let url = format!("{}/v1/messages", self.config.base_url.trim_end_matches('/'));
+        let path = if count_tokens {
+            "/v1/messages/count_tokens"
+        } else {
+            "/v1/messages"
+        };
+        let url = format!("{}{path}", self.config.base_url.trim_end_matches('/'));
         let request = client.request_preserving_endpoint_policy(reqwest::Method::POST, &url)?;
         let response = timeout(
             Duration::from_secs(self.config.request_timeout),
