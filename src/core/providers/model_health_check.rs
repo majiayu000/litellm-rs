@@ -25,6 +25,7 @@ impl Provider {
             | Provider::Mistral(_)
             | Provider::Cloudflare(_)
             | Provider::Enterprise(_)
+            | Provider::External(_)
             | Provider::Voyage(_)
             | Provider::OpenAILike(_)
             | Provider::Deepgram(_)
