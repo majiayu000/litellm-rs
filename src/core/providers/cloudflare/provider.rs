@@ -181,6 +181,14 @@ impl CloudflareProvider {
     }
 
     fn decode_response(response: serde_json::Value) -> Result<ChatResponse, ProviderError> {
+        if response.get("success") == Some(&serde_json::Value::Bool(false)) {
+            let message = response["errors"]
+                .as_array()
+                .and_then(|errors| errors.first())
+                .and_then(|error| error["message"].as_str())
+                .unwrap_or("Cloudflare reported an unsuccessful response");
+            return Err(ProviderError::api_error("cloudflare", 502, message));
+        }
         let response: OpenAIChatResponse = serde_json::from_value(response)
             .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))?;
         if response.choices.is_empty() {

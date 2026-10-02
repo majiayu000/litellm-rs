@@ -465,7 +465,7 @@ async fn test_response_decoder_rejects_failure_but_allows_explicit_empty_text() 
         .await
         .unwrap_err();
     assert_eq!(error.http_facts().status, 502);
-    assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+    assert!(error.to_string().contains("inference failed"));
     let empty = serde_json::to_vec(&chat_response_json("")).unwrap();
     let response = provider
         .transform_response(&empty, "test", "id")
