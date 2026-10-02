@@ -1,10 +1,6 @@
-//! 2025-2026 generic converse-compatible chat catalog.
-//!
-//! These are the model IDs added by the legacy `generic_converse_models` list
-//! in `model_config.rs` / `utils/cost.rs`. They share a default shape:
-//! converse API, 300k context, 8k max output, $0.0008 / $0.0032 per 1k tokens
-//! and full chat-multimodal capabilities. Family is `Nova` because the legacy
-//! map used that as the catch-all variant.
+//! Converse model metadata verified against AWS model cards on 2026-10-03.
+//! Prices are standard US rates (global for Nova 2 Lite), USD per 1k tokens.
+//! Other regions and service tiers can have different prices.
 
 use super::super::super::model_config::{BedrockApiType, BedrockModelFamily};
 use super::super::{
@@ -58,7 +54,7 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             id,
             name,
             BedrockVendor::OpenAI,
-            BedrockModelFamily::Nova,
+            BedrockModelFamily::GenericConverse,
             BedrockApiType::Converse,
             ModelLifecycle::Live,
             EndpointSupport::CONVERSE,
@@ -79,239 +75,442 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             },
         ));
     }
-    let generic: &[(&str, &str, BedrockVendor)] = &[
+    // Sonic uses bidirectional speech streaming, not Converse. Do not advertise
+    // it through the chat catalog until that transport is implemented.
+    let models = [
         (
             "amazon.nova-2-lite-v1:0",
             "Nova 2 Lite",
             BedrockVendor::Amazon,
-        ),
-        (
-            "amazon.nova-2-sonic-v1:0",
-            "Nova 2 Sonic",
-            BedrockVendor::Amazon,
-        ),
-        (
-            "amazon.nova-sonic-v1:0",
-            "Nova Sonic",
-            BedrockVendor::Amazon,
+            (1_000_000, Some(64_000)),
+            (0.00030000, 0.00250000),
+            true,
+            &[
+                InferenceProfileScope::Global,
+                InferenceProfileScope::UnitedStates,
+                InferenceProfileScope::Europe,
+                InferenceProfileScope::Japan,
+            ][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html",
         ),
         (
             "amazon.nova-premier-v1:0",
             "Nova Premier",
             BedrockVendor::Amazon,
+            (1_000_000, Some(25_000)),
+            (0.00250000, 0.01250000),
+            true,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html",
         ),
         (
             "meta.llama3-3-70b-instruct-v1:0",
             "Llama 3.3 70B Instruct",
             BedrockVendor::Meta,
+            (128_000, Some(4_000)),
+            (0.00072000, 0.00072000),
+            false,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-3-70b-instruct.html",
         ),
         (
             "meta.llama4-maverick-17b-instruct-v1:0",
             "Llama 4 Maverick 17B",
             BedrockVendor::Meta,
+            (1_000_000, Some(8_000)),
+            (0.00024000, 0.00097000),
+            true,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-maverick-17b-instruct.html",
         ),
         (
             "meta.llama4-scout-17b-instruct-v1:0",
             "Llama 4 Scout 17B",
             BedrockVendor::Meta,
+            (10_000_000, Some(8_000)),
+            (0.00017000, 0.00066000),
+            true,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-scout-17b-instruct.html",
         ),
-        ("deepseek.r1-v1:0", "DeepSeek R1", BedrockVendor::DeepSeek),
-        ("deepseek.v3-v1:0", "DeepSeek V3", BedrockVendor::DeepSeek),
+        (
+            "deepseek.r1-v1:0",
+            "DeepSeek R1",
+            BedrockVendor::DeepSeek,
+            (128_000, Some(8_000)),
+            (0.00135000, 0.00540000),
+            false,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html",
+        ),
+        (
+            "deepseek.v3-v1:0",
+            "DeepSeek V3",
+            BedrockVendor::DeepSeek,
+            (128_000, Some(8_000)),
+            (0.00058000, 0.00168000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-1.html",
+        ),
         (
             "google.gemma-3-12b-it",
             "Gemma 3 12B IT",
             BedrockVendor::Google,
+            (128_000, Some(8_000)),
+            (0.00009000, 0.00029000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-12b-it.html",
         ),
         (
             "google.gemma-3-27b-it",
             "Gemma 3 27B IT",
             BedrockVendor::Google,
+            (128_000, Some(8_000)),
+            (0.00023000, 0.00038000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-27b-pt.html",
         ),
         (
             "google.gemma-3-4b-it",
             "Gemma 3 4B IT",
             BedrockVendor::Google,
+            (128_000, Some(8_000)),
+            (0.00004000, 0.00008000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-google-gemma-3-4b-it.html",
         ),
-        ("minimax.minimax-m2", "MiniMax M2", BedrockVendor::MiniMax),
+        (
+            "minimax.minimax-m2",
+            "MiniMax M2",
+            BedrockVendor::MiniMax,
+            (1_000_000, Some(8_000)),
+            (0.00030000, 0.00120000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-minimax-minimax-m2.html",
+        ),
         (
             "minimax.minimax-m2.1",
             "MiniMax M2.1",
             BedrockVendor::MiniMax,
+            (196_000, Some(8_000)),
+            (0.00030000, 0.00120000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-minimax-minimax-m2-1.html",
         ),
         (
             "mistral.magistral-small-2509",
             "Magistral Small 2509",
             BedrockVendor::Mistral,
+            (128_000, Some(40_000)),
+            (0.00050000, 0.00150000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-magistral-small-2509.html",
         ),
         (
             "mistral.ministral-3-14b-instruct",
             "Ministral 3 14B Instruct",
             BedrockVendor::Mistral,
+            (128_000, Some(8_000)),
+            (0.00020000, 0.00020000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-14b-3-0.html",
         ),
         (
             "mistral.ministral-3-3b-instruct",
             "Ministral 3 3B Instruct",
             BedrockVendor::Mistral,
+            (128_000, Some(8_000)),
+            (0.00010000, 0.00010000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3b.html",
         ),
         (
             "mistral.ministral-3-8b-instruct",
             "Ministral 3 8B Instruct",
             BedrockVendor::Mistral,
+            (128_000, Some(8_000)),
+            (0.00015000, 0.00015000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html",
         ),
         (
             "mistral.mistral-large-3-675b-instruct",
             "Mistral Large 3 675B Instruct",
             BedrockVendor::Mistral,
+            (256_000, Some(32_000)),
+            (0.00050000, 0.00150000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html",
         ),
         (
             "mistral.pixtral-large-2502-v1:0",
             "Pixtral Large 2502",
             BedrockVendor::Mistral,
+            (128_000, Some(16_000)),
+            (0.00200000, 0.00600000),
+            true,
+            &[
+                InferenceProfileScope::UnitedStates,
+                InferenceProfileScope::Europe,
+            ][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-pixtral-large.html",
         ),
         (
             "mistral.voxtral-mini-3b-2507",
             "Voxtral Mini 3B 2507",
             BedrockVendor::Mistral,
+            (32_000, None),
+            (0.00004000, 0.00004000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html",
         ),
         (
             "mistral.voxtral-small-24b-2507",
             "Voxtral Small 24B 2507",
             BedrockVendor::Mistral,
+            (32_000, None),
+            (0.00010000, 0.00030000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-small-24b-2507.html",
         ),
         (
             "nvidia.nemotron-nano-12b-v2",
             "Nemotron Nano 12B v2",
             BedrockVendor::Nvidia,
+            (128_000, Some(8_000)),
+            (0.00020000, 0.00060000),
+            true,
+            &[InferenceProfileScope::UnitedStatesGovCloud][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-nvidia-nvidia-nemotron-nano-12b-v2-vl-bf16.html",
         ),
         (
             "nvidia.nemotron-nano-9b-v2",
             "Nemotron Nano 9B v2",
             BedrockVendor::Nvidia,
+            (128_000, Some(8_000)),
+            (0.00006000, 0.00023000),
+            false,
+            &[InferenceProfileScope::UnitedStatesGovCloud][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-nvidia-nvidia-nemotron-nano-9b-v2.html",
         ),
         (
             "openai.gpt-oss-120b-1:0",
             "GPT-OSS 120B",
             BedrockVendor::OpenAI,
+            (128_000, Some(16_000)),
+            (0.00015000, 0.00060000),
+            false,
+            &[InferenceProfileScope::UnitedStatesGovCloud][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html",
         ),
         (
             "openai.gpt-oss-20b-1:0",
             "GPT-OSS 20B",
             BedrockVendor::OpenAI,
+            (128_000, Some(16_000)),
+            (0.00007000, 0.00030000),
+            false,
+            &[InferenceProfileScope::UnitedStatesGovCloud][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html",
         ),
         (
             "openai.gpt-oss-safeguard-120b",
             "GPT-OSS Safeguard 120B",
             BedrockVendor::OpenAI,
+            (128_000, Some(16_000)),
+            (0.00015000, 0.00060000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-safeguard-120b.html",
         ),
         (
             "openai.gpt-oss-safeguard-20b",
             "GPT-OSS Safeguard 20B",
             BedrockVendor::OpenAI,
+            (128_000, Some(16_000)),
+            (0.00007000, 0.00020000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-safeguard-20b.html",
         ),
         (
             "qwen.qwen3-235b-a22b-2507-v1:0",
             "Qwen3 235B A22B 2507",
             BedrockVendor::Qwen,
+            (256_000, Some(8_000)),
+            (0.00022000, 0.00088000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html",
         ),
-        ("qwen.qwen3-32b-v1:0", "Qwen3 32B", BedrockVendor::Qwen),
+        (
+            "qwen.qwen3-32b-v1:0",
+            "Qwen3 32B",
+            BedrockVendor::Qwen,
+            (32_000, Some(8_000)),
+            (0.00015000, 0.00060000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html",
+        ),
         (
             "qwen.qwen3-coder-30b-a3b-v1:0",
             "Qwen3 Coder 30B A3B",
             BedrockVendor::Qwen,
+            (256_000, Some(16_000)),
+            (0.00015000, 0.00060000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-30b-a3b-instruct.html",
         ),
         (
             "qwen.qwen3-coder-480b-a35b-v1:0",
             "Qwen3 Coder 480B A35B",
             BedrockVendor::Qwen,
+            (128_000, Some(16_000)),
+            (0.00045000, 0.00180000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html",
         ),
         (
             "qwen.qwen3-next-80b-a3b",
             "Qwen3 Next 80B A3B",
             BedrockVendor::Qwen,
+            (256_000, Some(8_000)),
+            (0.00015000, 0.00120000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html",
         ),
         (
             "qwen.qwen3-vl-235b-a22b",
             "Qwen3 VL 235B A22B",
             BedrockVendor::Qwen,
+            (256_000, Some(8_000)),
+            (0.00053000, 0.00266000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-vl-235b-a22b.html",
         ),
         (
             "writer.palmyra-x4-v1:0",
             "Palmyra X4",
             BedrockVendor::Writer,
+            (128_000, Some(8_000)),
+            (0.00250000, 0.01000000),
+            false,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x4.html",
         ),
         (
             "writer.palmyra-x5-v1:0",
             "Palmyra X5",
             BedrockVendor::Writer,
+            (128_000, Some(8_000)),
+            (0.00060000, 0.00600000),
+            false,
+            &[InferenceProfileScope::UnitedStates][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x5.html",
         ),
-    ];
-
-    for (id, name, vendor) in generic {
-        let (context, output_limit, input_price, output_price) = match *id {
-            "amazon.nova-2-lite-v1:0" => (1_000_000, 64_000, 0.0003, 0.0025),
-            "amazon.nova-premier-v1:0" => (1_000_000, 25_000, 0.0025, 0.0125),
-            _ => (300_000, 8192, 0.0008, 0.0032),
-        };
-        out.push(entry(
-            id,
-            name,
-            *vendor,
-            // The former hard-coded MODEL_CONFIGS map used Nova as the
-            // catch-all for these generic converse models. Preserve that
-            // mapping so the public projection stays bit-identical.
-            BedrockModelFamily::Nova,
-            BedrockApiType::Converse,
-            ModelLifecycle::Live,
-            EndpointSupport::CONVERSE,
-            if *id == "amazon.nova-premier-v1:0" {
-                &[InferenceProfileScope::UnitedStates]
-            } else {
-                US_GLOBAL
-            },
-            ModelLimits {
-                max_context_length: context,
-                max_output_length: Some(output_limit),
-            },
-            ModelCapabilities::CHAT_MULTIMODAL,
-            Some(BedrockPricing::per_1k(input_price, output_price)),
-            None,
-            SourceMetadata::AWS_BEDROCK_PRICING,
-        ));
-    }
-
-    let moonshot: &[(&str, &str, ModelCapabilities)] = &[
         (
             "moonshot.kimi-k2-thinking",
             "Kimi K2 Thinking",
-            ModelCapabilities::CHAT_TOOLS_TEXT,
+            BedrockVendor::Moonshot,
+            (256_000, Some(16_000)),
+            (0.00060000, 0.00250000),
+            false,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html",
         ),
         (
             "moonshotai.kimi-k2.5",
             "Kimi K2.5",
-            ModelCapabilities::CHAT_MULTIMODAL,
+            BedrockVendor::Moonshot,
+            (256_000, Some(16_000)),
+            (0.00060000, 0.00300000),
+            true,
+            &[][..],
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html",
         ),
     ];
-    for (id, name, capabilities) in moonshot {
+    for (
+        id,
+        name,
+        vendor,
+        (context, output),
+        (input_price, output_price),
+        vision,
+        profiles,
+        source,
+    ) in models
+    {
+        let family = match vendor {
+            BedrockVendor::Amazon => BedrockModelFamily::Nova,
+            BedrockVendor::Meta => BedrockModelFamily::Llama,
+            BedrockVendor::Mistral => BedrockModelFamily::Mistral,
+            BedrockVendor::DeepSeek => BedrockModelFamily::DeepSeek,
+            _ => BedrockModelFamily::GenericConverse,
+        };
         out.push(entry(
             id,
             name,
-            BedrockVendor::Moonshot,
-            // The former hard-coded MODEL_CONFIGS map used Nova as the
-            // catch-all for these generic converse models. Preserve that
-            // mapping so the public projection stays bit-identical.
-            BedrockModelFamily::Nova,
+            vendor,
+            family,
             BedrockApiType::Converse,
-            ModelLifecycle::Live,
-            EndpointSupport::CONVERSE,
-            US_GLOBAL,
-            ModelLimits {
-                max_context_length: 256_000,
-                max_output_length: Some(16_000),
+            if id == "amazon.nova-premier-v1:0" {
+                ModelLifecycle::Deprecated {
+                    deprecation_date: "2026-09-14",
+                }
+            } else {
+                ModelLifecycle::Live
             },
-            *capabilities,
-            Some(BedrockPricing::per_1k(0.0008, 0.0032)),
+            EndpointSupport::CONVERSE,
+            profiles,
+            ModelLimits {
+                max_context_length: context,
+                max_output_length: output,
+            },
+            ModelCapabilities {
+                vision,
+                multimodal: vision,
+                function_calling: id != "deepseek.r1-v1:0",
+                thinking: matches!(
+                    id,
+                    "amazon.nova-2-lite-v1:0"
+                        | "amazon.nova-premier-v1:0"
+                        | "deepseek.r1-v1:0"
+                        | "deepseek.v3-v1:0"
+                        | "mistral.magistral-small-2509"
+                        | "openai.gpt-oss-120b-1:0"
+                        | "openai.gpt-oss-20b-1:0"
+                        | "qwen.qwen3-235b-a22b-2507-v1:0"
+                        | "qwen.qwen3-32b-v1:0"
+                        | "qwen.qwen3-next-80b-a3b"
+                        | "moonshot.kimi-k2-thinking"
+                        | "moonshotai.kimi-k2.5"
+                ),
+                ..ModelCapabilities::CHAT_TOOLS_TEXT
+            },
+            Some(BedrockPricing::per_1k(input_price, output_price)),
             None,
-            SourceMetadata::AWS_BEDROCK_PRICING,
+            SourceMetadata {
+                url: source,
+                verified_date: "2026-10-03",
+            },
         ));
     }
 }

@@ -323,7 +323,7 @@ fn arn_resource_metadata(model_id: &str) -> Option<ArnResourceMetadata> {
 fn is_geo_prefix(prefix: &str) -> bool {
     matches!(
         prefix,
-        "global" | "us" | "eu" | "ap" | "apac" | "sa" | "ca" | "me" | "af" | "jp" | "au"
+        "global" | "us" | "us-gov" | "eu" | "ap" | "apac" | "sa" | "ca" | "me" | "af" | "jp" | "au"
     )
 }
 
@@ -770,5 +770,24 @@ mod tests {
         assert_eq!(parsed.runtime_config_fallback, None);
         assert!(!super::is_prompt_management_model_id(model_id));
         assert!(super::get_model_config_for_model_id(model_id).is_err());
+    }
+}
+
+#[cfg(test)]
+mod govcloud_profile_tests {
+    use super::*;
+    #[test]
+    fn govcloud_profile_preserves_execution_and_resolves_metadata() {
+        let id = "us-gov.openai.gpt-oss-120b-1:0";
+        let parsed = parse_bedrock_model_id(id);
+        assert_eq!(parsed.execution_model_id, id);
+        assert_eq!(parsed.kind, BedrockModelIdKind::InferenceProfile);
+        assert_eq!(parsed.canonical_metadata_id(), "openai.gpt-oss-120b-1:0");
+        assert_eq!(
+            get_model_config_for_model_id(id)
+                .unwrap()
+                .max_context_length,
+            128_000
+        );
     }
 }

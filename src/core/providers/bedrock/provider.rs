@@ -264,6 +264,14 @@ impl LLMProvider for BedrockProvider {
             return super::chat::transformations::transform_runtime_invoke_request(&request);
         }
 
+        let config = get_model_config_for_model_id(&request.model)?;
+        if matches!(
+            config.api_type,
+            BedrockApiType::Converse | BedrockApiType::ConverseStream
+        ) {
+            return converse_streaming_request_body(&request);
+        }
+
         transformation::transform_chat_request(
             &request.model,
             &request.messages,

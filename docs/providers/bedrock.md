@@ -166,3 +166,23 @@ Catalog convergence, stricter model-specific parameter policies, the
 smoke tests are tracked separately and not part of this provider's stable
 surface yet — see the
 [long-term plan](../plan/bedrock-native-routing-and-model-catalog-plan.md).
+
+## Catalog verification (2026-10-03)
+
+The generic Converse entries now use individual AWS model-card limits, vision
+support, runtime profile scopes and lifecycle data. Each entry links its card.
+Nova Sonic and Nova 2 Sonic are excluded from this chat catalog because they
+require bidirectional speech streaming. Nova Premier is marked deprecated with
+AWS's published 2026-09-14 end-of-life date. Unknown output limits stay unknown.
+
+Prices use the **standard US on-demand** rates from the
+[AWS pricing page](https://aws.amazon.com/bedrock/pricing/) and its
+[published price data](https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json),
+verified 2026-10-03 (data publication 2026-09-30). Nova 2 Lite retains its global
+rate. DeepSeek V3.1 and Qwen3 235B / Coder 480B use the Ohio/Oregon rates because
+those entries are not available in the Virginia price table. These are catalog
+estimates; regional premiums, cache billing and non-standard service tiers are
+not represented by the simple two-rate cost calculator.
+
+The runtime cost calculator derives its lookup from the catalog. Updating a
+catalog rate therefore updates runtime cost estimates without a second table.

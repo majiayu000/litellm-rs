@@ -89,33 +89,15 @@ fn no_metadata_id_without_pricing_state() {
     );
 }
 
-/// Acceptance: when the catalog and the legacy `MODEL_PRICING` map both
-/// publish a per-token rate for the same ID, the two must agree.
-///
-/// The map is currently a strict superset of the catalog pricing-bearing IDs
-/// minus one known gap: `amazon.titan-embed-text-v1` carries a per-token rate
-/// in `model_config.rs` but is absent from `utils/cost.rs::MODEL_PRICING`.
-/// That gap is documented on the catalog entry and intentionally excluded
-/// here; a future cleanup PR can either backfill the cost map or remove the
-/// stale `model_config.rs` entry.
+/// Every priced catalog model must be available to the runtime cost calculator.
 #[test]
-fn catalog_pricing_matches_legacy_pricing_map() {
-    // Documented one-way gap; see the catalog entry comment.
-    const LEGACY_PRICING_MAP_GAP: &[&str] = &["amazon.titan-embed-text-v1"];
-
+fn catalog_pricing_matches_runtime_pricing_map() {
     for entry in all_entries() {
         let Some(expected) = entry.to_model_pricing() else {
             continue;
         };
-        let Some(actual) = CostCalculator::get_model_pricing(entry.model_id) else {
-            assert!(
-                LEGACY_PRICING_MAP_GAP.contains(&entry.model_id),
-                "{} has catalog pricing but is missing from the legacy pricing map \
-                 (and is not in the documented gap list)",
-                entry.model_id
-            );
-            continue;
-        };
+        let actual = CostCalculator::get_model_pricing(entry.model_id)
+            .expect("catalog pricing must be projected into runtime cost lookup");
         assert!(
             (actual.input_cost_per_1k_tokens - expected.input_cost_per_1k_tokens).abs() < 1e-9,
             "input pricing drift for {}: legacy={}, catalog={}",
@@ -259,4 +241,72 @@ fn current_bedrock_models_keep_platform_specific_limits_and_scopes() {
     let sonnet = get_catalog_entry("anthropic.claude-sonnet-5-5").unwrap();
     assert_eq!(sonnet.inference_profiles, &[InferenceProfileScope::Global]);
     assert!(sonnet.capabilities.thinking);
+}
+
+#[test]
+fn generic_converse_metadata_does_not_use_nova_defaults() {
+    use super::super::model_config::BedrockModelFamily;
+    let oss = get_catalog_entry("openai.gpt-oss-120b-1:0").unwrap();
+    assert_eq!(oss.family, BedrockModelFamily::GenericConverse);
+    assert_eq!(oss.limits.max_context_length, 128_000);
+    assert_eq!(oss.limits.max_output_length, Some(16_000));
+    assert!(!oss.capabilities.vision);
+    assert_eq!(
+        oss.inference_profiles,
+        &[super::InferenceProfileScope::UnitedStatesGovCloud]
+    );
+    assert!(oss.capabilities.thinking);
+    assert!(
+        !get_catalog_entry("deepseek.r1-v1:0")
+            .unwrap()
+            .capabilities
+            .function_calling
+    );
+    let scout = get_catalog_entry("meta.llama4-scout-17b-instruct-v1:0").unwrap();
+    assert_eq!(scout.limits.max_context_length, 10_000_000);
+    assert!(scout.capabilities.vision);
+    let qwen = get_catalog_entry("qwen.qwen3-32b-v1:0").unwrap();
+    assert_eq!(qwen.limits.max_context_length, 32_000);
+    assert!(qwen.inference_profiles.is_empty());
+    let voxtral = get_catalog_entry("mistral.voxtral-mini-3b-2507").unwrap();
+    assert_eq!(voxtral.limits.max_output_length, None);
+    assert!(!voxtral.capabilities.vision);
+    assert!(
+        get_catalog_entry("moonshot.kimi-k2-thinking")
+            .unwrap()
+            .capabilities
+            .thinking
+    );
+    for id in ["amazon.nova-sonic-v1:0", "amazon.nova-2-sonic-v1:0"] {
+        assert!(
+            get_catalog_entry(id).is_none(),
+            "speech-only models cannot be advertised as Converse chat"
+        );
+    }
+    assert!(matches!(
+        get_catalog_entry("amazon.nova-premier-v1:0")
+            .unwrap()
+            .lifecycle,
+        super::ModelLifecycle::Deprecated {
+            deprecation_date: "2026-09-14"
+        }
+    ));
+}
+
+#[test]
+fn corrected_catalog_prices_reach_runtime_cost_calculation() {
+    for (id, input, output) in [
+        ("openai.gpt-oss-120b-1:0", 0.15, 0.60),
+        ("google.gemma-3-4b-it", 0.04, 0.08),
+        ("deepseek.r1-v1:0", 1.35, 5.40),
+        ("moonshot.kimi-k2-thinking", 0.60, 2.50),
+        ("writer.palmyra-x4-v1:0", 2.50, 10.00),
+    ] {
+        let cost = CostCalculator::calculate_cost(id, 1_000_000, 1_000_000).unwrap();
+        assert!(
+            (cost - input - output).abs() < 1e-9,
+            "wrong total for {id}: {cost}"
+        );
+    }
+    assert!(CostCalculator::get_model_pricing("amazon.titan-embed-text-v1").is_some());
 }
