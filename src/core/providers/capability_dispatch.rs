@@ -105,6 +105,14 @@ impl Provider {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
             }
+            Provider::External(provider) => {
+                provider.as_ref().capabilities().contains(capability)
+                    && provider
+                        .as_ref()
+                        .models()
+                        .iter()
+                        .any(|info| info.id == model && info.capabilities.contains(capability))
+            }
             Provider::Enterprise(provider) => {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
