@@ -74,6 +74,7 @@ async fn fixture(auth: bool) -> (web::Data<AppState>, Calls, actix_web::dev::Ser
     let mut config = crate::server::valid_test_config();
     config.gateway.auth.enable_jwt = false;
     config.gateway.auth.enable_api_key = auth;
+    config.gateway.auth.api_key_header = "x-mcp-key".into();
     config.gateway.auth.allow_anonymous = !auth;
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
@@ -568,7 +569,7 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
         .insert_header(("access-control-request-method", "POST"))
         .insert_header((
             "access-control-request-headers",
-            "x-api-key,content-type,mcp-session-id,mcp-protocol-version,last-event-id",
+            "x-mcp-key,content-type,mcp-session-id,mcp-protocol-version,last-event-id",
         ))
         .to_request();
     let preflight = test::call_service(&app, preflight).await;
@@ -578,7 +579,7 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
     let req = test::TestRequest::post()
         .uri("/docs/mcp")
         .insert_header(("origin", "https://mcp.example.test"))
-        .insert_header(("x-api-key", raw))
+        .insert_header(("x-mcp-key", raw))
         .insert_header(("accept", "application/json, text/event-stream"))
         .set_json(json!({"jsonrpc":"2.0","method":"initialize","id":1}))
         .to_request();

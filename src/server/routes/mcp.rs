@@ -134,12 +134,10 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     else {
         return error(StatusCode::NOT_FOUND, "MCP server not found");
     };
-    // Include the entire configured account in the binding. A credential or URL
-    // change must never send an existing session to a different upstream account.
-    let binding = match serde_json::to_value(server).and_then(|mut value| {
-        value.sort_all_objects();
-        serde_json::to_vec(&value)
-    }) {
+    // Bind only upstream identity; harmless timeout/description edits preserve sessions.
+    let mut account = json!({"name":server_name,"url":server.url,"auth":server.auth,"headers":server.static_headers});
+    account.sort_all_objects();
+    let binding = match serde_json::to_vec(&account) {
         Ok(bytes) => Sha256::digest(bytes).to_vec(),
         Err(_) => {
             return error(
