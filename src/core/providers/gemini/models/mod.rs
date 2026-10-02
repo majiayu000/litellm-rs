@@ -55,6 +55,7 @@ pub enum ModelFeature {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeminiModelFamily {
     Gemini37Flash,
+    Gemini38Flash,
     Gemini36Flash,
     /// Gemini 3.5 series (2026 - Latest)
     Gemini35Flash,
@@ -210,7 +211,9 @@ impl GeminiModelRegistry {
     pub fn from_model_name(model_name: &str) -> Option<GeminiModelFamily> {
         let model_lower = model_name.to_lowercase();
 
-        if model_name == "gemini-3.7-flash" {
+        if model_name == "gemini-3.8-flash" {
+            Some(GeminiModelFamily::Gemini38Flash)
+        } else if model_name == "gemini-3.7-flash" {
             Some(GeminiModelFamily::Gemini37Flash)
         } else if model_lower.contains("gemini-3.6-flash") {
             Some(GeminiModelFamily::Gemini36Flash)

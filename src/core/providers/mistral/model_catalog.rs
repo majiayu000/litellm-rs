@@ -44,6 +44,18 @@ fn model_info(spec: &MistralModelSpec) -> ModelInfo {
 }
 
 const MODEL_SPECS: &[MistralModelSpec] = &[
+    // https://docs.mistral.ai/models/zai-glm-5-3 (2026-10-01)
+    MistralModelSpec {
+        id: "zai-glm-5-3",
+        name: "Z.ai GLM 5.3",
+        max_context_length: 1_000_000,
+        supports_streaming: true,
+        supports_tools: true,
+        supports_multimodal: false,
+        input_cost_per_1k_tokens: 0.0014,
+        output_cost_per_1k_tokens: 0.0044,
+        alias_for: None,
+    },
     MistralModelSpec {
         id: "mistral-large-latest",
         name: "Mistral Large 3",

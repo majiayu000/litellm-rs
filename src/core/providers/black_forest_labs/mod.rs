@@ -34,7 +34,16 @@ const CAPABILITIES: &[ProviderCapability] = &[
 ];
 const GENERATION_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::ImageGeneration];
 const KONTEXT_MODELS: &[&str] = &["flux-kontext-pro", "flux-kontext-max"];
+// First-party generation endpoints, reviewed 2026-10-01:
+// https://docs.bfl.ai/quick_start/generating_images
 const MODELS: &[&str] = &[
+    "flux-2-max",
+    "flux-2-pro-preview",
+    "flux-2-pro",
+    "flux-2-flex",
+    "flux-2-klein-4b",
+    "flux-2-klein-9b-preview",
+    "flux-2-klein-9b",
     "flux-pro-1.1",
     "flux-pro-1.1-ultra",
     "flux-dev",
@@ -680,6 +689,25 @@ fn supported_models() -> Vec<ModelInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flux2_generation_catalog_preserves_native_size_parameters() {
+        for id in [
+            "flux-2-max",
+            "flux-2-pro-preview",
+            "flux-2-pro",
+            "flux-2-flex",
+            "flux-2-klein-4b",
+            "flux-2-klein-9b-preview",
+            "flux-2-klein-9b",
+        ] {
+            assert!(supported_models().iter().any(|model| model.id == id));
+            let mut params = Map::new();
+            insert_size_parameters(id, "1024x1024", &mut params).unwrap();
+            assert_eq!(params["width"], 1024);
+            assert_eq!(params["height"], 1024);
+        }
+    }
 
     #[test]
     fn ready_poll_requires_an_http_result_url() {

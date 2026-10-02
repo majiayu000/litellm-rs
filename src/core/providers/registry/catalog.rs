@@ -77,7 +77,7 @@ pub(crate) static AMAZON_NOVA_CATALOG_MODELS: &[AmazonNovaCatalogModel] = &[
         display_name: "Amazon Nova Premier",
         description: "Most capable model for complex reasoning and multimodal tasks",
         max_context_length: 1_000_000,
-        max_output_length: 10_000,
+        max_output_length: 25_000,
         supports_multimodal: true,
         supports_reasoning: true,
         input_cost_per_million: 2.5,

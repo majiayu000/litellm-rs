@@ -9,7 +9,12 @@ struct DeveloperModelLifecycle {
     shutdown_date: Option<&'static str>,
 }
 
-const DEVELOPER_CHAT_MODELS: [DeveloperModelLifecycle; 10] = [
+const DEVELOPER_CHAT_MODELS: [DeveloperModelLifecycle; 11] = [
+    DeveloperModelLifecycle {
+        id: "gemini-3.8-flash",
+        release_date: "2026-09-02",
+        shutdown_date: None,
+    },
     DeveloperModelLifecycle {
         id: "gemini-3.7-flash",
         release_date: "2026-08-13",

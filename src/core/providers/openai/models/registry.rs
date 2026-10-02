@@ -107,7 +107,7 @@ impl OpenAIModelRegistry {
             || model_id.starts_with("o3")
             || model_id.starts_with("o4")
             || model_id.starts_with("gpt-5.5")
-            || gpt56_family(model_id).is_some()
+            || current_gpt_family(model_id).is_some()
             || is_realtime_2_reasoning_model(model_id)
         {
             features.push(OpenAIModelFeature::ReasoningMode);
@@ -199,7 +199,7 @@ impl OpenAIModelRegistry {
             OpenAIModelFamily::GPT4
         } else if model_id.starts_with("gpt-3.5") {
             OpenAIModelFamily::GPT35
-        } else if let Some(family) = gpt56_family(model_id) {
+        } else if let Some(family) = current_gpt_family(model_id) {
             family
         } else if model_id.starts_with("gpt-5.5-pro") {
             OpenAIModelFamily::GPT55Pro
@@ -293,7 +293,7 @@ impl OpenAIModelRegistry {
             }
         }
 
-        config.supports_batch = gpt56_family(model_id).is_some()
+        config.supports_batch = current_gpt_family(model_id).is_some()
             || model_id.starts_with("gpt-5.5")
             || matches!(
                 model_id.as_str(),
@@ -349,6 +349,10 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT56Terra
                         | OpenAIModelFamily::GPT56Luna
                         | OpenAIModelFamily::GPT56Cyber
+                        | OpenAIModelFamily::GPT6Astra
+                        | OpenAIModelFamily::GPT6Sol
+                        | OpenAIModelFamily::GPT61Sol
+                        | OpenAIModelFamily::GPT6Luna
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -381,6 +385,10 @@ impl OpenAIModelRegistry {
                         | OpenAIModelFamily::GPT56Terra
                         | OpenAIModelFamily::GPT56Luna
                         | OpenAIModelFamily::GPT56Cyber
+                        | OpenAIModelFamily::GPT6Astra
+                        | OpenAIModelFamily::GPT6Sol
+                        | OpenAIModelFamily::GPT61Sol
+                        | OpenAIModelFamily::GPT6Luna
                         | OpenAIModelFamily::O1
                         | OpenAIModelFamily::O1Pro
                         | OpenAIModelFamily::O3
@@ -524,8 +532,12 @@ fn normalize_price_per_1k(cost: f64) -> f64 {
     (cost * 1_000_000_000_000.0).round() / 1_000_000_000_000.0
 }
 
-fn gpt56_family(model_id: &str) -> Option<OpenAIModelFamily> {
+fn current_gpt_family(model_id: &str) -> Option<OpenAIModelFamily> {
     match model_id {
+        "gpt-6-astra" => Some(OpenAIModelFamily::GPT6Astra),
+        "gpt-6-sol" => Some(OpenAIModelFamily::GPT6Sol),
+        "gpt-6.1-sol" => Some(OpenAIModelFamily::GPT61Sol),
+        "gpt-6-luna" => Some(OpenAIModelFamily::GPT6Luna),
         "gpt-5.6" | "gpt-5.6-sol" => Some(OpenAIModelFamily::GPT56Sol),
         "gpt-5.6-terra" => Some(OpenAIModelFamily::GPT56Terra),
         "gpt-5.6-luna" => Some(OpenAIModelFamily::GPT56Luna),

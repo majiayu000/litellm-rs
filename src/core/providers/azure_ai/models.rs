@@ -307,6 +307,28 @@ impl AzureAIModelRegistry {
             output_price_per_1k: None,
         });
 
+        // Exact Foundry IDs from Microsoft's current sold-directly model table.
+        // Rerank pricing is per search, so no per-token price is advertised.
+        for (id, name) in [
+            ("Cohere-rerank-v4.0-pro", "Cohere Rerank V4 Pro"),
+            ("Cohere-rerank-v4.0-fast", "Cohere Rerank V4 Fast"),
+        ] {
+            self.register_model(AzureAIModelSpec {
+                id: id.to_string(),
+                name: name.to_string(),
+                provider: "cohere".to_string(),
+                model_type: AzureAIModelType::Rerank,
+                capabilities: vec![ProviderCapability::Rerank],
+                max_input_tokens: 32_768,
+                max_output_tokens: 0,
+                supports_streaming: false,
+                supports_function_calling: false,
+                supports_multimodal: false,
+                input_price_per_1k: None,
+                output_price_per_1k: None,
+            });
+        }
+
         // Rerank models
         self.register_model(AzureAIModelSpec {
             id: "cohere-rerank-v3".to_string(),

@@ -48,6 +48,8 @@ const VOYAGE_MODELS: &[VoyageModelSpec] = &[
     embedding_model("voyage-large-2-instruct", 16_000, false),
     embedding_model("voyage-large-2", 16_000, false),
     embedding_model("voyage-2", 4_000, false),
+    rerank_model("rerank-3", 32_000),
+    rerank_model("rerank-3-lite", 32_000),
     rerank_model("rerank-2.5", 32_000),
     rerank_model("rerank-2.5-lite", 32_000),
     rerank_model("rerank-2", 16_000),

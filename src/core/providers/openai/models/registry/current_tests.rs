@@ -5,6 +5,10 @@ use crate::core::types::model::{ModelInfo, ProviderCapability};
 fn gpt56_catalog_entries_match_official_model_cards() {
     let registry = get_openai_registry();
     let cases = [
+        ("gpt-6-astra", OpenAIModelFamily::GPT6Astra, 0.010, 0.050),
+        ("gpt-6-sol", OpenAIModelFamily::GPT6Sol, 0.002, 0.010),
+        ("gpt-6.1-sol", OpenAIModelFamily::GPT61Sol, 0.002, 0.010),
+        ("gpt-6-luna", OpenAIModelFamily::GPT6Luna, 0.0001, 0.0005),
         ("gpt-5.6", OpenAIModelFamily::GPT56Sol, 0.004, 0.020),
         ("gpt-5.6-sol", OpenAIModelFamily::GPT56Sol, 0.004, 0.020),
         ("gpt-5.6-terra", OpenAIModelFamily::GPT56Terra, 0.002, 0.012),

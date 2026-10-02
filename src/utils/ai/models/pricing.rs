@@ -61,7 +61,7 @@ impl ModelUtils {
             m if m.starts_with("gemini-2.5-flash") => Some((0.0003, 0.0025)),
             m if m.starts_with("gemini-2.0-flash-thinking-exp") => Some((0.00001, 0.00004)),
             m if m.starts_with("gemini-2.0-flash-lite") => Some((0.000075, 0.0003)),
-            m if m.starts_with("gemini-2.0-flash") => Some((0.0001, 0.0004)),
+            m if m.starts_with("gemini-2.0-flash") => Some((0.00015, 0.0006)),
             m if m.starts_with("gemini-1.5-flash") => Some((0.000075, 0.0003)),
             m if m.starts_with("gemini-pro") => Some((0.0005, 0.0015)),
             _ => None,
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn test_get_model_pricing_gemini_20_flash() {
         let pricing = ModelUtils::get_model_pricing("gemini-2.0-flash");
-        assert_eq!(pricing, Some((0.0001, 0.0004)));
+        assert_eq!(pricing, Some((0.00015, 0.0006)));
     }
 
     #[test]

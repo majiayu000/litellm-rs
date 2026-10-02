@@ -124,7 +124,7 @@ pub use failure::{ProviderFailureFacts, ProviderRetryHint};
 pub use provider_registry::ProviderRegistry;
 pub use unified_provider::ProviderError;
 #[derive(Debug, Clone)]
-#[cfg(any(feature = "gateway", test))]
+#[cfg(any(feature = "gateway", feature = "providers-extended", test))]
 pub(crate) struct GeminiNativeRequest {
     pub(crate) api_version: String,
     pub(crate) model: String,
@@ -132,7 +132,7 @@ pub(crate) struct GeminiNativeRequest {
     pub(crate) stream: bool,
     pub(crate) body: serde_json::Value,
 }
-#[cfg(any(feature = "gateway", test))]
+#[cfg(any(feature = "gateway", feature = "providers-extended", test))]
 pub(crate) fn gemini_native_url(
     base_url: &str,
     api_key: &str,
@@ -166,7 +166,7 @@ pub(crate) fn gemini_native_url(
     drop(query);
     Ok(url)
 }
-#[cfg(any(feature = "gateway", test))]
+#[cfg(any(feature = "gateway", feature = "providers-extended", test))]
 pub(crate) async fn gemini_response_or_provider_error(
     response: reqwest::Response,
     api_key: &str,
@@ -199,7 +199,7 @@ pub(crate) async fn gemini_response_or_provider_error(
         ProviderError::api_error("gemini_proxy", status, message)
     })
 }
-#[cfg(any(feature = "gateway", test))]
+#[cfg(any(feature = "gateway", feature = "providers-extended", test))]
 fn redact_gemini_key(body: &str, api_key: &str) -> String {
     if api_key.is_empty() {
         return body.to_string();
@@ -208,7 +208,7 @@ fn redact_gemini_key(body: &str, api_key: &str) -> String {
     body.replace(api_key, "[REDACTED]")
         .replace(&encoded, "[REDACTED]")
 }
-#[cfg(any(feature = "gateway", test))]
+#[cfg(any(feature = "gateway", feature = "providers-extended", test))]
 pub(crate) fn gemini_transport_error(is_timeout: bool) -> ProviderError {
     let message = "Gemini upstream request failed";
     if is_timeout {

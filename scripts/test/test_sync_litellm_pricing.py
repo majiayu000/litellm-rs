@@ -772,33 +772,36 @@ class CatalogAuthorityTests(unittest.TestCase):
                     (entry["provider"], entry["pricing_key"])
                 )
 
-        self.assertEqual(authority["_metadata"]["total_entry_count"], 3475)
+        self.assertEqual(authority["_metadata"]["total_entry_count"], 4555)
         self.assertEqual(
             target_counts,
-            {"callable": 179, "pricing_only": 293, "unreviewed": 87},
+            {"callable": 171, "pricing_only": 409, "unreviewed": 76},
         )
         self.assertEqual(
             sorted(callable_with_explicit_contract),
             [
+                ("azure", "azure/gpt-6-astra"),
+                ("azure", "azure/gpt-6-luna"),
+                ("azure", "azure/gpt-6-sol"),
+                ("azure", "azure/gpt-6.1-sol"),
+                ("azure_ai", "azure_ai/cohere-rerank-v4.0-fast"),
+                ("azure_ai", "azure_ai/cohere-rerank-v4.0-pro"),
                 ("deepgram", "deepgram/aura-2-thalia-en"),
+                ('openai', 'gpt-6-astra'),
+                ('openai', 'gpt-6-luna'),
+                ('openai', 'gpt-6-sol'),
+                ('openai', 'gpt-6.1-sol'),
+                ('openai', 'gpt-image-2.5-flare'),
+                ('openai', 'gpt-image-2.5-sunburst'),
                 ("xai", "xai/grok-4.5"),
                 ("xai", "xai/grok-4.5-latest"),
                 ("xai", "xai/grok-4.6"),
             ],
         )
-        historical = next(
-            entry
-            for entry in authority["entries"]
-            if entry["provider"] == "openai"
-            and entry["pricing_key"] == "chatgpt-4o-latest"
-        )
-        self.assertEqual(historical["decision"], "pricing_only")
-        self.assertIn("removed", historical["reason"])
-        source_id = historical["evidence_sources"][0]
-        self.assertEqual(
-            decisions["sources"][source_id]["location"],
-            "https://developers.openai.com/api/docs/models/chatgpt-4o-latest",
-        )
+        self.assertNotIn("chatgpt-4o-latest", prices)
+        live = next(entry for entry in authority["entries"]
+                    if entry["provider"] == "openai" and entry["pricing_key"] == "gpt-live-1")
+        self.assertEqual(live["decision"], "pricing_only")
 
     def test_repository_authority_matches_pricing_set_and_embedded_digests(self) -> None:
         catalog = sync.load_json(CATALOG_PATH)
@@ -975,17 +978,34 @@ class OfficialPricingRegressionTests(unittest.TestCase):
                 self.assertNotIn(field, self.catalog[model])
 
     def test_deepseek_time_of_use_is_preserved(self) -> None:
-        for model in ("deepseek-v4-flash", "deepseek/deepseek-v4-flash"):
+        for model in ("deepseek-flash", "deepseek/deepseek-flash", "deepseek-v4-flash", "deepseek/deepseek-v4-flash", "deepseek-v4-flash-vision-exp"):
             with self.subTest(model=model):
                 row = self.catalog[model]
-                self.assertEqual(row["input_cost_per_token"], 0.00000022)
-                self.assertEqual(row["output_cost_per_token"], 0.00000066)
-                self.assertEqual(row["cache_read_input_token_cost"], 0.000000007)
+                self.assertEqual(row["input_cost_per_token"], 0.00000015)
+                self.assertEqual(row["output_cost_per_token"], 0.00000060)
+                self.assertEqual(row["cache_read_input_token_cost"], 0.000000003)
                 tou = row["time_of_use_pricing"]
                 self.assertEqual(tou["timezone"], "UTC")
-                self.assertEqual(tou["peak_rates"]["input_cost_per_token"], 0.00000044)
-                self.assertEqual(tou["peak_rates"]["output_cost_per_token"], 0.00000132)
-                self.assertEqual(tou["peak_rates"]["cache_read_input_token_cost"], 0.000000014)
+                self.assertEqual(tou["peak_rates"]["input_cost_per_token"], 0.00000030)
+                self.assertEqual(tou["peak_rates"]["output_cost_per_token"], 0.00000120)
+                self.assertEqual(tou["peak_rates"]["cache_read_input_token_cost"], 0.000000006)
+
+    def test_retired_deepseek_overlay_does_not_receive_current_flash_fields(self) -> None:
+        historical = {
+            key: {
+                "input_cost_per_token": 0.00000022,
+                "deprecation_status": "deprecated_on_2026_07_24_1559_utc",
+            }
+            for key in (
+                "deepseek-chat", "deepseek-reasoner",
+                "deepseek/deepseek-chat", "deepseek/deepseek-reasoner",
+            )
+        }
+        patched = sync.apply_official_overrides(self.catalog, historical, date(2026, 10, 1))
+        for key, row in historical.items():
+            with self.subTest(model=key):
+                self.assertEqual(patched[key], row)
+        self.assertEqual(patched["deepseek-flash"]["input_cost_per_token"], 0.00000015)
 
 
 if __name__ == "__main__":

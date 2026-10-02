@@ -11,6 +11,7 @@ pub(crate) fn uses_fixed_sampling_contract(model_id: &str) -> bool {
         get_gemini_registry().get_model_family(model_id),
         Some(
             GeminiModelFamily::Gemini37Flash
+                | GeminiModelFamily::Gemini38Flash
                 | GeminiModelFamily::Gemini36Flash
                 | GeminiModelFamily::Gemini35FlashLite
         )

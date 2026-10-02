@@ -34,8 +34,10 @@ pub(super) fn effective_model_info_at<'a>(
     }
 
     let local_model = crate::core::types::model_id::ModelIdRef::parse(resolved_model).model();
-    if !matches!(local_model, "gemini-3.6-flash" | "gemini-3.7-flash")
-        || !has_official_flash_source(model_info)
+    if !matches!(
+        local_model,
+        "gemini-3.6-flash" | "gemini-3.7-flash" | "gemini-3.8-flash"
+    ) || !has_official_flash_source(model_info)
     {
         return Cow::Borrowed(model_info);
     }
@@ -81,7 +83,10 @@ pub(super) fn maximum_scheduled_model_info<'a>(
         crate::core::pricing::normalize_pricing_provider(&model_info.litellm_provider);
     let local_model = crate::core::types::model_id::ModelIdRef::parse(resolved_model).model();
     if uses_google_completion_calculator(&requested_provider, &catalog_provider)
-        && matches!(local_model, "gemini-3.6-flash" | "gemini-3.7-flash")
+        && matches!(
+            local_model,
+            "gemini-3.6-flash" | "gemini-3.7-flash" | "gemini-3.8-flash"
+        )
         && has_official_flash_source(model_info)
         && has_complete_rate_signature(
             model_info,
@@ -109,6 +114,9 @@ fn has_official_flash_source(model_info: &LiteLLMModelInfo) -> bool {
             .and_then(serde_json::Value::as_str),
         Some("https://ai.google.dev/gemini-api/docs/pricing")
             | Some("https://cloud.google.com/vertex-ai/generative-ai/pricing")
+            | Some(
+                "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+            )
     )
 }
 

@@ -87,7 +87,7 @@ impl GitHubCopilotProvider {
                     name: info.display_name.to_string(),
                     provider: "github_copilot".to_string(),
                     max_context_length: info.max_context_length,
-                    max_output_length: Some(info.max_output_length),
+                    max_output_length: info.max_output_length,
                     supports_streaming: info.supports_streaming,
                     supports_tools: info.supports_tools,
                     supports_multimodal: info.supports_multimodal,

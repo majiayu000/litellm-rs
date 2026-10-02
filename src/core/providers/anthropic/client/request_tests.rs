@@ -189,7 +189,14 @@ async fn continuation_send_path_adds_interleaved_beta_once() {
 fn claude5_policy_is_exact_defaults_adaptive_and_reports_supported_params() {
     let client = anthropic_client();
     let provider = AnthropicProvider::new(AnthropicConfig::new_test("test-key")).unwrap();
-    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+    for model in [
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+    ] {
         let wire = client
             .transform_chat_request(&ChatRequest::new(model).add_user_message("solve"))
             .expect("exact Claude 5 IDs use protocol policy before catalog registration");
@@ -266,7 +273,14 @@ fn claude5_disabled_thinking_obeys_model_effort_policy() {
 #[test]
 fn claude5_rejects_manual_thinking_non_default_sampling_and_prefill() {
     let client = anthropic_client();
-    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+    for model in [
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+    ] {
         let mut compatible = ChatRequest::new(model).add_user_message("solve");
         compatible.temperature = Some(1.0);
         compatible.top_p = Some(0.99);
@@ -318,7 +332,14 @@ fn claude5_rejects_manual_thinking_non_default_sampling_and_prefill() {
 
 #[test]
 fn claude5_rejects_extension_only_terminal_assistant_prefill() {
-    for model in ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"] {
+    for model in [
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+    ] {
         let mut request = ChatRequest::new(model).add_user_message("solve");
         request.messages.push(ChatMessage {
             role: MessageRole::Assistant,
@@ -796,4 +817,23 @@ fn issue_802_adds_extended_cache_beta_for_one_hour_cache_control() {
         .unwrap_or("");
 
     assert!(beta.contains(EXTENDED_CACHE_TTL_BETA));
+}
+
+#[test]
+fn current_claude_thinking_modes_preserve_documented_errors() {
+    let client = anthropic_client();
+    for model in ["claude-fable-5-1", "claude-opus-5-5"] {
+        let mut request = ChatRequest::new(model).add_user_message("solve");
+        request.thinking = Some(ThinkingConfig::new());
+        assert!(client.transform_chat_request(&request).is_err());
+    }
+    let mut request = ChatRequest::new("claude-sonnet-5-5").add_user_message("solve");
+    request.thinking = Some(ThinkingConfig::new());
+    request.reasoning_effort = Some("high".to_string());
+    assert_eq!(
+        client.transform_chat_request(&request).unwrap()["thinking"]["type"],
+        "between_tools"
+    );
+    request.reasoning_effort = Some("max".to_string());
+    assert!(client.transform_chat_request(&request).is_err());
 }

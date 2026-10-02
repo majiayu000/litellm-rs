@@ -28,7 +28,9 @@ impl GeminiModelRegistry {
                 if flash_uses_standard_pricing_at(now)
                     && matches!(
                         spec.family,
-                        GeminiModelFamily::Gemini36Flash | GeminiModelFamily::Gemini37Flash
+                        GeminiModelFamily::Gemini36Flash
+                            | GeminiModelFamily::Gemini37Flash
+                            | GeminiModelFamily::Gemini38Flash
                     )
                 {
                     info.input_cost_per_1k_tokens = Some(0.0015);

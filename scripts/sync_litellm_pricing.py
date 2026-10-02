@@ -26,7 +26,7 @@ from urllib.request import urlopen
 from model_catalog_authority import build_catalog_authority
 
 
-DEFAULT_SOURCE_COMMIT = "ec94a1f82aa9066dbf205773abf71595d3208388"
+DEFAULT_SOURCE_COMMIT = "025292e75bda0381174a751da320645c971e06c7"
 DEFAULT_SOURCE_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/"
     f"{DEFAULT_SOURCE_COMMIT}/model_prices_and_context_window.json"
@@ -67,8 +67,10 @@ GEMINI_PROMO_MODELS = frozenset(
     (
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "gemini/gemini-3.6-flash",
         "gemini/gemini-3.7-flash",
+        "gemini/gemini-3.8-flash",
     )
 )
 OFFICIAL_OVERRIDE_REMOVALS = {
@@ -229,6 +231,55 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
 
 # Fail the update if official exact-ID, cache, or tier coverage disappears.
 # This prevents a source-format change from silently degrading to scalar rates.
+# Official model cards reviewed 2026-10-01. Keep provider-scoped fields intact.
+for model in ("gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"):
+    OFFICIAL_OVERRIDE_PATCHES[model] = {
+        "max_input_tokens": 1_050_000,
+        "source": f"{OPENAI_MODEL_SOURCE_BASE}/{model}",
+    }
+OFFICIAL_OVERRIDE_PATCHES["gemini/gemini-3.8-flash"] = {
+    **OFFICIAL_OVERRIDE_PATCHES["gemini/gemini-3.7-flash"],
+}
+OFFICIAL_OVERRIDE_PATCHES["xai/grok-4.7"] = {
+    **OFFICIAL_OVERRIDE_PATCHES["xai/grok-4.6"],
+    "source": "https://docs.x.ai/developers/models/grok-4.7",
+}
+# The native DeepSeek Flash IDs now serve V4.1 Flash. Preserve the runtime's
+# existing off-peak base / peak-window representation instead of upstream's
+# peak base / off_peak_pricing representation, which the runtime does not read.
+# deepseek-chat/reasoner retired on 2026-07-24; their historical overlay
+# must not receive current Flash fields. https://api-docs.deepseek.com/updates/
+for model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"):
+    for key in (model, f"deepseek/{model}"):
+        OFFICIAL_OVERRIDE_PATCHES[key] = {
+            "input_cost_per_token": 0.00000015,
+            "output_cost_per_token": 0.00000060,
+            "cache_read_input_token_cost": 0.000000003,
+            "input_cost_per_token_cache_hit": 0.000000003,
+            "max_input_tokens": 1_048_576,
+            "max_output_tokens": 393_216,
+            "max_tokens": 1_048_576,
+            "pricing_status": "official_off_peak_rate_checked_2026_10_01",
+            "supports_vision": True,
+            "time_of_use_pricing": {
+                "timezone": "UTC",
+                "peak_windows": [
+                    {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+                    {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10},
+                ],
+                "peak_rates": {
+                    "input_cost_per_token": 0.00000030,
+                    "output_cost_per_token": 0.00000120,
+                    "cache_read_input_token_cost": 0.000000006,
+                },
+            },
+            "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        }
+        OFFICIAL_OVERRIDE_REMOVALS[key] = ("off_peak_pricing",)
+
+for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
+    OFFICIAL_OVERRIDE_PATCHES.setdefault(key, {})["pricing_status"] = "official_off_peak_rate_checked_2026_10_01"
+
 OFFICIAL_PRICING_CONTRACTS: dict[str, dict[str, Any]] = {
     "claude-fable-5": {
         "input_cost_per_token": 0.000010,

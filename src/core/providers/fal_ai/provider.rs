@@ -369,7 +369,8 @@ impl LLMProvider for FalAIProvider {
         _output_tokens: u32,
     ) -> Result<f64, ProviderError> {
         // For image generation, cost is per image not per token
-        Ok(self.model_registry.get_cost_per_image(model))
+        self.model_registry.get_cost_per_image(model).ok_or_else(||
+            ProviderError::not_supported("fal_ai", "This model requires image dimensions and quality for pricing; token counts cannot determine its cost"))
     }
 }
 
@@ -404,6 +405,22 @@ mod tests {
                 .expect("Fal AI test server should write response");
         });
         Ok(format!("http://{address}"))
+    }
+
+    #[tokio::test]
+    async fn current_image_models_do_not_claim_flat_megapixel_costs() {
+        let provider = FalAIProvider::new(FalAIConfig::with_api_key("test-key")).unwrap();
+        for model in ["fal-ai/flux-2-pro", "fal-ai/flux-2-flex", "ideogram/v4"] {
+            assert!(provider.models().iter().any(|m| m.id == model));
+            assert!(provider.calculate_cost(model, 0, 0).await.is_err());
+        }
+        assert_eq!(
+            provider
+                .calculate_cost("fal-ai/recraft/v4/text-to-image", 0, 0)
+                .await
+                .unwrap(),
+            0.04
+        );
     }
 
     #[test]

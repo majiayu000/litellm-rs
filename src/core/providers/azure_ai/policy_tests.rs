@@ -21,7 +21,7 @@ fn mapped_rerank_deployment_exposes_no_chat_parameters() {
         )
         .expect("embedded catalog should load");
     let mapping = crate::core::providers::model_identity::ModelIdentityMapping::new(
-        Some("azure_ai/cohere-rerank-v3.5".to_string()),
+        Some("azure_ai/Cohere-rerank-v4.0-pro".to_string()),
         None,
     );
     let identity = crate::core::providers::model_identity::validate_deployment_identity(

@@ -631,7 +631,7 @@ fn builtin_deepseek_v4_model(
     );
     model.extra.insert(
         "pricing_status".to_string(),
-        serde_json::Value::from("official_off_peak_rate_checked_2026_08_24"),
+        serde_json::Value::from("official_off_peak_rate_checked_2026_10_01"),
     );
     model
 }
@@ -717,11 +717,21 @@ impl Default for PricingDatabase {
             builtin_model("anthropic", 0.000003, 0.000015, 200000, 4096, true, true),
         );
 
-        for model in ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"] {
+        for model in ["deepseek-flash", "deepseek-v4-flash"] {
             models.insert(
                 model.to_string(),
-                builtin_deepseek_v4_model(0.00000022, 0.00000066, 0.000000007),
+                builtin_deepseek_v4_model(0.00000015, 0.00000060, 0.000000003),
             );
+        }
+
+        // Retired API aliases retain historical prices, not the current Flash card.
+        for model in ["deepseek-chat", "deepseek-reasoner"] {
+            let mut historical = builtin_deepseek_v4_model(0.00000022, 0.00000066, 0.000000007);
+            historical.extra.insert(
+                "pricing_status".to_string(),
+                serde_json::json!("historical_alias_retired"),
+            );
+            models.insert(model.to_string(), historical);
         }
 
         models.insert(
@@ -729,7 +739,10 @@ impl Default for PricingDatabase {
             builtin_deepseek_v4_model(0.00000066, 0.00000198, 0.000000022),
         );
 
-        let mut deepseek_vision = builtin_deepseek_v4_model(0.00000022, 0.00000066, 0.000000007);
+        for id in ["deepseek-flash", "deepseek-v4-flash"] {
+            models.get_mut(id).unwrap().supports_vision = Some(true);
+        }
+        let mut deepseek_vision = builtin_deepseek_v4_model(0.00000015, 0.00000060, 0.000000003);
         deepseek_vision.supports_vision = Some(true);
         models.insert("deepseek-v4-flash-vision-exp".to_string(), deepseek_vision);
 

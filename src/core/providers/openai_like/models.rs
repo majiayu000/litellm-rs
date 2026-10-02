@@ -93,7 +93,7 @@ const XAI_GROK_BUILD_MODEL_IDS: &[&str] = &[
     "grok-code-fast-1-0825",
 ];
 const XAI_GROK_45_MODEL_IDS: &[&str] = &["grok-4.5", "grok-4.5-latest", "grok-build-latest"];
-const XAI_GROK_46_MODEL_IDS: &[&str] = &["grok-4.6"];
+const XAI_GROK_46_MODEL_IDS: &[&str] = &["grok-4.6", "grok-4.7"];
 const XAI_GROK_45_REASONING_EFFORTS: &[&str] = &["low", "medium", "high"];
 const XAI_GROK_46_REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
 
@@ -642,6 +642,7 @@ mod tests {
             "grok-4.5-latest",
             "grok-build-latest",
             "grok-4.6",
+            "grok-4.7",
         ] {
             let info = registry.get_model_info(model);
             assert!(registry.is_known_model(model), "{model}");

@@ -14,16 +14,21 @@ use litellm_rs::core::providers::custom_api::{
 };
 #[cfg(not(clippy))]
 use litellm_rs::core::providers::github::{GitHubConfig, GitHubProvider, get_model_info};
+#[cfg(feature = "storage")]
 use litellm_rs::server::routes::ai::{
     create_file, delete_file, get_file, get_file_content, list_files,
 };
+#[cfg(feature = "storage")]
 use litellm_rs::server::routes::auth::{
     AuthSystem, Claims, JwtHandler, LoginRequest, RefreshTokenRequest, configure_routes, login,
     refresh_token,
 };
+#[cfg(feature = "storage")]
 use litellm_rs::storage::StorageLayer;
+#[cfg(feature = "storage")]
 use litellm_rs::storage::files::{FileMetadata, FileStorage, LocalStorage, S3Storage};
 
+#[cfg(feature = "storage")]
 #[allow(dead_code)]
 async fn gh1130_external_auth_and_storage_signatures(
     req: actix_web::HttpRequest,
@@ -86,6 +91,7 @@ async fn gh1130_external_auth_and_storage_signatures(
     Ok(())
 }
 
+#[cfg(feature = "storage")]
 #[test]
 fn gh1130_public_files_auth_and_jwt_shapes_remain_source_compatible() {
     let now = chrono::Utc::now();

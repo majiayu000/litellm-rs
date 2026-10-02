@@ -540,7 +540,7 @@ mod boundary_tests;
 mod final_invariant_tests;
 
 #[tokio::test]
-async fn bfl_does_not_advertise_unpriced_flux_2_models() {
+async fn bfl_advertises_official_flux_2_endpoints_without_fake_token_prices() {
     let provider = BflProvider::new(BflConfig::with_api_key("bfl-secret"))
         .expect("BFL provider should initialize");
     let model_ids = provider
@@ -549,8 +549,9 @@ async fn bfl_does_not_advertise_unpriced_flux_2_models() {
         .map(|model| model.id.as_str())
         .collect::<Vec<_>>();
 
-    assert!(!model_ids.contains(&"flux-2-pro"));
-    assert!(!model_ids.contains(&"flux-2-flex"));
+    assert!(model_ids.contains(&"flux-2-pro"));
+    assert!(model_ids.contains(&"flux-2-flex"));
+    assert!(provider.calculate_cost("flux-2-pro", 0, 0).await.is_err());
     assert!(!model_ids.contains(&"flux-2-dev"));
 }
 

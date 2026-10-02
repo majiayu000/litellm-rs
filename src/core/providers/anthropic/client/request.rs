@@ -625,9 +625,9 @@ impl AnthropicClient {
 
     fn claude_5_model(model: &str) -> Option<Claude5Model> {
         match model {
-            "claude-fable-5" => Some(Claude5Model::Fable),
-            "claude-opus-5" => Some(Claude5Model::Opus),
-            "claude-sonnet-5" => Some(Claude5Model::Sonnet),
+            "claude-fable-5" | "claude-fable-5-1" => Some(Claude5Model::Fable),
+            "claude-opus-5" | "claude-opus-5-5" => Some(Claude5Model::Opus),
+            "claude-sonnet-5" | "claude-sonnet-5-5" => Some(Claude5Model::Sonnet),
             _ => None,
         }
     }
@@ -762,6 +762,24 @@ impl AnthropicClient {
         }
         let effort = typed_effort.or(requested_effort);
         if !thinking.enabled {
+            if matches!(
+                request.model.as_str(),
+                "claude-fable-5-1" | "claude-opus-5-5"
+            ) {
+                return Err(ProviderError::invalid_request(
+                    "anthropic",
+                    format!("{} cannot disable thinking", request.model),
+                ));
+            }
+            if request.model == "claude-sonnet-5-5" {
+                if matches!(effort, Some(AnthropicEffort::XHigh | AnthropicEffort::Max)) {
+                    return Err(ProviderError::invalid_request(
+                        "anthropic",
+                        "claude-sonnet-5-5 requires adaptive thinking at xhigh or max effort",
+                    ));
+                }
+                return Ok(Some((json!({"type": "between_tools"}), effort)));
+            }
             if model == Claude5Model::Fable {
                 return Err(ProviderError::invalid_request(
                     "anthropic",

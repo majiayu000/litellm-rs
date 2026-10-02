@@ -11,6 +11,33 @@ pub(super) fn register(registry: &mut AnthropicModelRegistry) {
     // https://platform.claude.com/docs/en/about-claude/pricing
     for (id, name, family, input, output, cache_write, cache_read) in [
         (
+            "claude-fable-5-1",
+            "Claude Fable 5.1",
+            AnthropicModelFamily::ClaudeFable51,
+            10.0,
+            50.0,
+            12.5,
+            0.25,
+        ),
+        (
+            "claude-opus-5-5",
+            "Claude Opus 5.5",
+            AnthropicModelFamily::ClaudeOpus55,
+            4.0,
+            20.0,
+            5.0,
+            0.2,
+        ),
+        (
+            "claude-sonnet-5-5",
+            "Claude Sonnet 5.5",
+            AnthropicModelFamily::ClaudeSonnet55,
+            2.0,
+            10.0,
+            2.5,
+            0.2,
+        ),
+        (
             "claude-fable-5",
             "Claude Fable 5",
             AnthropicModelFamily::ClaudeFable5,
@@ -82,7 +109,13 @@ fn claude_5_spec(
                 ),
                 (
                     "thinking_always_on".to_string(),
-                    serde_json::Value::Bool(id == "claude-fable-5"),
+                    serde_json::Value::Bool(matches!(
+                        id,
+                        "claude-fable-5"
+                            | "claude-fable-5-1"
+                            | "claude-opus-5-5"
+                            | "claude-sonnet-5-5"
+                    )),
                 ),
                 (
                     "supports_manual_extended_thinking".to_string(),

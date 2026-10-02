@@ -42,7 +42,7 @@ pub struct ModelInfo {
     /// Maximum context length
     pub max_context_length: u32,
     /// Maximum output tokens
-    pub max_output_length: u32,
+    pub max_output_length: Option<u32>,
     /// Whether the model supports tools/functions
     pub supports_tools: bool,
     /// Whether the model supports vision
@@ -66,7 +66,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/meta/llama-3-8b-instruct",
             display_name: "Llama 3 8B Instruct",
             max_context_length: 8192,
-            max_output_length: 2048,
+            max_output_length: Some(2048),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -81,7 +81,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/meta/llama-3-70b-instruct",
             display_name: "Llama 3 70B Instruct",
             max_context_length: 8192,
-            max_output_length: 2048,
+            max_output_length: Some(2048),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -96,7 +96,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/meta/llama-2-7b-chat-int8",
             display_name: "Llama 2 7B Chat",
             max_context_length: 4096,
-            max_output_length: 2048,
+            max_output_length: Some(2048),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -112,7 +112,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/mistral/mistral-7b-instruct-v0.1",
             display_name: "Mistral 7B Instruct",
             max_context_length: 8192,
-            max_output_length: 2048,
+            max_output_length: Some(2048),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -127,7 +127,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@hf/thebloke/mixtral-8x7b-instruct-v0.1-awq",
             display_name: "Mixtral 8x7B Instruct",
             max_context_length: 32768,
-            max_output_length: 4096,
+            max_output_length: Some(4096),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -143,7 +143,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/qwen/qwen1.5-7b-chat-awq",
             display_name: "Qwen 1.5 7B Chat",
             max_context_length: 32768,
-            max_output_length: 4096,
+            max_output_length: Some(4096),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -159,7 +159,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/meta/codellama-7b-instruct",
             display_name: "Code Llama 7B",
             max_context_length: 16384,
-            max_output_length: 4096,
+            max_output_length: Some(4096),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -174,7 +174,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/deepseek-ai/deepseek-coder-6.7b-instruct-awq",
             display_name: "DeepSeek Coder 6.7B",
             max_context_length: 16384,
-            max_output_length: 4096,
+            max_output_length: Some(4096),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -190,7 +190,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/microsoft/phi-2",
             display_name: "Phi-2",
             max_context_length: 2048,
-            max_output_length: 1024,
+            max_output_length: Some(1024),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -205,7 +205,7 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
             model_id: "@cf/google/gemma-7b-it",
             display_name: "Gemma 7B IT",
             max_context_length: 8192,
-            max_output_length: 2048,
+            max_output_length: Some(2048),
             supports_tools: false,
             supports_multimodal: false,
             supports_streaming: true,
@@ -214,6 +214,76 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
         },
     );
 
+    // First-party Workers AI model cards, checked 2026-10-01. The native
+    // adapter currently forwards text chat only; do not advertise tools/vision.
+    // Cards do not publish an independent output limit, so leave it unknown.
+    for (id, name, context, input, output) in [
+        (
+            "@cf/deepseek-ai/deepseek-v4-flash-0731",
+            "deepseek-v4-flash-0731",
+            1048576,
+            0.44,
+            1.32,
+        ),
+        (
+            "@cf/deepseek-ai/deepseek-v4-pro-0813",
+            "deepseek-v4-pro-0813",
+            1048576,
+            1.32,
+            3.96,
+        ),
+        (
+            "@cf/google/gemma-4-26b-a4b-it",
+            "gemma-4-26b-a4b-it",
+            256000,
+            0.1,
+            0.3,
+        ),
+        (
+            "@cf/zai-org/glm-5.3-flash",
+            "glm-5.3-flash",
+            1048576,
+            0.15,
+            0.5,
+        ),
+        ("@cf/zai-org/glm-5.3", "glm-5.3", 1048576, 1.4, 4.4),
+        (
+            "@cf/openai/gpt-oss-120b",
+            "gpt-oss-120b",
+            128000,
+            0.35,
+            0.75,
+        ),
+        (
+            "@cf/moonshotai/kimi-k2.7-code",
+            "kimi-k2.7-code",
+            262144,
+            0.95,
+            4.0,
+        ),
+        (
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+            "qwen3-30b-a3b-fp8",
+            32768,
+            0.0509,
+            0.335,
+        ),
+    ] {
+        configs.insert(
+            id,
+            ModelInfo {
+                model_id: id,
+                display_name: name,
+                max_context_length: context,
+                max_output_length: None,
+                supports_tools: false,
+                supports_multimodal: false,
+                supports_streaming: false,
+                input_cost_per_million: input,
+                output_cost_per_million: output,
+            },
+        );
+    }
     configs
 });
 
@@ -229,10 +299,13 @@ pub fn get_available_models() -> Vec<&'static str> {
     MODEL_CONFIGS.keys().copied().collect()
 }
 
-/// Calculate cost (always 0 for Cloudflare Workers AI as it's free within limits)
-pub fn calculate_cost(model_id: &str, _input_tokens: u32, _output_tokens: u32) -> Option<f64> {
-    // Cloudflare Workers AI is free within usage limits
-    get_model_info(model_id).map(|_| 0.0)
+/// Estimate token cost using the model's published rates, before account allowances.
+pub fn calculate_cost(model_id: &str, input_tokens: u32, output_tokens: u32) -> Option<f64> {
+    get_model_info(model_id).map(|m| {
+        (f64::from(input_tokens) * m.input_cost_per_million
+            + f64::from(output_tokens) * m.output_cost_per_million)
+            / 1_000_000.0
+    })
 }
 
 impl CloudflareModel {
@@ -287,7 +360,7 @@ mod tests {
         let info = get_model_info("@cf/meta/llama-3-70b-instruct").unwrap();
         assert_eq!(info.display_name, "Llama 3 70B Instruct");
         assert_eq!(info.max_context_length, 8192);
-        assert_eq!(info.max_output_length, 2048);
+        assert_eq!(info.max_output_length, Some(2048));
         assert!(!info.supports_tools);
         assert!(!info.supports_multimodal);
     }
@@ -305,7 +378,7 @@ mod tests {
         let info = get_model_info("@hf/thebloke/mixtral-8x7b-instruct-v0.1-awq").unwrap();
         assert_eq!(info.display_name, "Mixtral 8x7B Instruct");
         assert_eq!(info.max_context_length, 32768);
-        assert_eq!(info.max_output_length, 4096);
+        assert_eq!(info.max_output_length, Some(4096));
     }
 
     #[test]
@@ -320,7 +393,7 @@ mod tests {
         let info = get_model_info("@cf/meta/codellama-7b-instruct").unwrap();
         assert_eq!(info.display_name, "Code Llama 7B");
         assert_eq!(info.max_context_length, 16384);
-        assert_eq!(info.max_output_length, 4096);
+        assert_eq!(info.max_output_length, Some(4096));
     }
 
     #[test]
@@ -335,7 +408,7 @@ mod tests {
         let info = get_model_info("@cf/microsoft/phi-2").unwrap();
         assert_eq!(info.display_name, "Phi-2");
         assert_eq!(info.max_context_length, 2048);
-        assert_eq!(info.max_output_length, 1024);
+        assert_eq!(info.max_output_length, Some(1024));
     }
 
     #[test]
@@ -550,36 +623,21 @@ mod tests {
     // ==================== ModelInfo Struct Tests ====================
 
     #[test]
-    fn test_model_info_all_free() {
-        // All Cloudflare models should be free
-        let models = get_available_models();
-        for model_id in models {
-            if let Some(info) = get_model_info(model_id) {
-                assert_eq!(
-                    info.input_cost_per_million, 0.0,
-                    "Model {} should be free",
-                    model_id
-                );
-                assert_eq!(
-                    info.output_cost_per_million, 0.0,
-                    "Model {} should be free",
-                    model_id
-                );
-            }
-        }
+    fn current_model_cost_uses_published_rates() {
+        let id = "@cf/zai-org/glm-5.3";
+        let cost = calculate_cost(id, 1_000_000, 1_000_000).unwrap();
+        assert!((cost - 5.8).abs() < 1e-12);
+        assert_eq!(get_model_info(id).unwrap().max_output_length, None);
     }
 
     #[test]
-    fn test_model_info_all_support_streaming() {
-        let models = get_available_models();
-        for model_id in models {
-            if let Some(info) = get_model_info(model_id) {
-                assert!(
-                    info.supports_streaming,
-                    "Model {} should support streaming",
-                    model_id
-                );
-            }
+    fn current_catalog_does_not_advertise_unimplemented_streaming() {
+        for id in [
+            "@cf/zai-org/glm-5.3",
+            "@cf/zai-org/glm-5.3-flash",
+            "@cf/openai/gpt-oss-120b",
+        ] {
+            assert!(!get_model_info(id).unwrap().supports_streaming);
         }
     }
 

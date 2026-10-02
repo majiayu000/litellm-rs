@@ -37,6 +37,22 @@ fn currency(pricing: &ModelPricing) -> &'static str {
 static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::new(|| {
     let mut pricing = HashMap::new();
 
+    // Claude 5 model cards (2026-10-01).
+    for (id, input, output) in [
+        ("anthropic.claude-fable-5-1", 0.010, 0.050),
+        ("anthropic.claude-opus-5-5", 0.004, 0.020),
+        ("anthropic.claude-sonnet-5-5", 0.002, 0.010),
+    ] {
+        insert_pricing(&mut pricing, id, input, output);
+    }
+    for (id, input, output) in [
+        ("openai.gpt-6-astra", 0.010, 0.050),
+        ("openai.gpt-6-sol", 0.002, 0.010),
+        ("openai.gpt-6-luna", 0.0001, 0.0005),
+        ("openai.gpt-6.1-sol", 0.0022, 0.011),
+    ] {
+        insert_pricing(&mut pricing, id, input, output);
+    }
     // Claude models
     insert_pricing(&mut pricing, "anthropic.claude-opus-4-6-v1:0", 0.005, 0.025);
     insert_pricing(&mut pricing, "anthropic.claude-opus-4-6-v1", 0.005, 0.025);
@@ -299,7 +315,12 @@ static MODEL_PRICING: LazyLock<HashMap<&'static str, ModelPricing>> = LazyLock::
         "writer.palmyra-x5-v1:0",
     ];
     for model_id in generic_converse_models {
-        insert_pricing(&mut pricing, model_id, 0.0008, 0.0032);
+        let (input, output) = match model_id {
+            "amazon.nova-2-lite-v1:0" => (0.0003, 0.0025),
+            "amazon.nova-premier-v1:0" => (0.0025, 0.0125),
+            _ => (0.0008, 0.0032),
+        };
+        insert_pricing(&mut pricing, model_id, input, output);
     }
 
     // Embedding/rerank catalog

@@ -65,6 +65,8 @@ fn gemini_flash_runtime_pricing_switches_at_the_exact_utc_boundary() {
     for (provider, model) in [
         ("gemini", "gemini-3.6-flash"),
         ("gemini", "gemini/gemini-3.6-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("vertex_ai", "vertex_ai/gemini-3.8-flash"),
         ("gemini", "gemini-3.7-flash"),
         ("gemini", "gemini/gemini-3.7-flash"),
         ("vertex_ai", "gemini-3.7-flash"),
@@ -310,10 +312,7 @@ fn openai_like_selector_aliases_route_after_raw_exact_miss() {
     );
     assert!(
         service
-            .get_model_info_for_provider(
-                "openai_like",
-                "aws_bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-            )
+            .get_model_info_for_provider("openai_like", "aws_bedrock/anthropic.claude-opus-5-5",)
             .is_some()
     );
 }

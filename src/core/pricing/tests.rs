@@ -69,13 +69,13 @@ fn embedded_default_pricing_catalog_tracks_litellm_scale() {
     );
 
     for model in [
-        "1024-x-1024/dall-e-2",
+        "gpt-image-2.5-flare",
         "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0",
         "ai21.j2-mid-v1",
         "aiml/flux-pro",
         "azure_ai/gpt-5.5",
         "openrouter/deepseek/deepseek-v3.2",
-        "xai/grok-4",
+        "xai/grok-4.7",
     ] {
         assert!(
             models.contains_key(model),
@@ -341,16 +341,15 @@ fn extended_pricing_handles_cohere_command_a_rates() {
 
 #[test]
 fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
-    const PRICING_STATUS: &str = "official_off_peak_rate_checked_2026_08_24";
-    const FLASH_RATES: (f64, f64, f64) = (2.2e-7, 6.6e-7, 7e-9);
+    const PRICING_STATUS: &str = "official_off_peak_rate_checked_2026_10_01";
+    const FLASH_RATES: (f64, f64, f64) = (1.5e-7, 6.0e-7, 3e-9);
     const PRO_RATES: (f64, f64, f64) = (6.6e-7, 1.98e-6, 2.2e-8);
 
     let builtin = PricingDatabase::default();
     for (model, expected) in [
+        ("deepseek-flash", FLASH_RATES),
         ("deepseek-v4-flash", FLASH_RATES),
         ("deepseek-v4-flash-vision-exp", FLASH_RATES),
-        ("deepseek-chat", FLASH_RATES),
-        ("deepseek-reasoner", FLASH_RATES),
         ("deepseek-v4-pro", PRO_RATES),
     ] {
         let Some(pricing) = builtin.get_model_info(model) else {
@@ -379,14 +378,11 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
         Err(error) => panic!("embedded pricing catalog should parse: {error}"),
     };
     for (model, expected) in [
+        ("deepseek-flash", FLASH_RATES),
         ("deepseek-v4-flash", FLASH_RATES),
         ("deepseek/deepseek-v4-flash", FLASH_RATES),
         ("deepseek-v4-flash-vision-exp", FLASH_RATES),
         ("deepseek/deepseek-v4-flash-vision-exp", FLASH_RATES),
-        ("deepseek-chat", FLASH_RATES),
-        ("deepseek/deepseek-chat", FLASH_RATES),
-        ("deepseek-reasoner", FLASH_RATES),
-        ("deepseek/deepseek-reasoner", FLASH_RATES),
         ("deepseek-v4-pro", PRO_RATES),
         ("deepseek/deepseek-v4-pro", PRO_RATES),
     ] {
@@ -409,6 +405,28 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
                 .and_then(serde_json::Value::as_str),
             Some(PRICING_STATUS)
         );
+    }
+
+    for model in ["deepseek-chat", "deepseek-reasoner"] {
+        let historical = builtin.get_model_info(model).unwrap();
+        assert_eq!(historical.input_cost_per_token, Some(2.2e-7));
+        assert_eq!(historical.output_cost_per_token, Some(6.6e-7));
+        assert_eq!(
+            historical.extra["pricing_status"],
+            "historical_alias_retired"
+        );
+    }
+    for model in [
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-reasoner",
+    ] {
+        let historical = embedded.get(model).unwrap();
+        assert_eq!(historical.input_cost_per_token, Some(2.2e-7));
+        assert_eq!(historical.output_cost_per_token, Some(6.6e-7));
+        assert_eq!(historical.extra["cache_read_input_token_cost"], 7e-9);
+        assert_ne!(historical.extra["pricing_status"], PRICING_STATUS);
     }
 
     let assert_vision_limits = |pricing: &LiteLLMModelInfo| {

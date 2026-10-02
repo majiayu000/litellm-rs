@@ -253,10 +253,7 @@ mod tests {
         let provider = native_provider(ProviderType::ElevenLabs, &mock.base_url, 5).await;
 
         let transcript = provider
-            .audio_transcription(
-                transcription_request("scribe_v1_experimental"),
-                RequestContext::new(),
-            )
+            .audio_transcription(transcription_request("scribe_v2"), RequestContext::new())
             .await
             .expect("ElevenLabs transcription should succeed");
         assert_eq!(transcript.text, "elevenlabs transcript");
@@ -289,7 +286,7 @@ mod tests {
         );
         let multipart = String::from_utf8_lossy(&requests[0].body);
         assert!(multipart.contains("name=\"model_id\""));
-        assert!(multipart.contains("scribe_v1_experimental"));
+        assert!(multipart.contains("scribe_v2"));
         assert!(multipart.contains("filename=\"sample.wav\""));
         assert!(multipart.contains("name=\"language_code\""));
         assert!(multipart.contains("name=\"temperature\""));
@@ -496,11 +493,15 @@ mod tests {
             &ProviderCapability::AudioTranscription
         ));
         assert!(
-            !elevenlabs.supports_capability_for_model(
+            elevenlabs.supports_capability_for_model(
                 "scribe_v2",
                 &ProviderCapability::AudioTranscription
             )
         );
+        assert!(!elevenlabs.supports_capability_for_model(
+            "scribe_v2-unlisted",
+            &ProviderCapability::AudioTranscription
+        ));
         assert!(
             !elevenlabs
                 .supports_capability_for_model("scribe_v1", &ProviderCapability::TextToSpeech)
