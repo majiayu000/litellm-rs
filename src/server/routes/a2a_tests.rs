@@ -5,11 +5,23 @@ use crate::core::{
 use actix_web::{App, HttpMessage, HttpServer, test};
 use std::sync::Arc;
 type Calls = Arc<Mutex<Vec<Value>>>;
-async fn upstream(
-    req: HttpRequest,
-    body: web::Json<Value>,
-    calls: web::Data<Calls>,
-) -> HttpResponse {
+async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -> HttpResponse {
+    assert!(
+        !std::str::from_utf8(&body)
+            .unwrap()
+            .contains("forbidden-first-id")
+    );
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    if body.pointer("/params/metadata/test_big_error") == Some(&Value::Bool(true)) {
+        return HttpResponse::TooManyRequests().body("x".repeat(1024));
+    }
+    if body.pointer("/params/metadata/test_slow_error") == Some(&Value::Bool(true)) {
+        return HttpResponse::BadGateway().streaming(async_stream::stream! {
+            yield Ok::<_, std::io::Error>(web::Bytes::from_static(b"first"));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            yield Ok(web::Bytes::from_static(b"late"));
+        });
+    }
     assert_eq!(
         req.headers().get("authorization").unwrap(),
         "Bearer upstream-test"
@@ -85,6 +97,7 @@ async fn fixture() -> (web::Data<AppState>, Calls, actix_web::dev::ServerHandle)
     config.gateway.auth.allow_anonymous = true;
     config.gateway.auth.enable_api_key = true;
     config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.api_key_header = "x-agent-key".into();
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.pricing.source = None;
@@ -101,6 +114,7 @@ async fn fixture() -> (web::Data<AppState>, Calls, actix_web::dev::ServerHandle)
     state.runtime.store(runtime);
     state.a2a_tasks = Arc::new(TaskOwners {
         entries: Mutex::default(),
+        reserved: AtomicUsize::new(0),
         client: Some(
             ProviderHttpClient::streaming_no_redirect(
                 ProviderEndpointPolicy::for_base_url(ProviderEndpointAccess::PrivateNetwork, &url)
@@ -160,6 +174,10 @@ async fn messages_tasks_cancellation_and_cards_reach_gateway() {
     req.extensions_mut().insert(user);
     let card: Value = test::read_body_json(test::call_service(&app, req).await).await;
     assert_eq!(card["supportedInterfaces"][0]["protocolVersion"], "1.0");
+    assert_eq!(
+        card["securitySchemes"]["gateway_key"]["apiKeySecurityScheme"]["name"],
+        "x-agent-key"
+    );
     assert!(!card.to_string().contains("upstream-test"));
     assert_eq!(card["capabilities"]["pushNotifications"], false);
     handle.stop(false).await;
@@ -247,11 +265,11 @@ async fn ownership_rejects_collisions_expiry_and_account_changes() {
     let owners = TaskOwners::default();
     let value = json!({"result":{"task":{"id":"one","contextId":"ctx"}}});
     owners
-        .observe(b"account-1", "alice", &value, None, None)
+        .observe(b"account-1", "alice", &value, None, None, None)
         .unwrap();
     assert!(
         owners
-            .observe(b"account-1", "bob", &value, None, None)
+            .observe(b"account-1", "bob", &value, None, None, None)
             .is_err()
     );
     assert!(!owners.owns(b"account-2", "alice", "task", "one"));
@@ -356,7 +374,7 @@ async fn real_key_authentication_and_endpoint_permissions() {
         .insert_header(("access-control-request-method", "POST"))
         .insert_header((
             "access-control-request-headers",
-            "x-api-key,content-type,a2a-version,a2a-extensions",
+            "x-agent-key,content-type,a2a-version,a2a-extensions",
         ))
         .to_request();
     assert!(
@@ -369,7 +387,7 @@ async fn real_key_authentication_and_endpoint_permissions() {
         .uri("/a2a/test")
         .insert_header(("origin", "https://agent.example.test"))
         .insert_header(("a2a-version", "1.0"))
-        .insert_header(("x-api-key", raw))
+        .insert_header(("x-agent-key", raw))
         .set_json(json!({"jsonrpc":"2.0","id":1,"method":"SendMessage","params":message()}))
         .to_request();
     let response = test::call_service(&app, req).await;
@@ -387,7 +405,7 @@ async fn real_key_authentication_and_endpoint_permissions() {
     assert_eq!(value["result"]["task"]["id"], "task-1");
     let req = test::TestRequest::get()
         .uri("/a2a/test/.well-known/agent-card.json")
-        .insert_header(("x-api-key", raw))
+        .insert_header(("x-agent-key", raw))
         .to_request();
     assert_eq!(
         test::call_service(&app, req).await.status(),
@@ -422,6 +440,7 @@ async fn config_validation_and_export_do_not_expose_agent_credentials() {
             b"account",
             "alice",
             &json!({"result":{"message":{"messageId":"reply","parts":[{"text":"done"}]}}}),
+            None,
             None,
             None,
         )
@@ -468,7 +487,13 @@ async fn equivalent_config_reload_preserves_task_ownership() {
         for index in indexes {
             headers.insert(format!("x-test-{index}"), index.to_string());
         }
-        config.gateway.a2a_agents.get_mut("test").unwrap().headers = headers;
+        let agent = config.gateway.a2a_agents.get_mut("test").unwrap();
+        agent.headers = headers;
+        if reverse {
+            agent.description = Some("updated description".into());
+            agent.timeout_ms += 100;
+            agent.tags.push("updated".into());
+        }
         revision.config = Arc::new(config);
         state.runtime.store(revision);
         let response = test::call_service(
@@ -491,5 +516,108 @@ async fn equivalent_config_reload_preserves_task_ownership() {
     let response =
         test::call_service(&app, request("GetTask", json!({"id":"unknown"}), &owner)).await;
     assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn capacity_rejection_precedes_upstream_and_reservations_release() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    {
+        let mut entries = state.a2a_tasks.entries.lock().unwrap();
+        for index in 0..4094 {
+            entries.insert(
+                (vec![], "task".into(), index.to_string()),
+                Owner {
+                    principal: "other".into(),
+                    expires: Instant::now() + Duration::from_secs(60),
+                },
+            );
+        }
+    }
+    let reservation = state.a2a_tasks.reserve(2).unwrap();
+    for method in ["SendMessage", "SendStreamingMessage"] {
+        let response = test::call_service(&app, request(method, message(), &user())).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    assert!(calls.lock().unwrap().is_empty());
+    drop(reservation);
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    state.a2a_tasks.entries.lock().unwrap().clear();
+    let mut params = message();
+    params["metadata"] = json!({"test_limit":true});
+    assert_eq!(
+        test::call_service(&app, request("SendMessage", params, &user()))
+            .await
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    assert!(state.a2a_tasks.entries.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn accepts_query_version_and_forwards_authorized_json_only() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let req = test::TestRequest::post()
+        .uri("/a2a/test?A2A-Version=1.0")
+        .set_json(json!({"jsonrpc":"2.0","id":1,"method":"SendMessage","params":message()}))
+        .to_request();
+    req.extensions_mut().insert(owner.clone());
+    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+    let req = test::TestRequest::post().uri("/a2a/test").insert_header(("a2a-version", "1.0"))
+        .insert_header(("content-type", "application/json"))
+        .set_payload(r#"{"jsonrpc":"2.0","id":1,"method":"CancelTask","params":{"id":"forbidden-first-id","id":"task-1"}}"#).to_request();
+    req.extensions_mut().insert(owner);
+    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+    assert_eq!(calls.lock().unwrap()[1]["params"]["id"], "task-1");
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn error_bodies_obey_size_and_time_bounds() {
+    let (state, _, handle) = fixture().await;
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    config.gateway.server.max_body_size = 64;
+    config
+        .gateway
+        .a2a_agents
+        .get_mut("test")
+        .unwrap()
+        .timeout_ms = 100;
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for field in ["test_big_error", "test_slow_error"] {
+        let mut params = message();
+        params["metadata"] = json!({field:true});
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            test::call_service(&app, request("SendMessage", params, &user())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    }
     handle.stop(false).await;
 }

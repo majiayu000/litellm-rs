@@ -7,12 +7,14 @@ use crate::{
     utils::net::http::ProviderHttpClient,
 };
 use actix_web::{HttpRequest, HttpResponse, http::StatusCode, web};
-use futures::StreamExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -27,10 +29,40 @@ type TaskIdentity = (Vec<u8>, String, String);
 #[derive(Default)]
 pub(crate) struct TaskOwners {
     entries: Mutex<HashMap<TaskIdentity, Owner>>,
+    reserved: AtomicUsize,
     #[cfg(test)]
     client: Option<ProviderHttpClient>,
 }
+// Each new message reserves room for its task and context before any side effect.
+// Unused slots are returned on errors, cancellation and stream disconnects.
+struct TaskReservation {
+    owners: Arc<TaskOwners>,
+    remaining: usize,
+}
+impl Drop for TaskReservation {
+    fn drop(&mut self) {
+        self.owners
+            .reserved
+            .fetch_sub(self.remaining, Ordering::Relaxed);
+    }
+}
 impl TaskOwners {
+    fn reserve(self: &Arc<Self>, slots: usize) -> Result<TaskReservation, &'static str> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| "A2A ownership unavailable")?;
+        entries.retain(|_, owner| owner.expires > Instant::now());
+        if entries.len() + self.reserved.load(Ordering::Relaxed) + slots > 4096 {
+            return Err("A2A ownership capacity reached");
+        }
+        self.reserved.fetch_add(slots, Ordering::Relaxed);
+        Ok(TaskReservation {
+            owners: self.clone(),
+            remaining: slots,
+        })
+    }
+
     fn owns(&self, binding: &[u8], principal: &str, kind: &str, id: &str) -> bool {
         self.entries
             .lock()
@@ -49,6 +81,7 @@ impl TaskOwners {
         value: &Value,
         expected_task: Option<&str>,
         expected_context: Option<&str>,
+        reservation: Option<&mut TaskReservation>,
     ) -> Result<(), &'static str> {
         if value.get("error").is_some() {
             return Ok(());
@@ -104,8 +137,14 @@ impl TaskOwners {
         }) {
             return Err("A2A response belongs to another caller");
         }
-        if entries.len() + ids.iter().filter(|id| !entries.contains_key(*id)).count() > 4096 {
+        let new_ids = ids.iter().filter(|id| !entries.contains_key(*id)).count();
+        let credit = reservation.as_ref().map_or(0, |r| r.remaining.min(new_ids));
+        if entries.len() + self.reserved.load(Ordering::Relaxed) + new_ids - credit > 4096 {
             return Err("A2A ownership capacity reached");
+        }
+        if let Some(reservation) = reservation {
+            reservation.remaining -= credit;
+            self.reserved.fetch_sub(credit, Ordering::Relaxed);
         }
         for id in ids {
             entries.insert(
@@ -187,7 +226,7 @@ async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
     if runtime.config.gateway.auth.enable_api_key {
         schemes.insert(
             "gateway_key".into(),
-            json!({"apiKeySecurityScheme":{"location":"header","name":"x-api-key"}}),
+            json!({"apiKeySecurityScheme":{"location":"header","name":runtime.config.gateway.auth.api_key_header}}),
         );
         requirements.push(json!({"schemes":{"gateway_key":{"list":[]}}}));
     }
@@ -263,12 +302,15 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             "Expected a JSON-RPC request with ID",
         );
     }
-    if req
+    let query_version = url::form_urlencoded::parse(req.query_string().as_bytes())
+        .find(|(name, _)| name == "A2A-Version")
+        .map(|(_, value)| value.into_owned());
+    let version = req
         .headers()
         .get("a2a-version")
         .and_then(|v| v.to_str().ok())
-        != Some("1.0")
-    {
+        .or(query_version.as_deref());
+    if version != Some("1.0") {
         return error(
             StatusCode::BAD_REQUEST,
             id,
@@ -306,17 +348,18 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             "Invalid or unsupported A2A parameters",
         );
     }
-    let binding = match serde_json::to_value(agent).and_then(|mut value| {
-        value.sort_all_objects();
-        serde_json::to_vec(&value)
-    }) {
+    // Presentation and capability edits do not change the upstream account.
+    let mut account =
+        json!({"name":name,"url":agent.url,"api_key":agent.api_key,"headers":agent.headers});
+    account.sort_all_objects();
+    let binding = match serde_json::to_vec(&account) {
         Ok(bytes) => Sha256::digest(bytes).to_vec(),
         Err(_) => {
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 id,
                 -32603,
-                "Invalid A2A configuration",
+                "Invalid A2A account configuration",
             );
         }
     };
@@ -404,11 +447,20 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 "application/json"
             },
         )
-        .body(body.to_vec());
+        .json(&value);
     // Extensions remain opaque, but cannot change the configured upstream endpoint/account.
     if let Some(value) = req.headers().get("a2a-extensions") {
         request = request.header("a2a-extensions", value.as_bytes());
     }
+    let mut reservation = if send {
+        let slots = usize::from(task.is_none()) + usize::from(context.is_none());
+        match state.a2a_tasks.reserve(slots) {
+            Ok(reservation) => Some(reservation),
+            Err(message) => return error(StatusCode::SERVICE_UNAVAILABLE, id, -32000, message),
+        }
+    } else {
+        None
+    };
     let mut upstream =
         match tokio::time::timeout(Duration::from_millis(agent.timeout_ms), request.send()).await {
             Ok(Ok(r)) => r,
@@ -438,20 +490,16 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         }
     }
     response.insert_header(("cache-control", "no-store"));
-    if !status.is_success() {
-        return response.streaming(upstream.bytes_stream().map(|chunk| {
-            chunk.map_err(|_| actix_web::error::ErrorBadGateway("A2A error body interrupted"))
-        }));
-    }
     let owners = state.a2a_tasks.clone();
     let task = task.map(str::to_owned);
     let context = context.map(str::to_owned);
     let limit = runtime.config.gateway.server.max_body_size;
-    if upstream
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|s| s.starts_with("text/event-stream"))
+    if status.is_success()
+        && upstream
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|s| s.starts_with("text/event-stream"))
     {
         if !stream {
             return error(
@@ -476,7 +524,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                         if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || value.get("id") != Some(&id) {
                             Err(actix_web::error::ErrorBadGateway("A2A response ID mismatch"))?;
                         }
-                        owners.observe(&binding, &principal, &value, task.as_deref(), context.as_deref()).map_err(actix_web::error::ErrorBadGateway)?;
+                        owners.observe(&binding, &principal, &value, task.as_deref(), context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
                     }
                     yield web::Bytes::from(frame);
                 }
@@ -507,6 +555,9 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             );
         }
     };
+    if !status.is_success() {
+        return response.body(bytes);
+    }
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(_) => {
@@ -532,6 +583,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         &value,
         task.as_deref(),
         context.as_deref(),
+        reservation.as_mut(),
     ) {
         return error(StatusCode::BAD_GATEWAY, id, -32603, message);
     }
