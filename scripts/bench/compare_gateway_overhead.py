@@ -66,7 +66,14 @@ def validate_artifact(artifact: dict[str, Any], label: str) -> None:
         raise ComparisonError(f"{label}.source.git_sha must be a full lowercase Git SHA")
     if source.get("git_dirty") is not False:
         raise ComparisonError(f"{label} must come from a clean Git worktree")
-    if source.get("build_flags") != ["--release", "--bin", "gateway"]:
+    if source.get("build_flags") != [
+        "--release",
+        "--bin",
+        "gateway",
+        "--no-default-features",
+        "--features",
+        "sqlite,redis,metrics,tracing",
+    ]:
         raise ComparisonError(f"{label}.source.build_flags do not match the benchmark contract")
 
     required_mapping(artifact.get("environment"), f"{label}.environment")

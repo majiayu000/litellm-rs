@@ -198,11 +198,14 @@ async fn test_llm_cache_embedding() {
     };
 
     cache
-        .cache_embedding_response(&request, response.clone())
+        .cache_embedding_response(&request, response.clone(), None, "deployment")
         .await
         .unwrap();
 
-    let result = cache.get_embedding_response(&request).await.unwrap();
+    let result = cache
+        .get_embedding_response(&request, None, "deployment")
+        .await
+        .unwrap();
     assert!(result.is_some());
     assert_eq!(
         result.as_ref().unwrap().model.as_str(),
@@ -235,17 +238,17 @@ async fn test_llm_cache_embedding_hit_reuses_shared_payload() {
     };
 
     cache
-        .cache_embedding_response(&request, response)
+        .cache_embedding_response(&request, response, None, "deployment")
         .await
         .unwrap();
 
     let first = cache
-        .get_embedding_response(&request)
+        .get_embedding_response(&request, None, "deployment")
         .await
         .unwrap()
         .expect("first cache hit");
     let second = cache
-        .get_embedding_response(&request)
+        .get_embedding_response(&request, None, "deployment")
         .await
         .unwrap()
         .expect("second cache hit");

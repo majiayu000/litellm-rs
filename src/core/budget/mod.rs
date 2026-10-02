@@ -166,10 +166,12 @@ impl BudgetAmount {
         Self(self.0.saturating_sub(other.0).max(0))
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn as_scaled(self) -> i128 {
         self.0
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn from_scaled(value: i128) -> Self {
         Self(value.max(0))
     }

@@ -7,16 +7,18 @@ use std::sync::OnceLock;
 
 const ADMISSION_SCRIPT: &str = r#"
 local op = ARGV[1]
-local now = tonumber(ARGV[2]) or 0
-local epoch = tonumber(ARGV[3]) or 0
-local max_p = tonumber(ARGV[4]) or -1
-local max_r = tonumber(ARGV[5]) or -1
-local max_t = tonumber(ARGV[6]) or -1
-local rpm_inc = tonumber(ARGV[7]) or 0
-local tpm_inc = tonumber(ARGV[8]) or 0
-local lease_id = ARGV[9]
-local ttl = tonumber(ARGV[10]) or 1
-local actual_tpm = tonumber(ARGV[11]) or 0
+-- All replicas use the clock at this atomic Redis boundary.
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local epoch = math.floor(tonumber(clock[1]) / 60)
+local max_p = tonumber(ARGV[2]) or -1
+local max_r = tonumber(ARGV[3]) or -1
+local max_t = tonumber(ARGV[4]) or -1
+local rpm_inc = tonumber(ARGV[5]) or 0
+local tpm_inc = tonumber(ARGV[6]) or 0
+local lease_id = ARGV[7]
+local ttl = tonumber(ARGV[8]) or 1
+local actual_tpm = tonumber(ARGV[9]) or 0
 
 local function nums()
   local p = tonumber(redis.call('HGET', KEYS[1], 'p') or '0') or 0
@@ -35,7 +37,8 @@ end
 
 local function reclaim()
   local p, r, t, e = nums()
-  if e ~= epoch then
+  local window_changed = epoch > e
+  if window_changed then
     r = 0
     t = 0
     e = epoch
@@ -60,6 +63,14 @@ local function reclaim()
           end
         end
         redis.call('HDEL', KEYS[1], fields[i])
+      elseif window_changed then
+        -- Carry outstanding TPM, but charge RPM only in the arrival window.
+        rpmInc = 0
+        t = t + tpmInc
+        redis.call(
+          'HSET', KEYS[1], fields[i],
+          tostring(pInc) .. ':' .. tostring(rpmInc) .. ':' .. tostring(tpmInc) .. ':' .. tostring(e) .. ':' .. tostring(expiry)
+        )
       end
     end
   end
@@ -106,8 +117,6 @@ if op == 'settle' or op == 'cancel' then
       else
         t = t - tpmInc + actual_tpm
       end
-    elseif op == 'settle' then
-      t = t + actual_tpm
     end
     redis.call('HDEL', KEYS[1], field)
     save(p, r, t, e)
@@ -134,8 +143,6 @@ pub(crate) struct AdmissionReserveArgs<'a> {
     pub rpm_inc: i64,
     pub tpm_inc: i64,
     pub lease_id: &'a str,
-    pub now_ms: i64,
-    pub window_epoch: i64,
     pub ttl_ms: i64,
 }
 
@@ -186,8 +193,6 @@ fn parse_admission_state(values: Vec<i64>) -> Result<AdmissionState> {
 
 struct AdmissionArgs<'a> {
     op: &'a str,
-    now_ms: i64,
-    window_epoch: i64,
     max_parallel: i64,
     max_rpm: i64,
     max_tpm: i64,
@@ -221,8 +226,6 @@ impl RedisPool {
         let values: Vec<i64> = admission_script()
             .key(key)
             .arg(args.op)
-            .arg(args.now_ms)
-            .arg(args.window_epoch)
             .arg(args.max_parallel)
             .arg(args.max_rpm)
             .arg(args.max_tpm)
@@ -245,8 +248,6 @@ impl RedisPool {
             args.key,
             AdmissionArgs {
                 op: "reserve",
-                now_ms: args.now_ms,
-                window_epoch: args.window_epoch,
                 max_parallel: args.max_parallel,
                 max_rpm: args.max_rpm,
                 max_tpm: args.max_tpm,
@@ -265,10 +266,8 @@ impl RedisPool {
         key: &str,
         lease_id: &str,
         actual_tpm: i64,
-        window_epoch: i64,
-        now_ms: i64,
     ) -> Result<AdmissionState> {
-        self.admission_finish("settle", key, lease_id, actual_tpm, window_epoch, now_ms)
+        self.admission_finish("settle", key, lease_id, actual_tpm)
             .await
     }
 
@@ -276,11 +275,8 @@ impl RedisPool {
         &self,
         key: &str,
         lease_id: &str,
-        window_epoch: i64,
-        now_ms: i64,
     ) -> Result<AdmissionState> {
-        self.admission_finish("cancel", key, lease_id, 0, window_epoch, now_ms)
-            .await
+        self.admission_finish("cancel", key, lease_id, 0).await
     }
 
     async fn admission_finish(
@@ -289,15 +285,11 @@ impl RedisPool {
         key: &str,
         lease_id: &str,
         actual_tpm: i64,
-        window_epoch: i64,
-        now_ms: i64,
     ) -> Result<AdmissionState> {
         self.invoke_admission(
             key,
             AdmissionArgs {
                 op,
-                now_ms,
-                window_epoch,
                 max_parallel: -1,
                 max_rpm: -1,
                 max_tpm: -1,
@@ -316,6 +308,251 @@ impl RedisPool {
 mod tests {
     use super::*;
     use crate::config::models::storage::RedisConfig;
+
+    async fn live_connection() -> Option<RedisLiveConnection> {
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return None;
+        };
+        let pool = RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap();
+        // Keep these short-lived test runtimes out of the bridge's connection cache.
+        Some(pool.open_live_connection().await.unwrap())
+    }
+
+    async fn invoke_script(
+        conn: &mut RedisLiveConnection,
+        key: &str,
+        op: &str,
+        lease_id: &str,
+        tokens: i64,
+        max_rpm: i64,
+    ) -> AdmissionState {
+        let values = admission_script()
+            .key(key)
+            .arg(op)
+            .arg(-1)
+            .arg(max_rpm)
+            .arg(10)
+            .arg(1)
+            .arg(tokens)
+            .arg(lease_id)
+            .arg(600_000)
+            .arg(tokens)
+            .invoke_async(conn)
+            .await
+            .unwrap();
+        parse_admission_state(values).unwrap()
+    }
+
+    async fn redis_time(conn: &mut RedisLiveConnection) -> (i64, i64) {
+        let (seconds, micros): (i64, i64) = redis::cmd("TIME").query_async(conn).await.unwrap();
+        (seconds * 1_000 + micros / 1_000, seconds / 60)
+    }
+
+    // Age stored accounting instead of waiting for a real minute boundary.
+    async fn age_window(conn: &mut RedisLiveConnection, key: &str, lease_id: &str) {
+        let (_, epoch) = redis_time(conn).await;
+        let field = format!("l:{lease_id}");
+        let lease: String = redis::cmd("HGET")
+            .arg(key)
+            .arg(&field)
+            .query_async(conn)
+            .await
+            .unwrap();
+        let mut parts: Vec<String> = lease.split(':').map(str::to_owned).collect();
+        parts[3] = (epoch - 1).to_string();
+        redis::cmd("HSET")
+            .arg(key)
+            .arg("e")
+            .arg(epoch - 1)
+            .arg(field)
+            .arg(parts.join(":"))
+            .query_async::<i64>(conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn window_rollover_carries_live_reservations_until_finish() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        for op in ["settle", "cancel", "expire"] {
+            let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+            assert!(
+                invoke_script(&mut conn, &key, "reserve", "old", 10, 2)
+                    .await
+                    .allowed
+            );
+            for _ in 0..2 {
+                age_window(&mut conn, &key, "old").await;
+                for _ in 0..2 {
+                    let denied = invoke_script(&mut conn, &key, "reserve", "new", 1, 2).await;
+                    assert!(!denied.allowed, "live TPM must survive rollover ({op})");
+                    assert_eq!((denied.parallel, denied.rpm, denied.tpm), (1, 0, 10));
+                }
+            }
+            if op == "expire" {
+                let (_, epoch) = redis_time(&mut conn).await;
+                redis::cmd("HSET")
+                    .arg(&key)
+                    .arg("l:old")
+                    .arg(format!("1:0:10:{epoch}:0"))
+                    .query_async::<i64>(&mut conn)
+                    .await
+                    .unwrap();
+            }
+            let finish_op = if op == "expire" { "cancel" } else { op };
+            let finished = invoke_script(&mut conn, &key, finish_op, "old", 4, 2).await;
+            let tpm = if op == "settle" { 4 } else { 0 };
+            assert_eq!((finished.parallel, finished.rpm, finished.tpm), (0, 0, tpm));
+            let admitted = invoke_script(&mut conn, &key, "reserve", "new", 10 - tpm, 2).await;
+            assert!(admitted.allowed, "finish must release the carried estimate");
+            assert_eq!((admitted.parallel, admitted.rpm, admitted.tpm), (1, 1, 10));
+            let repeated = invoke_script(&mut conn, &key, finish_op, "old", 4, 2).await;
+            assert_eq!(
+                repeated, admitted,
+                "duplicate finish must leave other leases intact"
+            );
+            age_window(&mut conn, &key, "new").await;
+            let carried = invoke_script(&mut conn, &key, "reserve", "third", 5, 2).await;
+            assert!(!carried.allowed);
+            assert_eq!(
+                (carried.parallel, carried.rpm, carried.tpm),
+                (1, 0, 10 - tpm),
+                "only outstanding TPM should carry into the next window"
+            );
+            redis::cmd("DEL")
+                .arg(&key)
+                .query_async::<i64>(&mut conn)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn same_window_commands_preserve_settled_usage() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", "old", 10, 2)
+                .await
+                .allowed
+        );
+        age_window(&mut conn, &key, "old").await;
+        assert!(
+            !invoke_script(&mut conn, &key, "reserve", "new", 1, 2)
+                .await
+                .allowed
+        );
+        let settled = invoke_script(&mut conn, &key, "settle", "old", 4, 2).await;
+        assert_eq!((settled.parallel, settled.rpm, settled.tpm), (0, 0, 4));
+        let admitted = invoke_script(&mut conn, &key, "reserve", "new", 6, 2).await;
+        assert!(admitted.allowed);
+        assert_eq!((admitted.parallel, admitted.rpm, admitted.tpm), (1, 1, 10));
+        let denied = invoke_script(&mut conn, &key, "reserve", "third", 1, 2).await;
+        assert!(
+            !denied.allowed,
+            "settled usage must survive another command"
+        );
+        assert_eq!((denied.parallel, denied.rpm, denied.tpm), (1, 1, 10));
+        let cancelled = invoke_script(&mut conn, &key, "cancel", "new", 0, 2).await;
+        assert_eq!(
+            (cancelled.parallel, cancelled.rpm, cancelled.tpm),
+            (0, 0, 4)
+        );
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn admission_uses_redis_time_for_windows_and_lease_expiry() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+        let (before, first_epoch) = redis_time(&mut conn).await;
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", "lease", 0, 1)
+                .await
+                .allowed
+        );
+        let (epoch, lease): (i64, String) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["e", "l:lease"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let (after, last_epoch) = redis_time(&mut conn).await;
+        assert!(
+            (first_epoch..=last_epoch).contains(&epoch),
+            "admission must use the Redis window: {epoch}"
+        );
+        let expiry: i64 = lease.rsplit(':').next().unwrap().parse().unwrap();
+        assert!((before + 600_000..=after + 600_000).contains(&expiry));
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn window_rollover_does_not_charge_old_arrivals_again() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        for op in ["settle", "cancel", "expire"] {
+            let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+            assert!(
+                invoke_script(&mut conn, &key, "reserve", "old", 0, 1)
+                    .await
+                    .allowed
+            );
+            age_window(&mut conn, &key, "old").await;
+            let admitted = invoke_script(&mut conn, &key, "reserve", "new", 0, 1).await;
+            assert!(
+                admitted.allowed,
+                "old arrivals must not consume new RPM ({op})"
+            );
+            assert_eq!((admitted.parallel, admitted.rpm, admitted.tpm), (2, 1, 0));
+            if op == "expire" {
+                let (_, epoch) = redis_time(&mut conn).await;
+                redis::cmd("HSET")
+                    .arg(&key)
+                    .arg("l:old")
+                    .arg(format!("1:0:0:{epoch}:0"))
+                    .query_async::<i64>(&mut conn)
+                    .await
+                    .unwrap();
+            }
+            let finish_op = if op == "expire" { "cancel" } else { op };
+            let finished = invoke_script(&mut conn, &key, finish_op, "old", 0, 1).await;
+            assert_eq!((finished.parallel, finished.rpm, finished.tpm), (1, 1, 0));
+            assert!(
+                !invoke_script(&mut conn, &key, "reserve", "third", 0, 1)
+                    .await
+                    .allowed
+            );
+            redis::cmd("DEL")
+                .arg(&key)
+                .query_async::<i64>(&mut conn)
+                .await
+                .unwrap();
+        }
+    }
 
     #[test]
     fn parses_admission_state() {
@@ -349,8 +586,6 @@ mod tests {
                 rpm_inc: 0,
                 tpm_inc: 0,
                 lease_id: "lease",
-                now_ms: 1,
-                window_epoch: 0,
                 ttl_ms: 1_000,
             })
             .await

@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::core::providers::{
-    ChatContinuationRequest, ChatContinuationResponse, unified_provider::ProviderError,
-};
+use crate::core::providers::unified_provider::ProviderError;
+#[cfg(feature = "gateway")]
+use crate::core::providers::{ChatContinuationRequest, ChatContinuationResponse};
 use crate::core::traits::provider::ProviderConfig as _;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
@@ -70,6 +70,7 @@ impl AnthropicProvider {
         })
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) async fn chat_with_continuation(
         &self,
         request: ChatContinuationRequest,

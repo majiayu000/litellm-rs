@@ -1,5 +1,6 @@
 # Multi-stage build for LiteLLM-RS
 FROM rust:1.92-bookworm AS builder
+ARG RELEASE_FEATURES="postgres sqlite redis s3 metrics tracing websockets analytics"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -33,15 +34,17 @@ RUN mkdir -p src/bin && \
     echo "fn main() {}" > benches/e2e_benchmarks.rs
 
 # Build dependencies (this layer will be cached)
-RUN cargo build --release --locked --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
 RUN rm -rf src/*
 
 # Copy source code and necessary files
 COPY src ./src
 COPY config ./config
+COPY docs/openapi/admin.json docs/openapi/inference.json ./docs/openapi/
 
 # Build the application
-RUN cargo build --release --locked --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo clean --release -p litellm-rs
+RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -80,7 +83,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Default command
-CMD ["gateway", "--config", "config/gateway.yaml"]
+CMD ["gateway"]
 
 # Labels
 LABEL org.opencontainers.image.title="LiteLLM-RS"

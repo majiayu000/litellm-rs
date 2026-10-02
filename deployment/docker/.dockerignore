@@ -29,6 +29,8 @@ logs/
 # Documentation build
 /doc
 /docs
+!/docs/openapi/admin.json
+!/docs/openapi/inference.json
 
 # Test outputs
 coverage/

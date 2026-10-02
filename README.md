@@ -26,13 +26,13 @@ Run the primary supported product from source:
 git clone https://github.com/majiayu000/litellm-rs.git
 cd litellm-rs
 cp config/gateway.dev.yaml.example config/gateway.yaml
-cargo run --bin gateway
+cargo run --bin gateway --features sqlite
 ```
 
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --bin gateway
+cargo install litellm-rs --bin gateway --features sqlite
 mkdir -p config
 curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
@@ -50,6 +50,8 @@ versioned source is
 control-plane contract is served at `GET /admin/openapi.json` (admin-authenticated)
 from [`docs/openapi/admin.json`](./docs/openapi/admin.json).
 
+For a first HTTP request or setup failure, use the [gateway setup and compatibility questions](docs/README.md#start-with-an-http-request).
+
 ## Supported Product Surfaces
 
 | Surface | Support policy |
@@ -58,11 +60,19 @@ from [`docs/openapi/admin.json`](./docs/openapi/admin.json).
 | Runtime-backed Rust APIs | Reusable gateway kernel. `LLMClient::from_runtime`, `DefaultRouter::from_runtime`, and runtime-configured `completion()` derive support from the selected deployment and fail unsupported capabilities with typed errors. |
 | Legacy SDK and selector adapters | Compatibility surfaces with narrower coverage. The [legacy adapter matrix](#legacy-adapter-matrix) is authoritative for these paths and is not a canonical runtime capability matrix. |
 
+## Container distribution status
+
+The public `ghcr.io/majiayu000/litellm-rs:latest` tag is a historical `main`
+image from December 16, 2025 (revision `5fefe416b95d2545d5ce38fa80ac174d3c589b5a`),
+not the current 0.7.0 release. For 0.7.0, use the
+[published crate](https://crates.io/crates/litellm-rs/0.7.0) or
+[GitHub Release downloads](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0).
+
 ## Rust Crate
 
 ```toml
 [dependencies]
-litellm-rs = { version = "0.6", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.7", default-features = false, features = ["lite"] }
 ```
 
 No `make` step is required for crate consumers.
@@ -162,23 +172,30 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 
 ## Installation
 
+On the development branch, default features select the reusable library with
+metrics and tracing. Gateway and database dependencies are opt-in. Published
+0.7.0 still uses gateway defaults; until the next release, library consumers can
+select `default-features = false, features = ["lite"]`.
+
 ```toml
-# Full gateway with SQLite + Redis (default)
+# Library with metrics and tracing
 [dependencies]
-litellm-rs = "0.6"
+litellm-rs = { version = "0.7", default-features = false, features = ["lite"] }
 
-# API-only - lightweight, no actix-web/argon2/aes-gcm/clap
+# Library without optional observability
 [dependencies]
-litellm-rs = { version = "0.6", default-features = false }
+litellm-rs = { version = "0.7", default-features = false }
 
-# API-only with metrics
+# Gateway with SQLite (also enables Redis support)
 [dependencies]
-litellm-rs = { version = "0.6", default-features = false, features = ["lite"] }
-
-# Gateway modules in library context (not standalone gateway binary runtime)
-[dependencies]
-litellm-rs = { version = "0.6", default-features = false, features = ["gateway"] }
+litellm-rs = { version = "0.7", features = ["sqlite"] }
 ```
+
+Use the crate root or `litellm_rs::prelude` for completion and embedding APIs.
+Advanced types have explicit module paths: `core::providers` for provider
+construction, `core::router` for deployment management, and
+`core::models::openai` for HTTP wire models. Hidden root re-exports of these
+advanced types have been removed on the development branch.
 
 ## Provider Support
 
@@ -404,7 +421,7 @@ See [SECURITY.md](./SECURITY.md) for security policy and vulnerability reporting
 
 This project is one layer of an open-source stack for running coding agents (Claude Code, Codex) as serious infrastructure. Every piece works standalone; together they close the loop:
 
-`litellm-rs` is the **Route** layer — the gateway underneath everything else, speaking OpenAI format to 100+ providers.
+`litellm-rs` is the **Route** layer — a self-hosted OpenAI-compatible gateway. See [Provider Support](#provider-support) for runtime and adapter coverage.
 
 | Layer | Project | What it does |
 |---|---|---|
@@ -414,7 +431,7 @@ This project is one layer of an open-source stack for running coding agents (Cla
 | Trust | [vibeguard](https://github.com/majiayu000/vibeguard) | Rules, hooks, and guards against hallucinated or unverified agent changes |
 | Remember | [remem](https://github.com/majiayu000/remem) | Local-first persistent memory for Claude Code and Codex sessions |
 | Orchestrate | [harness](https://github.com/majiayu000/harness) | Rust agent orchestration platform — rules, skills, GC, observability |
-| Route | [litellm-rs](https://github.com/majiayu000/litellm-rs) **◀ you are here** | High-performance Rust AI gateway — 100+ LLM APIs via OpenAI format |
+| Route | [litellm-rs](https://github.com/majiayu000/litellm-rs) **◀ you are here** | Self-hosted Rust LLM gateway with OpenAI-compatible APIs, routing, and failover |
 | Keep | [keepline](https://github.com/majiayu000/keepline) | Session command center — monitor, recover, never lose agent work |
 
 ---

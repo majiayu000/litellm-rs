@@ -16882,9 +16882,9 @@
     "max_tokens": 1048576,
     "max_input_tokens": 1048576,
     "max_output_tokens": 393216,
-    "input_cost_per_token": 1.5e-07,
-    "output_cost_per_token": 6e-07,
-    "cache_read_input_token_cost": 3e-09,
+    "input_cost_per_token": 2.2e-07,
+    "output_cost_per_token": 6.6e-07,
+    "cache_read_input_token_cost": 7e-09,
     "time_of_use_pricing": {
       "timezone": "UTC",
       "peak_windows": [
@@ -16912,9 +16912,9 @@
         }
       ],
       "peak_rates": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "cache_read_input_token_cost": 6e-09
+        "input_cost_per_token": 4.4e-07,
+        "output_cost_per_token": 1.32e-06,
+        "cache_read_input_token_cost": 1.4e-08
       }
     },
     "litellm_provider": "deepseek",
@@ -16925,18 +16925,16 @@
     "alias_for": "deepseek-v4-flash",
     "thinking_mode": "disabled",
     "deprecation_status": "deprecated_on_2026_07_24_1559_utc",
-    "pricing_status": "official_off_peak_rate_checked_2026_10_01",
-    "source": "https://api-docs.deepseek.com/quick_start/pricing",
-    "input_cost_per_token_cache_hit": 3e-09,
-    "supports_vision": true
+    "pricing_status": "official_off_peak_rate_checked_2026_08_24",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/"
   },
   "deepseek-reasoner": {
     "max_tokens": 1048576,
     "max_input_tokens": 1048576,
     "max_output_tokens": 393216,
-    "input_cost_per_token": 1.5e-07,
-    "output_cost_per_token": 6e-07,
-    "cache_read_input_token_cost": 3e-09,
+    "input_cost_per_token": 2.2e-07,
+    "output_cost_per_token": 6.6e-07,
+    "cache_read_input_token_cost": 7e-09,
     "time_of_use_pricing": {
       "timezone": "UTC",
       "peak_windows": [
@@ -16964,9 +16962,9 @@
         }
       ],
       "peak_rates": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "cache_read_input_token_cost": 6e-09
+        "input_cost_per_token": 4.4e-07,
+        "output_cost_per_token": 1.32e-06,
+        "cache_read_input_token_cost": 1.4e-08
       }
     },
     "litellm_provider": "deepseek",
@@ -16978,10 +16976,8 @@
     "alias_for": "deepseek-v4-flash",
     "thinking_mode": "enabled",
     "deprecation_status": "deprecated_on_2026_07_24_1559_utc",
-    "pricing_status": "official_off_peak_rate_checked_2026_10_01",
-    "source": "https://api-docs.deepseek.com/quick_start/pricing",
-    "input_cost_per_token_cache_hit": 3e-09,
-    "supports_vision": true
+    "pricing_status": "official_off_peak_rate_checked_2026_08_24",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/"
   },
   "dashscope/deepseek-v4-flash": {
     "cache_read_input_token_cost": 4e-08,
@@ -22880,7 +22876,7 @@
   },
   "deepseek/deepseek-chat": {
     "cache_creation_input_token_cost": 0.0,
-    "cache_read_input_token_cost": 3e-09,
+    "cache_read_input_token_cost": 7e-09,
     "time_of_use_pricing": {
       "timezone": "UTC",
       "peak_windows": [
@@ -22908,21 +22904,21 @@
         }
       ],
       "peak_rates": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "cache_read_input_token_cost": 6e-09
+        "input_cost_per_token": 4.4e-07,
+        "output_cost_per_token": 1.32e-06,
+        "cache_read_input_token_cost": 1.4e-08
       }
     },
-    "input_cost_per_token": 1.5e-07,
-    "input_cost_per_token_cache_hit": 3e-09,
+    "input_cost_per_token": 2.2e-07,
+    "input_cost_per_token_cache_hit": 7e-09,
     "litellm_provider": "deepseek",
-    "max_input_tokens": 1048576,
-    "max_output_tokens": 393216,
-    "max_tokens": 1048576,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 8192,
+    "max_tokens": 8192,
     "mode": "chat",
-    "output_cost_per_token": 6e-07,
-    "pricing_status": "official_off_peak_rate_checked_2026_10_01",
-    "source": "https://api-docs.deepseek.com/quick_start/pricing",
+    "output_cost_per_token": 6.6e-07,
+    "pricing_status": "official_off_peak_rate_checked_2026_08_24",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
     "supported_endpoints": [
       "/v1/chat/completions"
     ],
@@ -22933,8 +22929,7 @@
     "supports_prompt_caching": true,
     "supports_response_schema": true,
     "supports_system_messages": true,
-    "supports_tool_choice": true,
-    "supports_vision": true
+    "supports_tool_choice": true
   },
   "deepseek/deepseek-coder": {
     "cache_read_input_token_cost": 1.4e-08,
@@ -22968,7 +22963,7 @@
     "supports_tool_choice": true
   },
   "deepseek/deepseek-reasoner": {
-    "cache_read_input_token_cost": 3e-09,
+    "cache_read_input_token_cost": 7e-09,
     "time_of_use_pricing": {
       "timezone": "UTC",
       "peak_windows": [
@@ -22996,21 +22991,21 @@
         }
       ],
       "peak_rates": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "cache_read_input_token_cost": 6e-09
+        "input_cost_per_token": 4.4e-07,
+        "output_cost_per_token": 1.32e-06,
+        "cache_read_input_token_cost": 1.4e-08
       }
     },
-    "input_cost_per_token": 1.5e-07,
-    "input_cost_per_token_cache_hit": 3e-09,
+    "input_cost_per_token": 2.2e-07,
+    "input_cost_per_token_cache_hit": 7e-09,
     "litellm_provider": "deepseek",
-    "max_input_tokens": 1048576,
-    "max_output_tokens": 393216,
-    "max_tokens": 1048576,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 65536,
+    "max_tokens": 65536,
     "mode": "chat",
-    "output_cost_per_token": 6e-07,
-    "pricing_status": "official_off_peak_rate_checked_2026_10_01",
-    "source": "https://api-docs.deepseek.com/quick_start/pricing",
+    "output_cost_per_token": 6.6e-07,
+    "pricing_status": "official_off_peak_rate_checked_2026_08_24",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
     "supported_endpoints": [
       "/v1/chat/completions"
     ],
@@ -23022,8 +23017,7 @@
     "supports_reasoning": true,
     "supports_response_schema": true,
     "supports_system_messages": true,
-    "supports_tool_choice": false,
-    "supports_vision": true
+    "supports_tool_choice": false
   },
   "deepseek/deepseek-v3": {
     "cache_creation_input_token_cost": 0.0,

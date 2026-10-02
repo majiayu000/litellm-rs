@@ -31,17 +31,6 @@ fn should_bypass_chat_cache(request: &ChatCompletionRequest, context: &RequestCo
         || request.store == Some(true)
 }
 
-fn embedding_request_for_cache(
-    request: &EmbeddingRequest,
-    context: &RequestContext,
-) -> EmbeddingRequest {
-    let mut request = request.clone();
-    if let Some(identity) = cache_identity(context) {
-        request.user = Some(identity);
-    }
-    request
-}
-
 fn cache_identity(context: &RequestContext) -> Option<String> {
     let identity = context
         .api_key_id()
@@ -167,35 +156,43 @@ pub(super) async fn invalidate_chat(
 }
 
 pub(super) async fn lookup_embedding(
-    state: &AppState,
+    cache: Option<&LLMCache>,
     request: &EmbeddingRequest,
     context: &RequestContext,
-) -> Result<Option<EmbeddingResponse>, GatewayError> {
-    let Some(cache) = state.response_cache() else {
-        return Ok(None);
-    };
-    let request = embedding_request_for_cache(request, context);
-    match cache.get_embedding_response(&request).await {
-        Ok(cached) => Ok(cached.map(|response| response.as_ref().clone())),
+    deployment_id: &str,
+) -> Option<EmbeddingResponse> {
+    let cache = cache?;
+    let identity = cache_identity(context);
+    match cache
+        .get_embedding_response(request, identity.as_deref(), deployment_id)
+        .await
+    {
+        Ok(cached) => cached.map(|response| response.as_ref().clone()),
         Err(error) => {
             warn!(error = %error, "Embedding response cache lookup failed; treating as miss");
-            Ok(None)
+            None
         }
     }
 }
 
 pub(super) async fn store_embedding(
-    state: &AppState,
+    cache: Option<&LLMCache>,
     request: &EmbeddingRequest,
     response: &EmbeddingResponse,
     context: &RequestContext,
+    deployment_id: &str,
 ) -> Result<(), GatewayError> {
-    let Some(cache) = state.response_cache() else {
+    let Some(cache) = cache else {
         return Ok(());
     };
-    let request = embedding_request_for_cache(request, context);
+    let identity = cache_identity(context);
     cache
-        .cache_embedding_response(&request, response.clone())
+        .cache_embedding_response(
+            request,
+            response.clone(),
+            identity.as_deref(),
+            deployment_id,
+        )
         .await
 }
 
@@ -412,9 +409,12 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn embedding_cache_request_uses_authenticated_identity() {
-        let api_key_id = Uuid::from_u128(42);
+    #[tokio::test]
+    async fn embedding_cache_isolates_trusted_identity_and_deployment() {
+        let cache = LLMCache::new(
+            crate::core::cache::LLMCacheConfig::memory_only().with_user_specific(),
+            None,
+        );
         let request = EmbeddingRequest {
             model: "text-embedding-3-small".to_string(),
             input: serde_json::json!("hello"),
@@ -424,14 +424,59 @@ mod tests {
             input_type: None,
             truncation: None,
         };
-        let context = RequestContext::default().with_api_key(api_key_id);
-
-        let cache_request = embedding_request_for_cache(&request, &context);
-
-        assert_eq!(
-            cache_request.user.as_deref(),
-            Some("api_key:00000000-0000-0000-0000-00000000002a")
+        let a = RequestContext::default().with_api_key(Uuid::from_u128(42));
+        let b = RequestContext::default().with_api_key(Uuid::from_u128(43));
+        let response = EmbeddingResponse {
+            object: "list".into(),
+            data: vec![],
+            model: request.model.clone(),
+            usage: crate::core::models::openai::EmbeddingUsage {
+                prompt_tokens: 1,
+                total_tokens: 1,
+            },
+        };
+        store_embedding(Some(&cache), &request, &response, &a, "one")
+            .await
+            .unwrap();
+        assert!(
+            lookup_embedding(Some(&cache), &request, &a, "one")
+                .await
+                .is_some()
         );
+        assert!(
+            lookup_embedding(Some(&cache), &request, &b, "one")
+                .await
+                .is_none()
+        );
+        assert!(
+            lookup_embedding(Some(&cache), &request, &a, "two")
+                .await
+                .is_none()
+        );
+        assert!(
+            !cache
+                .invalidate_embedding(&request, cache_identity(&b).as_deref(), "one")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !cache
+                .invalidate_embedding(&request, cache_identity(&a).as_deref(), "two")
+                .await
+                .unwrap()
+        );
+        assert!(
+            cache
+                .invalidate_embedding(&request, cache_identity(&a).as_deref(), "one")
+                .await
+                .unwrap()
+        );
+        assert!(
+            lookup_embedding(Some(&cache), &request, &a, "one")
+                .await
+                .is_none()
+        );
+        assert_eq!(request.user.as_deref(), Some("caller-supplied"));
     }
 
     #[tokio::test]

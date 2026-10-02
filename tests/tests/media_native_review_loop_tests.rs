@@ -302,10 +302,30 @@ async fn runway_polling_truncated_error_bodies_preserve_known_statuses() {
     assert!(!retry_policy_allows(&unauthorized));
 }
 
-#[tokio::test]
-async fn stability_dns_policy_failure_remains_pre_dispatch_configuration_error() {
+#[test]
+fn stability_endpoint_policy_failure_is_configuration_error() {
     let mut config = StabilityConfig::with_api_key("stability-secret");
-    config.base.api_base = Some("http://native-media-does-not-exist.invalid".to_string());
+    config.base.api_base = Some("http://127.0.0.1".to_string());
+    let error = StabilityProvider::new(config)
+        .expect_err("public endpoint policy must reject loopback before dispatch");
+    assert!(
+        matches!(error, ProviderError::Configuration { .. }),
+        "{error:?}"
+    );
+    assert!(!retry_policy_allows(&error));
+}
+
+#[tokio::test]
+async fn stability_connect_failure_remains_retryable_network_error() {
+    // Use a closed local port instead of relying on external DNS behavior.
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind mock endpoint");
+    let address = listener.local_addr().expect("mock endpoint address");
+    drop(listener);
+    let mut config = StabilityConfig::with_api_key("stability-secret");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     let provider = StabilityProvider::new(config).expect("provider should initialize");
 
     let error = provider
@@ -323,12 +343,10 @@ async fn stability_dns_policy_failure_remains_pre_dispatch_configuration_error()
             RequestContext::default(),
         )
         .await
-        .expect_err("reserved invalid DNS name must fail before dispatch");
+        .expect_err("closed port must fail before dispatch");
 
-    assert!(
-        matches!(error, ProviderError::Configuration { .. }),
-        "{error:?}"
-    );
+    assert!(matches!(error, ProviderError::Network { .. }), "{error:?}");
+    assert!(retry_policy_allows(&error));
 }
 
 #[tokio::test]

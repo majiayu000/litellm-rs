@@ -5,7 +5,7 @@ readonly OHA_VERSION="1.16.0"
 readonly CONCURRENCY=64
 readonly WARMUP_SECONDS=10
 readonly DURATION_SECONDS=60
-readonly BUILD_FLAGS=(--release --bin gateway)
+readonly BUILD_FLAGS=(--release --bin gateway --no-default-features --features sqlite,redis,metrics,tracing)
 
 repo_root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 output_path=${1:-}
@@ -280,7 +280,7 @@ jq -n \
     source: {
       git_sha: $git_sha,
       git_dirty: false,
-      build_flags: ["--release", "--bin", "gateway"]
+      build_flags: ["--release", "--bin", "gateway", "--no-default-features", "--features", "sqlite,redis,metrics,tracing"]
     },
     environment: {
       hardware: {

@@ -5,15 +5,18 @@
 //! multiply limits. Redis errors fail closed.
 
 use super::deployment::Deployment;
+#[cfg(any(feature = "gateway", test))]
 use tracing::warn;
 
+#[cfg(feature = "gateway")]
 pub(crate) const DEFAULT_LEASE_TTL_MS: i64 = 600_000;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AdmissionHold {
+    #[cfg(feature = "gateway")]
     pub lease_id: String,
+    #[cfg(feature = "gateway")]
     pub deployment_id: String,
-    pub period_epoch: i64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -31,7 +34,9 @@ pub(crate) enum AdmissionBackend {
 
 pub(crate) enum AdmissionReserve {
     Skipped,
+    #[cfg(any(feature = "gateway", test))]
     Denied,
+    #[cfg(feature = "gateway")]
     Granted(AdmissionHold),
 }
 
@@ -53,6 +58,8 @@ impl AdmissionBackend {
         deployment: &Deployment,
         estimated_tokens: u64,
     ) -> AdmissionReserve {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (estimated_tokens,);
         let max_parallel = option_limit(deployment.config.max_parallel_requests.map(i64::from));
         let max_rpm = option_limit(deployment.config.rpm_limit.map(to_i64));
         let max_tpm = option_limit(deployment.config.tpm_limit.map(to_i64));
@@ -82,8 +89,6 @@ impl AdmissionBackend {
                 let pool = std::sync::Arc::clone(pool);
                 let key = crate::storage::redis::RedisPool::admission_key(&deployment.id);
                 let ttl_ms = *lease_ttl_ms;
-                let now_ms = now_ms();
-                let window_epoch = window_epoch_secs();
                 let lease_id_for_fut = lease_id.clone();
                 let deployment_id = deployment.id.clone();
                 let state = match run_redis(&deployment_id, "reserve", async move {
@@ -95,8 +100,6 @@ impl AdmissionBackend {
                         rpm_inc,
                         tpm_inc,
                         lease_id: &lease_id_for_fut,
-                        now_ms,
-                        window_epoch,
                         ttl_ms,
                     })
                     .await
@@ -110,7 +113,6 @@ impl AdmissionBackend {
                 AdmissionReserve::Granted(AdmissionHold {
                     lease_id,
                     deployment_id,
-                    period_epoch: window_epoch,
                 })
             }
         }
@@ -125,6 +127,8 @@ impl AdmissionBackend {
     }
 
     fn finish(&self, hold: &AdmissionHold, op: &'static str, actual_tpm: i64) {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (hold, op, actual_tpm);
         match self {
             Self::InProcess => {}
             #[cfg(test)]
@@ -134,16 +138,12 @@ impl AdmissionBackend {
                 let pool = std::sync::Arc::clone(pool);
                 let key = crate::storage::redis::RedisPool::admission_key(&hold.deployment_id);
                 let lease_id = hold.lease_id.clone();
-                let window_epoch = hold.period_epoch;
-                let now_ms = now_ms();
                 let deployment_id = hold.deployment_id.clone();
                 let _ = run_redis(&deployment_id, op, async move {
                     if op == "settle" {
-                        pool.admission_settle(&key, &lease_id, actual_tpm, window_epoch, now_ms)
-                            .await
+                        pool.admission_settle(&key, &lease_id, actual_tpm).await
                     } else {
-                        pool.admission_cancel(&key, &lease_id, window_epoch, now_ms)
-                            .await
+                        pool.admission_cancel(&key, &lease_id).await
                     }
                 });
             }
@@ -157,22 +157,6 @@ fn option_limit(limit: Option<i64>) -> i64 {
 
 fn to_i64(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-#[cfg(feature = "gateway")]
-fn window_epoch_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| (duration.as_secs() / 60) as i64)
-        .unwrap_or(0)
-}
-
-#[cfg(feature = "gateway")]
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(feature = "gateway")]
@@ -239,6 +223,76 @@ where
 #[cfg(all(test, feature = "gateway"))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn finishing_old_lease_keeps_the_current_window() {
+        use crate::config::models::storage::RedisConfig;
+        use crate::storage::redis::RedisPool;
+
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return;
+        };
+        let pool = std::sync::Arc::new(
+            RedisPool::new(&RedisConfig {
+                url,
+                enabled: true,
+                allow_degraded: false,
+                ..RedisConfig::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let backend = AdmissionBackend::redis(pool.clone());
+        for op in ["settle", "cancel"] {
+            let (seconds, micros): (i64, i64) =
+                redis::cmd("TIME").query_async(&mut conn).await.unwrap();
+            let epoch = seconds / 60;
+            let deployment_id = uuid::Uuid::new_v4().to_string();
+            let key = RedisPool::admission_key(&deployment_id);
+            let hold = AdmissionHold {
+                lease_id: "old".into(),
+                deployment_id,
+            };
+            // Finish a lease from the previous window through the production backend.
+            redis::cmd("HSET")
+                .arg(&key)
+                .arg("p")
+                .arg(1)
+                .arg("r")
+                .arg(1)
+                .arg("t")
+                .arg(10)
+                .arg("e")
+                .arg(epoch - 1)
+                .arg("l:old")
+                .arg(format!(
+                    "1:1:10:{}:{}",
+                    epoch - 1,
+                    seconds * 1_000 + micros / 1_000 + DEFAULT_LEASE_TTL_MS
+                ))
+                .query_async::<i64>(&mut conn)
+                .await
+                .unwrap();
+            backend.finish(&hold, op, 4);
+            let state: (i64, i64, i64, i64) = redis::cmd("HMGET")
+                .arg(&key)
+                .arg(&["e", "p", "r", "t"])
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            let tpm = if op == "settle" { 4 } else { 0 };
+            let (after, _): (i64, i64) = redis::cmd("TIME").query_async(&mut conn).await.unwrap();
+            assert!((epoch..=after / 60).contains(&state.0));
+            assert_eq!(
+                (state.1, state.2, state.3),
+                (0, 0, tpm),
+                "{op} must use the current window"
+            );
+            pool.delete(&key).await.unwrap();
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_redis_does_not_panic_on_current_thread_runtime() {

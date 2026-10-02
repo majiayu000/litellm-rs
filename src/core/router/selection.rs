@@ -51,6 +51,7 @@ impl DeploymentLease {
         }
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn take_admission(&mut self) -> (AdmissionBackend, Option<AdmissionHold>) {
         (self.admission.clone(), self.hold.take())
     }
@@ -478,7 +479,9 @@ impl Router {
 
         let hold = match self.admission.reserve(deployment, estimated_tokens) {
             AdmissionReserve::Skipped => None,
+            #[cfg(any(feature = "gateway", test))]
             AdmissionReserve::Denied => return None,
+            #[cfg(feature = "gateway")]
             AdmissionReserve::Granted(hold) => Some(hold),
         };
 
@@ -518,6 +521,7 @@ impl Router {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "gateway")]
     pub(crate) fn select_deployment_lease_with_tokens(
         &self,
         model_name: &str,

@@ -95,6 +95,7 @@ impl KeyManager {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "gateway")]
     pub(crate) fn has_recorded_key_usage(&self, key_id: Uuid) -> bool {
         self.last_used_cache.contains_key(&key_id)
     }

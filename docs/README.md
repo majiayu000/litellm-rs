@@ -1,6 +1,58 @@
 # LiteLLM-RS Documentation
 
-A high-performance AI Gateway written in Rust that provides unified access to 100+ AI providers through OpenAI-compatible APIs.
+A self-hosted Rust LLM gateway with OpenAI-compatible HTTP APIs, routing,
+load balancing, and failover. The gateway is the primary product; Rust APIs
+and legacy adapters have narrower coverage. See the current
+[provider support matrix](../README.md#provider-support).
+
+## Start with an HTTP request
+
+For the self-hosted gateway, follow the [source quick start](../README.md#quick-start-self-hosted-gateway)
+with [the development config](../config/gateway.dev.yaml.example). That config
+binds the gateway to `127.0.0.1:8080`, permits anonymous local development, and
+routes `local-model` to a separate local vLLM service at port 8000. It does not
+start vLLM or download a model for you.
+
+```sh
+curl --fail-with-body http://127.0.0.1:8080/openapi.json
+# Requires a running vLLM endpoint serving the configured local-model:
+curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"local-model","messages":[{"role":"user","content":"Say hello."}],"stream":false}'
+```
+
+The OpenAPI fetch verifies the HTTP contract is reachable; a generated reply
+additionally requires a configured, reachable provider and a model it serves.
+For a remote provider, use the [production-style config](../config/gateway.yaml.example)
+and configure its credentials and gateway auth. Do not expose the anonymous
+development config outside loopback.
+
+## Gateway and Rust API questions
+
+**Is this the Python LiteLLM SDK or a drop-in replacement?** This repository is
+[majiayu000/litellm-rs](https://github.com/majiayu000/litellm-rs), a Rust gateway
+and reusable kernel. Python LiteLLM has its own [proxy configuration](https://docs.litellm.ai/docs/proxy/quick_start).
+Use this repository's schema, [inference contract](openapi/inference.json), and
+[support matrix](../README.md#provider-support); matching names do not guarantee
+configuration, provider, SDK, or feature parity.
+
+**Which client path should I choose?** Use HTTP for an existing OpenAI-compatible
+application, [Codex setup](guides/codex.md) for its Responses integration, or the
+[Runtime-backed Rust API policy](../README.md#supported-product-surfaces) when
+embedding the kernel. The library snippet below is a separate path from starting
+the HTTP gateway. Legacy selector adapters have their own narrower matrix.
+
+**A server starts but generation fails. What should I check?** Confirm the actual
+provider endpoint, model identity and supported capability, then its authentication.
+The development vLLM prerequisite is separate from gateway readiness. For native
+Bedrock versus an OpenAI-compatible Bedrock proxy, follow the distinct
+[native guide](providers/bedrock.md) and [proxy guide](providers/openai-compatible-bedrock-proxy.md).
+
+**Why does docs.rs differ from main?** [docs.rs](https://docs.rs/litellm-rs) renders
+published crate versions. GitHub main may contain unreleased changes; check
+[Releases](https://github.com/majiayu000/litellm-rs/releases) and
+[CHANGELOG](../CHANGELOG.md) before using source-only APIs. Bugs belong in
+[Issues](https://github.com/majiayu000/litellm-rs/issues); source license is [MIT](../LICENSE).
 
 ## 📚 Documentation Structure
 
@@ -14,28 +66,28 @@ A high-performance AI Gateway written in Rust that provides unified access to 10
 - [Architecture Improvements](./architecture/improvements.md) - Historical improvements and optimizations
 
 ### Implementation Guides
-- [Getting Started](./guides/getting-started.md) - Quick start guide and basic usage
-- [Configuration](./guides/configuration.md) - Configuration management and environment setup
+- [Getting Started](../README.md#quick-start-self-hosted-gateway) - Quick start guide and basic usage
+- [Configuration](../README.md#gateway-configuration) - Configuration management and environment setup
 - [Codex](./guides/codex.md) - Use Codex with the Responses API compatibility layer
-- [Deployment](./guides/deployment.md) - Production deployment strategies
-- [Testing](./guides/testing.md) - Testing strategies and best practices
+- [Deployment](../deployment/README.md) - Production deployment strategies
+- [Testing](../CONTRIBUTING.md#testing) - Testing strategies and best practices
 
 ### Provider Documentation
 - [Provider Overview](./providers/README.md) - Supported providers and capabilities
 - [DeepSeek](./providers/deepseek.md) - DeepSeek V4 integration guide
 - [Xiaomi MiMo](./providers/xiaomi-mimo.md) - Xiaomi MiMo V2.5 OpenAI-compatible guide
-- [OpenAI](./providers/openai.md) - OpenAI and compatible providers
-- [Anthropic](./providers/anthropic.md) - Claude models integration
-- [Adding Providers](./providers/adding-new-provider.md) - Step-by-step provider implementation
+- [OpenAI implementation](../src/core/providers/openai/) - OpenAI request and response handling
+- [Anthropic implementation](../src/core/providers/anthropic/) - Claude request and response handling
+- [Adding Providers](./architecture/provider-implementation.md) - Step-by-step provider implementation
 
 ### Experimental protocol libraries
 - [MCP library](./protocols/mcp.md) - Default-off `mcp` feature; no HTTP gateway route
 - [A2A library](./protocols/a2a.md) - Default-off `a2a` feature; no HTTP gateway route
 
 ### Examples & Tutorials
-- [Basic Examples](./examples/basic-usage.md) - Simple completion examples
-- [Advanced Features](./examples/advanced-features.md) - Streaming, function calling, etc.
-- [Integration Examples](./examples/integrations.md) - Web frameworks and service integrations
+- [Basic Examples](../examples/README.md) - Simple completion examples
+- [Advanced Features](../examples/) - Streaming, function calling, etc.
+- [Integration Examples](../examples/) - Web frameworks and service integrations
 
 ## 🚀 Quick Start
 
@@ -53,18 +105,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
     ).await?;
     
-    println!("Response: {}", response.choices[0].message.content);
+    if let Some(content) = &response.choices[0].message.content {
+        println!("Response: {}", content);
+    }
     Ok(())
 }
 ```
 
 ## 🏗️ Architecture Highlights
 
-- **High Performance**: Built with Rust and Tokio for maximum throughput (10,000+ req/s)
-- **OpenAI Compatible**: Drop-in replacement for OpenAI API
-- **100+ Providers**: Unified interface to all major AI providers
+- **High Performance**: Rust and Tokio, with a reproducible [gateway-overhead benchmark](./benchmarks/gateway-overhead.md)
+- **OpenAI Compatible**: [Versioned inference contract](./openapi/inference.json)
+- **Provider Coverage**: [Runtime and legacy adapter support](../README.md#provider-support) varies by provider and capability
 - **Intelligent Routing**: Smart load balancing and failover
-- **Enterprise Ready**: Authentication, monitoring, cost tracking
+- **Gateway Controls**: Authentication, monitoring, and cost tracking
 - **Type Safety**: Compile-time guarantees and zero-cost abstractions
 - **Experimental MCP library**: Default-off protocol types and client orchestration; no mounted gateway route
 - **Experimental A2A library**: Default-off agent protocol types; no mounted gateway route
@@ -182,8 +236,8 @@ make docker           # Build Docker image
 ## 🤝 Contributing
 
 1. Read the [Provider Implementation Guide](./architecture/provider-implementation.md)
-2. Check existing [issues](https://github.com/your-org/litellm-rs/issues)
-3. Follow the [development setup](./guides/getting-started.md#development-setup)
+2. Check existing [issues](https://github.com/majiayu000/litellm-rs/issues)
+3. Follow the [development setup](../CONTRIBUTING.md#development-setup)
 4. Submit PRs with tests and documentation
 
 ## 📄 License

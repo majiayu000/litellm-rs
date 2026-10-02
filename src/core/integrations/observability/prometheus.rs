@@ -497,6 +497,7 @@ impl PrometheusIntegration {
         self.metrics.active_requests.dec();
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn record_llm_cancelled(&self) {
         self.metrics.active_requests.dec();
     }
@@ -513,32 +514,38 @@ impl PrometheusIntegration {
 }
 
 impl CallbackMetrics for PrometheusIntegration {
+    #[cfg(any(feature = "gateway", test))]
     fn begin_llm_lifecycle(&self, _event: &LlmStartEvent) {
         self.metrics.active_requests.inc();
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn finish_llm_lifecycle(&self, event: &LlmEndEvent) {
         let labels = self.get_labels(&event.model, event.provider.as_deref());
         Metrics::get_or_create_counter(&self.metrics.requests_total, &labels).inc();
         PrometheusIntegration::record_llm_end(self, event);
     }
 
+    #[cfg(feature = "gateway")]
     fn fail_llm_lifecycle(&self, event: &LlmErrorEvent) {
         let labels = self.get_labels(&event.model, event.provider.as_deref());
         Metrics::get_or_create_counter(&self.metrics.requests_total, &labels).inc();
         PrometheusIntegration::record_llm_error(self, event);
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn cancel_llm_lifecycle(&self, event: &LlmStartEvent) {
         let labels = self.get_labels(&event.model, event.provider.as_deref());
         Metrics::get_or_create_counter(&self.metrics.requests_total, &labels).inc();
         PrometheusIntegration::record_llm_cancelled(self);
     }
 
+    #[cfg(feature = "gateway")]
     fn record_embedding_start(&self, event: &EmbeddingStartEvent) {
         PrometheusIntegration::record_embedding_start(self, event);
     }
 
+    #[cfg(feature = "gateway")]
     fn record_embedding_end(&self, event: &EmbeddingEndEvent) {
         PrometheusIntegration::record_embedding_end(self, event);
     }

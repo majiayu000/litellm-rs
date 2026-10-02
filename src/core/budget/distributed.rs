@@ -14,8 +14,10 @@ use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use std::sync::Arc;
 #[cfg(feature = "gateway")]
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(any(feature = "gateway", test))]
 use tracing::warn;
 
+#[cfg(feature = "gateway")]
 pub(crate) const DEFAULT_LEASE_TTL_MS: i64 = 600_000;
 
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +26,7 @@ pub(crate) enum BudgetLeaseScope {
     Model,
 }
 
+#[cfg(any(feature = "gateway", test))]
 impl BudgetLeaseScope {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -32,6 +35,7 @@ impl BudgetLeaseScope {
         }
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn exceeded_error(self) -> BudgetReservationError {
         match self {
             Self::Provider => BudgetReservationError::ProviderBudgetExceeded,
@@ -100,6 +104,8 @@ impl BudgetLeaseBackend {
         seed_committed: BudgetAmount,
         period_epoch: i64,
     ) -> Result<ReservedLease, BudgetReservationError> {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (scope, name, amount, max, seed_committed, period_epoch);
         match self {
             Self::InProcess => Err(BudgetReservationError::BackendUnavailable),
             #[cfg(test)]
@@ -155,6 +161,8 @@ impl BudgetLeaseBackend {
         actual: BudgetAmount,
         period_epoch: i64,
     ) -> Result<LeaseSnapshot, BudgetReservationError> {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (scope, name, lease_id, reserved, actual, period_epoch);
         match self {
             Self::InProcess => Err(BudgetReservationError::BackendUnavailable),
             #[cfg(test)]
@@ -184,6 +192,8 @@ impl BudgetLeaseBackend {
         reserved: BudgetAmount,
         period_epoch: i64,
     ) -> Result<LeaseSnapshot, BudgetReservationError> {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (scope, name, lease_id, reserved, period_epoch);
         match self {
             Self::InProcess => Err(BudgetReservationError::BackendUnavailable),
             #[cfg(test)]
@@ -244,6 +254,8 @@ impl BudgetLeaseBackend {
         name: &str,
         period_epoch: i64,
     ) -> Result<LeaseSnapshot, BudgetReservationError> {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (scope, name, period_epoch);
         match self {
             Self::InProcess => Ok(LeaseSnapshot {
                 committed: BudgetAmount::zero(),

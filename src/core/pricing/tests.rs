@@ -350,8 +350,6 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
         ("deepseek-flash", FLASH_RATES),
         ("deepseek-v4-flash", FLASH_RATES),
         ("deepseek-v4-flash-vision-exp", FLASH_RATES),
-        ("deepseek-chat", FLASH_RATES),
-        ("deepseek-reasoner", FLASH_RATES),
         ("deepseek-v4-pro", PRO_RATES),
     ] {
         let Some(pricing) = builtin.get_model_info(model) else {
@@ -385,10 +383,6 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
         ("deepseek/deepseek-v4-flash", FLASH_RATES),
         ("deepseek-v4-flash-vision-exp", FLASH_RATES),
         ("deepseek/deepseek-v4-flash-vision-exp", FLASH_RATES),
-        ("deepseek-chat", FLASH_RATES),
-        ("deepseek/deepseek-chat", FLASH_RATES),
-        ("deepseek-reasoner", FLASH_RATES),
-        ("deepseek/deepseek-reasoner", FLASH_RATES),
         ("deepseek-v4-pro", PRO_RATES),
         ("deepseek/deepseek-v4-pro", PRO_RATES),
     ] {
@@ -411,6 +405,28 @@ fn deepseek_v4_pricing_surfaces_use_the_off_peak_card() {
                 .and_then(serde_json::Value::as_str),
             Some(PRICING_STATUS)
         );
+    }
+
+    for model in ["deepseek-chat", "deepseek-reasoner"] {
+        let historical = builtin.get_model_info(model).unwrap();
+        assert_eq!(historical.input_cost_per_token, Some(2.2e-7));
+        assert_eq!(historical.output_cost_per_token, Some(6.6e-7));
+        assert_eq!(
+            historical.extra["pricing_status"],
+            "historical_alias_retired"
+        );
+    }
+    for model in [
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-reasoner",
+    ] {
+        let historical = embedded.get(model).unwrap();
+        assert_eq!(historical.input_cost_per_token, Some(2.2e-7));
+        assert_eq!(historical.output_cost_per_token, Some(6.6e-7));
+        assert_eq!(historical.extra["cache_read_input_token_cost"], 7e-9);
+        assert_ne!(historical.extra["pricing_status"], PRICING_STATUS);
     }
 
     let assert_vision_limits = |pricing: &LiteLLMModelInfo| {

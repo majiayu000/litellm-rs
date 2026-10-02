@@ -5,10 +5,12 @@ use serde_json::{Value, json};
 use crate::core::providers::anthropic::error::anthropic_api_error;
 use crate::core::providers::anthropic::models::{ModelFeature, get_anthropic_registry};
 use crate::core::providers::unified_provider::ProviderError;
+#[cfg(any(feature = "gateway", test))]
 use crate::core::providers::{
     AnthropicContentBlockOrder, ChatContinuationRequest, ChatContinuationResponse,
     ChatMessageContinuation,
 };
+#[cfg(any(feature = "gateway", test))]
 use crate::core::types::anthropic_continuation::AnthropicThinkingBlock;
 use crate::core::types::chat::{ChatMessage, ChatRequest};
 use crate::core::types::content::ContentPart;
@@ -56,6 +58,7 @@ impl From<ThinkingEffort> for AnthropicEffort {
 }
 
 impl AnthropicClient {
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) async fn chat_with_continuation(
         &self,
         envelope: ChatContinuationRequest,
@@ -322,6 +325,7 @@ impl AnthropicClient {
         Ok(anthropic_request)
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) fn transform_chat_request_with_extensions(
         &self,
         request: &ChatRequest,
@@ -407,6 +411,7 @@ impl AnthropicClient {
         Ok(transformed)
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn enable_legacy_continuation_thinking(
         request: &ChatRequest,
         extensions: &[ChatMessageContinuation],
@@ -465,6 +470,7 @@ impl AnthropicClient {
         Ok(())
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn thinking_block_to_value(block: &AnthropicThinkingBlock) -> Value {
         match block {
             AnthropicThinkingBlock::Thinking {
@@ -482,6 +488,7 @@ impl AnthropicClient {
         }
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn replay_ordered_continuation(
         content: Vec<Value>,
         thinking: &[AnthropicThinkingBlock],
@@ -579,6 +586,7 @@ impl AnthropicClient {
         Ok(replay)
     }
 
+    #[cfg(any(feature = "gateway", test))]
     fn ordered_visible_block(
         block_type: &str,
         value_key: &str,

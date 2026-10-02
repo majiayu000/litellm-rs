@@ -522,7 +522,7 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
         .find("pub async fn completion_stream(")
         .expect("completion_stream free function should exist");
     let stream_end = facade[stream_start..]
-        .find("fn convert_chat_chunk_to_completion_chunk")
+        .find("\n}")
         .map(|offset| stream_start + offset)
         .expect("completion_stream should have a stable boundary");
     let facade_stream = &facade[stream_start..stream_end];

@@ -990,6 +990,23 @@ class OfficialPricingRegressionTests(unittest.TestCase):
                 self.assertEqual(tou["peak_rates"]["output_cost_per_token"], 0.00000120)
                 self.assertEqual(tou["peak_rates"]["cache_read_input_token_cost"], 0.000000006)
 
+    def test_retired_deepseek_overlay_does_not_receive_current_flash_fields(self) -> None:
+        historical = {
+            key: {
+                "input_cost_per_token": 0.00000022,
+                "deprecation_status": "deprecated_on_2026_07_24_1559_utc",
+            }
+            for key in (
+                "deepseek-chat", "deepseek-reasoner",
+                "deepseek/deepseek-chat", "deepseek/deepseek-reasoner",
+            )
+        }
+        patched = sync.apply_official_overrides(self.catalog, historical, date(2026, 10, 1))
+        for key, row in historical.items():
+            with self.subTest(model=key):
+                self.assertEqual(patched[key], row)
+        self.assertEqual(patched["deepseek-flash"]["input_cost_per_token"], 0.00000015)
+
 
 if __name__ == "__main__":
     unittest.main()

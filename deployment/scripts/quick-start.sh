@@ -27,7 +27,7 @@ echo "🔧 编译并启动..."
 echo ""
 
 # 启动 Gateway
-cargo run
+cargo run --bin gateway --features sqlite
 
 echo ""
 echo "👋 Gateway 已停止"

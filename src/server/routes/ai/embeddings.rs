@@ -17,7 +17,11 @@ use super::context::handle_ai_request;
 
 enum EmbeddingAttemptResponse {
     Cached(EmbeddingResponse),
-    Provider(crate::core::types::responses::EmbeddingResponse),
+    Provider(
+        crate::core::types::responses::EmbeddingResponse,
+        String,
+        String,
+    ),
 }
 
 fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, GatewayError> {
@@ -111,9 +115,10 @@ async fn handle_embedding_internal(
         return Err(GatewayError::validation("Model is required"));
     }
     validate_embedding_encoding_format(request.encoding_format.as_deref())?;
-    let cached_response =
-        super::response_cache::lookup_embedding(state, &request, &context).await?;
-    let request_for_cache = request.clone();
+    let response_cache = state.response_cache();
+    let cache_for_execution = response_cache.clone();
+    let mut request_for_cache = request.clone();
+    let cache_request_for_execution = request.clone();
 
     let requested_model = request.model.clone();
     let core_request = CoreEmbeddingRequest {
@@ -146,7 +151,7 @@ async fn handle_embedding_internal(
         &state.unified_router(),
         &requested_model,
         ProviderCapability::Embeddings,
-        move |provider, selected_model, _deployment_id| {
+        move |provider, selected_model, deployment_id| {
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let budgeted = budgeted.clone();
@@ -154,7 +159,9 @@ async fn handle_embedding_internal(
             let pricing_service = pricing_service.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
-            let cached_response = cached_response.clone();
+            let cache = cache_for_execution.clone();
+            let mut cache_request = cache_request_for_execution.clone();
+            cache_request.model = selected_model.clone();
             async move {
                 let budget_provider = provider.name().to_string();
                 let request_pricing = super::spend::request_pricing_for_provider(
@@ -163,7 +170,9 @@ async fn handle_embedding_internal(
                     &selected_model,
                     ProviderCapability::Embeddings,
                 )?;
-                if let Some(cached) = cached_response {
+                if let Some(cached) = super::response_cache::lookup_embedding(
+                    cache.as_deref(), &cache_request, &context, &deployment_id,
+                ).await {
                     super::response_cache::ensure_embedding_cache_pricing_for_attempt(
                         &request_pricing,
                         &core_request.input,
@@ -256,7 +265,7 @@ async fn handle_embedding_internal(
                     )
                     .await
                     .map(|(response, tokens)| {
-                        (EmbeddingAttemptResponse::Provider(response), tokens)
+                        (EmbeddingAttemptResponse::Provider(response, deployment_id, selected_model), tokens)
                     })
             }
         },
@@ -270,9 +279,12 @@ async fn handle_embedding_internal(
         }
     };
 
-    let core_response = match core_response {
+    let (core_response, deployment_id) = match core_response {
         EmbeddingAttemptResponse::Cached(cached) => return Ok(cached),
-        EmbeddingAttemptResponse::Provider(response) => response,
+        EmbeddingAttemptResponse::Provider(response, deployment_id, model) => {
+            request_for_cache.model = model;
+            (response, deployment_id)
+        }
     };
 
     // Convert core response to OpenAI format
@@ -303,8 +315,14 @@ async fn handle_embedding_internal(
         },
     };
 
-    if let Err(error) =
-        super::response_cache::store_embedding(state, &request_for_cache, &response, &context).await
+    if let Err(error) = super::response_cache::store_embedding(
+        response_cache.as_deref(),
+        &request_for_cache,
+        &response,
+        &context,
+        &deployment_id,
+    )
+    .await
     {
         callback.fail(error.to_string(), "cache_error");
         return Err(error);

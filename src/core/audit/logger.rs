@@ -202,6 +202,8 @@ impl AuditLogger {
         min_level: LogLevel,
         terminals: &mut FuturesUnordered<oneshot::Receiver<AuditEvent>>,
     ) -> AuditResult<()> {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (&terminals,);
         match command {
             AuditCommand::Event(event) => Self::write_event(outputs, &event, min_level).await,
             #[cfg(feature = "gateway")]

@@ -11,7 +11,7 @@ Configure at least one tool-capable model in `config/gateway.yaml`, then start
 the server:
 
 ```bash
-cargo run --bin gateway
+cargo run --bin gateway --features sqlite
 ```
 
 The development example listens on `http://127.0.0.1:8080`. Production

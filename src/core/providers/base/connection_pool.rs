@@ -381,6 +381,7 @@ impl GlobalPoolManager {
             .map_err(|e| ProviderError::network("common", e.to_string()))
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) async fn execute_request_preserving_endpoint_policy(
         &self,
         url: &str,
@@ -435,6 +436,7 @@ impl GlobalPoolManager {
         send_streaming_request(request, legacy_provider).await
     }
 
+    #[cfg(any(feature = "gateway", test))]
     pub(crate) async fn execute_streaming_request_preserving_endpoint_policy(
         &self,
         url: &str,

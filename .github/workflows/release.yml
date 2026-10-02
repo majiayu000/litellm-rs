@@ -7,53 +7,98 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_FEATURES: postgres,sqlite,redis,s3,metrics,tracing,websockets,analytics,providers-extra,providers-extended,mcp-validation
 
 permissions:
   contents: read
 
 jobs:
+  validate-release:
+    uses: ./.github/workflows/ci-disabled-modules.yml
+
   # Create GitHub release
   create-release:
-    name: Create Release
+    name: Create Draft Release
+    needs: validate-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      is_draft: ${{ steps.create_release.outputs.is_draft }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Get version
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        set -euo pipefail
+        version="${GITHUB_REF#refs/tags/}"
+        package_version="$(cargo metadata --format-version 1 --no-deps | jq -er '
+          . as $metadata | .packages[]
+          | select(.manifest_path == ($metadata.workspace_root + "/Cargo.toml"))
+          | .version
+        ')"
+        if [ "${version#v}" != "$package_version" ]; then
+          echo "::error::Release tag $version does not match Cargo version $package_version." >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
 
     - name: Create or update Release
+      id: create_release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
       run: |
+        set -euo pipefail
         version="${{ steps.get_version.outputs.version }}"
         target="$(git rev-list -n 1 "$version")"
-        if gh release view "$version" >/dev/null 2>&1; then
-          gh release edit "$version" \
-            --title "Release $version" \
-            --notes-file CHANGELOG.md \
-            --target "$target" \
-            --draft=false \
-            --prerelease=false
+        response="$(mktemp)"
+        trap 'rm -f "$response"' EXIT
+        if gh api --include --jq '[.draft, .target_commitish] | @tsv' "repos/$GH_REPO/releases/tags/$version" > "$response"; then
+          IFS=$'\t' read -r is_draft recorded_target < <(tail -n 1 "$response")
+          if [ "$recorded_target" != "$target" ]; then
+            echo "::error::Existing release $version recorded target does not match the tag commit; cannot verify rerun identity." >&2
+            exit 1
+          fi
+          case "$is_draft" in
+            true)
+              gh release edit "$version" \
+                --title "Release $version" \
+                --notes-file CHANGELOG.md \
+                --target "$target" \
+                --prerelease=false
+              ;;
+            false)
+              echo "Release $version is already public; leaving it unchanged."
+              ;;
+            *)
+              echo "::error::GitHub returned an invalid release draft status." >&2
+              exit 1
+              ;;
+          esac
         else
+          lookup_exit=$?
+          if [[ ! "$(head -n 1 "$response")" =~ ^HTTP/[0-9.]+[[:space:]]404[[:space:]] ]]; then
+            exit "$lookup_exit"
+          fi
           gh release create "$version" \
             --title "Release $version" \
             --notes-file CHANGELOG.md \
             --target "$target" \
-            --verify-tag
+            --verify-tag \
+            --draft
+          is_draft=true
         fi
+        echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
 
   # Build and upload binaries
   build-release:
     name: Build Release
-    needs: create-release
+    needs: [create-release, validate-release]
+    env:
+      RELEASE_FEATURES: ${{ needs.validate-release.outputs.features }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -118,7 +163,7 @@ jobs:
 
     - name: Build release binary
       shell: bash
-      run: cargo build --release --target ${{ matrix.target }} --bin gateway --no-default-features --features "$RELEASE_FEATURES"
+      run: cargo build --locked --release --target ${{ matrix.target }} --bin gateway --no-default-features --features "$RELEASE_FEATURES"
 
     - name: Create archive (Unix)
       if: matrix.os != 'windows-latest'
@@ -135,14 +180,14 @@ jobs:
         cd ../../..
 
     - name: Upload Release Asset (Unix)
-      if: matrix.os != 'windows-latest'
+      if: matrix.os != 'windows-latest' && needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz" --clobber
 
     - name: Upload Release Asset (Windows)
-      if: matrix.os == 'windows-latest'
+      if: matrix.os == 'windows-latest' && needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -151,7 +196,7 @@ jobs:
   # Build and push Docker image
   docker-release:
     name: Docker Release
-    needs: create-release
+    needs: [create-release, validate-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -159,6 +204,7 @@ jobs:
     steps:
     - name: Check Docker credentials
       id: docker_credentials
+      if: needs.create-release.outputs.is_draft == 'true'
       env:
         DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
         DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -171,22 +217,26 @@ jobs:
         fi
 
     - name: Checkout code
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: actions/checkout@v4
 
+    - name: Set up QEMU
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      uses: docker/setup-qemu-action@v3
+
     - name: Set up Docker Buildx
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/setup-buildx-action@v3
 
     - name: Login to Docker Hub
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Login to GitHub Container Registry
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -194,7 +244,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract metadata
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       id: meta
       uses: docker/metadata-action@v5
       with:
@@ -208,10 +258,13 @@ jobs:
           type=semver,pattern={{major}}
 
     - name: Build and push Docker image
-      if: steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: ./deployment/docker/Dockerfile
+        build-args: |
+          RELEASE_FEATURES=${{ needs.validate-release.outputs.features }}
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
@@ -222,7 +275,7 @@ jobs:
   # Publish to crates.io
   publish-crate:
     name: Publish to crates.io
-    needs: create-release
+    needs: [create-release, build-release]
     runs-on: ubuntu-latest
     steps:
     - name: Check crates.io token
@@ -267,12 +320,63 @@ jobs:
       if: steps.crates_token.outputs.available == 'true'
       env:
         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-      run: cargo publish --token "$CRATES_IO_TOKEN"
+      run: |
+        set -euo pipefail
+        metadata="$(cargo metadata --format-version 1 --no-deps)"
+        version="$(jq -er '
+          . as $metadata | .packages[]
+          | select(.manifest_path == ($metadata.workspace_root + "/Cargo.toml"))
+          | .version
+        ' <<< "$metadata")"
+        response="$(mktemp)"
+        trap 'rm -f "$response"' EXIT
+        status="$(curl --silent --show-error --location --connect-timeout 10 --max-time 30 \
+          --user-agent 'litellm-rs-release (https://github.com/majiayu000/litellm-rs)' \
+          --output "$response" --write-out '%{http_code}' \
+          "https://crates.io/api/v1/crates/litellm-rs/$version")"
+        case "$status" in
+          200)
+            jq -e --arg version "$version" \
+              '.version.crate == "litellm-rs" and .version.num == $version' \
+              "$response" >/dev/null
+            expected_checksum="$(jq -er '.version.checksum | select(type == "string" and test("^[0-9a-f]{64}$"))' "$response")"
+            cargo package --locked --no-verify --package litellm-rs
+            target_directory="$(jq -er '.target_directory' <<< "$metadata")"
+            actual_checksum="$(sha256sum "$target_directory/package/litellm-rs-$version.crate" | cut -d ' ' -f 1)"
+            if [ "$actual_checksum" != "$expected_checksum" ]; then
+              echo "::error::Published litellm-rs $version does not match the current source package." >&2
+              exit 1
+            fi
+            echo "litellm-rs $version is already published; skipping upload."
+            ;;
+          404)
+            cargo publish --locked --token "$CRATES_IO_TOKEN"
+            ;;
+          *)
+            echo "::error::crates.io version check failed (HTTP $status)." >&2
+            exit 1
+            ;;
+        esac
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [create-release, build-release, publish-crate, docker-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Publish validated release
+      if: needs.create-release.outputs.is_draft == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+        RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+      run: gh release edit "$RELEASE_VERSION" --draft=false
 
   # Update Homebrew formula from the published macOS release asset
   homebrew-release:
     name: Update Homebrew Formula
-    needs: [create-release, build-release]
+    needs: [create-release, publish-release]
     runs-on: ubuntu-latest
     if: github.repository == 'majiayu000/litellm-rs'
     steps:
@@ -307,6 +411,18 @@ jobs:
         formula_rel="Formula/rust-litellm-gateway.rb"
         formula_path="homebrew-tap/${formula_rel}"
         version="${RELEASE_VERSION#v}"
+        if [ -f "$formula_path" ]; then
+          tap_is_newer="$(ruby -r rubygems/version - "$formula_path" "$version" <<'RUBY'
+        current = File.read(ARGV.fetch(0))[/^\s*version\s+"([0-9][^"]*)"\s*$/, 1]
+        abort "Cannot read the current Homebrew formula version." unless current
+        puts Gem::Version.new(current) > Gem::Version.new(ARGV.fetch(1))
+        RUBY
+          )"
+          if [ "$tap_is_newer" = true ]; then
+            echo "::notice title=Homebrew formula newer::Skipping older release ${RELEASE_VERSION}."
+            exit 0
+          fi
+        fi
         arm_url="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_VERSION}/rust-litellm-gateway-${RELEASE_VERSION}-macos-aarch64.tar.gz"
         intel_url="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_VERSION}/rust-litellm-gateway-${RELEASE_VERSION}-macos-x86_64.tar.gz"
         arm_sha="$(curl -fsSL "$arm_url" | shasum -a 256 | awk '{print $1}')"

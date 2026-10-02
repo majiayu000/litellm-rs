@@ -19,6 +19,18 @@ The completion facade no longer reads provider environment variables, scans a
 calls select and execute the deployment recorded in the pinned runtime snapshot.
 Request-level credentials and endpoints fail closed on this path.
 
+## Distributed admission windows
+
+Redis supplies the clock for shared RPM/TPM windows and lease expiry. RPM counts
+arrivals in the current minute; outstanding TPM stays reserved across minute
+boundaries until settlement, cancellation, or lease expiry. Settlement replaces
+the reserved estimate with actual usage once.
+
+All replicas sharing admission keys must use the same accounting implementation.
+When upgrading from the admission script shipped in v0.7.0 or earlier, drain in-flight requests and
+stop the old replicas before starting the updated replicas. Mixed-version writes
+and repair of accounting left by the old script are not supported.
+
 ## Compatibility-only surfaces
 
 `DefaultRouter`, the completion `Router` trait, and `ProviderRegistry` remain

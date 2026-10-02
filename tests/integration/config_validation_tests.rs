@@ -14,9 +14,12 @@ mod tests {
     };
     use litellm_rs::config::models::server::{CorsConfig, ServerConfig, TlsConfig};
     use litellm_rs::config::models::storage::RedisConfig;
+    #[cfg(feature = "gateway")]
     use rcgen::generate_simple_self_signed;
+    #[cfg(feature = "gateway")]
     use std::fs;
     use std::path::Path;
+    #[cfg(feature = "gateway")]
     use tempfile::TempDir;
 
     // ==================== GatewayConfig Validation ====================
@@ -212,6 +215,7 @@ mod tests {
         assert!(config.is_tls_enabled());
     }
 
+    #[cfg(feature = "gateway")]
     #[test]
     fn gateway_validation_rejects_invalid_tls_material() {
         let directory = TempDir::new().expect("temporary TLS directory");

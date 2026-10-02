@@ -357,16 +357,16 @@ fn test_get_deepseek_pricing() {
     let Ok(chat_alias) = get_model_pricing_at("deepseek-chat", "deepseek", off_peak) else {
         panic!("deepseek-chat alias pricing should be available");
     };
-    assert_cost_eq(chat_alias.input_cost_per_1k_tokens, 0.00015);
-    assert_cost_eq(chat_alias.output_cost_per_1k_tokens, 0.00060);
-    assert_eq!(chat_alias.cache_read_input_token_cost, Some(0.000003));
+    assert_cost_eq(chat_alias.input_cost_per_1k_tokens, 0.00022);
+    assert_cost_eq(chat_alias.output_cost_per_1k_tokens, 0.00066);
+    assert_eq!(chat_alias.cache_read_input_token_cost, Some(0.000007));
 
     let Ok(reasoner_alias) = get_model_pricing_at("deepseek-reasoner", "deepseek", off_peak) else {
         panic!("deepseek-reasoner alias pricing should be available");
     };
-    assert_cost_eq(reasoner_alias.input_cost_per_1k_tokens, 0.00015);
-    assert_cost_eq(reasoner_alias.output_cost_per_1k_tokens, 0.00060);
-    assert_eq!(reasoner_alias.cache_read_input_token_cost, Some(0.000003));
+    assert_cost_eq(reasoner_alias.input_cost_per_1k_tokens, 0.00022);
+    assert_cost_eq(reasoner_alias.output_cost_per_1k_tokens, 0.00066);
+    assert_eq!(reasoner_alias.cache_read_input_token_cost, Some(0.000007));
 
     for model in [
         "deepseek-v4-flash-vision-exp",

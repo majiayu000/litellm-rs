@@ -25,8 +25,12 @@ scripts/bench/run_gateway_overhead.sh \
   artifacts/benchmarks/gateway-overhead-$(date -u +%Y-%m-%dT%H%M%SZ).json
 ```
 
-The script builds `gateway` with the recorded `build_flags` of `--release --bin
-gateway` into a fresh empty isolated Cargo target directory, validates the
+The script builds `gateway` with the recorded `build_flags` of
+`--release --bin gateway --no-default-features --features sqlite,redis,metrics,tracing`
+into a fresh empty isolated Cargo target directory. This explicit feature profile
+keeps the benchmark independent of the repository's default features; the
+compiled storage and observability features remain disabled in the benchmark
+configuration. The script validates the
 benchmark config, starts the deterministic mock and gateway, runs a 10-second
 warmup, then measures for 60 seconds at concurrency 64. It rejects unrecorded
 Cargo/Rust environment overrides, including `CARGO_BUILD_RUSTFLAGS` and a
@@ -110,7 +114,7 @@ below. `latency_ms` is end-to-end client-observed latency.
   "source": {
     "git_sha": "full Git commit SHA",
     "git_dirty": false,
-    "build_flags": ["--release", "--bin", "gateway"]
+    "build_flags": ["--release", "--bin", "gateway", "--no-default-features", "--features", "sqlite,redis,metrics,tracing"]
   },
   "environment": {
     "hardware": {

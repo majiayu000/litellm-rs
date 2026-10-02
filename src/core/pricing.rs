@@ -717,16 +717,21 @@ impl Default for PricingDatabase {
             builtin_model("anthropic", 0.000003, 0.000015, 200000, 4096, true, true),
         );
 
-        for model in [
-            "deepseek-flash",
-            "deepseek-v4-flash",
-            "deepseek-chat",
-            "deepseek-reasoner",
-        ] {
+        for model in ["deepseek-flash", "deepseek-v4-flash"] {
             models.insert(
                 model.to_string(),
                 builtin_deepseek_v4_model(0.00000015, 0.00000060, 0.000000003),
             );
+        }
+
+        // Retired API aliases retain historical prices, not the current Flash card.
+        for model in ["deepseek-chat", "deepseek-reasoner"] {
+            let mut historical = builtin_deepseek_v4_model(0.00000022, 0.00000066, 0.000000007);
+            historical.extra.insert(
+                "pricing_status".to_string(),
+                serde_json::json!("historical_alias_retired"),
+            );
+            models.insert(model.to_string(), historical);
         }
 
         models.insert(

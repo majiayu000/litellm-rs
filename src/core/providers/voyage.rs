@@ -171,6 +171,7 @@ impl VoyageProvider {
             .is_some_and(|info| info.capabilities.contains(capability))
     }
 
+    #[cfg(feature = "gateway")]
     pub(crate) fn rerank_provider(&self) -> crate::core::rerank::VoyageRerankProvider {
         crate::core::rerank::VoyageRerankProvider::from_transport(
             self.api_key.clone(),

@@ -16,6 +16,7 @@ use dashmap::DashMap;
 use std::sync::atomic::Ordering;
 #[cfg(feature = "gateway")]
 use std::time::{Duration, Instant};
+#[cfg(any(feature = "gateway", test))]
 use tracing::warn;
 
 #[cfg(feature = "gateway")]
@@ -42,6 +43,7 @@ pub(crate) enum CircuitObserve {
     UseLocal,
     #[cfg(feature = "gateway")]
     Shared(crate::storage::redis::circuit::CircuitState),
+    #[cfg(any(feature = "gateway", test))]
     Blocked,
 }
 
@@ -49,6 +51,7 @@ pub(crate) enum CircuitWrite {
     Local,
     #[cfg(feature = "gateway")]
     Applied(crate::storage::redis::circuit::CircuitState),
+    #[cfg(any(feature = "gateway", test))]
     StrictUnavailable,
 }
 
@@ -68,6 +71,8 @@ impl CircuitBackend {
     }
 
     pub(crate) fn observe(&self, deployment: &Deployment, config: &RouterConfig) -> CircuitObserve {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (deployment, config);
         match self {
             Self::InProcess => CircuitObserve::UseLocal,
             #[cfg(test)]
@@ -133,6 +138,8 @@ impl CircuitBackend {
         op: &'static str,
         reason: i64,
     ) -> CircuitWrite {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (deployment, config, op, reason);
         match self {
             Self::InProcess => CircuitWrite::Local,
             #[cfg(test)]

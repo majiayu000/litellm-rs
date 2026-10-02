@@ -244,6 +244,7 @@ pub mod wire {
 }
 
 /// Canonical Codex turn used before provider-specific chat/tool conversion.
+#[cfg(feature = "gateway")]
 pub(crate) mod domain {
     use super::wire::{CodexToolOutput, CodexToolOutputContent};
     use crate::core::models::openai::responses_api::{

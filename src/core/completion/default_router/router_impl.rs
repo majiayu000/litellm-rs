@@ -99,9 +99,7 @@ pub(super) async fn complete_stream_with_runtime_handle(
 
     Ok(Box::pin(stream.map(move |chunk| {
         let _lease = &lease;
-        chunk
-            .map(convert_chat_chunk_to_completion_chunk)
-            .map_err(GatewayError::from)
+        chunk.map_err(GatewayError::from)
     })))
 }
 

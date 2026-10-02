@@ -108,28 +108,3 @@ pub async fn completion_stream(
     )
     .await
 }
-
-/// Convert the canonical provider chunk into the compatibility stream shape.
-fn convert_chat_chunk_to_completion_chunk(
-    chunk: crate::core::types::responses::ChatChunk,
-) -> super::stream::CompletionChunk {
-    super::stream::CompletionChunk {
-        id: chunk.id,
-        object: chunk.object,
-        created: chunk.created,
-        model: chunk.model,
-        choices: chunk
-            .choices
-            .into_iter()
-            .map(|choice| super::stream::StreamChoice {
-                index: choice.index,
-                delta: super::stream::StreamDelta {
-                    role: choice.delta.role.map(|role| role.to_string()),
-                    content: choice.delta.content,
-                    tool_calls: None,
-                },
-                finish_reason: choice.finish_reason,
-            })
-            .collect(),
-    }
-}

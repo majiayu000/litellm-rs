@@ -247,7 +247,9 @@ OFFICIAL_OVERRIDE_PATCHES["xai/grok-4.7"] = {
 # The native DeepSeek Flash IDs now serve V4.1 Flash. Preserve the runtime's
 # existing off-peak base / peak-window representation instead of upstream's
 # peak base / off_peak_pricing representation, which the runtime does not read.
-for model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner"):
+# deepseek-chat/reasoner retired on 2026-07-24; their historical overlay
+# must not receive current Flash fields. https://api-docs.deepseek.com/updates/
+for model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"):
     for key in (model, f"deepseek/{model}"):
         OFFICIAL_OVERRIDE_PATCHES[key] = {
             "input_cost_per_token": 0.00000015,

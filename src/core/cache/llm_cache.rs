@@ -5,7 +5,7 @@
 
 use super::dual::DualCache;
 use super::key_generator::{
-    generate_chat_key, generate_chat_key_with_user, generate_embedding_key,
+    generate_chat_key, generate_chat_key_with_user, generate_embedding_key_with_user,
 };
 use super::types::{
     CacheKey, CacheStatsSnapshot, CacheWriteIdentity, DualCacheConfig, serialize_write_identity,
@@ -423,12 +423,31 @@ impl LLMCache {
 
     // ==================== Embedding Methods ====================
 
-    /// Get a cached embedding response
+    fn embedding_key(
+        &self,
+        request: &EmbeddingRequest,
+        user_id: Option<&str>,
+        deployment_id: &str,
+    ) -> CacheKey {
+        generate_embedding_key_with_user(
+            request,
+            if self.config.user_specific {
+                user_id
+            } else {
+                None
+            },
+            Some(deployment_id),
+        )
+    }
+
+    /// Get a cached embedding response for the selected deployment and trusted caller.
     pub async fn get_embedding_response(
         &self,
         request: &EmbeddingRequest,
+        user_id: Option<&str>,
+        deployment_id: &str,
     ) -> Result<Option<Arc<EmbeddingResponse>>> {
-        let key = generate_embedding_key(request);
+        let key = self.embedding_key(request, user_id, deployment_id);
 
         if let Some(cached) = self.embedding_cache.get(&key).await? {
             trace!(
@@ -447,8 +466,10 @@ impl LLMCache {
         &self,
         request: &EmbeddingRequest,
         response: EmbeddingResponse,
+        user_id: Option<&str>,
+        deployment_id: &str,
     ) -> Result<()> {
-        let key = generate_embedding_key(request);
+        let key = self.embedding_key(request, user_id, deployment_id);
         let cached = CachedEmbeddingResponse::new(response, request.model.clone());
 
         self.embedding_cache
@@ -466,8 +487,13 @@ impl LLMCache {
     }
 
     /// Invalidate a cached embedding response
-    pub async fn invalidate_embedding(&self, request: &EmbeddingRequest) -> Result<bool> {
-        let key = generate_embedding_key(request);
+    pub async fn invalidate_embedding(
+        &self,
+        request: &EmbeddingRequest,
+        user_id: Option<&str>,
+        deployment_id: &str,
+    ) -> Result<bool> {
+        let key = self.embedding_key(request, user_id, deployment_id);
         self.embedding_cache.delete(&key).await
     }
 

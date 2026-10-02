@@ -6,7 +6,7 @@
 
 - 基线：`3341e54a`（v0.7.0）。独立工作树 `litellm-rs-model-refresh`，分支 `codex/model-catalog-refresh-20261001`。
 - LiteLLM 上游固定到 `025292e75bda0381174a751da320645c971e06c7`，该价格文件提交日期为 2026-09-30。使用已有同步工具和分类账，没有新增运行时配置或兼容层。
-- 旧目录 3,475 条，新目录 4,555 条：新增 1,338、字段更新 1,214、保持 2,003、从快照移除 258。当前价格数据有 135 个 provider 标签，包含区域、部署类型和别名。
+- 旧目录 3,475 条，新目录 4,555 条：新增 1,338、字段更新 1,210、保持 2,007、从快照移除 258。当前价格数据有 135 个 provider 标签，包含区域、部署类型和别名。
 - [逐条清单](model-catalog-2026-10-01.entries.json)覆盖新旧快照并集的每一个精确 key，记录差异字段、证据层级和运行时分类。完整字段值仍以仓库中的价格 JSON 及 Git diff 为准。
 - `official_fields_reviewed` 只表示该行的特定字段对照过官网；其余行是固定上游版本的逐条比对。没有声称 4,555 条均经过逐项官网核验或付费 API 调用。
 - `removed_from_snapshot` 只表示本次数据源不再提供该行，不单凭它断言厂商已下线。`unreviewed` / `pricing_only` 保留原有能力隔离原则。
@@ -54,8 +54,9 @@ Cloudflare 本次逐型号核验：
 2. Copilot 完整账号目录、企业私有部署、区域配额和本地下载模型需要对应运行环境才能确认。没有读取或输出任何真实凭据，也没有执行付费推理。
 3. 历史静态条目不等于仍可调用。Cloudflare 已公布部分旧模型在 2026-05-30 下线；本次添加当前型号，但没有重构旧枚举及全库历史型号的生命周期管理。参考 [下线公告](https://developers.cloudflare.com/changelog/post/2026-05-08-planned-model-deprecations/)。
 4. DeepSeek 官方高峰规则排除中国公共假日；现有运行时仅表达星期和 UTC 小时，假日例外仍不能精确结算。本次改正新报价，未引入日历规则系统。
-5. Nova Premier 的官方模型卡标为 Legacy，且同页 EOL 日期存在矛盾；本次只校正 25K 输出和 US profile，不据此推断实际下线日。[AWS 模型卡](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html)。
-6. Bedrock 的其他旧 generic 条目、Copilot 未公布的 HTTP 型号参数、图像复杂账单仍有未验证范围。清单保留 `unreviewed`，不能把上游字段当作原生适配器的执行保证。
+5. DeepSeek 官方已公告 `deepseek-chat` / `deepseek-reasoner` 在 2026-07-24 停用；裸 ID 和带 `deepseek/` 前缀的四条历史价格记录保留基线值，不套用 V4.1 的新字段，清单标为 `historical_alias_retired`。它们仍为 `unreviewed`，这些历史值不代表当前报价或可调用性。[官方更新日志](https://api-docs.deepseek.com/updates/)。
+6. Nova Premier 的官方模型卡标为 Legacy，且同页 EOL 日期存在矛盾；本次只校正 25K 输出和 US profile，不据此推断实际下线日。[AWS 模型卡](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html)。
+7. Bedrock 的其他旧 generic 条目、Copilot 未公布的 HTTP 型号参数、图像复杂账单仍有未验证范围。清单保留 `unreviewed`，不能把上游字段当作原生适配器的执行保证。
 
 ## 每个通用提供商入口的核对结果
 
@@ -168,7 +169,7 @@ Cloudflare 本次逐型号核验：
 | `dataforseo` | 1 | 1 | 0 | 0 | 0 |
 | `deepgram` | 37 | 43 | 6 | 0 | 0 |
 | `deepinfra` | 135 | 134 | 0 | 6 | 1 |
-| `deepseek` | 15 | 17 | 2 | 13 | 0 |
+| `deepseek` | 15 | 17 | 2 | 9 | 0 |
 | `duckduckgo` | 1 | 1 | 0 | 0 | 0 |
 | `elevenlabs` | 4 | 5 | 1 | 0 | 0 |
 | `exa_ai` | 1 | 1 | 0 | 0 | 0 |
@@ -274,13 +275,14 @@ Cloudflare 本次逐型号核验：
 
 ## 验证
 
-运行目录均为本次独立工作树；所有 Rust 检查使用 `providers-extra,providers-extended`，覆盖本次涉及的额外适配器。
+验收工作树已普通合并 current main `307f04b7`。下面记录合成后的实际结果，不把原 PR 的旧验证当成当前结果。
 
-- `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`：39 项通过。
-- `cargo check --features providers-extra,providers-extended`：通过。
-- `cargo clippy --all-targets --features providers-extra,providers-extended -- -D warnings`：通过。
+- `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`：40 项通过。
+- `cargo check --features providers-extra,providers-extended`：通过。current main 在同一公开组合下原有 5 个 Gemini helper cfg 编译错误；本次仅使这 5 个共享 helper 对 `providers-extended` 可见，错误/密钥脱敏路径保持不变。
+- `cargo test --features providers-extra,providers-extended --no-fail-fast -- --test-threads=2`：通过；库单元测试 8,637 通过、1 忽略，集成测试与文档测试通过。旧 `public_api_compat` 的网关/存储部分增加 `storage` cfg，3 个原生兼容测试继续在库组合执行。
+- 完整网关组合 `postgres,sqlite,redis,s3,metrics,tracing,websockets,analytics,providers-extra,providers-extended`：`cargo check` 通过；`cargo test --lib --tests --bins --features <组合> --no-fail-fast` 的集成/命令行测试全部通过，库首次 11,104 通过、1 项未修改的 500ms 健康探测测试超时、1 忽略。该项单独复测通过；`cargo test --lib --features <组合> -- --test-threads=2` 最终 11,105 通过、1 忽略，没有改变超时阈值。
+- `cargo clippy --all-targets --features <完整网关组合> -- -D warnings`：通过。没有声称无网关的 native 组合通过严格 Clippy；该组合的现有未使用网关 helper 警告仍然存在，没有新增全局 allow。
 - `cargo fmt --check`、`git diff --check`：通过。
-- `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`：通过；4,437 条上游记录 + 207 条覆盖记录，合并后 4,555 条。
-- `cargo test --features providers-extra,providers-extended --no-fail-fast`：通过；库单元测试 11,017 通过、1 忽略，集成测试与文档测试也通过。忽略项未视为已执行。
+- `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`：通过；4,437 条上游记录 + 207 条覆盖记录，合并后 4,555 条。并集 4,813 个精确 key 的字段差异与 authority/decision 生成结果独立核验一致。
 
-测试不包含真实厂商付费 API 冒烟；因此不会声称全部型号已经在线调用成功。
+忽略项未视为已执行。测试不包含真实厂商付费 API 冒烟；官网只核验公开型号及选定字段，不能证明账号、区域或私有部署实际可调用。

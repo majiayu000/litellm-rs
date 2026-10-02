@@ -1,6 +1,8 @@
 use super::router_tests::create_test_deployment;
 use crate::core::router::config::RouterConfig;
-use crate::core::router::error::{CooldownReason, RouterError};
+#[cfg(feature = "gateway")]
+use crate::core::router::error::CooldownReason;
+use crate::core::router::error::RouterError;
 use crate::core::router::unified::Router;
 
 #[tokio::test]
@@ -99,7 +101,7 @@ mod redis {
         };
         let id = unique("half-open");
         let config = RouterConfig {
-            cooldown_time_secs: 1,
+            cooldown_time_secs: 60,
             success_threshold: 1,
             ..Default::default()
         };
@@ -109,7 +111,11 @@ mod redis {
         seed(&b, &id).await;
 
         a.record_failure_with_reason(&id, CooldownReason::Timeout);
-        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        // Expire the shared cooldown without racing a one-second probe lease.
+        pool.hash_set(&RedisPool::circuit_key(&id), "opened", "1")
+            .await
+            .expect("expire cooldown fixture");
+        tokio::time::sleep(Duration::from_millis(80)).await;
 
         let a_lease = a.select_deployment_lease("gpt-4");
         let b_lease = b.select_deployment_lease("gpt-4");
@@ -137,7 +143,7 @@ mod redis {
         };
         let id = unique("reopen");
         let config = RouterConfig {
-            cooldown_time_secs: 1,
+            cooldown_time_secs: 60,
             success_threshold: 3,
             ..Default::default()
         };
@@ -147,7 +153,11 @@ mod redis {
         seed(&b, &id).await;
 
         a.record_failure_with_reason(&id, CooldownReason::Manual);
-        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        // Advance to half-open through the fixture; the re-opened lease stays long.
+        pool.hash_set(&RedisPool::circuit_key(&id), "opened", "1")
+            .await
+            .expect("expire cooldown fixture");
+        tokio::time::sleep(Duration::from_millis(80)).await;
         let _probe = a
             .select_deployment_lease("gpt-4")
             .expect("cooldown expiry must allow one probe");
