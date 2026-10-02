@@ -121,6 +121,10 @@ fn catalog_model_config_matches_public_config_facade() {
     use super::super::model_config::get_model_config;
 
     for entry in all_entries() {
+        if matches!(entry.lifecycle, super::ModelLifecycle::Retired { .. }) {
+            assert!(get_model_config(entry.model_id).is_err());
+            continue;
+        }
         let projected = entry.to_model_config();
         let actual = match get_model_config(entry.model_id) {
             Ok(cfg) => cfg,
@@ -287,8 +291,8 @@ fn generic_converse_metadata_does_not_use_nova_defaults() {
         get_catalog_entry("amazon.nova-premier-v1:0")
             .unwrap()
             .lifecycle,
-        super::ModelLifecycle::Deprecated {
-            deprecation_date: "2026-09-14"
+        super::ModelLifecycle::Retired {
+            retirement_date: "2026-09-14"
         }
     ));
 }
@@ -309,4 +313,29 @@ fn corrected_catalog_prices_reach_runtime_cost_calculation() {
         );
     }
     assert!(CostCalculator::get_model_pricing("amazon.titan-embed-text-v1").is_some());
+}
+
+#[test]
+fn retired_models_keep_historical_prices_without_being_routable() {
+    use super::super::model_config::{get_model_config, model_supports_capability};
+    let advertised = get_all_model_ids();
+    for id in [
+        "anthropic.claude-3-haiku-20240307-v1:0",
+        "cohere.command-r-v1:0",
+        "cohere.command-r-plus-v1:0",
+        "amazon.nova-premier-v1:0",
+        "amazon.nova-canvas-v1:0",
+        "amazon.nova-reel-v1:0",
+        "amazon.nova-reel-v1:1",
+        "meta.llama2-13b-chat-v1",
+        "meta.llama2-70b-chat-v1",
+        "anthropic.claude-v2",
+        "anthropic.claude-v2:1",
+        "anthropic.claude-instant-v1",
+    ] {
+        assert!(get_catalog_entry(id).unwrap().pricing.is_some(), "{id}");
+        assert!(get_model_config(id).is_err(), "{id}");
+        assert!(!advertised.contains(&id), "{id}");
+        assert!(!model_supports_capability(id, "streaming"), "{id}");
+    }
 }

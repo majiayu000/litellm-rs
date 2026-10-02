@@ -128,7 +128,18 @@ fn seed_image_video(out: &mut Vec<BedrockCatalogEntry>) {
             *vendor,
             BedrockModelFamily::TitanImage,
             BedrockApiType::Invoke,
-            ModelLifecycle::Live,
+            // AWS model-lifecycle-legacy.html: all Nova Canvas/Reel variants
+            // reached EOL on 2026-09-30; keep historical pricing only.
+            if matches!(
+                *id,
+                "amazon.nova-canvas-v1:0" | "amazon.nova-reel-v1:0" | "amazon.nova-reel-v1:1"
+            ) {
+                ModelLifecycle::Retired {
+                    retirement_date: "2026-09-30",
+                }
+            } else {
+                ModelLifecycle::Live
+            },
             EndpointSupport::INVOKE_NON_STREAMING,
             NO_PROFILES,
             ModelLimits {

@@ -330,12 +330,14 @@ mod tests {
                 .supports_capability_for_model("cohere-wire", &ProviderCapability::ChatCompletion,)
         );
 
-        let mai = mapped_provider("mai-wire", "MAI-Image-2.5");
+        let image = mapped_provider("image-wire", "FLUX-1.1-pro");
         assert!(
-            mai.supports_capability_for_model("mai-wire", &ProviderCapability::ImageGeneration,)
+            image
+                .supports_capability_for_model("image-wire", &ProviderCapability::ImageGeneration,)
         );
         assert!(
-            !mai.supports_capability_for_model("mai-wire", &ProviderCapability::ChatCompletion,)
+            !image
+                .supports_capability_for_model("image-wire", &ProviderCapability::ChatCompletion,)
         );
 
         let mut config = AzureAIConfig::new("azure_ai");

@@ -186,3 +186,17 @@ not represented by the simple two-rate cost calculator.
 
 The runtime cost calculator derives its lookup from the catalog. Updating a
 catalog rate therefore updates runtime cost estimates without a second table.
+
+### Retired catalog entries
+
+The catalog retains historical metadata and prices separately from routable model
+configurations. Entries marked `ModelLifecycle::Retired` are excluded from
+`get_all_model_ids()` and rejected by `get_model_config()`; retaining their price
+history does not advertise them as available. AWS-specific retirement dates are
+reviewed explicitly, not inferred from the upstream vendor's API lifecycle.
+
+The 2026-10-03 review removes Nova Premier, Canvas, Reel, Claude 3 Haiku and
+Command R/R+ from runtime availability using the [AWS lifecycle schedule](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html).
+It also honors the existing catalog retirement dates for Claude v2/Instant and
+Llama 2. Legacy models whose AWS EOL date is still in the future remain eligible;
+account and regional restrictions still apply.

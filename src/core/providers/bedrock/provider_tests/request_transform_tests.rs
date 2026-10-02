@@ -176,7 +176,7 @@ async fn test_transform_request_cohere() {
     let provider = create_test_provider();
 
     let request = ChatRequest {
-        model: "cohere.command-r-plus-v1:0".to_string(),
+        model: "cohere.command-text-v14".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),

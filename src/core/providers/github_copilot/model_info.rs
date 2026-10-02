@@ -26,8 +26,10 @@ pub struct GitHubCopilotModel {
 /// Static model registry for GitHub Copilot
 /// These are models accessible through the GitHub Copilot API
 static GITHUB_COPILOT_MODELS: &[GitHubCopilotModel] = &[
-    // Exact IDs documented by GitHub's CLI reference, reviewed 2026-10-01.
+    // Exact IDs documented by GitHub's CLI reference, reviewed 2026-10-03.
     // https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+    // Retired and utility-only models are not advertised as selectable models.
+    // https://docs.github.com/en/copilot/reference/ai-models/supported-models
     // Limits depend on the account/client; zero/None means not published here.
     GitHubCopilotModel {
         model_id: "gpt-6-astra",
@@ -68,131 +70,6 @@ static GITHUB_COPILOT_MODELS: &[GitHubCopilotModel] = &[
         supports_multimodal: true,
         supports_streaming: true,
         supports_reasoning: true,
-    },
-    // GPT-4 series
-    GitHubCopilotModel {
-        model_id: "gpt-4o",
-        display_name: "GPT-4o",
-        max_context_length: 128000,
-        max_output_length: Some(16384),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: false,
-    },
-    GitHubCopilotModel {
-        model_id: "gpt-4o-mini",
-        display_name: "GPT-4o Mini",
-        max_context_length: 128000,
-        max_output_length: Some(16384),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: false,
-    },
-    GitHubCopilotModel {
-        model_id: "gpt-4-turbo",
-        display_name: "GPT-4 Turbo",
-        max_context_length: 128000,
-        max_output_length: Some(4096),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: false,
-    },
-    // O1 Reasoning models
-    GitHubCopilotModel {
-        model_id: "o1-preview",
-        display_name: "O1 Preview",
-        max_context_length: 128000,
-        max_output_length: Some(32768),
-        supports_tools: false,
-        supports_multimodal: false,
-        supports_streaming: true,
-        supports_reasoning: true,
-    },
-    GitHubCopilotModel {
-        model_id: "o1-mini",
-        display_name: "O1 Mini",
-        max_context_length: 128000,
-        max_output_length: Some(65536),
-        supports_tools: false,
-        supports_multimodal: false,
-        supports_streaming: true,
-        supports_reasoning: true,
-    },
-    GitHubCopilotModel {
-        model_id: "o1",
-        display_name: "O1",
-        max_context_length: 200000,
-        max_output_length: Some(100000),
-        supports_tools: false,
-        supports_multimodal: false,
-        supports_streaming: true,
-        supports_reasoning: true,
-    },
-    GitHubCopilotModel {
-        model_id: "o3-mini",
-        display_name: "O3 Mini",
-        max_context_length: 200000,
-        max_output_length: Some(100000),
-        supports_tools: false,
-        supports_multimodal: false,
-        supports_streaming: true,
-        supports_reasoning: true,
-    },
-    // Claude models (via Copilot)
-    GitHubCopilotModel {
-        model_id: "claude-3.5-sonnet",
-        display_name: "Claude 3.5 Sonnet",
-        max_context_length: 200000,
-        max_output_length: Some(8192),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: false,
-    },
-    GitHubCopilotModel {
-        model_id: "claude-3-7-sonnet",
-        display_name: "Claude 3.7 Sonnet",
-        max_context_length: 200000,
-        max_output_length: Some(16384),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: true,
-    },
-    GitHubCopilotModel {
-        model_id: "claude-sonnet-4",
-        display_name: "Claude Sonnet 4",
-        max_context_length: 200000,
-        max_output_length: Some(16384),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: true,
-    },
-    // Codex models (code-specific)
-    GitHubCopilotModel {
-        model_id: "gpt-5.1-codex",
-        display_name: "GPT-5.1 Codex",
-        max_context_length: 256000,
-        max_output_length: Some(32768),
-        supports_tools: true,
-        supports_multimodal: false,
-        supports_streaming: true,
-        supports_reasoning: false,
-    },
-    // Gemini models (via Copilot)
-    GitHubCopilotModel {
-        model_id: "gemini-2.0-flash",
-        display_name: "Gemini 2.0 Flash",
-        max_context_length: 1000000,
-        max_output_length: Some(8192),
-        supports_tools: true,
-        supports_multimodal: true,
-        supports_streaming: true,
-        supports_reasoning: false,
     },
 ];
 
@@ -238,17 +115,38 @@ mod tests {
     fn test_get_available_models() {
         let models = get_available_models();
         assert!(!models.is_empty());
-        assert!(models.contains(&"gpt-4o"));
-        assert!(models.contains(&"claude-3.5-sonnet"));
-        assert!(models.contains(&"o1-preview"));
+        assert!(models.contains(&"gpt-6-sol"));
+        assert!(models.contains(&"claude-opus-5.5"));
+        assert!(models.contains(&"gpt-6-astra"));
+    }
+
+    #[test]
+    fn retired_and_utility_only_models_are_not_advertised() {
+        for id in [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "o1-preview",
+            "o1-mini",
+            "o1",
+            "o3-mini",
+            "claude-3.5-sonnet",
+            "claude-3-7-sonnet",
+            "claude-sonnet-4",
+            "gpt-5.1-codex",
+            "gemini-2.0-flash",
+        ] {
+            assert!(get_model_info(id).is_none(), "{id}");
+            assert!(!get_available_models().contains(&id), "{id}");
+        }
     }
 
     #[test]
     fn test_get_model_info() {
-        let model = get_model_info("gpt-4o");
+        let model = get_model_info("gpt-6-sol");
         assert!(model.is_some());
         let model = model.unwrap();
-        assert_eq!(model.model_id, "gpt-4o");
+        assert_eq!(model.model_id, "gpt-6-sol");
         assert!(model.supports_tools);
         assert!(model.supports_multimodal);
     }
@@ -261,32 +159,32 @@ mod tests {
 
     #[test]
     fn test_is_vision_model() {
-        assert!(is_vision_model("gpt-4o"));
-        assert!(is_vision_model("claude-3.5-sonnet"));
-        assert!(!is_vision_model("o1-preview"));
+        assert!(is_vision_model("gpt-6-sol"));
+        assert!(is_vision_model("claude-opus-5.5"));
+        assert!(!is_vision_model("unknown"));
     }
 
     #[test]
     fn test_supports_tools() {
-        assert!(supports_tools("gpt-4o"));
-        assert!(supports_tools("claude-3.5-sonnet"));
-        assert!(!supports_tools("o1-preview"));
+        assert!(supports_tools("gpt-6-sol"));
+        assert!(supports_tools("claude-opus-5.5"));
+        assert!(!supports_tools("unknown"));
     }
 
     #[test]
     fn test_supports_reasoning() {
-        assert!(supports_reasoning("o1-preview"));
-        assert!(supports_reasoning("o1-mini"));
-        assert!(supports_reasoning("claude-3-7-sonnet"));
-        assert!(!supports_reasoning("gpt-4o"));
+        assert!(supports_reasoning("gpt-6-astra"));
+        assert!(supports_reasoning("gpt-6-luna"));
+        assert!(supports_reasoning("claude-opus-5.5"));
+        assert!(!supports_reasoning("unknown"));
     }
 
     #[test]
     fn test_is_claude_model() {
-        assert!(is_claude_model("claude-3.5-sonnet"));
+        assert!(is_claude_model("claude-opus-5.5"));
         assert!(is_claude_model("claude-3-7-sonnet"));
         assert!(is_claude_model("claude-sonnet-4"));
-        assert!(!is_claude_model("gpt-4o"));
-        assert!(!is_claude_model("o1-preview"));
+        assert!(!is_claude_model("gpt-6-sol"));
+        assert!(!is_claude_model("gpt-6-astra"));
     }
 }

@@ -120,8 +120,8 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             BedrockVendor::Meta,
             BedrockModelFamily::Llama,
             BedrockApiType::Invoke,
-            ModelLifecycle::Deprecated {
-                deprecation_date: "2024-12-12",
+            ModelLifecycle::Retired {
+                retirement_date: "2024-12-12",
             },
             EndpointSupport::INVOKE,
             NO_PROFILES,

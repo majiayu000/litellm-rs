@@ -40,11 +40,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Test chat completion with Llama 3
-    println!("\n=== Testing Chat Completion with Llama 3 8B ===");
+    // Test chat completion with GPT OSS
+    println!("\n=== Testing Chat Completion with GPT OSS 120B ===");
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![
             ChatMessage {
                 role: MessageRole::System,
@@ -84,11 +84,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Test with Mistral
-    println!("\n=== Testing with Mistral 7B ===");
+    // Test with Gemma
+    println!("\n=== Testing with Gemma 4 ===");
 
-    let mistral_request = ChatRequest {
-        model: "@cf/mistral/mistral-7b-instruct-v0.1".to_string(),
+    let gemma_request = ChatRequest {
+        model: "@cf/google/gemma-4-26b-a4b-it".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text(
@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match provider
-        .chat_completion(mistral_request, RequestContext::default())
+        .chat_completion(gemma_request, RequestContext::default())
         .await
     {
         Ok(response) => {
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Testing Cost Calculation ===");
 
     match provider
-        .calculate_cost("@cf/meta/llama-3-8b-instruct", 1000, 500)
+        .calculate_cost("@cf/openai/gpt-oss-120b", 1000, 500)
         .await
     {
         Ok(cost) => println!(

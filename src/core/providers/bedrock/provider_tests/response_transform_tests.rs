@@ -123,7 +123,7 @@ async fn test_transform_response_cohere() {
     let result = provider
         .transform_response(
             &response_bytes,
-            "cohere.command-r-plus-v1:0",
+            "cohere.command-text-v14",
             "test-request-id",
         )
         .await;

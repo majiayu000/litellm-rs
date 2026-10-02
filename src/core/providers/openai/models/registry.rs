@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::core::pricing::get_pricing_db;
+use crate::core::providers::registry::model_catalog_authority::{
+    CatalogAuthority, CatalogResolution,
+};
 use crate::core::types::model::ModelInfo;
 
 use super::registry_types::{
@@ -38,6 +41,8 @@ impl OpenAIModelRegistry {
 
     /// Load models from pricing database and add static definitions
     fn load_models(&mut self) {
+        let authority = CatalogAuthority::from_embedded()
+            .expect("compiled model catalog authority must validate");
         // Always load built-in static models first so we keep a comprehensive
         // fallback catalog even when pricing DB is partially populated.
         self.add_static_models();
@@ -47,6 +52,12 @@ impl OpenAIModelRegistry {
 
         // Load from pricing database
         for model_id in &model_ids {
+            if !matches!(
+                authority.resolve_model("openai", model_id),
+                CatalogResolution::Callable(_)
+            ) {
+                continue;
+            }
             if let Some(mut model_info) = pricing_db.to_model_info(model_id, "openai") {
                 if is_realtime_model_id(model_id) {
                     model_info.supports_streaming = false;
@@ -73,6 +84,13 @@ impl OpenAIModelRegistry {
                 );
             }
         }
+        // Historical pricing and static defaults must not reactivate a retired model.
+        self.models.retain(|id, _| {
+            matches!(
+                authority.resolve_model("openai", id),
+                CatalogResolution::Callable(_)
+            )
+        });
     }
 
     /// Detect model features based on model info
