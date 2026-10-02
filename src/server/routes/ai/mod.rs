@@ -60,7 +60,7 @@ pub use moderations::create_moderation;
 pub use rerank::rerank;
 mod responses_native;
 pub use responses::{cancel_response, delete_response, get_response, list_response_input_items};
-pub use responses_native::create_response;
+pub use responses_native::{compact_response, create_response};
 
 use crate::core::models::openai::EmbeddingRequest;
 use crate::server::state::AppState;

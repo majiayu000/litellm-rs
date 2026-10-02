@@ -579,6 +579,20 @@ impl Provider {
     }
 
     #[cfg(feature = "gateway")]
+    pub(crate) async fn compact_response(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => provider.compact_response(body).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses compaction",
+            )),
+        }
+    }
+
+    #[cfg(feature = "gateway")]
     pub(crate) fn native_response_binding(&self) -> Option<String> {
         match self {
             Provider::OpenAI(provider) => Some(provider.native_response_binding()),

@@ -55,7 +55,18 @@ pub async fn create_response(
             Err(_) => Ok(openai_errors::validation_error("Invalid Responses request")),
         };
     }
-    match create_native(state.get_ref(), &req, body).await {
+    match create_native(state.get_ref(), &req, body, false).await {
+        Ok(response) => Ok(response),
+        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+    }
+}
+
+pub async fn compact_response(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    payload: web::Json<Value>,
+) -> ActixResult<HttpResponse> {
+    match create_native(state.get_ref(), &req, payload.into_inner(), true).await {
         Ok(response) => Ok(response),
         Err(error) => Ok(openai_errors::gateway_error_response(&error)),
     }
@@ -78,6 +89,7 @@ async fn create_native(
     state: &AppState,
     req: &HttpRequest,
     mut body: Value,
+    compact: bool,
 ) -> Result<HttpResponse, GatewayError> {
     let mut context = super::context::get_request_context(req)
         .map_err(|_| GatewayError::Auth("Unauthorized".into()))?;
@@ -87,15 +99,29 @@ async fn create_native(
         && !super::context::check_permission(
             super::context::get_authenticated_user(req).as_ref(),
             super::context::get_authenticated_api_key(req).as_ref(),
-            "chat",
+            if compact { "responses" } else { "chat" },
         )
     {
         return Err(GatewayError::Auth("Unauthorized".into()));
     }
     super::token_policy::attach_api_key_token_limit(req, &mut context)?;
     let owner = super::responses::response_owner(&context);
+    if compact {
+        for field in ["stream", "background", "store", "max_output_tokens"] {
+            if body.get(field).is_some() {
+                return Err(GatewayError::validation(format!(
+                    "{field} is not supported by Responses compaction"
+                )));
+            }
+        }
+        if context.api_key_max_tokens_per_request().is_some() {
+            return Err(GatewayError::Forbidden(
+                "Compaction cannot enforce this key's output token limit".into(),
+            ));
+        }
+    }
     let store = match body.get("store") {
-        None | Some(Value::Null) => true,
+        None | Some(Value::Null) => !compact,
         Some(Value::Bool(value)) => *value,
         _ => return Err(GatewayError::validation("store must be a boolean")),
     };
@@ -240,7 +266,13 @@ async fn create_native(
                                     &model,
                                     pricing.clone(),
                                 );
-                                provider.native_response(body)
+                                async move {
+                                    if compact {
+                                        provider.compact_response(body).await
+                                    } else {
+                                        provider.native_response(body).await
+                                    }
+                                }
                             },
                         )
                         .await?;
@@ -345,6 +377,21 @@ async fn create_native(
             return Err(error.into());
         }
     };
+    if compact
+        && (value.get("error").is_some_and(|error| !error.is_null())
+            || value.get("object").and_then(Value::as_str) != Some("response.compaction")
+            || value
+                .get("id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            || value.get("output").and_then(Value::as_array).is_none()
+            || usage.is_none())
+    {
+        let error = ProviderError::response_parsing("responses", "Invalid compaction response");
+        callback.fail(error.to_string(), "provider_error");
+        lease.finish_failure(&error);
+        return Err(error.into());
+    }
     if value.get("error").is_some_and(|error| !error.is_null())
         || value.get("status").and_then(Value::as_str) == Some("failed")
     {
