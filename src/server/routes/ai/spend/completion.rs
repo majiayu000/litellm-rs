@@ -27,9 +27,18 @@ pub(in crate::server::routes::ai) struct ChatCompletionBudgetRequest<'a> {
     max_tokens: Option<u32>,
     max_completion_tokens: Option<u32>,
     n: Option<u32>,
+    retained_prompt_tokens: u32,
 }
 
 impl<'a> ChatCompletionBudgetRequest<'a> {
+    pub(in crate::server::routes::ai) fn with_retained_prompt_tokens(
+        mut self,
+        tokens: u32,
+    ) -> Self {
+        self.retained_prompt_tokens = tokens;
+        self
+    }
+
     pub(in crate::server::routes::ai) fn with_output_limits(
         mut self,
         max_tokens: Option<u32>,
@@ -52,6 +61,7 @@ impl<'a> From<&'a ChatCompletionRequest> for ChatCompletionBudgetRequest<'a> {
             max_tokens: request.max_tokens,
             max_completion_tokens: request.max_completion_tokens,
             n: request.n,
+            retained_prompt_tokens: 0,
         }
     }
 }
@@ -294,6 +304,14 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request
             error,
         )
     })?;
+    let prompt_tokens = prompt_tokens
+        .checked_add(request.retained_prompt_tokens)
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "responses",
+                "Retained context exceeds the token accounting range",
+            )
+        })?;
     let max_output_tokens = request
         .max_completion_tokens
         .or(request.max_tokens)
@@ -675,6 +693,7 @@ mod budget_request_tests {
             max_tokens: Some(16),
             max_completion_tokens: None,
             n: None,
+            retained_prompt_tokens: 0,
         };
 
         let error = match reserve_chat_completion_budget_with_request_pricing(

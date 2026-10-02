@@ -101,15 +101,14 @@ async fn create_native(
             "Responses lifecycle storage requires authentication; set store=false for anonymous requests",
         ));
     }
-    if body.get("background") == Some(&Value::Bool(true))
-        || body
-            .get("previous_response_id")
-            .is_some_and(|value| !value.is_null())
-    {
+    if body.get("background") == Some(&Value::Bool(true)) {
         return Err(GatewayError::validation(
-            "Native background and previous_response_id support is pending",
+            "Native background support is pending",
         ));
     }
+    let previous =
+        lifecycle::previous_response(&state.storage.database, &body, owner.as_ref()).await?;
+    let retained_prompt_tokens = previous.as_ref().map_or(0, |(_, tokens)| *tokens);
     let requested_model = body
         .get("model")
         .and_then(Value::as_str)
@@ -145,6 +144,13 @@ async fn create_native(
     let sink = GuardrailDecisionSink::from_state(state, Some(&requested_model), None, None);
     body =
         guardrails::apply_native_responses(state.guardrails().as_ref(), body, false, &sink).await?;
+    let retained_input = lifecycle::retained_input(
+        state,
+        &body,
+        previous.as_ref().map(|(record, _)| record),
+        &sink,
+    )
+    .await?;
     let model = state.unified_router().resolve_model_name(&requested_model);
     let callback = super::callbacks::CallbackLifecycle::new(
         &state.callbacks,
@@ -152,16 +158,23 @@ async fn create_native(
         &requested_model,
         &context,
     );
-    let (call, lease) = budgeted::run_stream(
+    let (call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::Responses,
+        |deployment| {
+            previous.as_ref().is_none_or(|(record, _)| {
+                record.deployment_id.as_deref() == Some(deployment.id.as_str())
+                    && deployment.provider.native_response_binding() == record.deployment_binding
+            })
+        },
         {
             let context = context.clone();
             let callback = callback.clone();
             let owner = owner.clone();
             move |provider, model, deployment| {
                 let mut body = body.clone();
+                let retained_input = retained_input.clone();
                 let context = context.clone();
                 let callback = callback.clone();
                 let owner = owner.clone();
@@ -189,7 +202,7 @@ async fn create_native(
                         })?;
                         Some(NativeResponseStorage::new(
                             owner.0.clone(),
-                            &body,
+                            &retained_input,
                             deployment.clone(),
                             binding,
                         ))
@@ -213,7 +226,8 @@ async fn create_native(
                                     &limits,
                                     &provider_name,
                                     &model,
-                                    &budget_request,
+                                    spend::ChatCompletionBudgetRequest::from(&budget_request)
+                                        .with_retained_prompt_tokens(retained_prompt_tokens),
                                 )
                             },
                             || {

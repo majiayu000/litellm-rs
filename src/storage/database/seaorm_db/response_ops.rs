@@ -5,13 +5,24 @@ use crate::utils::error::gateway_error::Result;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, sea_query::Expr,
 };
+use std::sync::atomic::Ordering;
 
 impl SeaOrmDatabase {
     pub async fn insert_response(&self, record: response::Model, now: i64) -> Result<()> {
-        Entity::delete_many()
-            .filter(Column::ExpiresAt.lte(now))
-            .exec(&self.db)
-            .await?;
+        let last = self.last_response_prune.load(Ordering::Relaxed);
+        if (last == 0 || now.saturating_sub(last) >= 3600)
+            && self
+                .last_response_prune
+                .compare_exchange(last, now.max(1), Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            && let Err(error) = Entity::delete_many()
+                .filter(Column::ExpiresAt.lte(now))
+                .exec(&self.db)
+                .await
+        {
+            self.last_response_prune.store(0, Ordering::Relaxed);
+            return Err(error.into());
+        }
         // Insert-only: a colliding upstream ID must never transfer ownership.
         record.into_active_model().insert(&self.db).await?;
         Ok(())
@@ -290,6 +301,43 @@ mod tests {
             !db.renew_response_lease("worker", "owner-a", 1061)
                 .await
                 .unwrap()
+        );
+    }
+    #[tokio::test]
+    async fn pruning_is_throttled_but_expired_reads_are_always_rejected() {
+        let db = Database::new(&DatabaseConfig {
+            enabled: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        db.migrate().await.unwrap();
+        let mut expired = row("expired", 1000);
+        expired.expires_at = 1001;
+        db.insert_response(expired, 1000).await.unwrap();
+        db.insert_response(row("next", 1002), 1002).await.unwrap();
+        assert!(
+            Entity::find_by_id("expired")
+                .one(&db.db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            db.owned_response("expired", "owner-a", 1002)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        db.insert_response(row("hour-later", 4600), 4600)
+            .await
+            .unwrap();
+        assert!(
+            Entity::find_by_id("expired")
+                .one(&db.db)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }

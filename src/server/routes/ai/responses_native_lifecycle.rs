@@ -84,6 +84,94 @@ impl NativeResponseStorage {
     }
 }
 
+pub(super) async fn previous_response(
+    database: &Database,
+    body: &Value,
+    owner: Option<&crate::server::routes::ai::responses::ResponseOwner>,
+) -> Result<Option<(ResponseRecord, u32)>, GatewayError> {
+    let id = match body.get("previous_response_id") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(id)) if !id.is_empty() => id,
+        _ => {
+            return Err(GatewayError::validation(
+                "previous_response_id must be a nonempty string",
+            ));
+        }
+    };
+    let missing = || GatewayError::not_found(format!("Response '{id}' not found"));
+    let owner = owner.ok_or_else(missing)?;
+    let record = database
+        .owned_response(id, &owner.0, chrono::Utc::now().timestamp())
+        .await?
+        .ok_or_else(missing)?;
+    if record.deployment_id.is_none() || record.deployment_binding.is_none() {
+        return Err(GatewayError::validation(
+            "A chat-adapted response cannot be continued through a native deployment",
+        ));
+    }
+    if matches!(record.status.as_str(), "queued" | "in_progress") {
+        return Err(GatewayError::conflict(
+            "The previous response has not finished",
+        ));
+    }
+    let value: Value = serde_json::from_str(&record.response_json)?;
+    // The previous response's total includes its retained input and generated
+    // output, including opaque reasoning that cannot be tokenized from JSON.
+    let usage = super::response_usage(&value).ok_or_else(|| {
+        GatewayError::conflict(
+            "The previous response has no verified usage for context reservation",
+        )
+    })?;
+    Ok(Some((record, usage.total_tokens)))
+}
+
+pub(super) async fn retained_input(
+    state: &AppState,
+    body: &Value,
+    previous: Option<&ResponseRecord>,
+    sink: &GuardrailDecisionSink,
+) -> Result<Value, GatewayError> {
+    let Some(previous) = previous else {
+        return Ok(body.clone());
+    };
+    let input: Value = serde_json::from_str(&previous.input_json)?;
+    let output: Value = serde_json::from_str(&previous.response_json)?;
+    let mut history = Vec::new();
+    append_input(&mut history, input.get("input"));
+    append_input(&mut history, output.get("output"));
+    let retained = serde_json::json!({"input":history});
+    let checked = guardrails::apply_native_responses(
+        state.guardrails().as_ref(),
+        retained.clone(),
+        false,
+        sink,
+    )
+    .await?;
+    if checked != retained {
+        return Err(GatewayError::validation(
+            "Stored upstream context cannot be masked; submit explicit input instead of previous_response_id",
+        ));
+    }
+    append_input(&mut history, body.get("input"));
+    let mut stored_input = body.clone();
+    stored_input["input"] = Value::Array(history);
+    if stored_input.to_string().len() > MAX_RESPONSE_BYTES {
+        return Err(GatewayError::validation(
+            "Stored Responses context exceeds the storage size limit",
+        ));
+    }
+    Ok(stored_input)
+}
+
+fn append_input(items: &mut Vec<Value>, value: Option<&Value>) {
+    match value {
+        Some(Value::Array(values)) => items.extend(values.iter().cloned()),
+        Some(Value::String(text)) => items.push(serde_json::json!({"role":"user", "content":text})),
+        Some(Value::Null) | None => {}
+        Some(value) => items.push(value.clone()),
+    }
+}
+
 fn bound_provider(state: &AppState, record: &ResponseRecord) -> Result<Provider, GatewayError> {
     let deployment = record
         .deployment_id
@@ -168,5 +256,21 @@ pub(in crate::server::routes::ai) async fn lifecycle(
     );
     let value =
         guardrails::apply_native_responses(state.guardrails().as_ref(), value, true, &sink).await?;
+    if suffix.is_none()
+        && matches!(method, HttpMethod::GET)
+        && let Some(status) = value.get("status").and_then(Value::as_str)
+        && matches!(status, "completed" | "incomplete" | "failed" | "cancelled")
+    {
+        state
+            .storage
+            .database
+            .finish_owned_response(
+                &record,
+                value.to_string(),
+                status,
+                chrono::Utc::now().timestamp(),
+            )
+            .await?;
+    }
     Ok(HttpResponse::Ok().json(value))
 }

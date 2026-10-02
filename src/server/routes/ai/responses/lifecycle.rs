@@ -244,20 +244,32 @@ pub(super) async fn handle_background_response(
         tokio::pin!(work);
         let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        heartbeat.tick().await;
+        let remaining = record
+            .lease_until
+            .unwrap_or_default()
+            .saturating_sub(current_unix_ts())
+            .max(0) as u64;
+        let mut lease_deadline = tokio::time::Instant::now() + Duration::from_secs(remaining);
         let result = loop {
             tokio::select! {
                 biased;
-                _ = heartbeat.tick() => {
-                    match database.renew_response_lease(&record.id, &record.owner, current_unix_ts()).await {
-                        Ok(true) => {},
-                        Ok(false) => return,
-                        Err(error) => {
-                            error!("Responses worker lease failed: {error}");
-                            return;
-                        }
+                _ = tokio::time::sleep_until(lease_deadline) => return,
+                result = &mut work => break result,
+                (started, renewal) = async {
+                    heartbeat.tick().await;
+                    let started = tokio::time::Instant::now();
+                    let renewal = database.renew_response_lease(&record.id, &record.owner, current_unix_ts()).await;
+                    (started, renewal)
+                } => match renewal {
+                    Ok(true) => lease_deadline = started + Duration::from_secs(60),
+                    Ok(false) => return,
+                    Err(error) => {
+                        // Keep polling the paid request during a transient database
+                        // failure, but never execute beyond the last confirmed lease.
+                        error!("Responses worker lease renewal failed: {error}");
                     }
                 }
-                result = &mut work => break result,
             }
         };
         let mut response = match result {

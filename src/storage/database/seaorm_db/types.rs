@@ -8,6 +8,7 @@ pub struct SeaOrmDatabase {
     pub(super) backend_type: DatabaseBackendType,
     /// True when a failed PostgreSQL connection fell back to local SQLite.
     pub(super) sqlite_fallback: bool,
+    pub(super) last_response_prune: std::sync::atomic::AtomicI64,
 }
 
 /// Database backend type indicator

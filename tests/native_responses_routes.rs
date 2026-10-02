@@ -359,7 +359,16 @@ async fn native_stored_json_and_sse_are_owner_scoped_across_gateways_and_account
         let wire = test::read_body(response).await;
         assert!(String::from_utf8_lossy(&wire).contains("future_response_field"));
         drop(app);
-        let second = litellm_rs::server::HttpServer::new(&state.config())
+        let mut second_config = state.config().as_ref().clone();
+        let mut unrelated = second_config.gateway.providers[0].clone();
+        unrelated.name = "other-native".into();
+        unrelated.base_url = unrelated
+            .base_url
+            .map(|base| format!("{base}/wrong-account"));
+        unrelated.priority = 0;
+        second_config.gateway.providers[0].priority = 10;
+        second_config.gateway.providers.push(unrelated);
+        let second = litellm_rs::server::HttpServer::new(&second_config)
             .await
             .unwrap();
         let app = test::init_service(
@@ -400,6 +409,41 @@ async fn native_stored_json_and_sse_are_owner_scoped_across_gateways_and_account
         assert_eq!(response.status(), StatusCode::OK);
         let value: Value = test::read_body_json(response).await;
         assert_eq!(value["data"][0]["future_input_field"], true);
+
+        let mut continuation = request(false);
+        continuation["previous_response_id"] = json!("resp_native");
+        continuation["input"] = json!("Continue on the original account");
+        let before_posts = upstream.seen.lock().unwrap().len();
+        let req = test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(&continuation)
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("bob"));
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(upstream.seen.lock().unwrap().len(), before_posts);
+        let req = test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(&continuation)
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        let response = test::call_service(&app, req).await;
+        let status = response.status();
+        let value = test::read_body(response).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&value)
+        );
+        assert_eq!(
+            upstream.seen.lock().unwrap().last().unwrap()["previous_response_id"],
+            "resp_native"
+        );
 
         let mut changed = state.config().as_ref().clone();
         changed.gateway.providers[0].api_key =
@@ -488,5 +532,153 @@ async fn native_storage_requires_owner_and_store_false_never_creates_a_handle() 
         StatusCode::NOT_FOUND
     );
     assert!(upstream.lifecycle_calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn previous_response_reserves_retained_tokens_and_rejects_expired_handles() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    use litellm_rs::core::types::context::RequestContext;
+    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["store"] = json!(true);
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = test::read_body(response).await;
+    let now = chrono::Utc::now().timestamp();
+    let db = &state.storage.database;
+    let mut record = db
+        .owned_response("resp_native", "user:alice", now)
+        .await
+        .unwrap()
+        .unwrap();
+    // Large retained usage can include hidden reasoning, so JSON length alone
+    // cannot reserve a continuation's actual input cost.
+    let mut value: Value = serde_json::from_str(&record.response_json).unwrap();
+    value["usage"]["input_tokens"] = json!(199997);
+    value["usage"]["total_tokens"] = json!(200000);
+    record.response_json = value.to_string();
+    db.delete_owned_response(&record.id, &record.owner, now)
+        .await
+        .unwrap();
+    db.insert_response(record.clone(), now).await.unwrap();
+    state.budget_limits.models.set_model_limit(
+        "gpt-4o-mini",
+        ModelLimitConfig::new(0.001, ResetPeriod::Monthly),
+    );
+    body["store"] = json!(false);
+    body["previous_response_id"] = json!("resp_native");
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    let status = response.status();
+    let bytes = test::read_body(response).await;
+    assert_eq!(
+        status,
+        StatusCode::PAYMENT_REQUIRED,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    db.delete_owned_response(&record.id, &record.owner, now)
+        .await
+        .unwrap();
+    record.expires_at = now;
+    db.insert_response(record, now).await.unwrap();
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn previous_response_cannot_bypass_new_guardrails_for_stored_context() {
+    use litellm_rs::core::guardrails::{GuardrailAction, PIIConfig};
+    use litellm_rs::core::types::context::RequestContext;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.storage.database.enabled = true;
+        config.gateway.storage.database.auto_migrate = true;
+        config.gateway.storage.database.url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("guardrails.db").display()
+        );
+    })
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["store"] = json!(true);
+    body["input"] = json!("Contact alice@example.com");
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = test::read_body(response).await;
+    let mut config = state.config().as_ref().clone();
+    config.gateway.guardrails.pii = Some(PIIConfig {
+        enabled: true,
+        action: GuardrailAction::Mask,
+        mask_pattern: Some("[MASKED]".into()),
+        ..Default::default()
+    });
+    let changed = litellm_rs::server::HttpServer::new(&config).await.unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(changed.state().clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    body["store"] = json!(false);
+    body["input"] = json!("Continue");
+    body["previous_response_id"] = json!("resp_native");
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let value: Value = test::read_body_json(response).await;
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be masked")
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
     handle.stop(false).await;
 }
