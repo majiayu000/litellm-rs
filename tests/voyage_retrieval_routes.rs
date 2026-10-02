@@ -157,7 +157,17 @@ mod tests {
     }
 
     async fn build_state(provider: ProviderConfig) -> litellm_rs::server::state::AppState {
+        build_state_with_pricing_source(provider, None).await
+    }
+
+    async fn build_state_with_pricing_source(
+        provider: ProviderConfig,
+        pricing_source: Option<&std::path::Path>,
+    ) -> litellm_rs::server::state::AppState {
         let mut config = Config::default();
+        if let Some(source) = pricing_source {
+            config.gateway.pricing.source = Some(source.to_string_lossy().into_owned());
+        }
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
         config.gateway.auth.allow_anonymous = true;
@@ -417,7 +427,14 @@ mod tests {
         let mock = MockVoyageServer::start_voyage_mock().await;
         let mut provider = voyage_provider(&mock.base_url);
         provider.models.push("rerank-1".to_string());
-        let state = build_state(provider).await;
+        // Upstream catalogs may acquire prices for any real model. Make the
+        // missing-price condition explicit instead of relying on catalog age.
+        let mut prices: Value =
+            serde_json::from_str(include_str!("../config/model_prices_extended.json")).unwrap();
+        prices.as_object_mut().unwrap().remove("voyage/rerank-1");
+        let price_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(price_file.path(), serde_json::to_vec(&prices).unwrap()).unwrap();
+        let state = build_state_with_pricing_source(provider, Some(price_file.path())).await;
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state))
