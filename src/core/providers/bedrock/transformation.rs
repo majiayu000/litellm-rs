@@ -141,6 +141,10 @@ pub fn transform_chat_request(
 
             Ok(body)
         }
+        BedrockModelFamily::GenericConverse => Err(ProviderError::not_supported(
+            "bedrock",
+            "This model requires the Converse request path",
+        )),
         BedrockModelFamily::TitanEmbedding
         | BedrockModelFamily::TitanImage
         | BedrockModelFamily::StabilityAI => Err(ProviderError::invalid_request(

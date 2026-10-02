@@ -31,8 +31,9 @@ async fn test_transform_request_claude() {
     assert!(result.is_ok());
     let body = result.unwrap();
     assert!(body.get("messages").is_some());
-    assert_eq!(body.get("max_tokens").unwrap(), 1000);
-    assert!(body.get("anthropic_version").is_some());
+    assert_eq!(body["inferenceConfig"]["maxTokens"], 1000);
+    assert_eq!(body["messages"][0]["content"][0]["text"], "Hello");
+    assert!(body.get("anthropic_version").is_none());
 }
 
 #[tokio::test]
@@ -88,7 +89,8 @@ async fn test_transform_request_nova() {
     assert!(result.is_ok());
     let body = result.unwrap();
     assert!(body.get("messages").is_some());
-    assert_eq!(body.get("max_tokens").unwrap(), 2000);
+    assert_eq!(body["inferenceConfig"]["maxTokens"], 2000);
+    assert_eq!(body["messages"][0]["content"][0]["text"], "Hello");
 }
 
 #[tokio::test]
@@ -235,4 +237,22 @@ async fn test_transform_request_unknown_model() {
     let result = provider.transform_request(request, context).await;
 
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn generic_converse_model_uses_neutral_request_shape() {
+    use crate::core::types::{chat::ChatRequest, context::RequestContext};
+    let provider = create_test_provider();
+    let request = ChatRequest::new("openai.gpt-oss-120b-1:0")
+        .add_system_message("Be brief.")
+        .add_user_message("Hello");
+    let body = provider
+        .transform_request(request, RequestContext::default())
+        .await
+        .unwrap();
+    assert_eq!(body["system"][0]["text"], "Be brief.");
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(body["messages"][0]["content"][0]["text"], "Hello");
+    assert!(body.get("prompt").is_none());
+    assert!(body.get("schemaVersion").is_none());
 }

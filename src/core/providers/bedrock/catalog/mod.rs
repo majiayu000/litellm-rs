@@ -18,9 +18,8 @@
 //!
 //! The catalog drives the existing `model_config` public facade: `MODEL_CONFIGS`
 //! is projected from these entries so callers keep their existing lookup API
-//! without duplicating capability metadata. `MODEL_PRICING` remains a separate
-//! lazy map in the cost utility module and is cross-checked against catalog
-//! pricing below.
+//! without duplicating capability metadata. The cost utility projects its
+//! pricing lookup from the same entries.
 
 use crate::core::cost::types::ModelPricing;
 
@@ -139,6 +138,7 @@ impl EndpointSupport {
 pub enum InferenceProfileScope {
     Global,
     UnitedStates,
+    UnitedStatesGovCloud,
     Europe,
     AsiaPacific,
     Australia,

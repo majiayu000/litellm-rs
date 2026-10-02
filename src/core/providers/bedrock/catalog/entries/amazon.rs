@@ -71,12 +71,7 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
         ));
     }
 
-    // Titan Embed Text v1 — capability metadata + per-token pricing live in
-    // `model_config.rs` ($0.0001 / 1k input). The standalone
-    // `utils/cost.rs::MODEL_PRICING` map currently omits it (only the v2:0
-    // variant is in that map). Catalog projection mirrors `model_config.rs`,
-    // and the pricing round-trip test treats catalog→legacy-cost as a
-    // one-way subset check rather than an equality assertion for this ID.
+    // Titan Embed Text v1: $0.0001 per 1k input tokens.
     out.push(entry(
         "amazon.titan-embed-text-v1",
         "Titan Embed Text v1",

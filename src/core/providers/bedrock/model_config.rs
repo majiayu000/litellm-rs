@@ -22,6 +22,8 @@ pub enum BedrockModelFamily {
     Cohere,
     DeepSeek,
     StabilityAI,
+    /// Models routed through the vendor-neutral Converse protocol.
+    GenericConverse,
 }
 
 /// Bedrock API types
