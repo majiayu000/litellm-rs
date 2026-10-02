@@ -214,8 +214,8 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
         },
     );
 
-    // First-party Workers AI model cards, checked 2026-10-01. The native
-    // adapter currently forwards text chat only; do not advertise tools/vision.
+    // First-party Workers AI model cards, checked 2026-10-03.
+    // The OpenAI-compatible adapter preserves tools, image input and streaming.
     // Cards do not publish an independent output limit, so leave it unknown.
     for (id, name, context, input, output) in [
         (
@@ -276,9 +276,14 @@ static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelInfo>> = LazyLock::new
                 display_name: name,
                 max_context_length: context,
                 max_output_length: None,
-                supports_tools: false,
-                supports_multimodal: false,
-                supports_streaming: false,
+                supports_tools: true,
+                supports_multimodal: matches!(
+                    id,
+                    "@cf/google/gemma-4-26b-a4b-it"
+                        | "@cf/zai-org/glm-5.3-flash"
+                        | "@cf/moonshotai/kimi-k2.7-code"
+                ),
+                supports_streaming: true,
                 input_cost_per_million: input,
                 output_cost_per_million: output,
             },
@@ -631,43 +636,43 @@ mod tests {
     }
 
     #[test]
-    fn current_catalog_does_not_advertise_unimplemented_streaming() {
+    fn current_catalog_advertises_supported_streaming() {
         for id in [
             "@cf/zai-org/glm-5.3",
             "@cf/zai-org/glm-5.3-flash",
             "@cf/openai/gpt-oss-120b",
         ] {
-            assert!(!get_model_info(id).unwrap().supports_streaming);
+            assert!(get_model_info(id).unwrap().supports_streaming);
         }
     }
 
     #[test]
-    fn test_model_info_no_tools_support() {
-        // Currently no Cloudflare models support tools
-        let models = get_available_models();
-        for model_id in models {
-            if let Some(info) = get_model_info(model_id) {
-                assert!(
-                    !info.supports_tools,
-                    "Model {} shouldn't support tools yet",
-                    model_id
-                );
-            }
+    fn current_catalog_capabilities_match_official_cards() {
+        for id in [
+            "@cf/deepseek-ai/deepseek-v4-flash-0731",
+            "@cf/deepseek-ai/deepseek-v4-pro-0813",
+            "@cf/google/gemma-4-26b-a4b-it",
+            "@cf/zai-org/glm-5.3-flash",
+            "@cf/zai-org/glm-5.3",
+            "@cf/openai/gpt-oss-120b",
+            "@cf/moonshotai/kimi-k2.7-code",
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+        ] {
+            assert!(get_model_info(id).unwrap().supports_tools, "{id}");
+            assert!(get_model_info(id).unwrap().supports_streaming, "{id}");
         }
-    }
-
-    #[test]
-    fn test_model_info_no_vision_support() {
-        // Currently no Cloudflare models support vision
-        let models = get_available_models();
-        for model_id in models {
-            if let Some(info) = get_model_info(model_id) {
-                assert!(
-                    !info.supports_multimodal,
-                    "Model {} shouldn't support vision yet",
-                    model_id
-                );
-            }
+        for (id, vision) in [
+            ("@cf/google/gemma-4-26b-a4b-it", true),
+            ("@cf/zai-org/glm-5.3-flash", true),
+            ("@cf/moonshotai/kimi-k2.7-code", true),
+            ("@cf/zai-org/glm-5.3", false),
+            ("@cf/qwen/qwen3-30b-a3b-fp8", false),
+        ] {
+            assert_eq!(
+                get_model_info(id).unwrap().supports_multimodal,
+                vision,
+                "{id}"
+            );
         }
     }
 

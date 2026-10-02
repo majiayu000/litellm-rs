@@ -162,7 +162,7 @@ async fn health_check_is_healthy_only_for_2xx_responses() {
 fn test_capabilities() {
     assert!(CLOUDFLARE_CAPABILITIES.contains(&ProviderCapability::ChatCompletion));
     assert!(CLOUDFLARE_CAPABILITIES.contains(&ProviderCapability::ChatCompletionStream));
-    assert_eq!(CLOUDFLARE_CAPABILITIES.len(), 2);
+    assert_eq!(CLOUDFLARE_CAPABILITIES.len(), 3);
 }
 
 #[tokio::test]
@@ -245,7 +245,7 @@ async fn test_transform_request() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request);
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     assert!(transformed["messages"].is_array());
     let temp_value = transformed["temperature"].as_f64().unwrap();
     assert!(
@@ -271,7 +271,7 @@ async fn test_transform_request_with_top_p() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request);
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     let top_p_value = transformed["top_p"].as_f64().unwrap();
     assert!((top_p_value - 0.9).abs() < 1e-6);
 }
@@ -291,7 +291,7 @@ async fn test_transform_request_with_streaming() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request);
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     assert_eq!(transformed["stream"], true);
 }
 
@@ -323,7 +323,7 @@ async fn test_transform_request_multiple_messages() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request);
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     let messages = transformed["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
 }
@@ -342,7 +342,7 @@ async fn test_transform_request_no_optional_params() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request);
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     assert!(transformed["messages"].is_array());
     assert!(transformed.get("temperature").is_none() || transformed["temperature"].is_null());
     assert!(transformed.get("max_tokens").is_none() || transformed["max_tokens"].is_null());
@@ -354,12 +354,7 @@ async fn test_transform_request_no_optional_params() {
 async fn test_transform_response_success() {
     let provider = create_test_provider().await;
 
-    let response_json = serde_json::json!({
-        "result": {
-            "response": "Hello! I'm doing well, thank you for asking."
-        },
-        "success": true
-    });
+    let response_json = chat_response_json("Hello!");
     let response_bytes = serde_json::to_vec(&response_json).unwrap();
 
     let result = provider
@@ -471,15 +466,13 @@ async fn test_response_decoder_rejects_failure_but_allows_explicit_empty_text() 
         .unwrap_err();
     assert_eq!(error.http_facts().status, 502);
     assert!(error.to_string().contains("inference failed"));
-    let empty = br#"{"success":true,"result":{"response":""}}"#;
+    let empty = serde_json::to_vec(&chat_response_json("")).unwrap();
     let response = provider
-        .transform_response(empty, "test", "id")
+        .transform_response(&empty, "test", "id")
         .await
         .unwrap();
-    assert!(matches!(
-        &response.choices[0].message.content,
-        Some(MessageContent::Text(text)) if text.is_empty()
-    ));
+    // The shared OpenAI transformer normalizes empty text to absent content.
+    assert!(response.choices[0].message.content.is_none());
 }
 
 #[tokio::test]
@@ -544,25 +537,194 @@ async fn test_calculate_cost_unknown_model() {
 
 // ==================== Streaming Tests ====================
 
+fn chat_response_json(content: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": "test-request-id", "object": "chat.completion", "created": 1,
+        "model": "@cf/meta/llama-3-8b-instruct",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+    })
+}
+
+async fn chat_server(
+    status: &str,
+    content_type: &str,
+    body: String,
+) -> (String, tokio::task::JoinHandle<serde_json::Value>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nRetry-After: 17\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let (header_end, length) = loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]);
+                assert!(
+                    headers
+                        .starts_with("POST /accounts/test_account/ai/v1/chat/completions HTTP/1.1")
+                );
+                assert!(
+                    headers
+                        .to_lowercase()
+                        .contains("authorization: bearer test_token")
+                );
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                break (end + 4, length);
+            }
+        };
+        while request.len() < header_end + length {
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+        }
+        socket.write_all(response.as_bytes()).await.unwrap();
+        serde_json::from_slice(&request[header_end..header_end + length]).unwrap()
+    });
+    (format!("http://{addr}"), task)
+}
+
 #[tokio::test]
-async fn test_streaming_not_implemented() {
-    let provider = create_test_provider().await;
+async fn test_chat_preserves_tools_images_reasoning_usage_and_wire_parameters() {
+    let mut reply = chat_response_json("");
+    reply["choices"][0]["message"] = serde_json::json!({
+        "role":"assistant", "content": null, "reasoning_content": "thinking",
+        "tool_calls": [{"id":"call-1","type":"function","function":{"name":"weather","arguments":"{}"}}]
+    });
+    reply["choices"][0]["finish_reason"] = serde_json::json!("tool_calls");
+    let (base, server) = chat_server("200 OK", "application/json", reply.to_string()).await;
+    let provider = CloudflareProvider::new(CloudflareConfig {
+        api_base: Some(base),
+        ..create_test_config()
+    })
+    .await
+    .unwrap();
+    let request: ChatRequest = serde_json::from_value(serde_json::json!({
+        "model":"cloudflare/@cf/test/model", "messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"https://example.test/image.png"}}]}],
+        "tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object"}}}],
+        "tool_choice":"auto", "frequency_penalty":0.25, "reasoning_effort":"low",
+        "options":{"rejectIfBusy":true}, "stream":true
+    })).unwrap();
+    let response = provider
+        .chat_completion(request, RequestContext::default())
+        .await
+        .unwrap();
+    let wire = server.await.unwrap();
+    assert_eq!(wire["model"], "@cf/test/model");
+    assert_eq!(wire["stream"], false);
+    assert_eq!(wire["messages"][0]["content"][1]["type"], "image_url");
+    assert_eq!(wire["tools"][0]["function"]["name"], "weather");
+    assert_eq!(wire["options"]["rejectIfBusy"], true);
+    assert_eq!(wire["reasoning_effort"], "low");
+    assert_eq!(wire["frequency_penalty"], 0.25);
+    assert_eq!(
+        response.choices[0].message.thinking_text(),
+        Some("thinking")
+    );
+    assert_eq!(
+        response.choices[0].message.tool_calls.as_ref().unwrap()[0].id,
+        "call-1"
+    );
+    assert_eq!(response.usage.unwrap().total_tokens, 3);
+}
 
-    let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
-        messages: vec![ChatMessage {
-            role: MessageRole::User,
-            content: Some(MessageContent::Text("Hello".to_string())),
-            ..Default::default()
-        }],
-        stream: true,
-        ..Default::default()
-    };
-
-    let context = RequestContext::default();
-    let result = provider.chat_completion_stream(request, context).await;
-
-    assert!(result.is_err());
+#[tokio::test]
+async fn test_streaming_preserves_deltas_usage_and_reports_errors() {
+    use futures::StreamExt;
+    let first = r#"data: {"id":"s","model":"test","choices":[{"index":0,"delta":{"content":"hello","reasoning_content":"thought"},"finish_reason":null}]}"#;
+    let finish = r#"data: {"id":"s","model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
+    let usage = r#"data: {"id":"s","model":"test","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}"#;
+    for (body, fails) in [
+        (
+            format!("{first}\n\n{finish}\n\n{usage}\n\ndata: [DONE]\n\n"),
+            false,
+        ),
+        (
+            format!("{first}\n\ndata: {{\"error\":{{\"message\":\"upstream failed\"}}}}\n\n"),
+            true,
+        ),
+    ] {
+        let (base, server) = chat_server("200 OK", "text/event-stream", body).await;
+        let provider = CloudflareProvider::new(CloudflareConfig {
+            api_base: Some(base),
+            ..create_test_config()
+        })
+        .await
+        .unwrap();
+        let stream = provider
+            .chat_completion_stream(
+                ChatRequest {
+                    model: "cloudflare/@cf/test/model".into(),
+                    ..Default::default()
+                },
+                RequestContext::default(),
+            )
+            .await
+            .unwrap();
+        let chunks: Vec<_> = stream.collect().await;
+        assert_eq!(chunks.iter().any(Result::is_err), fails);
+        if !fails {
+            let first = chunks.first().unwrap().as_ref().unwrap();
+            assert_eq!(first.choices[0].delta.content.as_deref(), Some("hello"));
+            assert!(first.choices[0].delta.thinking.is_some());
+            assert_eq!(
+                chunks
+                    .last()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .usage
+                    .as_ref()
+                    .unwrap()
+                    .total_tokens,
+                3
+            );
+        }
+        assert_eq!(server.await.unwrap()["stream"], true);
+    }
+    let (base, server) = chat_server(
+        "429 Too Many Requests",
+        "application/json",
+        "rate limited".into(),
+    )
+    .await;
+    let provider = CloudflareProvider::new(CloudflareConfig {
+        api_base: Some(base),
+        ..create_test_config()
+    })
+    .await
+    .unwrap();
+    let result = provider
+        .chat_completion_stream(
+            ChatRequest {
+                model: "test".into(),
+                ..Default::default()
+            },
+            RequestContext::default(),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ProviderError::RateLimit {
+            retry_after: Some(17),
+            ..
+        })
+    ));
+    server.await.unwrap();
 }
 
 // ==================== Embeddings Tests ====================
