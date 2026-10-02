@@ -24810,22 +24810,22 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-audio-preview-2024-12-17",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-022"
+        "evidence-022",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-4o-audio-preview-2024-12-17",
-      "aliases": []
+      "reason": "Snapshot of an audio/realtime preview family removed on 2026-05-07 according to the OpenAI deprecation notice; historical pricing is not current endpoint support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-audio-preview-2025-06-03",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-022"
+        "evidence-022",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-4o-audio-preview-2025-06-03",
-      "aliases": []
+      "reason": "Snapshot of an audio/realtime preview family removed on 2026-05-07 according to the OpenAI deprecation notice; historical pricing is not current endpoint support."
     },
     {
       "provider": "openai",
@@ -24850,22 +24850,22 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-audio-preview-2024-12-17",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-024"
+        "evidence-024",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-4o-mini-audio-preview-2024-12-17",
-      "aliases": []
+      "reason": "Snapshot of an audio/realtime preview family removed on 2026-05-07 according to the OpenAI deprecation notice; historical pricing is not current endpoint support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-realtime-preview-2024-12-17",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-025"
+        "evidence-025",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-4o-mini-realtime-preview-2024-12-17",
-      "aliases": []
+      "reason": "Snapshot of an audio/realtime preview family removed on 2026-05-07 according to the OpenAI deprecation notice; historical pricing is not current endpoint support."
     },
     {
       "provider": "openai",

@@ -221,8 +221,8 @@
     ],
     "total_model_count": 4569,
     "catalog_decision_revision": "model-retirement-review-20261003",
-    "catalog_decision_source_sha256": "b6133203f4a8ef9afb0d8a45a532bd67be4d45cae021f05357b64a7271ce47db",
-    "catalog_authority_sha256": "964f34907865710c3755fa7664510154e6eda3aeb130ec0976dd06ef3ed71123",
+    "catalog_decision_source_sha256": "4bb8fadf52d381da04773c091edf9e76192b0c8c0f0c076fbeb081cda6df1cc2",
+    "catalog_authority_sha256": "40b76b687c817a3976c5a7016b9a1c8ab544dc8ce434aca0ef081d03437d8aa4",
     "catalog_authority_entry_count": 4569,
     "catalog_authority_enforced_providers": [
       "azure",
@@ -596,8 +596,8 @@
         "unreviewed": 29
       },
       "openai": {
-        "callable": 115,
-        "pricing_only": 83,
+        "callable": 111,
+        "pricing_only": 87,
         "unreviewed": 12
       },
       "openrouter": {

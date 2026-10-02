@@ -233,6 +233,10 @@ fn retained_historical_prices_do_not_advertise_retired_models() {
         "o3-deep-research",
         "sora-2",
         "gpt-3.5-turbo-1106",
+        "gpt-4o-audio-preview-2024-12-17",
+        "gpt-4o-audio-preview-2025-06-03",
+        "gpt-4o-mini-audio-preview-2024-12-17",
+        "gpt-4o-mini-realtime-preview-2024-12-17",
         "dall-e-3",
     ] {
         assert!(
