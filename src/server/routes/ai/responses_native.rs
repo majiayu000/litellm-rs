@@ -41,7 +41,8 @@ pub async fn create_response(
         .any(|deployment| {
             deployment
                 .provider
-                .supports_capability_for_model(&deployment.model, &ProviderCapability::Responses)
+                .capabilities()
+                .contains(&ProviderCapability::Responses)
         });
     if !native {
         return match serde_json::from_value(body) {

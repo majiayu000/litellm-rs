@@ -938,27 +938,15 @@ class CatalogAuthorityTests(unittest.TestCase):
         self.assertEqual(target_counts["callable"], 151)
         self.assertEqual(target_counts["pricing_only"], 429)
         self.assertGreaterEqual(target_counts["unreviewed"], 76)
-        self.assertEqual(
-            sorted(callable_with_explicit_contract),
-            [
-                ("azure", "azure/gpt-6-astra"),
-                ("azure", "azure/gpt-6-luna"),
-                ("azure", "azure/gpt-6-sol"),
-                ("azure", "azure/gpt-6.1-sol"),
-                ("azure_ai", "azure_ai/cohere-rerank-v4.0-fast"),
-                ("azure_ai", "azure_ai/cohere-rerank-v4.0-pro"),
-                ("deepgram", "deepgram/aura-2-thalia-en"),
-                ('openai', 'gpt-6-astra'),
-                ('openai', 'gpt-6-luna'),
-                ('openai', 'gpt-6-sol'),
-                ('openai', 'gpt-6.1-sol'),
-                ('openai', 'gpt-image-2.5-flare'),
-                ('openai', 'gpt-image-2.5-sunburst'),
-                ("xai", "xai/grok-4.5"),
-                ("xai", "xai/grok-4.5-latest"),
-                ("xai", "xai/grok-4.6"),
-            ],
+        # Importing prices must not invent endpoint/capability contracts. The
+        # reviewed ledger now carries the per-model native endpoint matrix.
+        expected_contracts = sorted(
+            (entry["provider"], entry["pricing_key"])
+            for entry in decisions["entries"]
+            if entry["decision"] == "callable"
+            and any(field in entry for field in ("endpoints", "capabilities", "supported_parameters"))
         )
+        self.assertEqual(sorted(callable_with_explicit_contract), expected_contracts)
         self.assertNotIn("chatgpt-4o-latest", prices)
         live = next(entry for entry in authority["entries"]
                     if entry["provider"] == "openai" and entry["pricing_key"] == "gpt-live-1")

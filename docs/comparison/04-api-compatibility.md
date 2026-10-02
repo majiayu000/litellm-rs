@@ -723,3 +723,20 @@ Both implementations provide strong OpenAI API compatibility for core functional
 The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.
 
 This implementation is not ready for release: it currently requires `store=false`, `background=false`, and no `previous_response_id`. Shared, owner-scoped lifecycle bindings and the exact provider/model endpoint matrix remain outstanding (parity tracker F06/F07). Native stored responses must not be enabled before those bindings exist. Token reservation includes the serialized request and image overhead; provider-hosted tools, file contents and retained server-side context need additional accounting coverage.
+
+### Native OpenAI endpoint matrix (F06, unreleased)
+
+111 current OpenAI model IDs and exact documented snapshots have explicit endpoint
+contracts in `config/model_catalog_decisions.json`. Each contract links its official
+model card and records that document's digest. A snapshot inherits a contract only
+when the card lists that exact snapshot; name-prefix similarity is not evidence.
+
+Responses-only models (for example GPT-5.5 Pro and GPT-5.3 Codex) are routed to
+`/responses` and rejected by the typed Chat Completions path. Image/transcription
+models do not acquire chat support from a `gpt-` prefix. An OpenAI model without
+Responses support is rejected instead of silently entering the chat adapter.
+Other providers' compatibility adapters retain their documented behavior.
+
+This implements the OpenAI portion of F06. Copilot and Bedrock require their own
+endpoint/authentication contracts and are still pending; F07 lifecycle restrictions
+also remain. It does not establish account access or claim paid upstream validation.

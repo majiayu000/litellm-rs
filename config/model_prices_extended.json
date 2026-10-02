@@ -220,9 +220,9 @@
       "yi-medium"
     ],
     "total_model_count": 4569,
-    "catalog_decision_revision": "model-retirement-review-20261003",
-    "catalog_decision_source_sha256": "4bb8fadf52d381da04773c091edf9e76192b0c8c0f0c076fbeb081cda6df1cc2",
-    "catalog_authority_sha256": "40b76b687c817a3976c5a7016b9a1c8ab544dc8ce434aca0ef081d03437d8aa4",
+    "catalog_decision_revision": "responses-endpoint-and-retirement-review-20261003",
+    "catalog_decision_source_sha256": "da0be6ac55e4c42418d247a6fa2c31a7a5f2f86d4a8e33fa96eede04188ab688",
+    "catalog_authority_sha256": "637de2e88e158beecc028ab3fa037557c4388eabbfb5c7d371e3d8f2364296ab",
     "catalog_authority_entry_count": 4569,
     "catalog_authority_enforced_providers": [
       "azure",
