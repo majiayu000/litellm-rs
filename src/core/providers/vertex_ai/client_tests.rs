@@ -575,11 +575,10 @@ async fn vertex_gemini_37_count_tokens_uses_the_google_publisher_endpoint() {
 }
 
 #[tokio::test]
-async fn exact_legacy_vertex_gemini_ids_keep_the_gemini_transformer() {
+async fn retired_vertex_gemini_ids_fail_before_transport() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await
         .unwrap();
-
     for model in [
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
@@ -587,53 +586,19 @@ async fn exact_legacy_vertex_gemini_ids_keep_the_gemini_transformer() {
         "gemini-1.5-flash-002",
     ] {
         let request = ChatRequest {
-            model: model.to_string(),
-            messages: vec![crate::core::types::chat::ChatMessage {
-                role: crate::core::types::message::MessageRole::User,
-                content: Some(crate::core::types::message::MessageContent::Text(
-                    "hello".to_string(),
-                )),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let transformed = provider
-            .transform_request(request, RequestContext::default())
-            .await
-            .unwrap_or_else(|error| panic!("{model} should use the Gemini transformer: {error}"));
-        assert_eq!(transformed["contents"][0]["role"], "user");
-
-        let response = serde_json::json!({
-            "candidates": [{
-                "index": 0,
-                "content": {"parts": [{"text": "ok"}]},
-                "finishReason": "STOP"
-            }]
-        });
-        let parsed = provider
-            .transform_response(
-                serde_json::to_vec(&response).unwrap().as_slice(),
-                model,
-                "request-id",
-            )
-            .await
-            .unwrap_or_else(|error| panic!("{model} response should use Gemini: {error}"));
-        assert_eq!(parsed.choices.len(), 1);
-    }
-
-    for model in [
-        "prefix-gemini-2.0-flash-lite",
-        "gemini-2.0-flash-lite-suffix",
-        "GEMINI-1.5-PRO-002",
-    ] {
-        let request = ChatRequest {
-            model: model.to_string(),
+            model: model.into(),
             messages: vec![],
             ..Default::default()
         };
         assert!(matches!(
             provider
-                .transform_request(request, RequestContext::default())
+                .transform_request(request.clone(), RequestContext::default())
+                .await,
+            Err(ProviderError::ModelNotFound { .. })
+        ));
+        assert!(matches!(
+            provider
+                .chat_completion_internal(request, RequestContext::default())
                 .await,
             Err(ProviderError::ModelNotFound { .. })
         ));

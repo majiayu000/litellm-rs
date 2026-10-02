@@ -124,8 +124,7 @@ impl VertexAIProvider {
         let model = super::parse_vertex_model(&request.model);
         let is_catalog_gemini =
             super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
-        let is_legacy_gemini = super::is_exact_legacy_vertex_gemini_model(&request.model);
-        let is_gemini = is_catalog_gemini || is_legacy_gemini;
+        let is_gemini = is_catalog_gemini;
 
         // Transform request based on model type
         let (endpoint, body) = if is_gemini {

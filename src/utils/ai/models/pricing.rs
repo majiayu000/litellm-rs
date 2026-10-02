@@ -102,29 +102,20 @@ impl ModelUtils {
                 ]);
             }
             "claude-opus-4-8" => {
-                aliases.extend_from_slice(&["anthropic/claude-opus-4.8".to_string()]);
+                aliases.push("anthropic/claude-opus-4-8".to_string());
             }
             "claude-opus-4-7" => {
-                aliases.extend_from_slice(&[
-                    "anthropic/claude-opus-4.7".to_string(),
-                    "claude-opus-4-7-latest".to_string(),
-                ]);
+                aliases.push("anthropic/claude-opus-4-7".to_string());
             }
             "claude-opus-4-6" => {
-                aliases.extend_from_slice(&[
-                    "anthropic/claude-opus-4.6".to_string(),
-                    "claude-opus-4-6-20260114".to_string(),
-                ]);
+                aliases.push("anthropic/claude-opus-4-6".to_string());
             }
             "claude-sonnet-4-6" => {
-                aliases.extend_from_slice(&[
-                    "anthropic/claude-sonnet-4.6".to_string(),
-                    "claude-sonnet-4-6-20251001".to_string(),
-                ]);
+                aliases.push("anthropic/claude-sonnet-4-6".to_string());
             }
             "claude-sonnet-4-5" => {
                 aliases.extend_from_slice(&[
-                    "anthropic/claude-sonnet-4.5".to_string(),
+                    "anthropic/claude-sonnet-4-5".to_string(),
                     "claude-sonnet-4-5-20250929".to_string(),
                 ]);
             }
@@ -445,7 +436,7 @@ mod tests {
     fn test_get_model_aliases_claude_opus_47() {
         let aliases = ModelUtils::get_model_aliases("claude-opus-4-7");
         assert!(!aliases.is_empty());
-        assert!(aliases.iter().any(|a| a.contains("4.7")));
+        assert_eq!(aliases, vec!["anthropic/claude-opus-4-7"]);
     }
 
     #[test]

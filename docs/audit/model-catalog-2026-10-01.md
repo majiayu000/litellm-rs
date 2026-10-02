@@ -293,6 +293,7 @@ Cloudflare 本次逐型号核验：
 - Anthropic：移除 Opus 4.1、Opus 4、Sonnet 4、Haiku 3.5、Sonnet 3.5、Opus 3、Sonnet 3、Haiku 3、Claude 2.1、Instant 1.2，以及指向它们的 12 个别名。健康探测改用仍可用的 Haiku 4.5。Sonnet 4.5 仅弃用、到 2026-11-30 才退役，本批保留。
 - Claude 4.6 起使用无日期的固定型号 ID，移除 5 个未经官方证实的日期/latest 别名，保留官方 pre-4.6 短别名。此前审计文档中的这些别名声明由本条更正。
 - Gemini：移除 1.0 Pro、1.5 Pro/Flash/Flash-8B、2.0 Flash experimental/thinking experimental、3 Pro Image preview；另外移除没有可核实公开 API ID 的 `gemini-3-pro`、`gemini-3-pro-deep-think`、`gemini-3.1-flash`，这三项不作有退役日期的断言。Developer API 原有过滤；本次消除共享注册表和 Vertex/experimental surface 中的残留。
+- Vertex 额外传输放行名单中的 1.5/2.0 型号也已移除；旧 ID 在网络调用前返回 ModelNotFound，历史费用查询仍可用。健康探测改用现有 Gemini 3.7 Flash；crate quick start 与 Claude 公共别名工具同步到保留型号。
 - Gemini 2.5 Pro/Flash/Flash-Lite 仍可用。按官方标准文本缓存价修正为 $0.125/$0.03/$0.01 每百万 tokens；媒体按 tokens 计费，移除目录中未经证实的固定每张图/每秒价格。中央价格库仍负责运行时分档、多模态计费，本批不建立第二套计费机制。
 - 历史价格库和历史模型家族分类保持独立，不因取消可调用声明而删除既有历史查询记录。真实供应商网络调用未运行。
 
