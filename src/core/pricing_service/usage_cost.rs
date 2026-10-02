@@ -78,8 +78,25 @@ fn calculate_usage_cost_with_rates(
     };
     let input_cost = non_cached_tokens as f64 * input_rate;
     let output_cost = usage.completion_tokens as f64 * output_rate;
-    let cache_cost = cache_creation_tokens as f64 * cache_creation_rate
+    let one_hour = usage.cache_creation_1h_tokens.unwrap_or(0);
+    let short_cache = cache_creation_tokens.checked_sub(one_hour).ok_or_else(|| {
+        GatewayError::validation("One-hour cache tokens exceed total cache creation tokens")
+    })?;
+    let cache_cost = short_cache as f64 * cache_creation_rate
+        + priced_extra_units(
+            model_info,
+            model,
+            Some(one_hour),
+            &["cache_creation_input_token_cost_above_1hr"],
+            "one-hour cache pricing",
+        )?
         + cache_read_tokens as f64 * cache_read_rate;
+    let tool_cost = anthropic_search_cost(
+        requested_provider,
+        model,
+        model_info,
+        usage.web_search_requests.unwrap_or(0),
+    )?;
     let audio_cost = priced_extra_units(
         model_info,
         model,
@@ -99,8 +116,13 @@ fn calculate_usage_cost_with_rates(
         + super::image_pricing::output_image_cost(model, model_info, usage)?;
     let reasoning_cost = usage.reasoning_tokens.unwrap_or(0) as f64
         * extra_f64(model_info, "output_cost_per_reasoning_token");
-    let total_cost =
-        input_cost + output_cost + cache_cost + audio_cost + image_cost + reasoning_cost;
+    let total_cost = input_cost
+        + output_cost
+        + cache_cost
+        + audio_cost
+        + image_cost
+        + reasoning_cost
+        + tool_cost;
 
     Ok(PricingCostBreakdown {
         total_cost,
@@ -110,12 +132,56 @@ fn calculate_usage_cost_with_rates(
         audio_cost,
         image_cost,
         reasoning_cost,
+        tool_cost,
         usage: usage.clone(),
         currency: "USD".to_string(),
         model: model.to_string(),
         provider: requested_provider.to_string(),
         cost_type: CostType::TokenBased,
     })
+}
+
+fn anthropic_search_cost(
+    provider: &str,
+    model: &str,
+    info: &LiteLLMModelInfo,
+    calls: u32,
+) -> Result<f64> {
+    if calls == 0 {
+        return Ok(0.0);
+    }
+    let missing = || {
+        GatewayError::Config(format!(
+            "Verified Anthropic web search pricing unavailable for {model}"
+        ))
+    };
+    if provider != "anthropic" {
+        return Err(missing());
+    }
+    let prices = info
+        .extra
+        .get("search_context_cost_per_query")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(missing)?;
+    let mut rate = None;
+    // Anthropic has a flat per-search charge. Do not guess an OpenAI-style
+    // context tier or accept a partially populated pricing object.
+    for tier in [
+        "search_context_size_low",
+        "search_context_size_medium",
+        "search_context_size_high",
+    ] {
+        let value = prices
+            .get(tier)
+            .and_then(serde_json::Value::as_f64)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .ok_or_else(missing)?;
+        if rate.is_some_and(|rate| rate != value) {
+            return Err(missing());
+        }
+        rate = Some(value);
+    }
+    Ok(f64::from(calls) * rate.ok_or_else(missing)?)
 }
 
 fn standard_token_rates(
@@ -393,5 +459,37 @@ mod tests {
         assert!((estimate.max_cost - peak_cost.total_cost).abs() < 1e-12);
         assert!(off_peak_cost.total_cost <= estimate.max_cost);
         assert!(peak_cost.total_cost <= estimate.max_cost);
+    }
+    #[test]
+    fn anthropic_cache_ttls_and_search_are_billed_separately() {
+        let service = super::super::PricingService::with_embedded_default().unwrap();
+        let mut usage = PricingUsage::new(100, 10);
+        usage.cache_creation_tokens = Some(50);
+        usage.cache_creation_1h_tokens = Some(20);
+        usage.cache_read_tokens = Some(10);
+        usage.web_search_requests = Some(2);
+        let cost = service
+            .calculate_loaded_usage_cost_for_provider("anthropic", "claude-opus-5", &usage)
+            .unwrap();
+        let expected = 40.0 * 0.000005
+            + 30.0 * 0.00000625
+            + 20.0 * 0.00001
+            + 10.0 * 0.0000005
+            + 10.0 * 0.000025
+            + 0.02;
+        assert!((cost.total_cost - expected).abs() < 1e-12);
+        assert_eq!(cost.tool_cost, 0.02);
+        usage.cache_creation_1h_tokens = Some(51);
+        assert!(
+            service
+                .calculate_loaded_usage_cost_for_provider("anthropic", "claude-opus-5", &usage)
+                .is_err()
+        );
+        usage.cache_creation_1h_tokens = Some(20);
+        assert!(
+            service
+                .calculate_loaded_usage_cost_for_provider("openai", "gpt-4o-mini", &usage)
+                .is_err()
+        );
     }
 }

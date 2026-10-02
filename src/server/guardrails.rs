@@ -1,5 +1,8 @@
 //! Guardrail enforcement on canonical chat request and response DTOs.
 
+mod messages_native;
+pub(crate) use messages_native::{apply_native_messages, messages_projection};
+
 use crate::core::guardrails::{CheckResult, GuardrailEngine};
 use crate::core::models::openai::{
     ChatCompletionRequest, ChatCompletionResponse, ContentPart, Function, MessageContent,
