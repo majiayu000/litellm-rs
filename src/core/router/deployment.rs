@@ -454,11 +454,8 @@ pub struct Deployment {
     /// Unique deployment ID
     pub id: DeploymentId,
 
-    /// Built-in provider enum instance.
-    ///
-    /// Router deployments dispatch through the closed `Provider` enum. A
-    /// third-party `LLMProvider` implementation is not routeable here unless it
-    /// is wired into that enum and its dispatch/factory paths.
+    /// Built-in provider or external implementation wrapped in `Provider::External`.
+    /// External providers use the same routing, admission and health state.
     pub provider: Provider,
 
     /// Actual model name (e.g., "azure/gpt-4-turbo")
@@ -483,7 +480,7 @@ impl Deployment {
     /// # Arguments
     ///
     /// * `id` - Unique deployment identifier
-    /// * `provider` - Built-in provider enum instance
+    /// * `provider` - Built-in or external provider instance
     /// * `model` - Actual model name (provider-specific)
     /// * `model_name` - User-facing model name (model group)
     pub fn new(id: DeploymentId, provider: Provider, model: String, model_name: String) -> Self {

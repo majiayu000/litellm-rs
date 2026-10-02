@@ -294,6 +294,58 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn external_provider_callback_drives_configured_health_probe() {
+        use crate::core::providers::{ExternalProvider, ProviderError};
+        use crate::core::types::{
+            chat::ChatRequest,
+            context::RequestContext,
+            model::{ModelInfo, ProviderCapability},
+            responses::ChatResponse,
+        };
+        use futures::future::BoxFuture;
+        #[derive(Debug)]
+        struct ExternalProbe(tokio::sync::mpsc::UnboundedSender<()>);
+        impl ExternalProvider for ExternalProbe {
+            fn name(&self) -> &str {
+                "external-probe"
+            }
+            fn capabilities(&self) -> &'static [ProviderCapability] {
+                &[]
+            }
+            fn models(&self) -> &[ModelInfo] {
+                &[]
+            }
+            fn chat_completion(
+                &self,
+                _: ChatRequest,
+                _: RequestContext,
+            ) -> BoxFuture<'_, Result<ChatResponse, ProviderError>> {
+                Box::pin(async { panic!("a health callback must not synthesize a chat request") })
+            }
+            fn health_check(&self) -> BoxFuture<'_, ProviderHealthStatus> {
+                Box::pin(async {
+                    self.0.send(()).unwrap();
+                    ProviderHealthStatus::Healthy
+                })
+            }
+        }
+        let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let provider = Provider::External(Arc::new(ExternalProbe(sent)));
+        let router = Router::new(RouterConfig::default());
+        router.add_deployment(test_deployment("external", provider, test_policy(None)).await);
+        assert_eq!(router.start_configured_health_checks().unwrap(), 1);
+        tokio::time::timeout(Duration::from_secs(2), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        wait_for_health(
+            &router.get_deployment("external").unwrap(),
+            HealthStatus::Healthy,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn custom_endpoint_uses_expected_status_codes() {
         let provider = test_provider(None).await;
         let (healthy_endpoint, healthy_server) = status_server(204).await;
