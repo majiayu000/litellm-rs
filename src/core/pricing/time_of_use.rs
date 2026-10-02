@@ -283,3 +283,40 @@ mod tests {
         assert_eq!(rates.cache_read_input_token_cost, 1.0);
     }
 }
+
+#[cfg(test)]
+mod imported_schedule_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn imported_openrouter_schedule_selects_weekday_peak_and_weekend_base() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/config/model_prices_extended.json"
+        )))
+        .unwrap();
+        let info: LiteLLMModelInfo =
+            serde_json::from_value(catalog["openrouter/deepseek/deepseek-v4-pro-0813"].clone())
+                .unwrap();
+        let peak = Utc.with_ymd_and_hms(2026, 10, 5, 2, 0, 0).unwrap();
+        let weekend = Utc.with_ymd_and_hms(2026, 10, 3, 2, 0, 0).unwrap();
+        assert_eq!(
+            peak_token_rates_at(&info, peak)
+                .unwrap()
+                .unwrap()
+                .input_cost_per_token,
+            1.32e-6
+        );
+        assert!(peak_token_rates_at(&info, weekend).unwrap().is_none());
+        assert_eq!(info.input_cost_per_token, Some(6.6e-7));
+        assert_eq!(info.output_cost_per_token, Some(1.98e-6));
+        assert_eq!(
+            configured_peak_token_rates(&info)
+                .unwrap()
+                .unwrap()
+                .input_cost_per_token,
+            1.32e-6
+        );
+    }
+}

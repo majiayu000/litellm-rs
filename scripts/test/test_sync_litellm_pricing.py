@@ -1168,5 +1168,49 @@ class OfficialPricingRegressionTests(unittest.TestCase):
         self.assertEqual(patched["deepseek-flash"]["input_cost_per_token"], 0.00000015)
 
 
+class OffPeakImportTests(unittest.TestCase):
+    def row(self, **schedule):
+        return {
+            "input_cost_per_token": 4.0, "output_cost_per_token": 8.0,
+            "cache_read_input_token_cost": 1.0,
+            "off_peak_pricing": {"input_cost_per_token": 2.0, "output_cost_per_token": 4.0,
+                "cache_read_input_token_cost": 0.5, **schedule},
+        }
+
+    def test_weekend_and_weekday_windows_preserve_peak_and_low_rates(self):
+        row = self.row(windows=[
+            {"weekdays": ["saturday", "sunday"], "hours_utc": "00:00-00:00"},
+            *[{"weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"], "hours_utc": hours}
+              for hours in ("00:00-01:00", "04:00-06:00", "10:00-00:00")],
+        ])
+        result = sync.normalize_off_peak_pricing("test", row)
+        self.assertEqual(result["input_cost_per_token"], 2.0)
+        self.assertEqual(row["input_cost_per_token"], 4.0)
+        self.assertNotIn("off_peak_pricing", result)
+        self.assertEqual(result["time_of_use_pricing"]["peak_rates"]["input_cost_per_token"], 4.0)
+        self.assertEqual(result["time_of_use_pricing"]["peak_windows"], [
+            {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+            {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10},
+        ])
+        self.assertEqual(sync.normalize_off_peak_pricing("test", result), result)
+
+    def test_daily_window_ending_at_midnight(self):
+        result = sync.normalize_off_peak_pricing("test", self.row(hours_utc="16:00-00:00"))
+        self.assertEqual(result["time_of_use_pricing"]["peak_windows"], [
+            {"weekdays": [1, 2, 3, 4, 5, 6, 7], "start_hour": 0, "end_hour": 16},
+        ])
+
+    def test_unrepresentable_schedule_and_invalid_rates_fail_closed(self):
+        for schedule in ({"hours_utc": "16:30-00:00"}, {"windows": []},
+                         {"windows": [{"weekdays": ["noday"], "hours_utc": "16:00-00:00"}]},
+                         {"hours_utc": "22:00-02:00"}, {"hours_utc": "invalid"}):
+            with self.subTest(schedule=schedule), self.assertRaises(SystemExit):
+                sync.normalize_off_peak_pricing("test", self.row(**schedule))
+        row = self.row(hours_utc="16:00-00:00")
+        row["off_peak_pricing"]["input_cost_per_token"] = None
+        with self.assertRaises(SystemExit):
+            sync.normalize_off_peak_pricing("test", row)
+
+
 if __name__ == "__main__":
     unittest.main()

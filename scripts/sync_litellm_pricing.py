@@ -651,6 +651,67 @@ def apply_official_overrides(
     return patched
 
 
+def normalize_off_peak_pricing(model: str, row: dict[str, Any]) -> dict[str, Any]:
+    """Convert upstream UTC hour windows to the runtime's peak-window format."""
+    if "off_peak_pricing" not in row:
+        return row
+    off_peak = row["off_peak_pricing"]
+    if not isinstance(off_peak, dict) or "time_of_use_pricing" in row:
+        raise SystemExit(f"{model!r} has invalid or conflicting off_peak_pricing")
+    fields = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    for rates in (row, off_peak):
+        for field in fields:
+            rate = rates.get(field)
+            if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate < 0:
+                raise SystemExit(f"{model!r}.off_peak_pricing requires a finite non-negative {field} in both rate sets")
+    windows = off_peak.get("windows")
+    if windows is None:
+        windows = [{"hours_utc": off_peak.get("hours_utc"), "weekdays": [
+            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+        ]}]
+    if not isinstance(windows, list) or not windows:
+        raise SystemExit(f"{model!r}.off_peak_pricing.windows must be a non-empty array")
+    day_names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    off_hours: set[tuple[int, int]] = set()
+    for window in windows:
+        if not isinstance(window, dict):
+            raise SystemExit(f"{model!r}.off_peak_pricing window must be an object")
+        hours = window.get("hours_utc")
+        weekdays = window.get("weekdays")
+        match = re.fullmatch(r"([01][0-9]|2[0-3]):00-([01][0-9]|2[0-4]):00", hours) if isinstance(hours, str) else None
+        if not match or not isinstance(weekdays, list) or not weekdays or any(day not in day_names for day in weekdays):
+            raise SystemExit(f"{model!r}.off_peak_pricing requires supported UTC hour windows and weekday names")
+        start, end = int(match[1]), int(match[2]) or 24
+        if start >= end:
+            raise SystemExit(f"{model!r}.off_peak_pricing requires split windows for spans across midnight")
+        for day in weekdays:
+            off_hours.update((day_names.index(day) + 1, hour) for hour in range(start, end))
+    grouped: dict[tuple[int, int], list[int]] = {}
+    for day in range(1, 8):
+        hour = 0
+        while hour < 24:
+            if (day, hour) in off_hours:
+                hour += 1
+                continue
+            start = hour
+            while hour < 24 and (day, hour) not in off_hours:
+                hour += 1
+            grouped.setdefault((start, hour), []).append(day)
+    converted = dict(row)
+    del converted["off_peak_pricing"]
+    converted.update({field: off_peak[field] for field in fields})
+    if grouped:
+        converted["time_of_use_pricing"] = {
+            "timezone": "UTC",
+            "peak_windows": [
+                {"weekdays": days, "start_hour": start, "end_hour": end}
+                for (start, end), days in sorted(grouped.items())
+            ],
+            "peak_rates": {field: row[field] for field in fields},
+        }
+    return converted
+
+
 def render_catalog(
     source_data: dict[str, Any],
     source_entries: dict[str, dict[str, Any]],
@@ -852,6 +913,8 @@ def main() -> int:
         source_commit,
         source_sha256,
     )
+    for model, row in model_entries(data).items():
+        data[model] = normalize_off_peak_pricing(model, row)
     merged_entries = model_entries(data)
     validate_entries(merged_entries, args.min_models)
     validate_official_contracts(merged_entries, as_of_date)
