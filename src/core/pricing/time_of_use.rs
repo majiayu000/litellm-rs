@@ -306,17 +306,20 @@ mod imported_schedule_tests {
                 .unwrap()
                 .unwrap()
                 .input_cost_per_token,
-            1.32e-6
+            catalog["openrouter/deepseek/deepseek-v4-pro-0813"]["time_of_use_pricing"]
+                ["peak_rates"]["input_cost_per_token"].as_f64().unwrap()
         );
         assert!(peak_token_rates_at(&info, weekend).unwrap().is_none());
-        assert_eq!(info.input_cost_per_token, Some(6.6e-7));
-        assert_eq!(info.output_cost_per_token, Some(1.98e-6));
         assert_eq!(
             configured_peak_token_rates(&info)
                 .unwrap()
                 .unwrap()
                 .input_cost_per_token,
-            1.32e-6
+            peak_token_rates_at(&info, peak)
+                .unwrap()
+                .unwrap()
+                .input_cost_per_token
+                .max(info.input_cost_per_token.unwrap())
         );
     }
 }

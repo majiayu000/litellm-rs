@@ -1203,13 +1203,61 @@ class OffPeakImportTests(unittest.TestCase):
     def test_unrepresentable_schedule_and_invalid_rates_fail_closed(self):
         for schedule in ({"hours_utc": "16:30-00:00"}, {"windows": []},
                          {"windows": [{"weekdays": ["noday"], "hours_utc": "16:00-00:00"}]},
-                         {"hours_utc": "22:00-02:00"}, {"hours_utc": "invalid"}):
+                         {"hours_utc": "22:00-02:00"}, {"hours_utc": "16:00-24:00"},
+                         {"hours_utc": "invalid"},
+                         {"hours_utc": "16:00-00:00", "weekday_timezone": "Asia/Shanghai"},
+                         {"hours_utc": "16:00-00:00", "cache_creation_input_token_cost": 0.1},
+                         {"hours_utc": "16:00-00:00", "output_cost_per_reasoning_token": 0.1},
+                         {"hours_utc": "16:00-00:00", "windows": [
+                             {"weekdays": ["monday"], "hours_utc": "01:00-02:00"}]},
+                         {"windows": [{"weekdays": ["monday"], "hours_utc": "16:00-00:00",
+                                       "weekday_timezone": "Asia/Shanghai"}]}):
             with self.subTest(schedule=schedule), self.assertRaises(SystemExit):
                 sync.normalize_off_peak_pricing("test", self.row(**schedule))
         row = self.row(hours_utc="16:00-00:00")
         row["off_peak_pricing"]["input_cost_per_token"] = None
         with self.assertRaises(SystemExit):
             sync.normalize_off_peak_pricing("test", row)
+
+    def test_off_peak_and_token_tiers_fail_closed(self):
+        for field in ("input_cost_per_token_above_128k_tokens",
+                      "output_cost_per_token_above_128k_tokens",
+                      "cache_read_input_token_cost_above_128k_tokens",
+                      "tiered_pricing"):
+            with self.subTest(field=field):
+                row = self.row(hours_utc="16:00-00:00")
+                row[field] = [{"input_cost_per_token": 30.0}] if field == "tiered_pricing" else 30.0
+                with self.assertRaisesRegex(SystemExit, "off_peak_pricing.*tier"):
+                    sync.normalize_off_peak_pricing("test", row)
+
+    def test_main_rejects_unsupported_off_peak_without_writing_outputs(self):
+        for update in ({"weekday_timezone": "Asia/Shanghai"}, {"hours_utc": "16:30-00:00"},
+                       {"cache_creation_input_token_cost": 0.1}, {"token_tier": 30.0}):
+            with self.subTest(update=update), tempfile.TemporaryDirectory() as temp_dir:
+                directory = pathlib.Path(temp_dir)
+                source = sync.model_entries(sync.load_json(CATALOG_PATH))
+                row = self.row(hours_utc="16:00-00:00")
+                row.update({"litellm_provider": "openrouter", "mode": "chat"})
+                if "token_tier" in update:
+                    row["input_cost_per_token_above_128k_tokens"] = update["token_tier"]
+                else:
+                    row["off_peak_pricing"].update(update)
+                source["unsupported-off-peak-test"] = row
+                outputs = [directory / name for name in ("prices.json", "authority.json", "decisions.json")]
+                for path, original in zip(outputs, (CATALOG_PATH, CATALOG_AUTHORITY_PATH, CATALOG_DECISIONS_PATH)):
+                    path.write_bytes(original.read_bytes())
+                before = {path: path.read_bytes() for path in outputs}
+                args = SimpleNamespace(
+                    source_catalog=None, source_url=sync.DEFAULT_SOURCE_URL,
+                    source_commit=sync.DEFAULT_SOURCE_COMMIT,
+                    output=outputs[0], catalog_authority_output=outputs[1], catalog_decisions=outputs[2],
+                    overlay_file=[CATALOG_PATH], min_models=sync.DEFAULT_MIN_MODELS, check=False,
+                )
+                with mock.patch.object(sync, "parse_args", return_value=args), \
+                     mock.patch.object(sync, "load_url", return_value=(source, "f" * 64)), \
+                     self.assertRaisesRegex(SystemExit, "off_peak_pricing"):
+                    sync.main()
+                self.assertEqual(before, {path: path.read_bytes() for path in outputs})
 
 
 if __name__ == "__main__":

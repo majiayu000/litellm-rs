@@ -659,6 +659,18 @@ def normalize_off_peak_pricing(model: str, row: dict[str, Any]) -> dict[str, Any
     if not isinstance(off_peak, dict) or "time_of_use_pricing" in row:
         raise SystemExit(f"{model!r} has invalid or conflicting off_peak_pricing")
     fields = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    if (
+        set(off_peak) - {*fields, "hours_utc", "windows", "weekday_timezone"}
+        or off_peak.get("weekday_timezone", "UTC") != "UTC"
+        or ("hours_utc" in off_peak and "windows" in off_peak)
+    ):
+        raise SystemExit(f"{model!r}.off_peak_pricing has unsupported rate or schedule fields")
+    # Upstream off-peak rates override token tiers; runtime tiers override time-of-use rates.
+    if "tiered_pricing" in row or any(
+        key.startswith(tuple(f"{field}_above_" for field in fields)) and key.endswith("_tokens")
+        for key in row
+    ):
+        raise SystemExit(f"{model!r}.off_peak_pricing cannot be combined with token tiers")
     for rates in (row, off_peak):
         for field in fields:
             rate = rates.get(field)
@@ -674,11 +686,11 @@ def normalize_off_peak_pricing(model: str, row: dict[str, Any]) -> dict[str, Any
     day_names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
     off_hours: set[tuple[int, int]] = set()
     for window in windows:
-        if not isinstance(window, dict):
-            raise SystemExit(f"{model!r}.off_peak_pricing window must be an object")
+        if not isinstance(window, dict) or set(window) - {"hours_utc", "weekdays"}:
+            raise SystemExit(f"{model!r}.off_peak_pricing window has unsupported fields")
         hours = window.get("hours_utc")
         weekdays = window.get("weekdays")
-        match = re.fullmatch(r"([01][0-9]|2[0-3]):00-([01][0-9]|2[0-4]):00", hours) if isinstance(hours, str) else None
+        match = re.fullmatch(r"([01][0-9]|2[0-3]):00-([01][0-9]|2[0-3]):00", hours) if isinstance(hours, str) else None
         if not match or not isinstance(weekdays, list) or not weekdays or any(day not in day_names for day in weekdays):
             raise SystemExit(f"{model!r}.off_peak_pricing requires supported UTC hour windows and weekday names")
         start, end = int(match[1]), int(match[2]) or 24
