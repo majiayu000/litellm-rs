@@ -304,10 +304,17 @@ async fn create_native(
 }
 
 fn budget_request(body: &Value, model: &str) -> ChatCompletionRequest {
-    let mut parts = vec![ContentPart::Text {
-        text: body.to_string(),
-    }];
-    budget_image_parts(body, &mut parts);
+    let mut parts = Vec::new();
+    let mut text_body = body.clone();
+    budget_image_parts(&mut text_body, &mut parts);
+    // Preserve tool schemas, instructions and other native text, without counting
+    // an image's base64 payload both as text tokens and as image overhead.
+    parts.insert(
+        0,
+        ContentPart::Text {
+            text: text_body.to_string(),
+        },
+    );
     ChatCompletionRequest {
         model: model.to_string(),
         messages: vec![ChatMessage {
@@ -327,7 +334,7 @@ fn budget_request(body: &Value, model: &str) -> ChatCompletionRequest {
     }
 }
 
-fn budget_image_parts(value: &Value, parts: &mut Vec<ContentPart>) {
+fn budget_image_parts(value: &mut Value, parts: &mut Vec<ContentPart>) {
     match value {
         Value::Array(values) => {
             for value in values {
@@ -349,8 +356,10 @@ fn budget_image_parts(value: &Value, parts: &mut Vec<ContentPart>) {
                             .map(str::to_string),
                     },
                 });
+                *value = Value::Null;
+                return;
             }
-            for value in values.values() {
+            for value in values.values_mut() {
                 budget_image_parts(value, parts);
             }
         }
@@ -457,5 +466,30 @@ mod tests {
         };
         assert!(matches!(&parts[1], ContentPart::ImageUrl { .. }));
         assert_eq!(projected.max_tokens, Some(10));
+    }
+    #[test]
+    fn budget_projection_does_not_count_image_data_as_text() {
+        let image_data = format!("data:image/png;base64,{}", "A".repeat(100_000));
+        let body = json!({"instructions":"follow the schema", "input":[{"role":"user","content":[{"type":"input_text","text":"describe this"},{"type":"input_image","image_url":image_data,"detail":"low"}]}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]});
+        let projected = budget_request(&body, "gpt-4o-mini");
+        let Some(MessageContent::Parts(parts)) = &projected.messages[0].content else {
+            panic!("missing parts")
+        };
+        let ContentPart::Text { text } = &parts[0] else {
+            panic!("missing text")
+        };
+        assert!(text.len() < 1_000);
+        for expected in ["follow the schema", "describe this", "lookup", "parameters"] {
+            assert!(text.contains(expected));
+        }
+        let ContentPart::ImageUrl { image_url } = &parts[1] else {
+            panic!("missing image")
+        };
+        assert_eq!(image_url.url, image_data);
+        assert_eq!(image_url.detail.as_deref(), Some("low"));
+        assert_eq!(
+            body.pointer("/input/0/content/1/image_url").unwrap(),
+            &json!(image_data)
+        );
     }
 }
