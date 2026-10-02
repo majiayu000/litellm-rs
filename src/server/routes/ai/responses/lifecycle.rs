@@ -6,30 +6,25 @@ use crate::core::models::openai::responses_api::{
 use crate::core::types::codex::wire::CodexFunctionCall;
 use crate::server::routes::ai::chat::handle_chat_completion_after_input_guardrail;
 use crate::server::state::AppState;
+use crate::storage::database::{Database, entities::response::Model as ResponseRecord};
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
-use dashmap::DashMap;
 use serde::ser::Error as SerializeError;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use std::{collections::HashSet, sync::LazyLock};
-use tokio::task::JoinHandle;
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tracing::error;
 
 use super::{convert_to_responses_api, current_unix_ts, uuid_v4_hex};
 use crate::server::routes::ai::openai_errors;
 
-static RESPONSE_STORE: LazyLock<DashMap<String, StoredResponse>> = LazyLock::new(DashMap::new);
-static BACKGROUND_TASKS: LazyLock<DashMap<String, JoinHandle<()>>> = LazyLock::new(DashMap::new);
-const RESPONSE_STORE_LIMIT: usize = 1024;
 const RESPONSE_STORE_TTL_SECS: i64 = 86_400;
 
 #[derive(Clone)]
 pub(super) struct StoredResponse {
     response: ResponsesApiResponse,
     input: ResponseInput,
-    background: bool,
-    owner: ResponseOwner,
+    record: ResponseRecord,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,67 +71,70 @@ pub struct InputItemsQuery {
     order: Option<String>,
 }
 
-struct BackgroundTaskCleanup {
-    response_id: String,
-}
-
-impl Drop for BackgroundTaskCleanup {
-    fn drop(&mut self) {
-        BACKGROUND_TASKS.remove(&self.response_id);
-    }
-}
-
 pub async fn get_response(
+    state: web::Data<AppState>,
     req: HttpRequest,
     response_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    match get_owned_response(response_id.as_str(), &owner) {
+    match get_owned_response(&state.storage.database, response_id.as_str(), &owner).await {
         Ok(stored) => Ok(HttpResponse::Ok().json(stored.response)),
         Err(error) => Ok(openai_errors::gateway_error_response(&error)),
     }
 }
 
 pub async fn delete_response(
+    state: web::Data<AppState>,
     req: HttpRequest,
     response_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
     let response_id = response_id.into_inner();
-    match get_owned_response(&response_id, &owner) {
-        Ok(_) => {
-            RESPONSE_STORE.remove(&response_id);
-            if let Some((_, task)) = BACKGROUND_TASKS.remove(&response_id) {
-                task.abort();
-            }
-            Ok(HttpResponse::Ok().json(DeletedResponse {
-                id: response_id,
-                object: "response",
-                deleted: true,
-            }))
+    let result = match owner {
+        Some(owner) => {
+            state
+                .storage
+                .database
+                .delete_owned_response(&response_id, &owner.0, current_unix_ts())
+                .await
         }
+        None => Ok(false),
+    };
+    match result {
+        Ok(true) => Ok(HttpResponse::Ok().json(DeletedResponse {
+            id: response_id,
+            object: "response",
+            deleted: true,
+        })),
+        Ok(false) => Ok(openai_errors::gateway_error_response(&response_not_found(
+            &response_id,
+        ))),
         Err(error) => Ok(openai_errors::gateway_error_response(&error)),
     }
 }
 
 pub async fn cancel_response(
+    state: web::Data<AppState>,
     req: HttpRequest,
     response_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    match cancel_stored_background_response(response_id.as_str(), &owner) {
+    match cancel_stored_background_response(&state.storage.database, response_id.as_str(), &owner)
+        .await
+    {
         Ok(response) => Ok(HttpResponse::Ok().json(response)),
         Err(error) => Ok(openai_errors::gateway_error_response(&error)),
     }
 }
 
 pub async fn list_response_input_items(
+    state: web::Data<AppState>,
     req: HttpRequest,
     response_id: web::Path<String>,
     query: web::Query<InputItemsQuery>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    match get_owned_response(response_id.as_str(), &owner) {
+    match get_owned_response(&state.storage.database, response_id.as_str(), &owner).await {
         Ok(stored) => match input_items_page(&stored.input, &query) {
             Ok(page) => Ok(HttpResponse::Ok().json(page)),
             Err(error) => Ok(openai_errors::gateway_error_response(&error)),
@@ -145,7 +143,7 @@ pub async fn list_response_input_items(
     }
 }
 
-pub(super) fn handle_background_response(
+pub(super) async fn handle_background_response(
     state: AppState,
     chat_request: ChatCompletionRequest,
     guarded_request: ResponsesApiRequest,
@@ -158,73 +156,138 @@ pub(super) fn handle_background_response(
         );
     };
     let response = queued_background_response(&guarded_request);
-    let response_id = response.id.clone();
-    insert_stored_response(
-        response_id.clone(),
-        StoredResponse {
-            response: response.clone(),
-            input: guarded_request.input.clone(),
-            background: true,
-            owner,
-        },
-    );
-    super::super::response_cache::bypass_chat_response_cache(&mut context);
-    let task_response_id = response_id.clone();
-    let handle = tokio::spawn(async move {
-        let _cleanup = BackgroundTaskCleanup {
-            response_id: response_id.clone(),
-        };
-        set_background_status(&response_id, "in_progress");
-        match handle_chat_completion_after_input_guardrail(
-            &state,
-            std::sync::Arc::new(chat_request),
-            std::sync::Arc::new(context),
-        )
+    let record = match response_record(&guarded_request, &response, &owner, true) {
+        Ok(record) => record,
+        Err(error) => return openai_errors::gateway_error_response(&error),
+    };
+    let database = Arc::clone(&state.storage.database);
+    if let Err(error) = database
+        .insert_response(record.clone(), current_unix_ts())
         .await
+    {
+        return openai_errors::gateway_error_response(&error);
+    }
+    super::super::response_cache::bypass_chat_response_cache(&mut context);
+    let mut running = response.clone();
+    running.status = "in_progress".into();
+    let running_json = match serde_json::to_string(&running) {
+        Ok(json) => json,
+        Err(error) => return openai_errors::gateway_error_response(&error.into()),
+    };
+    tokio::spawn(async move {
+        let mut record = record;
+        match database
+            .start_response_worker(&record, running_json, current_unix_ts())
+            .await
         {
-            Ok(chat_resp) => {
-                let mut response = convert_to_responses_api(chat_resp, &guarded_request);
-                response.id = response_id.clone();
-                finish_background_response(&response_id, guarded_request.input.clone(), response);
+            Ok(true) => {
+                record.revision += 1;
+                record.status = "in_progress".into();
             }
+            Ok(false) => return,
             Err(error) => {
-                error!("Background Responses API error: {}", error);
-                set_background_status(&response_id, "failed");
+                error!("Responses worker could not start: {error}");
+                return;
             }
         }
+
+        // The shared record is also the cancellation signal. Dropping this future
+        // stops local upstream work when any replica cancels/deletes the response.
+        let work = handle_chat_completion_after_input_guardrail(
+            &state,
+            Arc::new(chat_request),
+            Arc::new(context),
+        );
+        tokio::pin!(work);
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let result = loop {
+            tokio::select! {
+                biased;
+                _ = heartbeat.tick() => {
+                    match database.renew_response_lease(&record.id, &record.owner, current_unix_ts()).await {
+                        Ok(true) => {},
+                        Ok(false) => return,
+                        Err(error) => {
+                            error!("Responses worker lease failed: {error}");
+                            return;
+                        }
+                    }
+                }
+                result = &mut work => break result,
+            }
+        };
+        let mut response = match result {
+            Ok(chat_resp) => convert_to_responses_api(chat_resp, &guarded_request),
+            Err(error) => {
+                error!("Background Responses API error: {error}");
+                let mut response = queued_background_response(&guarded_request);
+                response.status = "failed".into();
+                response.error = Some(
+                    crate::core::models::openai::responses_api::ResponseApiError {
+                        code: "server_error".into(),
+                        message: "Background response execution failed".into(),
+                    },
+                );
+                response
+            }
+        };
+        response.id = record.id.clone();
+        if let Err(error) = finish_background_response(&database, &record, &response).await {
+            error!("Responses completion could not be stored: {error}");
+        }
     });
-    BACKGROUND_TASKS.insert(task_response_id, handle);
     HttpResponse::Ok().json(response)
 }
 
-pub(crate) fn store_response_if_requested(
+fn response_record(
+    original: &ResponsesApiRequest,
+    response: &ResponsesApiResponse,
+    owner: &ResponseOwner,
+    background: bool,
+) -> Result<ResponseRecord, GatewayError> {
+    Ok(ResponseRecord {
+        id: response.id.clone(),
+        owner: owner.0.clone(),
+        response_json: serde_json::to_string(response)?,
+        input_json: serde_json::to_string(&original.input)?,
+        deployment_id: None,
+        background,
+        status: response.status.clone(),
+        expires_at: current_unix_ts() + RESPONSE_STORE_TTL_SECS,
+        lease_until: background.then(|| current_unix_ts() + 60),
+        revision: 0,
+    })
+}
+
+pub(crate) async fn store_response_if_requested(
+    database: &Database,
     original: &ResponsesApiRequest,
     response: &ResponsesApiResponse,
     owner: Option<ResponseOwner>,
-) {
+) -> Result<(), GatewayError> {
     if original.store.unwrap_or(true)
         && let Some(owner) = owner
     {
-        insert_stored_response(
-            response.id.clone(),
-            StoredResponse {
-                response: response.clone(),
-                input: original.input.clone(),
-                background: false,
-                owner,
-            },
-        );
+        database
+            .insert_response(
+                response_record(original, response, &owner, false)?,
+                current_unix_ts(),
+            )
+            .await?;
     }
+    Ok(())
 }
 
-pub(super) fn resolve_previous_response_context(
+pub(super) async fn resolve_previous_response_context(
+    database: &Database,
     mut request: ResponsesApiRequest,
     owner: &Option<ResponseOwner>,
 ) -> Result<ResponsesApiRequest, GatewayError> {
     let Some(previous_response_id) = request.previous_response_id.as_deref() else {
         return Ok(request);
     };
-    let stored = get_owned_response(previous_response_id, owner)?;
+    let stored = get_owned_response(database, previous_response_id, owner).await?;
     request.input = append_previous_context(&stored, &request.input);
     Ok(request)
 }
@@ -272,53 +335,47 @@ fn queued_background_response(original: &ResponsesApiRequest) -> ResponsesApiRes
     }
 }
 
-fn set_background_status(response_id: &str, status: &str) {
-    if let Some(mut stored) = RESPONSE_STORE.get_mut(response_id)
-        && stored.background
-        && stored.response.status != "cancelled"
-    {
-        stored.response.status = status.to_string();
-    }
+async fn finish_background_response(
+    database: &Database,
+    record: &ResponseRecord,
+    response: &ResponsesApiResponse,
+) -> Result<bool, GatewayError> {
+    database
+        .finish_owned_response(
+            record,
+            serde_json::to_string(response)?,
+            &response.status,
+            current_unix_ts(),
+        )
+        .await
 }
 
-fn finish_background_response(
-    response_id: &str,
-    input: ResponseInput,
-    response: ResponsesApiResponse,
-) {
-    if let Some(mut stored) = RESPONSE_STORE.get_mut(response_id)
-        && stored.response.status != "cancelled"
-    {
-        stored.response = response;
-        stored.input = input;
-    }
-}
-
-fn cancel_stored_background_response(
+async fn cancel_stored_background_response(
+    database: &Database,
     response_id: &str,
     owner: &Option<ResponseOwner>,
 ) -> Result<ResponsesApiResponse, GatewayError> {
-    let Some(mut stored) = RESPONSE_STORE.get_mut(response_id) else {
-        return Err(response_not_found(response_id));
-    };
-    let Some(owner) = owner else {
-        return Err(response_not_found(response_id));
-    };
-    if &stored.owner != owner {
-        return Err(response_not_found(response_id));
-    }
-    if !stored.background {
+    let mut stored = get_owned_response(database, response_id, owner).await?;
+    if !stored.record.background {
         return Err(GatewayError::conflict(
             "Only background Responses tasks can be canceled",
         ));
     }
     match stored.response.status.as_str() {
-        "queued" | "in_progress" | "cancelled" => {
-            if let Some((_, task)) = BACKGROUND_TASKS.remove(response_id) {
-                task.abort();
+        "cancelled" => Ok(stored.response),
+        "queued" | "in_progress" => {
+            stored.response.status = "cancelled".into();
+            if finish_background_response(database, &stored.record, &stored.response).await? {
+                return Ok(stored.response);
             }
-            stored.response.status = "cancelled".to_string();
-            Ok(stored.response.clone())
+            let latest = get_owned_response(database, response_id, owner).await?;
+            if latest.response.status == "cancelled" {
+                Ok(latest.response)
+            } else {
+                Err(GatewayError::conflict(
+                    "Background response finished before cancellation",
+                ))
+            }
         }
         status => Err(GatewayError::conflict(format!(
             "Cannot cancel background response with status {status}"
@@ -326,74 +383,45 @@ fn cancel_stored_background_response(
     }
 }
 
-fn get_owned_response(
+async fn get_owned_response(
+    database: &Database,
     response_id: &str,
     owner: &Option<ResponseOwner>,
 ) -> Result<StoredResponse, GatewayError> {
-    let stored = RESPONSE_STORE
-        .get(response_id)
-        .ok_or_else(|| response_not_found(response_id))?;
     let Some(owner) = owner else {
         return Err(response_not_found(response_id));
     };
-    if &stored.owner != owner {
-        return Err(response_not_found(response_id));
-    }
-    Ok(stored.clone())
-}
-
-fn insert_stored_response(response_id: String, stored: StoredResponse) {
-    cleanup_response_store();
-    RESPONSE_STORE.insert(response_id, stored);
-}
-
-fn cleanup_response_store() {
     let now = current_unix_ts();
-    let mut entries = RESPONSE_STORE
-        .iter()
-        .map(|entry| (entry.key().clone(), entry.value().response.created_at))
-        .collect::<Vec<_>>();
-
-    for (response_id, created_at) in &entries {
-        if now.saturating_sub(*created_at) > RESPONSE_STORE_TTL_SECS {
-            remove_response_and_task(response_id);
-        }
+    let mut record = database
+        .owned_response(response_id, &owner.0, now)
+        .await?
+        .ok_or_else(|| response_not_found(response_id))?;
+    let mut response: ResponsesApiResponse = serde_json::from_str(&record.response_json)?;
+    if record.lease_until.is_some_and(|deadline| deadline <= now)
+        && matches!(record.status.as_str(), "queued" | "in_progress")
+    {
+        response.status = "failed".into();
+        response.error = Some(
+            crate::core::models::openai::responses_api::ResponseApiError {
+                code: "server_error".into(),
+                message: "Background response worker stopped before completion".into(),
+            },
+        );
+        database
+            .fail_abandoned_response(&record, serde_json::to_string(&response)?, now)
+            .await?;
+        // Another replica may have completed, cancelled, or renewed the worker.
+        record = database
+            .owned_response(response_id, &owner.0, now)
+            .await?
+            .ok_or_else(|| response_not_found(response_id))?;
+        response = serde_json::from_str(&record.response_json)?;
     }
-    remove_orphaned_background_tasks();
-
-    entries.retain(|(_, created_at)| now.saturating_sub(*created_at) <= RESPONSE_STORE_TTL_SECS);
-    let overflow = entries
-        .len()
-        .saturating_add(1)
-        .saturating_sub(RESPONSE_STORE_LIMIT);
-    if overflow == 0 {
-        return;
-    }
-
-    entries.sort_by_key(|(_, created_at)| *created_at);
-    for (response_id, _) in entries.into_iter().take(overflow) {
-        remove_response_and_task(&response_id);
-    }
-}
-
-fn remove_response_and_task(response_id: &str) {
-    RESPONSE_STORE.remove(response_id);
-    if let Some((_, task)) = BACKGROUND_TASKS.remove(response_id) {
-        task.abort();
-    }
-}
-
-fn remove_orphaned_background_tasks() {
-    let orphaned = BACKGROUND_TASKS
-        .iter()
-        .filter(|entry| !RESPONSE_STORE.contains_key(entry.key().as_str()))
-        .map(|entry| entry.key().clone())
-        .collect::<Vec<_>>();
-    for response_id in orphaned {
-        if let Some((_, task)) = BACKGROUND_TASKS.remove(&response_id) {
-            task.abort();
-        }
-    }
+    Ok(StoredResponse {
+        response,
+        input: serde_json::from_str(&record.input_json)?,
+        record,
+    })
 }
 
 fn append_previous_context(

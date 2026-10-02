@@ -740,3 +740,11 @@ Other providers' compatibility adapters retain their documented behavior.
 This implements the OpenAI portion of F06. Copilot and Bedrock require their own
 endpoint/authentication contracts and are still pending; F07 lifecycle restrictions
 also remain. It does not establish account access or claim paid upstream validation.
+
+### Responses storage work in progress (F07, unreleased)
+
+The chat-adapter Responses lifecycle now stores response bodies, inputs and authenticated ownership in the existing SQL database. Retrieval, deletion, cancellation and previous-response context use the shared record, including a 24-hour read-time expiration check. Concurrent completion and cancellation use an atomic terminal-state update. Background workers renew a lease; after a worker disappears, the next authorized read marks the expired job failed without resubmitting a potentially billable request. Other replicas observe cancellation/deletion within the worker's one-second polling interval.
+
+Durability requires an enabled file-backed SQLite or PostgreSQL database. Replicas must use the same database; a separate local SQLite fallback does not share state. `storage.database.enabled=false` uses a separate in-memory database and does **not** survive restart. Migrate the schema before startup when `auto_migrate=false`.
+
+Native Responses owner/deployment binding and background accounting are still pending in F07. The native route therefore retains its `store=false`, no-background and no-previous-response restrictions for now.

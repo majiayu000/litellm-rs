@@ -9,6 +9,30 @@ use crate::core::types::codex::wire::{
 use actix_web::{HttpMessage, body::to_bytes, http::StatusCode, test as actix_test};
 use serde_json::Value;
 
+async fn database() -> Database {
+    let config = crate::config::models::storage::DatabaseConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let database = Database::new(&config).await.unwrap();
+    database.migrate().await.unwrap();
+    database
+}
+
+async fn state() -> web::Data<AppState> {
+    let mut config = crate::server::valid_test_config();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.pricing.source = None;
+    web::Data::new(
+        crate::server::HttpServer::new(&config)
+            .await
+            .unwrap()
+            .state()
+            .clone(),
+    )
+}
+
 fn owner(label: &str) -> ResponseOwner {
     ResponseOwner(format!("test:{label}"))
 }
@@ -76,17 +100,27 @@ async fn read_json(response: HttpResponse) -> Value {
     serde_json::from_slice(&body).expect("response body should be json")
 }
 
-#[test]
-fn store_respects_owner_and_store_false() {
+#[tokio::test]
+async fn store_respects_owner_and_store_false() {
+    let db = database().await;
     let owner_a = Some(owner("a"));
     let owner_b = Some(owner("b"));
     let request = req("hello");
     let response = resp(&format!("resp_test_{}", uuid_v4_hex()), &request, "world");
-    store_response_if_requested(&request, &response, owner_a.clone());
+    store_response_if_requested(&db, &request, &response, owner_a.clone())
+        .await
+        .unwrap();
 
-    assert!(get_owned_response(&response.id, &owner_a).is_ok());
-    assert!(get_owned_response(&response.id, &owner_b).is_err());
-    RESPONSE_STORE.remove(&response.id);
+    assert!(
+        get_owned_response(&db, &response.id, &owner_a)
+            .await
+            .is_ok()
+    );
+    assert!(
+        get_owned_response(&db, &response.id, &owner_b)
+            .await
+            .is_err()
+    );
 
     let mut unstored_request = req("hello");
     unstored_request.store = Some(false);
@@ -95,8 +129,14 @@ fn store_respects_owner_and_store_false() {
         &unstored_request,
         "world",
     );
-    store_response_if_requested(&unstored_request, &unstored, owner_a);
-    assert!(get_owned_response(&unstored.id, &Some(owner("a"))).is_err());
+    store_response_if_requested(&db, &unstored_request, &unstored, owner_a)
+        .await
+        .unwrap();
+    assert!(
+        get_owned_response(&db, &unstored.id, &Some(owner("a")))
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -109,30 +149,42 @@ fn storage_requires_authenticated_owner_unless_store_false() {
     assert!(validate_storage_owner(&unstored, &None).is_ok());
 }
 
-#[test]
-fn previous_context_prepends_prior_input_output_and_current_input() {
+#[tokio::test]
+async fn previous_context_prepends_prior_input_output_and_current_input() {
+    let db = database().await;
     let owner = Some(owner("chain"));
     let previous_id = format!("resp_test_{}", uuid_v4_hex());
     let previous_req = req("first question");
     let previous_resp = resp(&previous_id, &previous_req, "first answer");
-    store_response_if_requested(&previous_req, &previous_resp, owner.clone());
+    store_response_if_requested(&db, &previous_req, &previous_resp, owner.clone())
+        .await
+        .unwrap();
 
     let mut follow_up = req("follow up");
     follow_up.previous_response_id = Some(previous_id.clone());
-    let resolved = resolve_previous_response_context(follow_up, &owner).unwrap();
+    let resolved = resolve_previous_response_context(&db, follow_up, &owner)
+        .await
+        .unwrap();
     let ResponseInput::Items(items) = resolved.input else {
         panic!("previous context should produce item input");
     };
     assert_eq!(items.len(), 3);
 
-    RESPONSE_STORE.remove(&previous_id);
+    db.delete_owned_response(&previous_id, &owner.as_ref().unwrap().0, current_unix_ts())
+        .await
+        .unwrap();
     let mut missing = req("follow up");
     missing.previous_response_id = Some(previous_id);
-    assert!(resolve_previous_response_context(missing, &owner).is_err());
+    assert!(
+        resolve_previous_response_context(&db, missing, &owner)
+            .await
+            .is_err()
+    );
 }
 
-#[test]
-fn previous_context_preserves_codex_calls_for_correlated_outputs() {
+#[tokio::test]
+async fn previous_context_preserves_codex_calls_for_correlated_outputs() {
+    let db = database().await;
     let owner = Some(owner("codex-chain"));
     let previous_id = format!("resp_test_{}", uuid_v4_hex());
     let previous_req = req("run tools");
@@ -155,7 +207,9 @@ fn previous_context_preserves_codex_calls_for_correlated_outputs() {
             internal_chat_message_metadata_passthrough: None,
         }),
     ];
-    store_response_if_requested(&previous_req, &previous_resp, owner.clone());
+    store_response_if_requested(&db, &previous_req, &previous_resp, owner.clone())
+        .await
+        .unwrap();
 
     let mut follow_up = req("ignored");
     follow_up.previous_response_id = Some(previous_id.clone());
@@ -176,7 +230,9 @@ fn previous_context_preserves_codex_calls_for_correlated_outputs() {
             },
         ),
     ]);
-    let resolved = resolve_previous_response_context(follow_up, &owner).unwrap();
+    let resolved = resolve_previous_response_context(&db, follow_up, &owner)
+        .await
+        .unwrap();
     assert!(crate::core::types::codex::domain::CodexTurn::try_from(&resolved).is_ok());
     let ResponseInput::Items(items) = resolved.input else {
         panic!("item input")
@@ -188,58 +244,67 @@ fn previous_context_preserves_codex_calls_for_correlated_outputs() {
         items[4],
         ResponseInputItem::CustomToolCallOutput(_)
     ));
-    RESPONSE_STORE.remove(&previous_id);
 }
 
-#[test]
-fn background_cancel_is_owner_scoped() {
+#[tokio::test]
+async fn background_cancel_is_owner_scoped() {
+    let db = database().await;
     let background_owner = owner("background");
     let other_owner = Some(owner("other"));
     let request = req("run later");
     let queued = queued_background_response(&request);
     let id = queued.id.clone();
-    insert_stored_response(
-        id.clone(),
-        StoredResponse {
-            response: queued,
-            input: request.input.clone(),
-            background: true,
-            owner: background_owner.clone(),
-        },
+    let record = response_record(&request, &queued, &background_owner, true).unwrap();
+    db.insert_response(record.clone(), current_unix_ts())
+        .await
+        .unwrap();
+    assert!(
+        cancel_stored_background_response(&db, &id, &other_owner)
+            .await
+            .is_err()
     );
-
-    assert!(cancel_stored_background_response(&id, &other_owner).is_err());
     assert_eq!(
-        cancel_stored_background_response(&id, &Some(background_owner))
+        cancel_stored_background_response(&db, &id, &Some(background_owner.clone()))
+            .await
             .unwrap()
             .status,
         "cancelled"
     );
-    finish_background_response(&id, request.input.clone(), resp(&id, &request, "done"));
-    assert_eq!(
-        RESPONSE_STORE
-            .get(&id)
-            .map(|stored| stored.response.status.clone()),
-        Some("cancelled".to_string())
+    assert!(
+        !finish_background_response(&db, &record, &resp(&id, &request, "done"))
+            .await
+            .unwrap()
     );
-    remove_response_and_task(&id);
+    assert_eq!(
+        get_owned_response(&db, &id, &Some(background_owner))
+            .await
+            .unwrap()
+            .response
+            .status,
+        "cancelled"
+    );
 }
 
 #[actix_web::test]
 async fn lifecycle_handlers_enforce_owner_delete_and_input_items_shape() {
+    let state = state().await;
+    let db = &state.storage.database;
     let route_owner = Some(user_owner("route-owner"));
     let other = request_for_user("other-owner");
     let request = req("hello");
     let response = resp(&format!("resp_test_{}", uuid_v4_hex()), &request, "world");
     let id = response.id.clone();
-    store_response_if_requested(&request, &response, route_owner);
+    store_response_if_requested(db, &request, &response, route_owner)
+        .await
+        .unwrap();
 
-    let cross_owner = get_response(other, web::Path::from(id.clone()))
+    let cross_owner = get_response(state.clone(), other, web::Path::from(id.clone()))
         .await
         .unwrap();
     assert_eq!(cross_owner.status(), StatusCode::NOT_FOUND);
 
     let list = list_response_input_items(
+        state.clone(),
         request_for_user("route-owner"),
         web::Path::from(id.clone()),
         web::Query(InputItemsQuery {
@@ -261,14 +326,22 @@ async fn lifecycle_handlers_enforce_owner_delete_and_input_items_shape() {
     assert_eq!(list_body["data"][0]["type"], "message");
     assert_eq!(list_body["has_more"], false);
 
-    let deleted = delete_response(request_for_user("route-owner"), web::Path::from(id.clone()))
-        .await
-        .unwrap();
+    let deleted = delete_response(
+        state.clone(),
+        request_for_user("route-owner"),
+        web::Path::from(id.clone()),
+    )
+    .await
+    .unwrap();
     assert_eq!(deleted.status(), StatusCode::OK);
     let deleted_body = read_json(deleted).await;
     assert_eq!(deleted_body["object"], "response");
     assert_eq!(deleted_body["deleted"], true);
-    assert!(get_owned_response(&id, &Some(user_owner("route-owner"))).is_err());
+    assert!(
+        get_owned_response(db, &id, &Some(user_owner("route-owner")))
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -354,83 +427,183 @@ fn input_items_page_defaults_desc_and_rejects_unsupported_include() {
     assert!(matches!(include_error, GatewayError::Validation(_)));
 }
 
-#[actix_web::test]
-async fn response_store_cleanup_removes_expired_entries_and_tasks() {
-    let cleanup_owner = owner("cleanup");
-    let mut request = req("old");
-    let mut response = resp(&format!("resp_test_{}", uuid_v4_hex()), &request, "old");
-    response.created_at = current_unix_ts() - RESPONSE_STORE_TTL_SECS - 1;
-    let id = response.id.clone();
-    request.input = ResponseInput::Text("old".to_string());
-    insert_stored_response(
-        id.clone(),
-        StoredResponse {
-            response,
-            input: request.input.clone(),
-            background: true,
-            owner: cleanup_owner,
-        },
+#[tokio::test]
+async fn reads_enforce_expiry_without_insert_and_fail_abandoned_workers() {
+    let db = database().await;
+    let owner = owner("worker");
+    let request = req("old");
+    let queued = queued_background_response(&request);
+    let mut record = response_record(&request, &queued, &owner, true).unwrap();
+    record.lease_until = Some(current_unix_ts() - 1);
+    db.insert_response(record.clone(), current_unix_ts())
+        .await
+        .unwrap();
+    let stored = get_owned_response(&db, &record.id, &Some(owner.clone()))
+        .await
+        .unwrap();
+    assert_eq!(stored.response.status, "failed");
+    assert!(
+        stored
+            .response
+            .error
+            .unwrap()
+            .message
+            .contains("worker stopped")
     );
-    let handle = tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-    });
-    BACKGROUND_TASKS.insert(id.clone(), handle);
-
-    let fresh_request = req("fresh");
-    let fresh_response = resp(
-        &format!("resp_test_{}", uuid_v4_hex()),
-        &fresh_request,
-        "fresh",
+    assert!(
+        !db.renew_response_lease(&record.id, &record.owner, current_unix_ts())
+            .await
+            .unwrap()
     );
-    insert_stored_response(
-        fresh_response.id.clone(),
-        StoredResponse {
-            response: fresh_response.clone(),
-            input: fresh_request.input.clone(),
-            background: false,
-            owner: owner("cleanup-fresh"),
-        },
+    assert!(
+        !finish_background_response(&db, &record, &resp(&record.id, &request, "too late"))
+            .await
+            .unwrap()
     );
 
-    assert!(RESPONSE_STORE.get(&id).is_none());
-    assert!(BACKGROUND_TASKS.get(&id).is_none());
-    remove_response_and_task(&fresh_response.id);
+    record.id = "expired".into();
+    record.expires_at = current_unix_ts();
+    db.insert_response(record.clone(), current_unix_ts())
+        .await
+        .unwrap();
+    assert!(
+        get_owned_response(&db, &record.id, &Some(owner))
+            .await
+            .is_err()
+    );
 }
 
-#[actix_web::test]
-async fn cancel_aborts_background_task_and_non_background_conflicts() {
-    let background_owner = owner("abort-owner");
+#[tokio::test]
+async fn cancellation_and_deletion_stop_leases_and_sync_cancel_conflicts() {
+    let db = database().await;
+    let owner = owner("worker");
     let request = req("run later");
     let queued = queued_background_response(&request);
-    let id = queued.id.clone();
-    insert_stored_response(
-        id.clone(),
-        StoredResponse {
-            response: queued,
-            input: request.input.clone(),
-            background: true,
-            owner: background_owner.clone(),
-        },
+    let record = response_record(&request, &queued, &owner, true).unwrap();
+    db.insert_response(record.clone(), current_unix_ts())
+        .await
+        .unwrap();
+    assert!(
+        db.renew_response_lease(&record.id, &record.owner, current_unix_ts())
+            .await
+            .unwrap()
     );
-    let handle = tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-    });
-    BACKGROUND_TASKS.insert(id.clone(), handle);
-
-    let cancelled = cancel_stored_background_response(&id, &Some(background_owner)).unwrap();
-    assert_eq!(cancelled.status, "cancelled");
-    assert!(BACKGROUND_TASKS.get(&id).is_none());
-    remove_response_and_task(&id);
-
-    let owner = Some(owner("sync-owner"));
-    let sync_request = req("hello");
-    let sync_response = resp(
-        &format!("resp_test_{}", uuid_v4_hex()),
-        &sync_request,
-        "world",
+    cancel_stored_background_response(&db, &record.id, &Some(owner.clone()))
+        .await
+        .unwrap();
+    assert!(
+        !db.renew_response_lease(&record.id, &record.owner, current_unix_ts())
+            .await
+            .unwrap()
     );
-    store_response_if_requested(&sync_request, &sync_response, owner.clone());
-    let err = cancel_stored_background_response(&sync_response.id, &owner).unwrap_err();
-    assert!(matches!(err, GatewayError::Conflict(_)));
-    remove_response_and_task(&sync_response.id);
+    let queued = queued_background_response(&request);
+    let record = response_record(&request, &queued, &owner, true).unwrap();
+    db.insert_response(record.clone(), current_unix_ts())
+        .await
+        .unwrap();
+    assert!(
+        db.delete_owned_response(&record.id, &record.owner, current_unix_ts())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !db.renew_response_lease(&record.id, &record.owner, current_unix_ts())
+            .await
+            .unwrap()
+    );
+
+    let response = resp("sync-response", &request, "world");
+    store_response_if_requested(&db, &request, &response, Some(owner.clone()))
+        .await
+        .unwrap();
+    let error = cancel_stored_background_response(&db, &response.id, &Some(owner))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, GatewayError::Conflict(_)));
+}
+
+#[cfg(feature = "sqlite")]
+#[actix_web::test]
+async fn separate_gateway_states_share_records_and_restart_preserves_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = crate::server::valid_test_config();
+    config.gateway.storage.database.enabled = true;
+    config.gateway.storage.database.auto_migrate = true;
+    config.gateway.storage.database.url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("responses.db").display()
+    );
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.pricing.source = None;
+    let first = crate::server::HttpServer::new(&config).await.unwrap();
+    let second = crate::server::HttpServer::new(&config).await.unwrap();
+    let request = req("persist this input");
+    let response = resp("persisted-response", &request, "persist this output");
+    store_response_if_requested(
+        &first.state().storage.database,
+        &request,
+        &response,
+        Some(user_owner("alice")),
+    )
+    .await
+    .unwrap();
+    let data = web::Data::new(second.state().clone());
+    assert_eq!(
+        get_response(
+            data.clone(),
+            request_for_user("bob"),
+            web::Path::from(response.id.clone())
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let retrieved = get_response(
+        data,
+        request_for_user("alice"),
+        web::Path::from(response.id.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read_json(retrieved).await["output"][0]["content"][0]["text"],
+        "persist this output"
+    );
+    drop(first);
+    drop(second);
+    let restarted = crate::server::HttpServer::new(&config).await.unwrap();
+    let data = web::Data::new(restarted.state().clone());
+    let mut follow_up = req("second input");
+    follow_up.previous_response_id = Some(response.id.clone());
+    let resolved = resolve_previous_response_context(
+        &data.storage.database,
+        follow_up,
+        &Some(user_owner("alice")),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(resolved.input, ResponseInput::Items(items) if items.len() == 3));
+    assert_eq!(
+        delete_response(
+            data.clone(),
+            request_for_user("alice"),
+            web::Path::from(response.id.clone())
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_response(
+            data,
+            request_for_user("alice"),
+            web::Path::from(response.id)
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
 }
