@@ -54,9 +54,18 @@ pub(crate) async fn lifecycle(
         }
     }
     url.set_query((!query.is_empty()).then_some(query));
-    let response = pool
-        .execute_request_preserving_endpoint_policy(url.as_str(), method, headers, None)
-        .await?;
+    let streaming = matches!(method, HttpMethod::GET)
+        && suffix.is_none()
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "stream" && value == "true");
+    let response = if streaming {
+        pool.execute_streaming_get_preserving_endpoint_policy(url.as_str(), headers, "responses")
+            .await?
+    } else {
+        pool.execute_request_preserving_endpoint_policy(url.as_str(), method, headers, None)
+            .await?
+    };
     check_status(response, "responses").await
 }
 

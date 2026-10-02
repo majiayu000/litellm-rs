@@ -17,6 +17,8 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::{budgeted, openai_errors, spend};
+#[path = "responses_native_background.rs"]
+mod background;
 #[path = "responses_native_lifecycle.rs"]
 pub(super) mod lifecycle;
 #[path = "responses_native_stream.rs"]
@@ -69,6 +71,7 @@ struct NativeCall {
     reservation: Option<UnifiedBudgetReservation>,
     key_reservation: Option<BudgetReservation>,
     storage: Option<NativeResponseStorage>,
+    started: tokio::time::Instant,
 }
 
 async fn create_native(
@@ -96,14 +99,14 @@ async fn create_native(
         Some(Value::Bool(value)) => *value,
         _ => return Err(GatewayError::validation("store must be a boolean")),
     };
-    if store && owner.is_none() {
+    let background = match body.get("background") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(GatewayError::validation("background must be a boolean")),
+    };
+    if (store || background) && owner.is_none() {
         return Err(GatewayError::validation(
-            "Responses lifecycle storage requires authentication; set store=false for anonymous requests",
-        ));
-    }
-    if body.get("background") == Some(&Value::Bool(true)) {
-        return Err(GatewayError::validation(
-            "Native background support is pending",
+            "Stored or background Responses require authentication; anonymous requests must use store=false and background=false",
         ));
     }
     let previous =
@@ -158,7 +161,7 @@ async fn create_native(
         &requested_model,
         &context,
     );
-    let (call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
+    let (mut call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::Responses,
@@ -190,7 +193,7 @@ async fn create_native(
                     // This projection is only for the token reservation. The native wire body
                     // never passes through the chat transformer, including tools and reasoning.
                     let budget_request = budget_request(&body, &model);
-                    let storage = if store {
+                    let storage = if store || background {
                         let binding = provider.native_response_binding().ok_or_else(|| {
                             ProviderError::not_supported("responses", "Stored native responses")
                         })?;
@@ -210,6 +213,7 @@ async fn create_native(
                         None
                     };
                     let limits = state.budgeted.budget_limits();
+                    let started = tokio::time::Instant::now();
                     let (response, reservations) = state
                         .budgeted
                         .for_selected_with_api_key_budget(
@@ -251,6 +255,7 @@ async fn create_native(
                         reservation,
                         key_reservation,
                         storage,
+                        started,
                     })
                 }
             }
@@ -263,6 +268,19 @@ async fn create_native(
     if streaming {
         return Ok(stream::response(state.clone(), context, call, lease));
     }
+    if background {
+        let value = lifecycle::read_json(&mut call.response).await;
+        return background::response(
+            state.clone(),
+            context,
+            call,
+            lease,
+            value,
+            false,
+            crate::core::request_ledger::current_facts(),
+        )
+        .await;
+    }
     let NativeCall {
         callback,
         response,
@@ -273,6 +291,7 @@ async fn create_native(
         reservation,
         key_reservation,
         mut storage,
+        started: _,
     } = call;
     let mut body_stream = response.bytes_stream();
     let mut bytes = Vec::new();

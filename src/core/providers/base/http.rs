@@ -472,7 +472,7 @@ mod tests {
                 if path.extension().and_then(|ext| ext.to_str()) != Some("rs") || name == "tests.rs"
                     || name.ends_with("_tests.rs") || path == root.join("core/providers/base/connection_pool.rs") || path == root.join("core/providers/base/http.rs") { continue; }
                 let source = std::fs::read_to_string(&path).expect("source must be readable");
-                for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy"] {
+                for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy", "execute_streaming_get_preserving_endpoint_policy"] {
                     if source.contains(method) { callers.push((path.strip_prefix(&root).unwrap_or(&path).to_path_buf(), method)); }
                 }
             }
@@ -482,6 +482,7 @@ mod tests {
         for path in ["core/providers/openai_like/provider.rs", "core/providers/responses_native.rs"] {
             for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy"] { expected.push((std::path::PathBuf::from(path), method)); }
         }
+        expected.push((std::path::PathBuf::from("core/providers/responses_native.rs"), "execute_streaming_get_preserving_endpoint_policy"));
         expected.sort(); assert_eq!(callers, expected);
     }
 

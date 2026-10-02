@@ -1,6 +1,5 @@
 //! Native response handles are scoped to their gateway owner and upstream account.
 use actix_web::{HttpRequest, HttpResponse};
-use futures::StreamExt;
 use serde_json::Value;
 
 use super::{AppState, MAX_RESPONSE_BYTES, ProviderError};
@@ -15,16 +14,24 @@ pub(super) struct NativeResponseStorage {
     deployment: String,
     binding: String,
     record: Option<ResponseRecord>,
+    background: bool,
+    retain_content: bool,
 }
 
 impl NativeResponseStorage {
     pub(super) fn new(owner: String, input: &Value, deployment: String, binding: String) -> Self {
         Self {
             owner,
-            input_json: input.to_string(),
+            input_json: if input.get("store") == Some(&Value::Bool(false)) {
+                serde_json::json!({"store":false,"stream":input.get("stream").and_then(Value::as_bool).unwrap_or(false)}).to_string()
+            } else {
+                input.to_string()
+            },
             deployment,
             binding,
             record: None,
+            background: input.get("background") == Some(&Value::Bool(true)),
+            retain_content: input.get("store") != Some(&Value::Bool(false)),
         }
     }
 
@@ -44,6 +51,7 @@ impl NativeResponseStorage {
             ProviderError::response_parsing("responses", "Stored response is missing its status")
         })?;
         let now = chrono::Utc::now().timestamp();
+        let stored_json = stored_value(value, self.retain_content).to_string();
         if let Some(record) = self.record.as_mut() {
             if record.id != id {
                 return Err(ProviderError::response_parsing(
@@ -53,27 +61,38 @@ impl NativeResponseStorage {
                 .into());
             }
             if !database
-                .finish_owned_response(record, value.to_string(), status, now)
+                .finish_owned_response(record, stored_json.clone(), status, now)
                 .await?
             {
+                let current = database.owned_response(id, &self.owner, now).await?;
+                // A lifecycle read/cancel may have cached the same upstream terminal
+                // state first. It does not own this request's billing reservation.
+                if let Some(current) = current
+                    && self.background
+                    && super::background::is_terminal(&current.status)
+                    && super::background::is_terminal(status)
+                {
+                    *record = current;
+                    return Ok(());
+                }
                 return Err(GatewayError::conflict(
                     "Stored response was deleted or finalized concurrently",
                 ));
             }
-            record.response_json = value.to_string();
+            record.response_json = stored_json;
             record.status = status.into();
             record.revision += 1;
         } else {
             let record = ResponseRecord {
                 id: id.into(),
                 owner: self.owner.clone(),
-                response_json: value.to_string(),
+                response_json: stored_json,
                 input_json: self.input_json.clone(),
                 deployment_id: Some(self.deployment.clone()),
                 deployment_binding: Some(self.binding.clone()),
-                background: false,
+                background: self.background,
                 status: status.into(),
-                expires_at: now + 86_400,
+                expires_at: now + if self.retain_content { 86_400 } else { 600 },
                 lease_until: None,
                 revision: 0,
             };
@@ -81,6 +100,21 @@ impl NativeResponseStorage {
             self.record = Some(record);
         }
         Ok(())
+    }
+    pub(super) fn is_background(&self) -> bool {
+        self.background
+    }
+
+    pub(super) fn record(&self) -> Option<&ResponseRecord> {
+        self.record.as_ref()
+    }
+}
+
+fn stored_value(value: &Value, retain_content: bool) -> Value {
+    if retain_content {
+        value.clone()
+    } else {
+        serde_json::json!({"id":value.get("id"),"object":"response","status":value.get("status"),"store":false})
     }
 }
 
@@ -104,6 +138,12 @@ pub(super) async fn previous_response(
         .owned_response(id, &owner.0, chrono::Utc::now().timestamp())
         .await?
         .ok_or_else(missing)?;
+    let stored_input: Value = serde_json::from_str(&record.input_json)?;
+    if stored_input.get("store") == Some(&Value::Bool(false)) {
+        return Err(GatewayError::validation(
+            "A response created with store=false cannot be continued",
+        ));
+    }
     if record.deployment_id.is_none() || record.deployment_binding.is_none() {
         return Err(GatewayError::validation(
             "A chat-adapted response cannot be continued through a native deployment",
@@ -172,7 +212,10 @@ fn append_input(items: &mut Vec<Value>, value: Option<&Value>) {
     }
 }
 
-fn bound_provider(state: &AppState, record: &ResponseRecord) -> Result<Provider, GatewayError> {
+pub(super) fn bound_provider(
+    state: &AppState,
+    record: &ResponseRecord,
+) -> Result<Provider, GatewayError> {
     let deployment = record
         .deployment_id
         .as_deref()
@@ -197,36 +240,39 @@ pub(in crate::server::routes::ai) async fn lifecycle(
     method: HttpMethod,
     suffix: Option<&str>,
 ) -> Result<HttpResponse, GatewayError> {
-    if url::form_urlencoded::parse(req.query_string().as_bytes())
-        .any(|(key, value)| key == "stream" && value == "true")
-    {
-        return Err(GatewayError::validation(
-            "Resuming a stored native response stream is not yet supported",
-        ));
+    let streaming = url::form_urlencoded::parse(req.query_string().as_bytes())
+        .any(|(key, value)| key == "stream" && value == "true");
+    if streaming {
+        let input: Value = serde_json::from_str(&record.input_json)?;
+        if !matches!(method, HttpMethod::GET)
+            || suffix.is_some()
+            || !record.background
+            || input.get("stream") != Some(&Value::Bool(true))
+        {
+            return Err(GatewayError::validation(
+                "Only background responses created with stream=true can resume streaming",
+            ));
+        }
+        guardrails::reject_unsupported_streaming_mask(state)?;
     }
     let provider = bound_provider(state, &record)?;
     let response = provider
         .native_response_lifecycle(&record.id, method.clone(), suffix, req.query_string())
         .await?;
-    let mut stream = response.bytes_stream();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| {
-            ProviderError::network("responses", "Responses lifecycle body interrupted")
-        })?;
-        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err(ProviderError::response_parsing(
-                "responses",
-                "Responses lifecycle body exceeds size limit",
-            )
-            .into());
-        }
-        bytes.extend_from_slice(&chunk);
+    if streaming {
+        return Ok(super::stream::resume(
+            state.clone(),
+            response,
+            record.id.clone(),
+            provider.name().to_string(),
+            record.deployment_id.clone(),
+        ));
     }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        ProviderError::response_parsing("responses", "Invalid Responses lifecycle JSON")
-    })?;
-    if suffix.is_none() && value.get("id").and_then(Value::as_str) != Some(record.id.as_str()) {
+    let mut response = response;
+    let value = read_json(&mut response).await?;
+    if suffix != Some("input_items")
+        && value.get("id").and_then(Value::as_str) != Some(record.id.as_str())
+    {
         return Err(ProviderError::response_parsing(
             "responses",
             "Responses lifecycle returned a different ID",
@@ -256,8 +302,7 @@ pub(in crate::server::routes::ai) async fn lifecycle(
     );
     let value =
         guardrails::apply_native_responses(state.guardrails().as_ref(), value, true, &sink).await?;
-    if suffix.is_none()
-        && matches!(method, HttpMethod::GET)
+    if (suffix.is_none() && matches!(method, HttpMethod::GET) || suffix == Some("cancel"))
         && let Some(status) = value.get("status").and_then(Value::as_str)
         && matches!(status, "completed" | "incomplete" | "failed" | "cancelled")
     {
@@ -266,11 +311,37 @@ pub(in crate::server::routes::ai) async fn lifecycle(
             .database
             .finish_owned_response(
                 &record,
-                value.to_string(),
+                stored_value(
+                    &value,
+                    serde_json::from_str::<Value>(&record.input_json)?.get("store")
+                        != Some(&Value::Bool(false)),
+                )
+                .to_string(),
                 status,
                 chrono::Utc::now().timestamp(),
             )
             .await?;
     }
     Ok(HttpResponse::Ok().json(value))
+}
+
+/// Bound both successful create/poll bodies, including providers that omit Content-Length.
+pub(super) async fn read_json(response: &mut reqwest::Response) -> Result<Value, GatewayError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| ProviderError::network("responses", "Responses body interrupted"))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(ProviderError::response_parsing(
+                "responses",
+                "Responses body exceeds size limit",
+            )
+            .into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| ProviderError::response_parsing("responses", "Invalid Responses JSON").into())
 }
