@@ -148,7 +148,7 @@ impl OpenAILikeProvider {
         config: OpenAILikeConfig,
         capabilities: &'static [ProviderCapability],
     ) -> Result<Self, OpenAILikeError> {
-        Self::new_with_profile(config, capabilities, OPENAI_LIKE_CATALOG_CAPABILITIES).await
+        Self::new_with_profile(config, capabilities, OPENAI_COMPATIBLE_PROXY_CAPABILITIES).await
     }
     pub(crate) async fn new_for_catalog_no_redirect(
         config: OpenAILikeConfig,
@@ -338,13 +338,20 @@ impl OpenAILikeProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.map_err(|error| {
-                self.map_error_response(
-                    status.as_u16(),
-                    &format!("failed to read upstream error body: {error}"),
-                )
-            })?;
-            return Err(self.map_error_response(status.as_u16(), &body));
+            let header_retry = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|error| format!("failed to read upstream error body: {error}"));
+            let mut error = self.map_error_response(status.as_u16(), &body);
+            if let ProviderError::RateLimit { retry_after, .. } = &mut error {
+                *retry_after = header_retry.or(*retry_after);
+            }
+            return Err(error);
         }
 
         let response_bytes = response
@@ -381,13 +388,20 @@ impl OpenAILikeProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.map_err(|error| {
-                self.map_error_response(
-                    status.as_u16(),
-                    &format!("failed to read upstream error body: {error}"),
-                )
-            })?;
-            return Err(self.map_error_response(status.as_u16(), &body));
+            let header_retry = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|error| format!("failed to read upstream error body: {error}"));
+            let mut error = self.map_error_response(status.as_u16(), &body);
+            if let ProviderError::RateLimit { retry_after, .. } = &mut error {
+                *retry_after = header_retry.or(*retry_after);
+            }
+            return Err(error);
         }
 
         let response_bytes = response
