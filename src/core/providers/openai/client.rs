@@ -48,6 +48,34 @@ pub struct OpenAIProvider {
 }
 
 impl OpenAIProvider {
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response(
+        &self,
+        mut body: Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ProviderError::invalid_request("openai", "model must be a string"))?;
+        let wire_model = self
+            .model_identity
+            .as_ref()
+            .map(|binding| binding.identity().wire_model())
+            .or_else(|| self.config.model_mappings.get(model).map(String::as_str))
+            .unwrap_or(model)
+            .to_string();
+        body["model"] = Value::String(wire_model);
+        super::super::responses_native::send(
+            &self.pool_manager,
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            self.config.base.timeout,
+            body,
+            "openai",
+        )
+        .await
+    }
+
     /// Generate headers for OpenAI API requests
     ///
     /// Uses `HeaderPair` with Cow for static keys to avoid allocations.
@@ -347,7 +375,14 @@ impl OpenAIProvider {
         capability: &ProviderCapability,
     ) -> bool {
         if let Some(model_spec) = self.model_registry.get_model_spec(model_id) {
-            model_spec.model_info.capabilities.contains(capability)
+            if capability == &ProviderCapability::Responses {
+                model_spec
+                    .model_info
+                    .capabilities
+                    .contains(&ProviderCapability::ChatCompletion)
+            } else {
+                model_spec.model_info.capabilities.contains(capability)
+            }
         } else {
             false
         }
@@ -387,6 +422,7 @@ impl LLMProvider for OpenAIProvider {
             ProviderCapability::ImageEdit,
             ProviderCapability::ImageVariation,
             ProviderCapability::RealtimeApi,
+            ProviderCapability::Responses,
         ];
         CAPABILITIES
     }

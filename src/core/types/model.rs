@@ -46,6 +46,8 @@ pub enum ProviderCapability {
     RealtimeApi,
     /// Gemini SDK native generateContent transport
     GeminiGenerateContent,
+    /// Native OpenAI Responses JSON/SSE transport
+    Responses,
 }
 
 /// Model information

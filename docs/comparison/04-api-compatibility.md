@@ -717,3 +717,9 @@ Both implementations provide strong OpenAI API compatibility for core functional
 - Enterprise features (audit, RBAC) are required
 - Full OpenAI API surface area is needed
 - Python ecosystem integration is preferred
+
+### Unreleased native Responses work
+
+The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.
+
+This implementation is not ready for release: it currently requires `store=false`, `background=false`, and no `previous_response_id`. Shared, owner-scoped lifecycle bindings and the exact provider/model endpoint matrix remain outstanding (parity tracker F06/F07). Native stored responses must not be enabled before those bindings exist. Token reservation includes the serialized request and image overhead; provider-hosted tools, file contents and retained server-side context need additional accounting coverage.
