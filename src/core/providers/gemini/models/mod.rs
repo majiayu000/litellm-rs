@@ -306,7 +306,9 @@ impl CostCalculator {
         super::calculate_gemini_cost(model_id, prompt_tokens, completion_tokens)
     }
 
-    /// Calculate multimodal cost
+    /// Estimate multimodal cost. Prompt tokens include the audio input tokens.
+    /// Audio duration uses Google's documented 32 tokens/second. Mixed cached
+    /// audio cannot be priced from these arguments and returns `None`.
     pub fn calculate_multimodal_cost(
         model_id: &str,
         prompt_tokens: u32,
@@ -366,11 +368,20 @@ impl CostCalculator {
             total_cost += video_secs as f64 * video_price;
         }
 
-        // Audio cost
-        if let (Some(audio_secs), Some(audio_price)) =
-            (audio_seconds, pricing.audio_cost_per_second)
-        {
-            total_cost += audio_secs as f64 * audio_price;
+        // Audio is included in prompt_tokens: replace its text-rate portion,
+        // rather than adding the full audio rate on top of already billed input.
+        // https://ai.google.dev/gemini-api/docs/audio#technical-details-about-audio
+        if let Some(seconds) = audio_seconds.filter(|seconds| *seconds > 0) {
+            if let Some(audio_rate) = pricing.input_cost_per_audio_token {
+                let audio_tokens = seconds.checked_mul(32)?;
+                if audio_tokens > prompt_tokens || cached_tokens.unwrap_or(0) > 0 {
+                    return None;
+                }
+                total_cost +=
+                    audio_tokens as f64 * (audio_rate - pricing.input_cost_per_1k_tokens / 1000.0);
+            } else if let Some(audio_rate) = pricing.audio_cost_per_second {
+                total_cost += seconds as f64 * audio_rate;
+            }
         }
 
         Some(total_cost)
@@ -691,7 +702,7 @@ mod tests {
     fn test_multimodal_cost_with_video_and_audio() {
         let cost = CostCalculator::calculate_multimodal_cost(
             "gemini-2.5-flash",
-            1000,
+            5000,
             500,
             None,
             Some(5),
