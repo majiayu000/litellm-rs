@@ -37,7 +37,7 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
             .json(json!({"error":{"message":"upstream unavailable"}}));
     }
     match req.path() {
-        "/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"completion_tokens":0,"total_tokens":2}})),
+        "/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}})),
         "/v1/images/generations" => HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]})),
         "/v1/audio/speech" => HttpResponse::Ok().insert_header(("content-type","audio/mpeg")).body("test-audio"),
         "/v1/audio/transcriptions" | "/v1/audio/translations" => HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0})),
@@ -105,15 +105,23 @@ async fn named_catalog_embeddings_reach_the_verified_endpoint() {
     ] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
         let provider = selected(&router, ProviderCapability::Embeddings);
+        let mut request = embedding_request();
+        request.task_type = Some("query".into());
         let response = provider
-            .create_embeddings(embedding_request(), RequestContext::default())
+            .create_embeddings(request, RequestContext::default())
             .await
             .unwrap();
         assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+        assert_eq!(response.usage.as_ref().unwrap().prompt_tokens, 2);
+        assert_eq!(response.usage.as_ref().unwrap().completion_tokens, 0);
         let (path, body) = upstream.seen.lock().unwrap()[0].clone();
         assert_eq!(path, "/v1/embeddings");
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["dimensions"], 2);
+        if matches!(selector, "fireworks" | "fireworks_ai") {
+            assert_eq!(body["input_type"], "query");
+            assert!(body.get("task_type").is_none());
+        }
         assert_eq!(body["model"], "test-model");
         handle.stop(false).await;
     }
@@ -153,7 +161,10 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
     for selector in ["together", "together_ai"] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
         let provider = selected(&router, ProviderCapability::TextToSpeech);
-        let speech: SpeechRequest = serde_json::from_value(json!({"model":"test-model","input":"hello", "voice":"test-voice", "response_format":"mp3"})).unwrap();
+        let speech: SpeechRequest = serde_json::from_value(
+            json!({"model":"test-model","input":"hello", "voice":"test-voice"}),
+        )
+        .unwrap();
         assert_eq!(
             provider
                 .text_to_speech(speech, RequestContext::default())
@@ -190,6 +201,10 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
         );
         let calls = upstream.seen.lock().unwrap().clone();
         assert_eq!(calls.len(), 3);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&calls[0].1).unwrap()["response_format"],
+            "mp3"
+        );
         for (path, body) in &calls[1..] {
             assert!(path.starts_with("/v1/audio/"));
             let body = String::from_utf8_lossy(body);
@@ -199,6 +214,7 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
             );
             assert!(body.contains("test-wave-data"));
             assert!(body.contains("test-model"));
+            assert!(body.find("name=\"model\"").unwrap() < body.find("name=\"file\"").unwrap());
         }
         handle.stop(false).await;
     }
@@ -240,5 +256,42 @@ async fn named_catalog_errors_and_unverified_capabilities_fail_closed() {
             .is_err()
     );
     assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn together_audio_preserves_retry_after() {
+    let (router, _, handle) = fixture("together", StatusCode::TOO_MANY_REQUESTS).await;
+    let provider = selected(&router, ProviderCapability::TextToSpeech);
+    let speech =
+        serde_json::from_value(json!({"model":"test-model","input":"hello","voice":"test"}))
+            .unwrap();
+    let transcription = serde_json::from_value(json!({"model":"test-model"})).unwrap();
+    let translation = serde_json::from_value(json!({"model":"test-model"})).unwrap();
+    for error in [
+        provider
+            .text_to_speech(speech, RequestContext::default())
+            .await
+            .map(|_| ())
+            .unwrap_err(),
+        provider
+            .audio_transcription(transcription, RequestContext::default())
+            .await
+            .map(|_| ())
+            .unwrap_err(),
+        provider
+            .audio_translation(translation, RequestContext::default())
+            .await
+            .map(|_| ())
+            .unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            ProviderError::RateLimit {
+                retry_after: Some(7),
+                ..
+            }
+        ));
+    }
     handle.stop(false).await;
 }

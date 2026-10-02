@@ -326,10 +326,15 @@ impl OpenAILikeProvider {
         request.model = self.rewrite_request_model(&request.model);
         let url = format!("{}/embeddings", self.config.get_api_base());
         let headers = self.get_request_headers();
-        let body = Some(
-            serde_json::to_value(&request)
-                .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?,
-        );
+        let mut body = serde_json::to_value(&request)
+            .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        if matches!(self.provider_name.as_str(), "fireworks" | "fireworks_ai")
+            && let Some(fields) = body.as_object_mut()
+            && let Some(task_type) = fields.remove("task_type")
+        {
+            fields.insert("input_type".into(), task_type);
+        }
+        let body = Some(body);
 
         let response = self
             .pool_manager
@@ -359,7 +364,14 @@ impl OpenAILikeProvider {
             .await
             .map_err(|e| OpenAILikeError::network(PROVIDER_NAME, e.to_string()))?;
 
-        serde_json::from_slice(&response_bytes)
+        // Embeddings report prompt/total usage and generate no completion tokens.
+        // Normalize this wire shape only at the embedding boundary.
+        let mut value: Value = serde_json::from_slice(&response_bytes)
+            .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
+        if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
+            usage.entry("completion_tokens").or_insert(Value::from(0));
+        }
+        serde_json::from_value(value)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))
     }
 
