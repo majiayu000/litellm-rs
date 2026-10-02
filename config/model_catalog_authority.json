@@ -2,10 +2,10 @@
   "_metadata": {
     "schema_version": 1,
     "revision": "model-refresh-20261001",
-    "decision_source_sha256": "3fbd98d1a5e2a7c75c838de396b9db4a2a87e9e2bfce53f7811c45c20cdc3962",
-    "pricing_universe_sha256": "46433a5a9e52c677c369cfeaa3658fe3abfcd270d940b5f5ab089fd56f142d77",
-    "classification_sha256": "f0288b27553c08b4b8d0a49718221748870fcede87c367efc4afae4385241cc8",
-    "total_entry_count": 4555,
+    "decision_source_sha256": "8073af6cce6bfc498535bd83bcb74631e380077f5aa236de4cb9595e857d947b",
+    "pricing_universe_sha256": "d742cde2ad856944b98a883392dad41c9cf38fd7ecc0715b8a7bada94f4eb109",
+    "classification_sha256": "1d2a61367ab0b245f641c7cef1f605c1e1059124e645d4a8eaca5ec94fa47981",
+    "total_entry_count": 4569,
     "enforced_providers": [
       "azure",
       "azure_ai",
@@ -340,7 +340,7 @@
       "nebius": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 60
+        "unreviewed": 61
       },
       "nimble": {
         "callable": 0,
@@ -385,7 +385,7 @@
       "openrouter": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 484
+        "unreviewed": 486
       },
       "ovhcloud": {
         "callable": 0,
@@ -405,7 +405,7 @@
       "perplexity": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 77
+        "unreviewed": 84
       },
       "pinstripes": {
         "callable": 0,
@@ -570,7 +570,7 @@
       "vertex_ai": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 55
+        "unreviewed": 56
       },
       "vertex_ai-ai21_models": {
         "callable": 0,
@@ -650,7 +650,7 @@
       "voyage": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 35
+        "unreviewed": 38
       },
       "wandb": {
         "callable": 0,
@@ -22269,6 +22269,14 @@
     },
     {
       "provider": "nebius",
+      "pricing_key": "nebius/Qwen/Qwen3.8-27B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "nebius",
       "pricing_key": "nebius/deepseek-ai/DeepSeek-R1",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -26782,6 +26790,14 @@
     },
     {
       "provider": "openrouter",
+      "pricing_key": "openrouter/apodex/apodex-1.1-mini:free",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "openrouter",
       "pricing_key": "openrouter/arcee-ai/trinity-large-thinking",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -29838,6 +29854,14 @@
     },
     {
       "provider": "openrouter",
+      "pricing_key": "openrouter/unbiased/pareto-26.10-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "openrouter",
       "pricing_key": "openrouter/undi95/remm-slerp-l2-13b",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -30510,6 +30534,14 @@
     },
     {
       "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-fable-5-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
       "pricing_key": "perplexity/anthropic/claude-haiku-4-5",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -30554,6 +30586,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-opus-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -30686,6 +30726,14 @@
     },
     {
       "provider": "perplexity",
+      "pricing_key": "perplexity/google/gemini-3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
       "pricing_key": "perplexity/llama-2-70b-chat",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -30810,6 +30858,30 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -31114,6 +31186,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/xai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -35541,6 +35621,14 @@
       ]
     },
     {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/xai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
       "provider": "vertex_ai-ai21_models",
       "pricing_key": "vertex_ai/jamba-1.5",
       "decision": "unreviewed",
@@ -36838,6 +36926,14 @@
     },
     {
       "provider": "voyage",
+      "pricing_key": "voyage/rerank-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "voyage",
       "pricing_key": "voyage/rerank-2",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -36882,6 +36978,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/rerank-lite-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -37010,6 +37114,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/voyage-large-2-instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {

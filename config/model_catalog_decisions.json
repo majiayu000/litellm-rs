@@ -705,6 +705,13 @@
       "location": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
       "reviewed_on": "2026-10-01",
       "revision": "2026-10-01"
+    },
+    "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6": {
+      "kind": "runtime_pricing_row_pending_provider_review",
+      "location": "https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json",
+      "reviewed_on": "2026-10-02",
+      "revision": "a5fef4b4e68963640c3062d464509129ec8863c6",
+      "sha256": "6a6c5f26c342932371d7681f3dd7e5fc5d3a7f33fa59692fb167c08cad21cb4e"
     }
   },
   "provider_aliases": {
@@ -38452,6 +38459,118 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-cloudflare"
+      ]
+    },
+    {
+      "provider": "nebius",
+      "pricing_key": "nebius/Qwen/Qwen3.8-27B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/apodex/apodex-1.1-mini:free",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/unbiased/pareto-26.10-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-fable-5-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-opus-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/google/gemini-3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/xai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/xai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/rerank-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/rerank-lite-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/voyage-large-2-instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     }
   ]

@@ -464,6 +464,166 @@ class CatalogAuthorityTests(unittest.TestCase):
             "entries": entries,
         }
 
+    def test_refresh_records_new_rows_without_promoting_or_changing_reviews(self) -> None:
+        reviewed = self.decision(
+            "openai", "known", "callable", catalog_model_id="known",
+            endpoints=["responses"], aliases=[],
+        )
+        original = self.document([reviewed])
+        prices = {
+            "known": {"litellm_provider": "openai"},
+            "new": {"litellm_provider": "openai"},
+        }
+        refreshed = sync.add_unreviewed_decisions(
+            prices, original, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 3),
+        )
+        self.assertEqual(original, self.document([reviewed]))
+        self.assertEqual(refreshed["entries"][0], reviewed)
+        self.assertEqual(refreshed["entries"][1]["decision"], "unreviewed")
+        authority = sync.build_catalog_authority(prices, refreshed)
+        self.assertEqual(len(authority["entries"]), 2)
+        self.assertEqual(
+            refreshed,
+            sync.add_unreviewed_decisions(
+                prices, refreshed, "https://example.test/prices", "a" * 40,
+                "b" * 64, date(2026, 10, 4),
+            ),
+        )
+
+    def test_refresh_keeps_provider_scoped_identity_and_rejects_stale_reviews(self) -> None:
+        prices = {"known": {"litellm_provider": "new-provider"}}
+        original = self.document([self.decision("old-provider", "known", "unreviewed")])
+        refreshed = sync.add_unreviewed_decisions(
+            prices, original, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 3),
+        )
+        self.assertEqual(len(refreshed["entries"]), 2)
+        with self.assertRaisesRegex(SystemExit, "stale classification.*old-provider"):
+            sync.build_catalog_authority(prices, refreshed)
+
+    def test_main_refresh_and_check_preserve_overlay_identity_and_are_repeatable(self) -> None:
+        source = sync.model_entries(sync.load_json(CATALOG_PATH))
+        overlay_key = "amazon.nova-2-lite-v1:0"
+        original_provider = source[overlay_key]["litellm_provider"]
+        source[overlay_key]["litellm_provider"] = "upstream-provider-before-override"
+        source["new-upstream-test"] = {
+            "litellm_provider": "openai", "mode": "chat",
+            "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = pathlib.Path(temp_dir)
+            decisions = directory / "decisions.json"
+            decisions.write_bytes(CATALOG_DECISIONS_PATH.read_bytes())
+            args = SimpleNamespace(
+                source_catalog=None, source_url=sync.DEFAULT_SOURCE_URL,
+                source_commit=sync.DEFAULT_SOURCE_COMMIT,
+                output=directory / "prices.json", catalog_decisions=decisions,
+                catalog_authority_output=directory / "authority.json",
+                overlay_file=[CATALOG_PATH], min_models=sync.DEFAULT_MIN_MODELS,
+                check=False,
+            )
+            with (
+                mock.patch.object(sync, "parse_args", return_value=args),
+                mock.patch.object(sync, "load_url", return_value=(source, "f" * 64)),
+            ):
+                # Use a fresh evidence identity for this synthetic upstream snapshot.
+                args.source_commit = "d" * 40
+                args.source_url = sync.DEFAULT_SOURCE_URL.replace(sync.DEFAULT_SOURCE_COMMIT, args.source_commit)
+                self.assertEqual(sync.main(), 0)
+                first = {path: path.read_bytes() for path in directory.iterdir()}
+                self.assertEqual(sync.main(), 0)
+                args.check = True
+                self.assertEqual(sync.main(), 0)
+                self.assertEqual(first, {path: path.read_bytes() for path in directory.iterdir()})
+                pending = sync.load_json(decisions)
+                pending["entries"] = [
+                    row for row in pending["entries"]
+                    if row["pricing_key"] != "new-upstream-test"
+                ]
+                decisions.write_text(json.dumps(pending))
+                before_check = {path: path.read_bytes() for path in directory.iterdir()}
+                with self.assertRaisesRegex(SystemExit, "missing classification"):
+                    sync.main()
+                self.assertEqual(before_check, {path: path.read_bytes() for path in directory.iterdir()})
+                decisions.write_bytes(first[decisions])
+            rows = sync.load_json(decisions)["entries"]
+            self.assertEqual(
+                [row["provider"] for row in rows if row["pricing_key"] == overlay_key],
+                [original_provider],
+            )
+            new = next(row for row in rows if row["pricing_key"] == "new-upstream-test")
+            self.assertEqual(new["decision"], "unreviewed")
+
+    def test_main_refresh_rejects_null_source_without_writing_outputs(self) -> None:
+        source_commit = "d" * 40
+        source = sync.model_entries(sync.load_json(CATALOG_PATH))
+        source["new-upstream-test"] = {
+            "litellm_provider": "openai", "mode": "chat",
+            "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = pathlib.Path(temp_dir)
+            decisions = directory / "decisions.json"
+            document = sync.load_json(CATALOG_DECISIONS_PATH)
+            document["sources"][f"upstream-pricing-{source_commit}"] = None
+            decisions.write_text(json.dumps(document), encoding="utf-8")
+            before = decisions.read_bytes()
+            args = SimpleNamespace(
+                source_catalog=None,
+                source_url=sync.DEFAULT_SOURCE_URL.replace(sync.DEFAULT_SOURCE_COMMIT, source_commit),
+                source_commit=source_commit,
+                output=directory / "prices.json", catalog_decisions=decisions,
+                catalog_authority_output=directory / "authority.json",
+                overlay_file=[CATALOG_PATH], min_models=sync.DEFAULT_MIN_MODELS,
+                check=False,
+            )
+            with (
+                mock.patch.object(sync, "parse_args", return_value=args),
+                mock.patch.object(sync, "load_url", return_value=(source, "f" * 64)),
+                self.assertRaisesRegex(SystemExit, "conflicting pricing evidence"),
+            ):
+                sync.main()
+            self.assertEqual(decisions.read_bytes(), before)
+            self.assertFalse(args.output.exists())
+            self.assertFalse(args.catalog_authority_output.exists())
+
+    def test_refresh_does_not_hide_malformed_or_duplicate_decisions(self) -> None:
+        prices = {"known": {"litellm_provider": "other"}, "new": {"litellm_provider": "other"}}
+        duplicate = self.decision("other", "known", "unreviewed")
+        documents = [
+            None, {}, self.document([None]), self.document([{}]),
+            self.document([duplicate, duplicate]),
+        ]
+        for document in documents:
+            with self.subTest(document=document):
+                refreshed = sync.add_unreviewed_decisions(
+                    prices, document, "https://example.test/prices", "a" * 40,
+                    "b" * 64, date(2026, 10, 3),
+                )
+                with self.assertRaises(SystemExit):
+                    sync.build_catalog_authority(prices, refreshed)
+
+    def test_refresh_reuses_evidence_without_overwriting_a_conflicting_source(self) -> None:
+        prices = {"one": {"litellm_provider": "other"}}
+        original = self.document([])
+        refreshed = sync.add_unreviewed_decisions(
+            prices, original, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 3),
+        )
+        prices["two"] = {"litellm_provider": "other"}
+        again = sync.add_unreviewed_decisions(
+            prices, refreshed, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 4),
+        )
+        self.assertEqual(again["sources"], refreshed["sources"])
+        sync.build_catalog_authority(prices, again)
+        with self.assertRaisesRegex(SystemExit, "conflicting pricing evidence"):
+            sync.add_unreviewed_decisions(
+                prices, refreshed, "https://example.test/prices", "a" * 40,
+                "c" * 64, date(2026, 10, 4),
+            )
+
     def test_missing_and_duplicate_decisions_fail_closed(self) -> None:
         prices = {
             "known": {"litellm_provider": "other"},
@@ -772,11 +932,11 @@ class CatalogAuthorityTests(unittest.TestCase):
                     (entry["provider"], entry["pricing_key"])
                 )
 
-        self.assertEqual(authority["_metadata"]["total_entry_count"], 4555)
-        self.assertEqual(
-            target_counts,
-            {"callable": 171, "pricing_only": 409, "unreviewed": 76},
-        )
+        self.assertEqual(authority["_metadata"]["total_entry_count"], len(prices))
+        # Scheduled imports may add pending rows, but cannot change reviewed ones.
+        self.assertEqual(target_counts["callable"], 171)
+        self.assertEqual(target_counts["pricing_only"], 409)
+        self.assertGreaterEqual(target_counts["unreviewed"], 76)
         self.assertEqual(
             sorted(callable_with_explicit_contract),
             [
@@ -1006,6 +1166,98 @@ class OfficialPricingRegressionTests(unittest.TestCase):
             with self.subTest(model=key):
                 self.assertEqual(patched[key], row)
         self.assertEqual(patched["deepseek-flash"]["input_cost_per_token"], 0.00000015)
+
+
+class OffPeakImportTests(unittest.TestCase):
+    def row(self, **schedule):
+        return {
+            "input_cost_per_token": 4.0, "output_cost_per_token": 8.0,
+            "cache_read_input_token_cost": 1.0,
+            "off_peak_pricing": {"input_cost_per_token": 2.0, "output_cost_per_token": 4.0,
+                "cache_read_input_token_cost": 0.5, **schedule},
+        }
+
+    def test_weekend_and_weekday_windows_preserve_peak_and_low_rates(self):
+        row = self.row(windows=[
+            {"weekdays": ["saturday", "sunday"], "hours_utc": "00:00-00:00"},
+            *[{"weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"], "hours_utc": hours}
+              for hours in ("00:00-01:00", "04:00-06:00", "10:00-00:00")],
+        ])
+        result = sync.normalize_off_peak_pricing("test", row)
+        self.assertEqual(result["input_cost_per_token"], 2.0)
+        self.assertEqual(row["input_cost_per_token"], 4.0)
+        self.assertNotIn("off_peak_pricing", result)
+        self.assertEqual(result["time_of_use_pricing"]["peak_rates"]["input_cost_per_token"], 4.0)
+        self.assertEqual(result["time_of_use_pricing"]["peak_windows"], [
+            {"weekdays": [1, 2, 3, 4, 5], "start_hour": 1, "end_hour": 4},
+            {"weekdays": [1, 2, 3, 4, 5], "start_hour": 6, "end_hour": 10},
+        ])
+        self.assertEqual(sync.normalize_off_peak_pricing("test", result), result)
+
+    def test_daily_window_ending_at_midnight(self):
+        result = sync.normalize_off_peak_pricing("test", self.row(hours_utc="16:00-00:00"))
+        self.assertEqual(result["time_of_use_pricing"]["peak_windows"], [
+            {"weekdays": [1, 2, 3, 4, 5, 6, 7], "start_hour": 0, "end_hour": 16},
+        ])
+
+    def test_unrepresentable_schedule_and_invalid_rates_fail_closed(self):
+        for schedule in ({"hours_utc": "16:30-00:00"}, {"windows": []},
+                         {"windows": [{"weekdays": ["noday"], "hours_utc": "16:00-00:00"}]},
+                         {"hours_utc": "22:00-02:00"}, {"hours_utc": "16:00-24:00"},
+                         {"hours_utc": "invalid"},
+                         {"hours_utc": "16:00-00:00", "weekday_timezone": "Asia/Shanghai"},
+                         {"hours_utc": "16:00-00:00", "cache_creation_input_token_cost": 0.1},
+                         {"hours_utc": "16:00-00:00", "output_cost_per_reasoning_token": 0.1},
+                         {"hours_utc": "16:00-00:00", "windows": [
+                             {"weekdays": ["monday"], "hours_utc": "01:00-02:00"}]},
+                         {"windows": [{"weekdays": ["monday"], "hours_utc": "16:00-00:00",
+                                       "weekday_timezone": "Asia/Shanghai"}]}):
+            with self.subTest(schedule=schedule), self.assertRaises(SystemExit):
+                sync.normalize_off_peak_pricing("test", self.row(**schedule))
+        row = self.row(hours_utc="16:00-00:00")
+        row["off_peak_pricing"]["input_cost_per_token"] = None
+        with self.assertRaises(SystemExit):
+            sync.normalize_off_peak_pricing("test", row)
+
+    def test_off_peak_and_token_tiers_fail_closed(self):
+        for field in ("input_cost_per_token_above_128k_tokens",
+                      "output_cost_per_token_above_128k_tokens",
+                      "cache_read_input_token_cost_above_128k_tokens",
+                      "tiered_pricing"):
+            with self.subTest(field=field):
+                row = self.row(hours_utc="16:00-00:00")
+                row[field] = [{"input_cost_per_token": 30.0}] if field == "tiered_pricing" else 30.0
+                with self.assertRaisesRegex(SystemExit, "off_peak_pricing.*tier"):
+                    sync.normalize_off_peak_pricing("test", row)
+
+    def test_main_rejects_unsupported_off_peak_without_writing_outputs(self):
+        for update in ({"weekday_timezone": "Asia/Shanghai"}, {"hours_utc": "16:30-00:00"},
+                       {"cache_creation_input_token_cost": 0.1}, {"token_tier": 30.0}):
+            with self.subTest(update=update), tempfile.TemporaryDirectory() as temp_dir:
+                directory = pathlib.Path(temp_dir)
+                source = sync.model_entries(sync.load_json(CATALOG_PATH))
+                row = self.row(hours_utc="16:00-00:00")
+                row.update({"litellm_provider": "openrouter", "mode": "chat"})
+                if "token_tier" in update:
+                    row["input_cost_per_token_above_128k_tokens"] = update["token_tier"]
+                else:
+                    row["off_peak_pricing"].update(update)
+                source["unsupported-off-peak-test"] = row
+                outputs = [directory / name for name in ("prices.json", "authority.json", "decisions.json")]
+                for path, original in zip(outputs, (CATALOG_PATH, CATALOG_AUTHORITY_PATH, CATALOG_DECISIONS_PATH)):
+                    path.write_bytes(original.read_bytes())
+                before = {path: path.read_bytes() for path in outputs}
+                args = SimpleNamespace(
+                    source_catalog=None, source_url=sync.DEFAULT_SOURCE_URL,
+                    source_commit=sync.DEFAULT_SOURCE_COMMIT,
+                    output=outputs[0], catalog_authority_output=outputs[1], catalog_decisions=outputs[2],
+                    overlay_file=[CATALOG_PATH], min_models=sync.DEFAULT_MIN_MODELS, check=False,
+                )
+                with mock.patch.object(sync, "parse_args", return_value=args), \
+                     mock.patch.object(sync, "load_url", return_value=(source, "f" * 64)), \
+                     self.assertRaisesRegex(SystemExit, "off_peak_pricing"):
+                    sync.main()
+                self.assertEqual(before, {path: path.read_bytes() for path in outputs})
 
 
 if __name__ == "__main__":

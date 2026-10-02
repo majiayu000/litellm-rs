@@ -13,7 +13,7 @@ jobs:
       pull-requests: write
     env:
       UPSTREAM_REPO: BerriAI/litellm
-      UPSTREAM_REF: litellm_internal_staging
+      UPSTREAM_REF: main
 
     steps:
       - name: Checkout repository
@@ -61,6 +61,7 @@ jobs:
         run: |
           if git diff --quiet -- \
             config/model_prices_extended.json \
+            config/model_catalog_decisions.json \
             config/model_catalog_authority.json; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
           else
@@ -74,6 +75,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           add-paths: |
             config/model_prices_extended.json
+            config/model_catalog_decisions.json
             config/model_catalog_authority.json
           commit-message: "chore(pricing): refresh runtime catalog from LiteLLM"
           title: "chore(pricing): refresh runtime catalog from LiteLLM"
@@ -86,11 +88,12 @@ jobs:
             - Immutable source commit: `${{ steps.upstream.outputs.source_commit }}`
             - Runtime catalog: `config/model_prices_extended.json`
             - Generated exact classification authority: `config/model_catalog_authority.json`
-            - Reviewed decisions: `config/model_catalog_decisions.json` (not changed automatically)
+            - Decisions: `config/model_catalog_decisions.json` (new rows are unreviewed; existing decisions are preserved)
             - Official and compatibility overrides: validated and applied after upstream rows
 
             Review the catalog diff before merging. First-party overrides are retained
             when LiteLLM differs from provider documentation. Classification is exact,
-            provider-scoped, and fails if a pricing row lacks an explicit decision.
+            provider-scoped, and never promotes a new pricing row to callable.
+            Stale or invalid existing classifications still require manual review.
           branch: auto-update-runtime-model-prices
           delete-branch: true

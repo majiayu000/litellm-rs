@@ -10,6 +10,7 @@ catalog used at runtime.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -26,7 +27,7 @@ from urllib.request import urlopen
 from model_catalog_authority import build_catalog_authority
 
 
-DEFAULT_SOURCE_COMMIT = "025292e75bda0381174a751da320645c971e06c7"
+DEFAULT_SOURCE_COMMIT = "a5fef4b4e68963640c3062d464509129ec8863c6"
 DEFAULT_SOURCE_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/"
     f"{DEFAULT_SOURCE_COMMIT}/model_prices_and_context_window.json"
@@ -650,6 +651,79 @@ def apply_official_overrides(
     return patched
 
 
+def normalize_off_peak_pricing(model: str, row: dict[str, Any]) -> dict[str, Any]:
+    """Convert upstream UTC hour windows to the runtime's peak-window format."""
+    if "off_peak_pricing" not in row:
+        return row
+    off_peak = row["off_peak_pricing"]
+    if not isinstance(off_peak, dict) or "time_of_use_pricing" in row:
+        raise SystemExit(f"{model!r} has invalid or conflicting off_peak_pricing")
+    fields = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    if (
+        set(off_peak) - {*fields, "hours_utc", "windows", "weekday_timezone"}
+        or off_peak.get("weekday_timezone", "UTC") != "UTC"
+        or ("hours_utc" in off_peak and "windows" in off_peak)
+    ):
+        raise SystemExit(f"{model!r}.off_peak_pricing has unsupported rate or schedule fields")
+    # Upstream off-peak rates override token tiers; runtime tiers override time-of-use rates.
+    if "tiered_pricing" in row or any(
+        key.startswith(tuple(f"{field}_above_" for field in fields)) and key.endswith("_tokens")
+        for key in row
+    ):
+        raise SystemExit(f"{model!r}.off_peak_pricing cannot be combined with token tiers")
+    for rates in (row, off_peak):
+        for field in fields:
+            rate = rates.get(field)
+            if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate < 0:
+                raise SystemExit(f"{model!r}.off_peak_pricing requires a finite non-negative {field} in both rate sets")
+    windows = off_peak.get("windows")
+    if windows is None:
+        windows = [{"hours_utc": off_peak.get("hours_utc"), "weekdays": [
+            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+        ]}]
+    if not isinstance(windows, list) or not windows:
+        raise SystemExit(f"{model!r}.off_peak_pricing.windows must be a non-empty array")
+    day_names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    off_hours: set[tuple[int, int]] = set()
+    for window in windows:
+        if not isinstance(window, dict) or set(window) - {"hours_utc", "weekdays"}:
+            raise SystemExit(f"{model!r}.off_peak_pricing window has unsupported fields")
+        hours = window.get("hours_utc")
+        weekdays = window.get("weekdays")
+        match = re.fullmatch(r"([01][0-9]|2[0-3]):00-([01][0-9]|2[0-3]):00", hours) if isinstance(hours, str) else None
+        if not match or not isinstance(weekdays, list) or not weekdays or any(day not in day_names for day in weekdays):
+            raise SystemExit(f"{model!r}.off_peak_pricing requires supported UTC hour windows and weekday names")
+        start, end = int(match[1]), int(match[2]) or 24
+        if start >= end:
+            raise SystemExit(f"{model!r}.off_peak_pricing requires split windows for spans across midnight")
+        for day in weekdays:
+            off_hours.update((day_names.index(day) + 1, hour) for hour in range(start, end))
+    grouped: dict[tuple[int, int], list[int]] = {}
+    for day in range(1, 8):
+        hour = 0
+        while hour < 24:
+            if (day, hour) in off_hours:
+                hour += 1
+                continue
+            start = hour
+            while hour < 24 and (day, hour) not in off_hours:
+                hour += 1
+            grouped.setdefault((start, hour), []).append(day)
+    converted = dict(row)
+    del converted["off_peak_pricing"]
+    converted.update({field: off_peak[field] for field in fields})
+    if grouped:
+        converted["time_of_use_pricing"] = {
+            "timezone": "UTC",
+            "peak_windows": [
+                {"weekdays": days, "start_hour": start, "end_hour": end}
+                for (start, end), days in sorted(grouped.items())
+            ],
+            "peak_rates": {field: row[field] for field in fields},
+        }
+    return converted
+
+
 def render_catalog(
     source_data: dict[str, Any],
     source_entries: dict[str, dict[str, Any]],
@@ -686,6 +760,74 @@ def render_catalog(
 
     data["_metadata"]["total_model_count"] = len(source_entries) + overlay_add_count
     return data, len(overlay_entries)
+
+
+def add_unreviewed_decisions(
+    pricing_entries: dict[str, dict[str, Any]],
+    decisions: dict[str, Any],
+    source_url: str,
+    source_commit: str,
+    source_sha256: str,
+    as_of_date: date,
+) -> dict[str, Any]:
+    """Record new pricing identities without modifying existing review decisions.
+
+    The authority builder remains responsible for validating the result. Stale
+    decisions still require explicit review rather than silent removal.
+    """
+    if not isinstance(decisions, dict):
+        return decisions
+    entries = decisions.get("entries")
+    sources = decisions.get("sources")
+    if not isinstance(entries, list) or not isinstance(sources, dict):
+        return decisions
+    if any(not isinstance(entry, dict) for entry in entries):
+        return decisions
+    # Leave malformed identities to the normal authority validation below.
+    if any(
+        not isinstance(entry.get("provider"), str)
+        or not isinstance(entry.get("pricing_key"), str)
+        for entry in entries
+    ):
+        return decisions
+    known = {(entry["provider"], entry["pricing_key"]) for entry in entries}
+    missing = [
+        (row.get("litellm_provider"), key)
+        for key, row in sorted(pricing_entries.items())
+        if (row.get("litellm_provider"), key) not in known
+    ]
+    if not missing:
+        return decisions
+    result = copy.deepcopy(decisions)
+    source_id = f"upstream-pricing-{source_commit}"
+    source = {
+        "kind": "runtime_pricing_row_pending_provider_review",
+        "location": source_url,
+        "reviewed_on": as_of_date.isoformat(),
+        "revision": source_commit,
+        "sha256": source_sha256,
+    }
+    existing_source = sources.get(source_id)
+    if source_id in sources:
+        # A prior import of this commit must retain its original observation date.
+        source["reviewed_on"] = (
+            existing_source.get("reviewed_on")
+            if isinstance(existing_source, dict)
+            else None
+        )
+        if existing_source != source:
+            raise SystemExit(f"conflicting pricing evidence source {source_id!r}")
+    result["sources"][source_id] = source
+    result["entries"].extend(
+        {
+            "provider": provider,
+            "pricing_key": key,
+            "decision": "unreviewed",
+            "evidence_sources": [source_id],
+        }
+        for provider, key in missing
+    )
+    return result
 
 
 def write_catalog(path: Path, data: dict[str, Any]) -> None:
@@ -783,10 +925,23 @@ def main() -> int:
         source_commit,
         source_sha256,
     )
+    for model, row in model_entries(data).items():
+        data[model] = normalize_off_peak_pricing(model, row)
     merged_entries = model_entries(data)
     validate_entries(merged_entries, args.min_models)
     validate_official_contracts(merged_entries, as_of_date)
     decisions = load_json(args.catalog_decisions)
+    if not args.check:
+        upstream_identities = {
+            key: row
+            for key, row in merged_entries.items()
+            if key in source_entries
+            and row["litellm_provider"] == source_entries[key]["litellm_provider"]
+        }
+        decisions = add_unreviewed_decisions(
+            upstream_identities, decisions, source_url, source_commit,
+            source_sha256, as_of_date,
+        )
     catalog_authority = build_catalog_authority(merged_entries, decisions)
     authority_metadata = catalog_authority["_metadata"]
     data["_metadata"].update(
@@ -828,6 +983,7 @@ def main() -> int:
             )
             return 1
     else:
+        write_catalog(args.catalog_decisions, decisions)
         write_catalog(args.catalog_authority_output, catalog_authority)
         write_catalog(args.output, data)
 
