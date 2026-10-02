@@ -890,14 +890,23 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        crate::core::providers::openai::execute_text_to_speech(
+        let together_pcm = matches!(self.provider_name.as_str(), "together" | "together_ai")
+            && request.response_format.as_deref() == Some("pcm");
+        if together_pcm {
+            request.response_format = Some("raw".into());
+        }
+        let mut response = crate::core::providers::openai::execute_text_to_speech(
             self.config.base.clone(),
             &self.config.get_api_base(),
             self.get_request_headers(),
             request,
             PROVIDER_NAME,
         )
-        .await
+        .await?;
+        if together_pcm {
+            response.content_type = "audio/pcm".into();
+        }
+        Ok(response)
     }
     async fn health_check(&self) -> HealthStatus {
         let url = format!("{}/models", self.config.get_api_base());

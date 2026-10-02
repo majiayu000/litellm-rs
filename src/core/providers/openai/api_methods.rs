@@ -462,9 +462,30 @@ fn audio_file_form(model: String, file: Vec<u8>, filename: String) -> multipart:
         filename
     };
 
-    multipart::Form::new()
-        .text("model", model)
-        .part("file", multipart::Part::bytes(file).file_name(filename))
+    let extension = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "wav" => "audio/wav",
+        "webm" => "audio/webm",
+        "flac" => "audio/flac",
+        "m4a" | "mp4" => "audio/mp4",
+        "oga" | "ogg" => "audio/ogg",
+        "mp3" | "mpeg" | "mpga" => "audio/mpeg",
+        "aac" => "audio/aac",
+        "opus" => "audio/opus",
+        _ => "application/octet-stream",
+    };
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
+    multipart::Form::new().text("model", model).part(
+        "file",
+        multipart::Part::bytes(file)
+            .file_name(filename)
+            .headers(headers),
+    )
 }
 
 trait OptionalMultipartText {

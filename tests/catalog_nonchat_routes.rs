@@ -213,6 +213,10 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
                 "{body}"
             );
             assert!(body.contains("test-wave-data"));
+            assert!(
+                body.to_ascii_lowercase()
+                    .contains("content-type: audio/wav")
+            );
             assert!(body.contains("test-model"));
             assert!(body.find("name=\"model\"").unwrap() < body.find("name=\"file\"").unwrap());
         }
@@ -293,5 +297,25 @@ async fn together_audio_preserves_retry_after() {
             }
         ));
     }
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn together_pcm_uses_raw_wire_format_and_pcm_response_type() {
+    let (router, upstream, handle) = fixture("together_ai", StatusCode::OK).await;
+    let speech = serde_json::from_value(
+        json!({"model":"test-model","input":"hello","voice":"test","response_format":"pcm"}),
+    )
+    .unwrap();
+    let response = selected(&router, ProviderCapability::TextToSpeech)
+        .text_to_speech(speech, RequestContext::default())
+        .await
+        .unwrap();
+    assert_eq!(response.content_type, "audio/pcm");
+    let calls = upstream.seen.lock().unwrap().clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&calls[0].1).unwrap()["response_format"],
+        "raw"
+    );
     handle.stop(false).await;
 }
