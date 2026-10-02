@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(response) => {
-            println!("\nMistral Response:");
+            println!("\nGemma 4 Response:");
             if let Some(choice) = response.choices.first()
                 && let Some(ref content) = choice.message.content
             {
@@ -115,15 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(e) => {
-            println!("Mistral request failed: {}", e);
+            println!("Gemma 4 request failed: {}", e);
         }
     }
 
-    // Test with Code Llama for code generation
-    println!("\n=== Testing Code Generation with Code Llama ===");
+    // Test with Kimi K2.7 Code for code generation
+    println!("\n=== Testing Code Generation with Kimi K2.7 Code ===");
 
     let code_request = ChatRequest {
-        model: "@cf/meta/codellama-7b-instruct".to_string(),
+        model: "@cf/moonshotai/kimi-k2.7-code".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text(
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(response) => {
-            println!("\nCode Llama Response:");
+            println!("\nKimi K2.7 Code Response:");
             if let Some(choice) = response.choices.first()
                 && let Some(ref content) = choice.message.content
             {
@@ -154,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Test cost calculation (should be 0 for Cloudflare)
+    // Published-rate estimate before account allowances or credits
     println!("\n=== Testing Cost Calculation ===");
 
     match provider
@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(cost) => println!(
-            "Cost for 1000 input + 500 output tokens: ${:.4} (Free on Cloudflare Workers!)",
+            "Estimated cost for 1000 input + 500 output tokens: ${:.6} before account allowances",
             cost
         ),
         Err(e) => println!("Cost calculation failed: {}", e),
