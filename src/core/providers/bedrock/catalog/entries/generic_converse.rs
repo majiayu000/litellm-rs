@@ -472,8 +472,8 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             family,
             BedrockApiType::Converse,
             if id == "amazon.nova-premier-v1:0" {
-                ModelLifecycle::Deprecated {
-                    deprecation_date: "2026-09-14",
+                ModelLifecycle::Retired {
+                    retirement_date: "2026-09-14",
                 }
             } else {
                 ModelLifecycle::Live

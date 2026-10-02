@@ -46,7 +46,14 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             BedrockVendor::Cohere,
             BedrockModelFamily::Cohere,
             BedrockApiType::Invoke,
-            ModelLifecycle::Live,
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html
+            if matches!(*id, "cohere.command-r-v1:0" | "cohere.command-r-plus-v1:0") {
+                ModelLifecycle::Retired {
+                    retirement_date: "2026-08-19",
+                }
+            } else {
+                ModelLifecycle::Live
+            },
             EndpointSupport::INVOKE,
             NO_PROFILES,
             ModelLimits {

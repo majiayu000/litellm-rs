@@ -710,8 +710,8 @@ mod tests {
 
         assert!(!models.is_empty());
         let model_ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-        assert!(model_ids.contains(&"gpt-4o"));
-        assert!(model_ids.contains(&"claude-3.5-sonnet"));
+        assert!(model_ids.contains(&"gpt-6-sol"));
+        assert!(model_ids.contains(&"claude-opus-5.5"));
     }
 
     #[tokio::test]
@@ -720,16 +720,16 @@ mod tests {
             .await
             .expect("provider should build");
 
-        let params = provider.get_supported_openai_params("gpt-4o");
+        let params = provider.get_supported_openai_params("gpt-6-sol");
         assert!(params.contains(&"temperature"));
         assert!(params.contains(&"max_tokens"));
         assert!(params.contains(&"tools"));
-        assert!(!params.contains(&"reasoning_effort"));
-
-        let params = provider.get_supported_openai_params("o1-preview");
         assert!(params.contains(&"reasoning_effort"));
 
-        let params = provider.get_supported_openai_params("claude-3-7-sonnet");
+        let params = provider.get_supported_openai_params("gpt-6-astra");
+        assert!(params.contains(&"reasoning_effort"));
+
+        let params = provider.get_supported_openai_params("claude-opus-5.5");
         assert!(params.contains(&"thinking"));
         assert!(params.contains(&"reasoning_effort"));
     }

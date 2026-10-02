@@ -96,8 +96,10 @@ pub fn get_model_config_for_model_id(
 ) -> Result<&'static super::model_config::ModelConfig, crate::core::providers::ProviderError> {
     let parsed = parse_bedrock_model_id(model_id);
     for lookup_id in &parsed.metadata_lookup_ids {
-        if let Ok(config) = super::model_config::get_model_config(lookup_id) {
-            return Ok(config);
+        // A known historical catalog entry must not fall through to the
+        // runtime-profile defaults after its routable configuration is removed.
+        if super::catalog::get_catalog_entry(lookup_id).is_some() {
+            return super::model_config::get_model_config(lookup_id);
         }
     }
 
@@ -789,5 +791,16 @@ mod govcloud_profile_tests {
                 .max_context_length,
             128_000
         );
+    }
+    #[test]
+    fn retired_models_cannot_reenter_through_profile_or_arn_fallback() {
+        for model in [
+            "amazon.nova-premier-v1:0",
+            "bedrock/us.amazon.nova-premier-v1:0",
+            "us.anthropic.claude-3-haiku-20240307-v1:0",
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-premier-v1:0",
+        ] {
+            assert!(get_model_config_for_model_id(model).is_err(), "{model}");
+        }
     }
 }

@@ -93,6 +93,11 @@ pub enum ModelLifecycle {
     Live,
     /// Preview / early access — usage may be gated by AWS.
     Preview,
+    /// Past AWS end-of-life; retained only for historical metadata and pricing.
+    Retired {
+        /// Provider-specific end-of-life date, verified during catalog review.
+        retirement_date: &'static str,
+    },
     /// Deprecated by AWS; still callable until the deprecation date.
     Deprecated {
         /// ISO-8601 date (`YYYY-MM-DD`) on which AWS will retire the model.

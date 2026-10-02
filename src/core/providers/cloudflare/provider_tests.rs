@@ -183,7 +183,7 @@ async fn test_provider_capabilities_method() {
 #[tokio::test]
 async fn test_provider_supported_openai_params() {
     let provider = create_test_provider().await;
-    let params = provider.get_supported_openai_params("@cf/meta/llama-3-8b-instruct");
+    let params = provider.get_supported_openai_params("@cf/openai/gpt-oss-120b");
 
     assert!(params.contains(&"temperature"));
     assert!(params.contains(&"top_p"));
@@ -228,7 +228,7 @@ async fn test_transform_request() {
     let provider = CloudflareProvider::new(config).await.unwrap();
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
@@ -261,7 +261,7 @@ async fn test_transform_request_with_top_p() {
     let provider = create_test_provider().await;
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
@@ -281,7 +281,7 @@ async fn test_transform_request_with_streaming() {
     let provider = create_test_provider().await;
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
@@ -300,7 +300,7 @@ async fn test_transform_request_multiple_messages() {
     let provider = create_test_provider().await;
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![
             ChatMessage {
                 role: MessageRole::System,
@@ -333,7 +333,7 @@ async fn test_transform_request_no_optional_params() {
     let provider = create_test_provider().await;
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
@@ -360,7 +360,7 @@ async fn test_transform_response_success() {
     let result = provider
         .transform_response(
             &response_bytes,
-            "@cf/meta/llama-3-8b-instruct",
+            "@cf/openai/gpt-oss-120b",
             "test-request-id",
         )
         .await;
@@ -368,7 +368,7 @@ async fn test_transform_response_success() {
     assert!(result.is_ok());
     let chat_response = result.unwrap();
     assert_eq!(chat_response.id, "test-request-id");
-    assert_eq!(chat_response.model, "@cf/meta/llama-3-8b-instruct");
+    assert_eq!(chat_response.model, "@cf/openai/gpt-oss-120b");
     assert!(!chat_response.choices.is_empty());
 }
 
@@ -385,7 +385,7 @@ async fn test_transform_response_missing_content_is_an_error() {
     let result = provider
         .transform_response(
             &response_bytes,
-            "@cf/meta/llama-3-8b-instruct",
+            "@cf/openai/gpt-oss-120b",
             "test-request-id",
         )
         .await;
@@ -482,11 +482,7 @@ async fn test_transform_response_invalid_json() {
     let response_bytes = b"not valid json";
 
     let result = provider
-        .transform_response(
-            response_bytes,
-            "@cf/meta/llama-3-8b-instruct",
-            "test-request-id",
-        )
+        .transform_response(response_bytes, "@cf/openai/gpt-oss-120b", "test-request-id")
         .await;
 
     assert!(result.is_err());
@@ -503,7 +499,7 @@ async fn test_map_openai_params_passthrough() {
     params.insert("max_tokens".to_string(), serde_json::json!(100));
 
     let result = provider
-        .map_openai_params(params.clone(), "@cf/meta/llama-3-8b-instruct")
+        .map_openai_params(params.clone(), "@cf/openai/gpt-oss-120b")
         .await;
 
     assert!(result.is_ok());
@@ -518,7 +514,7 @@ async fn test_calculate_cost_known_model() {
     let provider = create_test_provider().await;
 
     let cost = provider
-        .calculate_cost("@cf/meta/llama-3-8b-instruct", 1000, 500)
+        .calculate_cost("@cf/openai/gpt-oss-120b", 1000, 500)
         .await;
 
     assert!(cost.is_ok());
@@ -540,7 +536,7 @@ async fn test_calculate_cost_unknown_model() {
 fn chat_response_json(content: &str) -> serde_json::Value {
     serde_json::json!({
         "id": "test-request-id", "object": "chat.completion", "created": 1,
-        "model": "@cf/meta/llama-3-8b-instruct",
+        "model": "@cf/openai/gpt-oss-120b",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
     })
@@ -765,7 +761,7 @@ async fn test_transform_request_trait() {
     let provider = create_test_provider().await;
 
     let request = ChatRequest {
-        model: "@cf/meta/llama-3-8b-instruct".to_string(),
+        model: "@cf/openai/gpt-oss-120b".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),

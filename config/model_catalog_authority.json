@@ -1,10 +1,10 @@
 {
   "_metadata": {
     "schema_version": 1,
-    "revision": "model-refresh-20261001",
-    "decision_source_sha256": "8073af6cce6bfc498535bd83bcb74631e380077f5aa236de4cb9595e857d947b",
+    "revision": "model-retirement-review-20261003",
+    "decision_source_sha256": "b6133203f4a8ef9afb0d8a45a532bd67be4d45cae021f05357b64a7271ce47db",
     "pricing_universe_sha256": "d742cde2ad856944b98a883392dad41c9cf38fd7ecc0715b8a7bada94f4eb109",
-    "classification_sha256": "1d2a61367ab0b245f641c7cef1f605c1e1059124e645d4a8eaca5ec94fa47981",
+    "classification_sha256": "964f34907865710c3755fa7664510154e6eda3aeb130ec0976dd06ef3ed71123",
     "total_entry_count": 4569,
     "enforced_providers": [
       "azure",
@@ -73,8 +73,8 @@
         "unreviewed": 0
       },
       "azure_ai": {
-        "callable": 38,
-        "pricing_only": 39,
+        "callable": 36,
+        "pricing_only": 41,
         "unreviewed": 64
       },
       "azure_text": {
@@ -378,8 +378,8 @@
         "unreviewed": 29
       },
       "openai": {
-        "callable": 129,
-        "pricing_only": 69,
+        "callable": 115,
+        "pricing_only": 83,
         "unreviewed": 12
       },
       "openrouter": {
@@ -5376,22 +5376,22 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/MAI-Image-2.5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "official-retirements-azure-20261003"
       ],
-      "catalog_model_id": "MAI-Image-2.5",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-10-01, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/MAI-Image-2.5-Flash",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "official-retirements-azure-20261003"
       ],
-      "catalog_model_id": "MAI-Image-2.5-Flash",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-10-01, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "azure_ai",
@@ -24642,12 +24642,12 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-3.5-turbo-1106",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-014"
+        "evidence-014",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-3.5-turbo-1106",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-09-28, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -24996,22 +24996,22 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-5-chat-latest",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-034"
+        "evidence-034",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5-chat-latest",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-codex",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-035"
+        "evidence-035",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5-codex",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -25112,42 +25112,42 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-5.1-chat-latest",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-040"
+        "evidence-040",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.1-chat-latest",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.1-codex",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-041"
+        "evidence-041",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.1-codex",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.1-codex-max",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-042"
+        "evidence-042",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.1-codex-max",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.1-codex-mini",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-043"
+        "evidence-043",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.1-codex-mini",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -25172,22 +25172,22 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-5.2-chat-latest",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-045"
+        "evidence-045",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.2-chat-latest",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-08-10, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.2-codex",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-046"
+        "evidence-046",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.2-codex",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -25212,12 +25212,12 @@
     {
       "provider": "openai",
       "pricing_key": "gpt-5.3-chat-latest",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-048"
+        "evidence-048",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "gpt-5.3-chat-latest",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-08-10, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -26138,12 +26138,12 @@
     {
       "provider": "openai",
       "pricing_key": "o3-deep-research",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-082"
+        "evidence-082",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "o3-deep-research",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -26208,12 +26208,12 @@
     {
       "provider": "openai",
       "pricing_key": "o4-mini-deep-research",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-086"
+        "evidence-086",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "o4-mini-deep-research",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-07-23, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
@@ -26272,22 +26272,22 @@
     {
       "provider": "openai",
       "pricing_key": "sora-2",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-088"
+        "evidence-088",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "sora-2",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-09-24, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",
       "pricing_key": "sora-2-pro",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-089"
+        "evidence-089",
+        "official-retirements-openai-20261003"
       ],
-      "catalog_model_id": "sora-2-pro",
-      "aliases": []
+      "reason": "The provider's published shutdown/retirement date is 2026-09-24, before the 2026-10-03 review. Retain historical pricing without advertising current inference support."
     },
     {
       "provider": "openai",

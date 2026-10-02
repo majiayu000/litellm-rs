@@ -221,3 +221,31 @@ fn model_info(id: &str) -> ModelInfo {
         metadata: std::collections::HashMap::new(),
     }
 }
+
+#[test]
+fn retained_historical_prices_do_not_advertise_retired_models() {
+    let registry = get_openai_registry();
+    let prices = crate::core::pricing::get_pricing_db();
+    for model in [
+        "gpt-5-codex",
+        "gpt-5.2-codex",
+        "gpt-5.2-chat-latest",
+        "o3-deep-research",
+        "sora-2",
+        "gpt-3.5-turbo-1106",
+        "dall-e-3",
+    ] {
+        assert!(
+            prices.get_model_info(model).is_some(),
+            "historical price missing for {model}"
+        );
+        assert!(
+            registry.get_model_spec(model).is_none(),
+            "retired model advertised: {model}"
+        );
+    }
+    assert!(registry.get_model_spec("gpt-4o-audio-preview").is_none());
+    // Deprecated models with future shutdown dates are still callable.
+    assert!(registry.get_model_spec("gpt-5.1").is_some());
+    assert!(registry.get_model_spec("gpt-6.1-sol").is_some());
+}

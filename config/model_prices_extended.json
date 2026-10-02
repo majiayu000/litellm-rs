@@ -220,9 +220,9 @@
       "yi-medium"
     ],
     "total_model_count": 4569,
-    "catalog_decision_revision": "model-refresh-20261001",
-    "catalog_decision_source_sha256": "8073af6cce6bfc498535bd83bcb74631e380077f5aa236de4cb9595e857d947b",
-    "catalog_authority_sha256": "1d2a61367ab0b245f641c7cef1f605c1e1059124e645d4a8eaca5ec94fa47981",
+    "catalog_decision_revision": "model-retirement-review-20261003",
+    "catalog_decision_source_sha256": "b6133203f4a8ef9afb0d8a45a532bd67be4d45cae021f05357b64a7271ce47db",
+    "catalog_authority_sha256": "964f34907865710c3755fa7664510154e6eda3aeb130ec0976dd06ef3ed71123",
     "catalog_authority_entry_count": 4569,
     "catalog_authority_enforced_providers": [
       "azure",
@@ -291,8 +291,8 @@
         "unreviewed": 0
       },
       "azure_ai": {
-        "callable": 38,
-        "pricing_only": 39,
+        "callable": 36,
+        "pricing_only": 41,
         "unreviewed": 64
       },
       "azure_text": {
@@ -596,8 +596,8 @@
         "unreviewed": 29
       },
       "openai": {
-        "callable": 129,
-        "pricing_only": 69,
+        "callable": 115,
+        "pricing_only": 83,
         "unreviewed": 12
       },
       "openrouter": {

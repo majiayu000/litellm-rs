@@ -232,7 +232,17 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             BedrockVendor::Anthropic,
             BedrockModelFamily::Claude,
             BedrockApiType::Converse,
-            ModelLifecycle::Live,
+            // AWS provider-specific EOL, not Anthropic's API retirement date.
+            if matches!(
+                *id,
+                "anthropic.claude-3-haiku-20240307" | "anthropic.claude-3-haiku-20240307-v1:0"
+            ) {
+                ModelLifecycle::Retired {
+                    retirement_date: "2026-09-10",
+                }
+            } else {
+                ModelLifecycle::Live
+            },
             EndpointSupport::CONVERSE,
             COMMON_GEO,
             ModelLimits {
@@ -280,8 +290,8 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             BedrockVendor::Anthropic,
             BedrockModelFamily::Claude,
             BedrockApiType::Invoke,
-            ModelLifecycle::Deprecated {
-                deprecation_date: "2025-07-21",
+            ModelLifecycle::Retired {
+                retirement_date: "2025-07-21",
             },
             EndpointSupport::INVOKE,
             NO_PROFILES,

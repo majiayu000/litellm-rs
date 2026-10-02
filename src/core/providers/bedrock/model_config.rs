@@ -3,7 +3,7 @@
 //! Defines model families, capabilities, and routing configuration
 //! for all supported Bedrock models.
 
-use super::catalog::all_entries;
+use super::catalog::{ModelLifecycle, all_entries};
 use crate::core::providers::unified_provider::ProviderError;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -53,6 +53,7 @@ pub struct ModelConfig {
 static MODEL_CONFIGS: LazyLock<HashMap<&'static str, ModelConfig>> = LazyLock::new(|| {
     all_entries()
         .iter()
+        .filter(|entry| !matches!(entry.lifecycle, ModelLifecycle::Retired { .. }))
         .map(|entry| (entry.model_id, entry.to_model_config()))
         .collect()
 });

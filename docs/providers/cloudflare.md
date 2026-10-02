@@ -35,3 +35,5 @@ Sources checked 2026-10-03:
 
 Verification uses a local HTTP server for wire requests, responses, streaming,
 usage and error behavior. It does not claim live access to a Cloudflare account.
+
+The built-in catalog and `CloudflareModel` enum now list the eight verified current cards above. The four models in Cloudflare's [May 30, 2026 retirement notice](https://developers.cloudflare.com/changelog/post/2026-05-08-planned-model-deprecations/) previously advertised here (Llama 3 8B Instruct, Llama 2 7B int8, Mistral 7B v0.1 and Phi-2) have been removed. Six other legacy zero-price entries without a card in the [current public catalog](https://developers.cloudflare.com/workers-ai/models/) are no longer advertised as verified or free. Their omission is not a claim that every account must reject the ID. Use the current enum variants; obsolete variants are removed. Historical billing rows remain separate from this callable catalog.
