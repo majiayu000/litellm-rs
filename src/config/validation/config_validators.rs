@@ -99,6 +99,10 @@ impl Validate for GatewayConfig {
             Validate::validate(provider)?;
         }
 
+        #[cfg(feature = "a2a")]
+        for (name, agent) in &self.a2a_agents {
+            agent.validate_http_gateway(name)?;
+        }
         Self::validate_model_alias_map(&self.model_aliases)?;
         Validate::validate(&self.router)?;
         Validate::validate(&self.storage)?;

@@ -257,6 +257,10 @@ pub struct GatewayConfig {
     pub server: ServerConfig,
     /// Provider configurations
     pub providers: Vec<ProviderConfig>,
+    /// Named A2A 1.0 JSON-RPC agents exposed by the HTTP gateway.
+    #[cfg(feature = "a2a")]
+    #[serde(default)]
+    pub a2a_agents: HashMap<String, crate::core::a2a::config::AgentConfig>,
     /// Public model aliases resolved by the runtime router
     #[serde(default)]
     pub model_aliases: HashMap<String, String>,
@@ -302,6 +306,8 @@ impl Default for GatewayConfig {
             schema_version: default_schema_version(),
             server: ServerConfig::default(),
             providers: Vec::new(),
+            #[cfg(feature = "a2a")]
+            a2a_agents: HashMap::new(),
             model_aliases: HashMap::new(),
             router: GatewayRouterConfig::default(),
             storage: StorageConfig::default(),
@@ -342,6 +348,8 @@ impl GatewayConfig {
         }
 
         self.providers = provider_map.into_values().collect();
+        #[cfg(feature = "a2a")]
+        self.a2a_agents.extend(other.a2a_agents);
         self.model_aliases.extend(other.model_aliases);
         self.router = self.router.merge(other.router);
         self.storage = self

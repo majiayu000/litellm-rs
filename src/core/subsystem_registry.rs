@@ -79,7 +79,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "a2a",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: a2a"),
-        note: "A2A library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
+        note: "Opt-in A2A 1.0 JSON-RPC HTTP gateway with caller-bound tasks and Streamable events; ownership is process-local.",
     },
     CoreSubsystem {
         name: "analytics",

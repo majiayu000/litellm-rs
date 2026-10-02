@@ -250,6 +250,12 @@ impl HttpServer {
             .configure(routes::admin_dashboard::configure_routes)
             .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
+            .configure(|cfg| {
+                #[cfg(feature = "a2a")]
+                routes::a2a::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "a2a"))]
+                let _ = cfg;
+            })
     }
 
     fn validate_cors_config(cors_config: &CorsConfig) -> Result<()> {
@@ -292,6 +298,14 @@ impl HttpServer {
             cors = cors.allowed_headers(headers);
         }
 
+        #[cfg(feature = "a2a")]
+        {
+            cors = cors
+                .allowed_header("x-api-key")
+                .allowed_header("a2a-version")
+                .allowed_header("a2a-extensions")
+                .expose_headers(["a2a-version", "a2a-extensions", "retry-after"]);
+        }
         cors = cors.max_age(cors_config.max_age as usize);
 
         if cors_config.allow_credentials {

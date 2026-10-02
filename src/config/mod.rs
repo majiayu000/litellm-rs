@@ -361,6 +361,20 @@ impl Config {
             redact_string(&mut provider.api_key);
         }
 
+        #[cfg(feature = "a2a")]
+        for agent in gateway.a2a_agents.values_mut() {
+            redact_optional_string(&mut agent.api_key);
+            for value in agent.headers.values_mut() {
+                redact_string(value);
+            }
+            if let Ok(mut url) = url::Url::parse(&agent.url) {
+                url.set_query(None);
+                url.set_fragment(None);
+                let _ = url.set_username("");
+                let _ = url.set_password(None);
+                agent.url = url.to_string();
+            }
+        }
         redact_string(&mut gateway.auth.jwt_secret);
         redact_optional_string(&mut gateway.auth.api_key_hmac_secret);
 
