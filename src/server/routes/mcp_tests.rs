@@ -78,6 +78,8 @@ async fn fixture(auth: bool) -> (web::Data<AppState>, Calls, actix_web::dev::Ser
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.pricing.source = None;
+    config.gateway.server.cors.enabled = true;
+    config.gateway.server.cors.allowed_origins = vec!["https://mcp.example.test".into()];
     let server = crate::server::http::HttpServer::new(&config).await.unwrap();
     let mut state = server.state().clone();
     config.gateway.mcp_servers.insert(
@@ -559,8 +561,23 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
     );
     state.storage.db().create_api_key(&key).await.unwrap();
     let app = test::init_service(crate::server::http::HttpServer::create_app(state)).await;
+    let preflight = test::TestRequest::default()
+        .method(Method::OPTIONS)
+        .uri("/docs/mcp")
+        .insert_header(("origin", "https://mcp.example.test"))
+        .insert_header(("access-control-request-method", "POST"))
+        .insert_header((
+            "access-control-request-headers",
+            "x-api-key,content-type,mcp-session-id,mcp-protocol-version,last-event-id",
+        ))
+        .to_request();
+    let preflight = test::call_service(&app, preflight).await;
+    let status = preflight.status();
+    let body = test::read_body(preflight).await;
+    assert!(status.is_success(), "preflight {status}: {body:?}");
     let req = test::TestRequest::post()
         .uri("/docs/mcp")
+        .insert_header(("origin", "https://mcp.example.test"))
         .insert_header(("x-api-key", raw))
         .insert_header(("accept", "application/json, text/event-stream"))
         .set_json(json!({"jsonrpc":"2.0","method":"initialize","id":1}))
@@ -568,7 +585,172 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
     let response = test::call_service(&app, req).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.headers().contains_key("mcp-session-id"));
+    let exposed = response
+        .headers()
+        .get("access-control-expose-headers")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    for name in ["mcp-session-id", "mcp-protocol-version", "retry-after"] {
+        assert!(exposed.contains(name));
+    }
     drop(test::read_body(response).await);
     assert_eq!(calls.lock().unwrap().len(), 1);
+    server.stop(true).await;
+}
+
+#[actix_web::test]
+async fn capacity_is_reserved_before_upstream_and_cancellation_releases_it() {
+    let (state, calls, server) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    {
+        let mut entries = state.mcp_sessions.entries.lock().unwrap();
+        for index in 0..4096 {
+            entries.insert(
+                index.to_string(),
+                Session {
+                    owner: "other".into(),
+                    binding: vec![],
+                    upstream: None,
+                    expires: Instant::now() + Duration::from_secs(60),
+                    pending: false,
+                },
+            );
+        }
+    }
+    let response = test::call_service(&app, request("initialize", None, &user())).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    assert!(calls.lock().unwrap().is_empty());
+    state.mcp_sessions.entries.lock().unwrap().clear();
+    // Cancellation drops the guard even without reaching an HTTP error handler.
+    let sessions = state.mcp_sessions.clone();
+    let future = async {
+        sessions.entries.lock().unwrap().insert(
+            "pending".into(),
+            Session {
+                owner: "other".into(),
+                binding: vec![],
+                upstream: None,
+                expires: Instant::now(),
+                pending: true,
+            },
+        );
+        let _reservation = PendingSession {
+            sessions: sessions.clone(),
+            token: "pending".into(),
+            committed: false,
+        };
+        std::future::pending::<()>().await;
+    };
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), future)
+            .await
+            .is_err()
+    );
+    assert!(sessions.entries.lock().unwrap().is_empty());
+    server.stop(true).await;
+}
+
+#[actix_web::test]
+async fn accept_handles_repeated_fields_case_and_quality() {
+    let (state, calls, server) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for (values, expected) in [
+        (
+            vec!["Application/JSON", "Text/Event-Stream; q=0.5"],
+            StatusCode::OK,
+        ),
+        (
+            vec!["application/json, text/event-stream;q=0"],
+            StatusCode::NOT_ACCEPTABLE,
+        ),
+        (
+            vec!["application/jsonp, text/event-stream"],
+            StatusCode::NOT_ACCEPTABLE,
+        ),
+    ] {
+        let mut builder = test::TestRequest::post().uri("/docs/mcp");
+        for value in values {
+            builder = builder.append_header(("accept", value));
+        }
+        let req = builder
+            .set_json(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
+            .to_request();
+        req.extensions_mut().insert(owner.clone());
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), expected);
+        assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+        drop(test::read_body(response).await);
+    }
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    server.stop(true).await;
+}
+
+#[actix_web::test]
+async fn equivalent_config_reload_preserves_session() {
+    let (state, _, server) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let mut token = None;
+    for reverse in [false, true] {
+        let mut revision = state.pin_runtime().as_ref().clone();
+        let mut config = revision.config.as_ref().clone();
+        let mut headers = HashMap::new();
+        let indexes: Vec<_> = if reverse {
+            (0..32).rev().collect()
+        } else {
+            (0..32).collect()
+        };
+        for index in indexes {
+            headers.insert(format!("x-test-{index}"), index.to_string());
+        }
+        config
+            .gateway
+            .mcp_servers
+            .get_mut("docs")
+            .unwrap()
+            .static_headers = headers;
+        revision.config = Arc::new(config);
+        state.runtime.store(revision);
+        let response = test::call_service(
+            &app,
+            request(
+                if reverse { "tools/list" } else { "initialize" },
+                token.as_deref(),
+                &owner,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        if !reverse {
+            token = Some(
+                response
+                    .headers()
+                    .get("mcp-session-id")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        drop(test::read_body(response).await);
+    }
     server.stop(true).await;
 }

@@ -7,7 +7,10 @@ use crate::server::state::AppState;
 use crate::utils::net::http::ProviderHttpClient;
 use actix_web::{
     HttpRequest, HttpResponse,
-    http::{Method, StatusCode},
+    http::{
+        Method, StatusCode,
+        header::{Accept, Header, Quality},
+    },
     web,
 };
 use futures::StreamExt;
@@ -15,7 +18,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -25,6 +28,7 @@ struct Session {
     binding: Vec<u8>,
     upstream: Option<String>,
     expires: Instant,
+    pending: bool,
 }
 
 /// Bounded process-local sessions. A restart requires clients to initialize again.
@@ -35,8 +39,26 @@ pub(crate) struct Sessions {
     client: Option<ProviderHttpClient>,
 }
 
+// Reserve before contacting the upstream. Cancellation and every error path release
+// an uncommitted reservation, so concurrent initializations cannot exceed the limit.
+struct PendingSession {
+    sessions: Arc<Sessions>,
+    token: String,
+    committed: bool,
+}
+impl Drop for PendingSession {
+    fn drop(&mut self) {
+        if !self.committed
+            && let Ok(mut entries) = self.sessions.entries.lock()
+        {
+            entries.remove(&self.token);
+        }
+    }
+}
+
 fn error(status: StatusCode, message: &str) -> HttpResponse {
     HttpResponse::build(status)
+        .insert_header(("cache-control", "no-store"))
         .json(json!({"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":message}}))
 }
 
@@ -114,7 +136,10 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     };
     // Include the entire configured account in the binding. A credential or URL
     // change must never send an existing session to a different upstream account.
-    let binding = match serde_json::to_vec(server) {
+    let binding = match serde_json::to_value(server).and_then(|mut value| {
+        value.sort_all_objects();
+        serde_json::to_vec(&value)
+    }) {
         Ok(bytes) => Sha256::digest(bytes).to_vec(),
         Err(_) => {
             return error(
@@ -123,14 +148,19 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             );
         }
     };
-    let accept = req
-        .headers()
-        .get("accept")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+    let accept = Accept::parse(&req).ok();
+    let accepts = |kind: &str, subtype: &str| {
+        accept.as_ref().is_some_and(|accept| {
+            accept.0.iter().any(|entry| {
+                entry.quality > Quality::ZERO
+                    && entry.item.type_().as_str().eq_ignore_ascii_case(kind)
+                    && entry.item.subtype().as_str().eq_ignore_ascii_case(subtype)
+            })
+        })
+    };
     if req.method() != Method::DELETE
-        && (!accept.contains("text/event-stream")
-            || (req.method() == Method::POST && !accept.contains("application/json")))
+        && (!accepts("text", "event-stream")
+            || (req.method() == Method::POST && !accepts("application", "json")))
     {
         return error(
             StatusCode::NOT_ACCEPTABLE,
@@ -145,7 +175,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             .is_some_and(|v| {
                 v.split(';')
                     .next()
-                    .is_some_and(|v| v.trim() == "application/json")
+                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"))
             })
         {
             return error(
@@ -189,10 +219,9 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             Ok(entries) => entries,
             Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable"),
         };
-        match entries
-            .get(token)
-            .filter(|s| s.owner == owner && s.binding == binding && s.expires > Instant::now())
-        {
+        match entries.get(token).filter(|s| {
+            !s.pending && s.owner == owner && s.binding == binding && s.expires > Instant::now()
+        }) {
             Some(session) => Some(session.clone()),
             None => {
                 return error(
@@ -241,13 +270,44 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         "mcp-protocol-version",
         "last-event-id",
     ] {
-        if let Some(value) = req.headers().get(name) {
+        for value in req.headers().get_all(name) {
             outgoing = outgoing.header(name, value.as_bytes());
         }
     }
     if let Some(upstream) = session.as_ref().and_then(|s| s.upstream.as_ref()) {
         outgoing = outgoing.header("mcp-session-id", upstream);
     }
+    let mut reservation = if initialize {
+        let mut entries = match state.mcp_sessions.entries.lock() {
+            Ok(entries) => entries,
+            Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable"),
+        };
+        entries.retain(|_, session| session.pending || session.expires > Instant::now());
+        if entries.len() >= 4096 {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "MCP session capacity reached",
+            );
+        }
+        let token = uuid::Uuid::new_v4().to_string();
+        entries.insert(
+            token.clone(),
+            Session {
+                owner,
+                binding,
+                upstream: None,
+                expires: Instant::now() + Duration::from_secs(3600),
+                pending: true,
+            },
+        );
+        Some(PendingSession {
+            sessions: state.mcp_sessions.clone(),
+            token,
+            committed: false,
+        })
+    } else {
+        None
+    };
     let outgoing = outgoing.body(body.to_vec());
     let upstream =
         match tokio::time::timeout(Duration::from_millis(server.timeout_ms), outgoing.send()).await
@@ -291,24 +351,23 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             Ok(entries) => entries,
             Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable"),
         };
-        entries.retain(|_, session| session.expires > Instant::now());
-        if entries.len() >= 4096 {
+        let Some(reservation) = reservation.as_mut() else {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "MCP session capacity reached",
+                "MCP reservation unavailable",
             );
-        }
-        let token = uuid::Uuid::new_v4().to_string();
-        entries.insert(
-            token.clone(),
-            Session {
-                owner,
-                binding,
-                upstream: upstream_id,
-                expires: Instant::now() + Duration::from_secs(3600),
-            },
-        );
-        response.insert_header(("mcp-session-id", token));
+        };
+        let Some(session) = entries.get_mut(&reservation.token) else {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "MCP reservation unavailable",
+            );
+        };
+        session.upstream = upstream_id;
+        session.pending = false;
+        session.expires = Instant::now() + Duration::from_secs(3600);
+        reservation.committed = true;
+        response.insert_header(("mcp-session-id", reservation.token.clone()));
     } else if let Some(token) = token {
         if status == StatusCode::NOT_FOUND
             || (req.method() == Method::DELETE && status.is_success())

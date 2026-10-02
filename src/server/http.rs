@@ -298,6 +298,19 @@ impl HttpServer {
             cors = cors.allowed_headers(headers);
         }
 
+        #[cfg(feature = "mcp")]
+        {
+            for name in [
+                "x-api-key",
+                "mcp-session-id",
+                "mcp-protocol-version",
+                "last-event-id",
+            ] {
+                cors = cors.allowed_header(name);
+            }
+            cors = cors.expose_headers(["mcp-session-id", "mcp-protocol-version", "retry-after"]);
+        }
+
         cors = cors.max_age(cors_config.max_age as usize);
 
         if cors_config.allow_credentials {
