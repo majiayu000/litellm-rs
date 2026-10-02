@@ -10,6 +10,7 @@ catalog used at runtime.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -26,7 +27,7 @@ from urllib.request import urlopen
 from model_catalog_authority import build_catalog_authority
 
 
-DEFAULT_SOURCE_COMMIT = "025292e75bda0381174a751da320645c971e06c7"
+DEFAULT_SOURCE_COMMIT = "a5fef4b4e68963640c3062d464509129ec8863c6"
 DEFAULT_SOURCE_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/"
     f"{DEFAULT_SOURCE_COMMIT}/model_prices_and_context_window.json"
@@ -688,6 +689,74 @@ def render_catalog(
     return data, len(overlay_entries)
 
 
+def add_unreviewed_decisions(
+    pricing_entries: dict[str, dict[str, Any]],
+    decisions: dict[str, Any],
+    source_url: str,
+    source_commit: str,
+    source_sha256: str,
+    as_of_date: date,
+) -> dict[str, Any]:
+    """Record new pricing identities without modifying existing review decisions.
+
+    The authority builder remains responsible for validating the result. Stale
+    decisions still require explicit review rather than silent removal.
+    """
+    if not isinstance(decisions, dict):
+        return decisions
+    entries = decisions.get("entries")
+    sources = decisions.get("sources")
+    if not isinstance(entries, list) or not isinstance(sources, dict):
+        return decisions
+    if any(not isinstance(entry, dict) for entry in entries):
+        return decisions
+    # Leave malformed identities to the normal authority validation below.
+    if any(
+        not isinstance(entry.get("provider"), str)
+        or not isinstance(entry.get("pricing_key"), str)
+        for entry in entries
+    ):
+        return decisions
+    known = {(entry["provider"], entry["pricing_key"]) for entry in entries}
+    missing = [
+        (row.get("litellm_provider"), key)
+        for key, row in sorted(pricing_entries.items())
+        if (row.get("litellm_provider"), key) not in known
+    ]
+    if not missing:
+        return decisions
+    result = copy.deepcopy(decisions)
+    source_id = f"upstream-pricing-{source_commit}"
+    source = {
+        "kind": "runtime_pricing_row_pending_provider_review",
+        "location": source_url,
+        "reviewed_on": as_of_date.isoformat(),
+        "revision": source_commit,
+        "sha256": source_sha256,
+    }
+    existing_source = sources.get(source_id)
+    if existing_source is not None:
+        # A prior import of this commit must retain its original observation date.
+        source["reviewed_on"] = (
+            existing_source.get("reviewed_on")
+            if isinstance(existing_source, dict)
+            else None
+        )
+        if existing_source != source:
+            raise SystemExit(f"conflicting pricing evidence source {source_id!r}")
+    result["sources"][source_id] = source
+    result["entries"].extend(
+        {
+            "provider": provider,
+            "pricing_key": key,
+            "decision": "unreviewed",
+            "evidence_sources": [source_id],
+        }
+        for provider, key in missing
+    )
+    return result
+
+
 def write_catalog(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
@@ -787,6 +856,17 @@ def main() -> int:
     validate_entries(merged_entries, args.min_models)
     validate_official_contracts(merged_entries, as_of_date)
     decisions = load_json(args.catalog_decisions)
+    if not args.check:
+        upstream_identities = {
+            key: row
+            for key, row in merged_entries.items()
+            if key in source_entries
+            and row["litellm_provider"] == source_entries[key]["litellm_provider"]
+        }
+        decisions = add_unreviewed_decisions(
+            upstream_identities, decisions, source_url, source_commit,
+            source_sha256, as_of_date,
+        )
     catalog_authority = build_catalog_authority(merged_entries, decisions)
     authority_metadata = catalog_authority["_metadata"]
     data["_metadata"].update(
@@ -828,6 +908,7 @@ def main() -> int:
             )
             return 1
     else:
+        write_catalog(args.catalog_decisions, decisions)
         write_catalog(args.catalog_authority_output, catalog_authority)
         write_catalog(args.output, data)
 

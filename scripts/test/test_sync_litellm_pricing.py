@@ -464,6 +464,122 @@ class CatalogAuthorityTests(unittest.TestCase):
             "entries": entries,
         }
 
+    def test_refresh_records_new_rows_without_promoting_or_changing_reviews(self) -> None:
+        reviewed = self.decision(
+            "openai", "known", "callable", catalog_model_id="known",
+            endpoints=["responses"], aliases=[],
+        )
+        original = self.document([reviewed])
+        prices = {
+            "known": {"litellm_provider": "openai"},
+            "new": {"litellm_provider": "openai"},
+        }
+        refreshed = sync.add_unreviewed_decisions(
+            prices, original, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 3),
+        )
+        self.assertEqual(original, self.document([reviewed]))
+        self.assertEqual(refreshed["entries"][0], reviewed)
+        self.assertEqual(refreshed["entries"][1]["decision"], "unreviewed")
+        authority = sync.build_catalog_authority(prices, refreshed)
+        self.assertEqual(len(authority["entries"]), 2)
+        self.assertEqual(
+            refreshed,
+            sync.add_unreviewed_decisions(
+                prices, refreshed, "https://example.test/prices", "a" * 40,
+                "b" * 64, date(2026, 10, 4),
+            ),
+        )
+
+    def test_refresh_keeps_provider_scoped_identity_and_rejects_stale_reviews(self) -> None:
+        prices = {"known": {"litellm_provider": "new-provider"}}
+        original = self.document([self.decision("old-provider", "known", "unreviewed")])
+        refreshed = sync.add_unreviewed_decisions(
+            prices, original, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 3),
+        )
+        self.assertEqual(len(refreshed["entries"]), 2)
+        with self.assertRaisesRegex(SystemExit, "stale classification.*old-provider"):
+            sync.build_catalog_authority(prices, refreshed)
+
+    def test_main_refresh_and_check_preserve_overlay_identity_and_are_repeatable(self) -> None:
+        source = sync.model_entries(sync.load_json(CATALOG_PATH))
+        overlay_key = "amazon.nova-2-lite-v1:0"
+        original_provider = source[overlay_key]["litellm_provider"]
+        source[overlay_key]["litellm_provider"] = "upstream-provider-before-override"
+        source["new-upstream-test"] = {
+            "litellm_provider": "openai", "mode": "chat",
+            "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = pathlib.Path(temp_dir)
+            decisions = directory / "decisions.json"
+            decisions.write_bytes(CATALOG_DECISIONS_PATH.read_bytes())
+            args = SimpleNamespace(
+                source_catalog=None, source_url=sync.DEFAULT_SOURCE_URL,
+                source_commit=sync.DEFAULT_SOURCE_COMMIT,
+                output=directory / "prices.json", catalog_decisions=decisions,
+                catalog_authority_output=directory / "authority.json",
+                overlay_file=[CATALOG_PATH], min_models=sync.DEFAULT_MIN_MODELS,
+                check=False,
+            )
+            with (
+                mock.patch.object(sync, "parse_args", return_value=args),
+                mock.patch.object(sync, "load_url", return_value=(source, "f" * 64)),
+            ):
+                # Use a fresh evidence identity for this synthetic upstream snapshot.
+                args.source_commit = "d" * 40
+                args.source_url = sync.DEFAULT_SOURCE_URL.replace(sync.DEFAULT_SOURCE_COMMIT, args.source_commit)
+                self.assertEqual(sync.main(), 0)
+                first = {path: path.read_bytes() for path in directory.iterdir()}
+                self.assertEqual(sync.main(), 0)
+                args.check = True
+                self.assertEqual(sync.main(), 0)
+                self.assertEqual(first, {path: path.read_bytes() for path in directory.iterdir()})
+            rows = sync.load_json(decisions)["entries"]
+            self.assertEqual(
+                [row["provider"] for row in rows if row["pricing_key"] == overlay_key],
+                [original_provider],
+            )
+            new = next(row for row in rows if row["pricing_key"] == "new-upstream-test")
+            self.assertEqual(new["decision"], "unreviewed")
+
+    def test_refresh_does_not_hide_malformed_or_duplicate_decisions(self) -> None:
+        prices = {"known": {"litellm_provider": "other"}, "new": {"litellm_provider": "other"}}
+        duplicate = self.decision("other", "known", "unreviewed")
+        documents = [
+            None, {}, self.document([None]), self.document([{}]),
+            self.document([duplicate, duplicate]),
+        ]
+        for document in documents:
+            with self.subTest(document=document):
+                refreshed = sync.add_unreviewed_decisions(
+                    prices, document, "https://example.test/prices", "a" * 40,
+                    "b" * 64, date(2026, 10, 3),
+                )
+                with self.assertRaises(SystemExit):
+                    sync.build_catalog_authority(prices, refreshed)
+
+    def test_refresh_reuses_evidence_without_overwriting_a_conflicting_source(self) -> None:
+        prices = {"one": {"litellm_provider": "other"}}
+        original = self.document([])
+        refreshed = sync.add_unreviewed_decisions(
+            prices, original, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 3),
+        )
+        prices["two"] = {"litellm_provider": "other"}
+        again = sync.add_unreviewed_decisions(
+            prices, refreshed, "https://example.test/prices", "a" * 40,
+            "b" * 64, date(2026, 10, 4),
+        )
+        self.assertEqual(again["sources"], refreshed["sources"])
+        sync.build_catalog_authority(prices, again)
+        with self.assertRaisesRegex(SystemExit, "conflicting pricing evidence"):
+            sync.add_unreviewed_decisions(
+                prices, refreshed, "https://example.test/prices", "a" * 40,
+                "c" * 64, date(2026, 10, 4),
+            )
+
     def test_missing_and_duplicate_decisions_fail_closed(self) -> None:
         prices = {
             "known": {"litellm_provider": "other"},
@@ -772,11 +888,11 @@ class CatalogAuthorityTests(unittest.TestCase):
                     (entry["provider"], entry["pricing_key"])
                 )
 
-        self.assertEqual(authority["_metadata"]["total_entry_count"], 4555)
-        self.assertEqual(
-            target_counts,
-            {"callable": 171, "pricing_only": 409, "unreviewed": 76},
-        )
+        self.assertEqual(authority["_metadata"]["total_entry_count"], len(prices))
+        # Scheduled imports may add pending rows, but cannot change reviewed ones.
+        self.assertEqual(target_counts["callable"], 171)
+        self.assertEqual(target_counts["pricing_only"], 409)
+        self.assertGreaterEqual(target_counts["unreviewed"], 76)
         self.assertEqual(
             sorted(callable_with_explicit_contract),
             [
