@@ -8,7 +8,7 @@
 
 | ID | 优先级 | 功能 / 问题 | 验收条件 | 状态 | Issue / PR / 验证 |
 | --- | --- | --- | --- | --- | --- |
-| F01 | P1 | 恢复模型价格自动更新 | 从有效上游引用解析不可变提交；新增模型进入 unreviewed；保留人工决定；更新后的三个目录文件一致；重复运行无差异 | 待验收 | [#1364](https://github.com/majiayu000/litellm-rs/issues/1364)；45 项 Python 测试通过；当前源新增 14 条 unreviewed，4,555 条已有决定不变；重复同步/check 通过；Rust 检查/全量测试通过，clippy 运行中 |
+| F01 | P1 | 恢复模型价格自动更新 | 从有效上游引用解析不可变提交；新增模型进入 unreviewed；保留人工决定；更新后的三个目录文件一致；重复运行无差异 | 待验收 | [#1364](https://github.com/majiayu000/litellm-rs/issues/1364)；45 项 Python 测试通过；当前源新增 14 条 unreviewed，4,555 条已有决定不变；重复同步/check 通过；Rust 检查/全量测试通过，clippy 运行中；[PR #1366](https://github.com/majiayu000/litellm-rs/pull/1366) 为草稿 |
 | F02 | P1 | Cloudflare 错误语义 | HTTP 401/429/5xx 和 success=false 返回对应错误；畸形成功响应不能变成空成功；覆盖真实 HTTP 模拟测试 | 进行中 | [#1365](https://github.com/majiayu000/litellm-rs/issues/1365)；在独立 worktree 修复并添加 HTTP 回归测试 |
 | F03 | P1 | Cloudflare 现代聊天协议与流式 | 使用官方兼容接口；文本、工具、多模态、用量、流式及中途错误按支持能力正确传递；文档和能力声明一致 | 待开始 | `src/core/providers/cloudflare/` |
 | F04 | P1 | Bedrock 逐模型能力与计费 | 审核 generic_converse 全部条目；修正上下文、输出、视觉、推理、profile 与价格；消除通用虚假默认值和重复价格源 | 待开始 | `bedrock/catalog/entries/generic_converse.rs`、`bedrock/utils/cost.rs` |
@@ -16,7 +16,7 @@
 | F06 | P1 | Responses 模型与供应商路由 | OpenAI、Copilot、Bedrock 原生协议分别按官方 endpoint/model 支持矩阵路由；Responses-only 模型和工具不被送往 chat/completions | 待开始 | 依赖 F05；供应商/账户限制明确记录 |
 | F07 | P1 | Responses 跨副本持久状态 | 两个网关实例可读/删同一授权响应；重启后可恢复记录；租户隔离、TTL、后台状态及取消语义有测试 | 待开始 | `src/server/routes/ai/responses/lifecycle.rs`；依赖 F05 |
 | F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 待开始 | 原生路由当前缺失 |
-| F09 | P2 | Responses compact 与 Gemini 原生协议 | 按官方协议接通 /v1/responses/compact 和 Gemini generateContent/streamGenerateContent；支持矩阵、错误、鉴权及流式测试齐全 | 待开始 | 分别拆成独立实现 issue；依赖原生协议通路 |
+| F09 | P2 | Responses compact 与 Gemini 文档覆盖 | 接通 /v1/responses/compact；Gemini 已有 generateContent/streamGenerateContent 路由，补 OpenAPI 覆盖并复核现有鉴权/流式/用量测试 | 待开始 | `src/server/routes/ai/mod.rs:178-229` 已挂载 Gemini；不能从 OpenAPI 缺项推断未实现 |
 | F10 | P1 | 模型退役与目录一致性 | 去除已退役模型的可调用声明；优先修 Cloudflare；复核全部现有静态供应商目录、示例、价格和能力来源 | 待开始 | 已有逐条基线：`docs/audit/model-catalog-2026-10-01.entries.json` |
 | F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 待开始 | `src/core/providers/registry/support_matrix.rs` |
 | F12 | P2 | 自定义供应商注册 | 外部实现可通过公开 API 注册并被路由，无须修改内部 Provider 枚举；覆盖构造、能力、错误和流式测试 | 待开始 | `src/core/providers/mod.rs` |
@@ -32,3 +32,5 @@
 - 2026-10-03：建立清单；GitHub 当前无开放 issue/PR 与上述工作重复。先执行 F01，然后 F02–F04，再处理协议、状态和网关能力。独立功能拆分提交，避免将全部变化塞入一个 PR。
 - 所有构建与测试在本任务独立 worktree 执行。每个 PR 准备好前执行仓库要求的格式、检查、全量测试及 clippy；合并前确认 CI 全绿且 review threads 已解决。
 - 离线模拟测试与需要供应商账户的真实调用分开记录。没有凭据或没有运行过的真实调用不得标为通过。
+
+- 2026-10-03 复核更正：Gemini 原生生成和流式接口在实际路由中已存在，F09 改为文档/契约覆盖，不重复实现。
