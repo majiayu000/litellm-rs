@@ -5,7 +5,7 @@ Implement `litellm_rs::core::providers::ExternalProvider` to add an in-process p
 
 Wrap the implementation in `Provider::External(Arc::new(provider))`, construct a `Deployment`, and register it with `UnifiedRouter::add_deployment`. The [external integration test](../../tests/external_provider_registration.rs) is a complete downstream example covering registration, model selection, synchronous output, streaming and errors.
 
-Chat is required; streaming, embeddings, image generation/editing and audio operations are optional and return `NotSupported` by default. Unknown cost is an error, not zero; configured gateway pricing remains authoritative. External code owns its HTTP transport and credentials. Registration is programmatic, with no runtime plugin loading or configuration-based construction. Native Responses, native Gemini, rerank, moderation and image variations are not exposed by this extension interface.
+Chat is required; streaming, embeddings, image generation/editing and audio operations are optional and return `NotSupported` by default. Unknown cost is an error, not zero; configured gateway pricing remains authoritative. Configured native health probes invoke `ExternalProvider::health_check`; the default callback returns Unknown, and overrides must provide actual upstream evidence. External code owns its HTTP transport and credentials. Registration is programmatic, with no runtime plugin loading or configuration-based construction. Native Responses, native Gemini, rerank, moderation and image variations are not exposed by this extension interface.
 
 ## Single Provider Implementation Guide
 

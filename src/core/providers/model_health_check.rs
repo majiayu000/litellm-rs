@@ -7,6 +7,7 @@ use crate::core::types::message::MessageContent;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeHealthProbeSemantics {
     ModelSpecific,
+    ProviderDefined,
     Unsupported,
 }
 
@@ -14,6 +15,7 @@ impl Provider {
     pub(crate) fn native_health_probe_semantics(&self, _model: &str) -> NativeHealthProbeSemantics {
         match self {
             Provider::Anthropic(_) => NativeHealthProbeSemantics::ModelSpecific,
+            Provider::External(_) => NativeHealthProbeSemantics::ProviderDefined,
             #[cfg(feature = "providers-extra")]
             Provider::VertexAI(_) => NativeHealthProbeSemantics::Unsupported,
             #[cfg(feature = "providers-extended")]
@@ -25,7 +27,6 @@ impl Provider {
             | Provider::Mistral(_)
             | Provider::Cloudflare(_)
             | Provider::Enterprise(_)
-            | Provider::External(_)
             | Provider::Voyage(_)
             | Provider::OpenAILike(_)
             | Provider::Deepgram(_)
@@ -53,6 +54,7 @@ impl Provider {
     pub(crate) async fn health_check_for_model(&self, model: &str) -> HealthStatus {
         match self.native_health_probe_semantics(model) {
             NativeHealthProbeSemantics::ModelSpecific => self.chat_health_check(model).await,
+            NativeHealthProbeSemantics::ProviderDefined => self.health_check().await,
             NativeHealthProbeSemantics::Unsupported => HealthStatus::Unknown,
         }
     }
