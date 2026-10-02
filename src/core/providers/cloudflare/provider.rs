@@ -203,7 +203,7 @@ impl CloudflareProvider {
 
     fn transform_to_cloudflare_format(
         &self,
-        request: &ChatRequest,
+        mut request: ChatRequest,
     ) -> Result<serde_json::Value, ProviderError> {
         if request.thinking.is_some() {
             return Err(ProviderError::not_supported(
@@ -211,7 +211,6 @@ impl CloudflareProvider {
                 "Use reasoning_effort or provider-native parameters for reasoning configuration",
             ));
         }
-        let mut request = request.clone();
         request.model = request
             .model
             .strip_prefix("cloudflare/")
@@ -278,7 +277,7 @@ impl LLMProvider for CloudflareProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<serde_json::Value, ProviderError> {
-        self.transform_to_cloudflare_format(&request)
+        self.transform_to_cloudflare_format(request)
     }
 
     async fn transform_response(
@@ -305,7 +304,7 @@ impl LLMProvider for CloudflareProvider {
 
         let mut request = request;
         request.stream = false;
-        let body = self.transform_to_cloudflare_format(&request)?;
+        let body = self.transform_to_cloudflare_format(request)?;
         let response = self.execute_request(body).await?;
         Self::decode_response(response)
     }
@@ -317,7 +316,7 @@ impl LLMProvider for CloudflareProvider {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
         request.stream = true;
-        let body = self.transform_to_cloudflare_format(&request)?;
+        let body = self.transform_to_cloudflare_format(request)?;
         let mut headers = vec![header("Content-Type", "application/json".to_string())];
         if let Some(token) = self.config.get_api_token() {
             headers.push(header("Authorization", format!("Bearer {}", token)));

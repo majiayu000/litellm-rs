@@ -245,7 +245,7 @@ async fn test_transform_request() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request).unwrap();
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     assert!(transformed["messages"].is_array());
     let temp_value = transformed["temperature"].as_f64().unwrap();
     assert!(
@@ -271,7 +271,7 @@ async fn test_transform_request_with_top_p() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request).unwrap();
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     let top_p_value = transformed["top_p"].as_f64().unwrap();
     assert!((top_p_value - 0.9).abs() < 1e-6);
 }
@@ -291,7 +291,7 @@ async fn test_transform_request_with_streaming() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request).unwrap();
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     assert_eq!(transformed["stream"], true);
 }
 
@@ -323,7 +323,7 @@ async fn test_transform_request_multiple_messages() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request).unwrap();
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     let messages = transformed["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
 }
@@ -342,7 +342,7 @@ async fn test_transform_request_no_optional_params() {
         ..Default::default()
     };
 
-    let transformed = provider.transform_to_cloudflare_format(&request).unwrap();
+    let transformed = provider.transform_to_cloudflare_format(request).unwrap();
     assert!(transformed["messages"].is_array());
     assert!(transformed.get("temperature").is_none() || transformed["temperature"].is_null());
     assert!(transformed.get("max_tokens").is_none() || transformed["max_tokens"].is_null());
