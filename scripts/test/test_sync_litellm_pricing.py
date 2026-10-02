@@ -536,6 +536,17 @@ class CatalogAuthorityTests(unittest.TestCase):
                 args.check = True
                 self.assertEqual(sync.main(), 0)
                 self.assertEqual(first, {path: path.read_bytes() for path in directory.iterdir()})
+                pending = sync.load_json(decisions)
+                pending["entries"] = [
+                    row for row in pending["entries"]
+                    if row["pricing_key"] != "new-upstream-test"
+                ]
+                decisions.write_text(json.dumps(pending))
+                before_check = {path: path.read_bytes() for path in directory.iterdir()}
+                with self.assertRaisesRegex(SystemExit, "missing classification"):
+                    sync.main()
+                self.assertEqual(before_check, {path: path.read_bytes() for path in directory.iterdir()})
+                decisions.write_bytes(first[decisions])
             rows = sync.load_json(decisions)["entries"]
             self.assertEqual(
                 [row["provider"] for row in rows if row["pricing_key"] == overlay_key],
