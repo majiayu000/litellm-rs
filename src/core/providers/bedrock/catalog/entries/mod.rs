@@ -5,9 +5,7 @@
 //! entry across these submodules. Cross-reference invariants in
 //! `super::tests` enforce the union.
 //!
-//! Pricing values match `utils/cost.rs` exactly; capability / limit values
-//! match `model_config.rs` exactly. Submodule splits keep each file under the
-//! 800-line ceiling.
+//! Runtime model configuration and cost lookup are projected from these seeds.
 
 use super::BedrockCatalogEntry;
 
