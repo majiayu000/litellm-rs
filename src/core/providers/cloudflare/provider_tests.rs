@@ -378,7 +378,7 @@ async fn test_transform_response_success() {
 }
 
 #[tokio::test]
-async fn test_transform_response_empty_content() {
+async fn test_transform_response_missing_content_is_an_error() {
     let provider = create_test_provider().await;
 
     let response_json = serde_json::json!({
@@ -395,9 +395,91 @@ async fn test_transform_response_empty_content() {
         )
         .await;
 
-    assert!(result.is_ok());
-    let chat_response = result.unwrap();
-    assert!(!chat_response.choices.is_empty());
+    assert!(matches!(result, Err(ProviderError::ResponseParsing { .. })));
+}
+
+#[tokio::test]
+async fn test_chat_http_errors_preserve_status_and_retry_delay() {
+    for (status, expected, body) in [
+        (
+            "401 Unauthorized",
+            401,
+            r#"{"success":false,"errors":[{"message":"denied"}]}"#,
+        ),
+        ("403 Forbidden", 403, "permission denied"),
+        ("429 Too Many Requests", 429, "rate limited"),
+        ("503 Service Unavailable", 503, r#"{"success":false}"#),
+        (
+            "200 OK",
+            502,
+            r#"{"success":false,"result":{"response":"must not return"},"errors":[{"message":"inference failed"}]}"#,
+        ),
+        ("200 OK", 502, r#"{"success":true,"result":{}}"#),
+        ("200 OK", 502, "not JSON"),
+    ] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nRetry-After: 17\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_headers(&mut socket).await.unwrap();
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let provider = CloudflareProvider::new(CloudflareConfig {
+            api_base: Some(format!("http://{addr}")),
+            ..create_test_config()
+        })
+        .await
+        .unwrap();
+        let error = provider
+            .chat_completion(
+                ChatRequest {
+                    model: "@cf/test/model".to_string(),
+                    ..Default::default()
+                },
+                RequestContext::default(),
+            )
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(error.http_facts().status, expected, "{status}: {error}");
+        if expected == 429 {
+            assert!(matches!(
+                error,
+                ProviderError::RateLimit {
+                    retry_after: Some(17),
+                    ..
+                }
+            ));
+        }
+        if expected == 401 {
+            assert!(matches!(error, ProviderError::Authentication { .. }));
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_response_decoder_rejects_failure_but_allows_explicit_empty_text() {
+    let provider = create_test_provider().await;
+    let failed = br#"{"success":false,"errors":[{"message":"inference failed"}]}"#;
+    let error = provider
+        .transform_response(failed, "test", "id")
+        .await
+        .unwrap_err();
+    assert_eq!(error.http_facts().status, 502);
+    assert!(error.to_string().contains("inference failed"));
+    let empty = br#"{"success":true,"result":{"response":""}}"#;
+    let response = provider
+        .transform_response(empty, "test", "id")
+        .await
+        .unwrap();
+    assert!(matches!(
+        &response.choices[0].message.content,
+        Some(MessageContent::Text(text)) if text.is_empty()
+    ));
 }
 
 #[tokio::test]

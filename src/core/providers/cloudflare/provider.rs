@@ -11,7 +11,7 @@ use tracing::debug;
 use super::config::CloudflareConfig;
 use super::model_info::{calculate_cost, get_available_models, get_model_info};
 use crate::core::providers::base::{GlobalPoolManager, HttpMethod, header};
-use crate::core::providers::unified_provider::ProviderError;
+use crate::core::providers::unified_provider::{ProviderError, default_http_error_mapper};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::{
     provider::ProviderConfig as _, provider::llm_provider::trait_definition::LLMProvider,
@@ -136,17 +136,74 @@ impl CloudflareProvider {
             .await
             .map_err(|e| ProviderError::network("cloudflare", e.to_string()))?;
 
-        let response_bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ProviderError::network("cloudflare", e.to_string()))?;
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let response_bytes = response.bytes().await.map_err(|e| {
+            if status.is_success() {
+                ProviderError::network("cloudflare", e.to_string())
+            } else {
+                Self::http_error(status.as_u16(), &e.to_string(), retry_after)
+            }
+        })?;
 
-        serde_json::from_slice(&response_bytes).map_err(|e| {
-            ProviderError::api_error(
-                "cloudflare",
-                500,
-                format!("Failed to parse response: {}", e),
-            )
+        if !status.is_success() {
+            return Err(Self::http_error(
+                status.as_u16(),
+                &String::from_utf8_lossy(&response_bytes),
+                retry_after,
+            ));
+        }
+
+        serde_json::from_slice(&response_bytes)
+            .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))
+    }
+
+    fn http_error(status: u16, body: &str, retry_after: Option<u64>) -> ProviderError {
+        if status == 429 && retry_after.is_some() {
+            return ProviderError::rate_limit("cloudflare", retry_after);
+        }
+        default_http_error_mapper("cloudflare", status, body)
+    }
+
+    fn decode_response(
+        response: &serde_json::Value,
+        model: &str,
+        request_id: &str,
+    ) -> Result<ChatResponse, ProviderError> {
+        if response.get("success") == Some(&serde_json::Value::Bool(false)) {
+            let message = response["errors"]
+                .as_array()
+                .and_then(|errors| errors.first())
+                .and_then(|error| error["message"].as_str())
+                .unwrap_or("Cloudflare reported an unsuccessful response");
+            return Err(ProviderError::api_error("cloudflare", 502, message));
+        }
+        let content = response["result"]["response"].as_str().ok_or_else(|| {
+            ProviderError::response_parsing("cloudflare", "Missing text result.response")
+        })?;
+        Ok(ChatResponse {
+            id: request_id.to_string(),
+            object: "chat.completion".to_string(),
+            created: chrono::Utc::now().timestamp(),
+            model: model.to_string(),
+            choices: vec![crate::core::types::responses::ChatChoice {
+                index: 0,
+                message: crate::core::types::chat::ChatMessage {
+                    role: crate::core::types::message::MessageRole::Assistant,
+                    content: Some(crate::core::types::message::MessageContent::Text(
+                        content.to_string(),
+                    )),
+                    ..Default::default()
+                },
+                finish_reason: Some(FinishReason::Stop),
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: None,
         })
     }
 
@@ -245,44 +302,9 @@ impl LLMProvider for CloudflareProvider {
         model: &str,
         request_id: &str,
     ) -> Result<ChatResponse, ProviderError> {
-        let cloudflare_response: serde_json::Value =
-            serde_json::from_slice(raw_response).map_err(|e| {
-                ProviderError::api_error(
-                    "cloudflare",
-                    500,
-                    format!("Failed to parse response: {}", e),
-                )
-            })?;
-
-        // Transform Cloudflare response to OpenAI format
-        let content = cloudflare_response["result"]["response"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        Ok(ChatResponse {
-            id: request_id.to_string(),
-            object: "chat.completion".to_string(),
-            created: chrono::Utc::now().timestamp(),
-            model: model.to_string(),
-            choices: vec![crate::core::types::responses::ChatChoice {
-                index: 0,
-                message: crate::core::types::chat::ChatMessage {
-                    role: crate::core::types::message::MessageRole::Assistant,
-                    content: Some(crate::core::types::message::MessageContent::Text(content)),
-                    thinking: None,
-                    audio: None,
-                    name: None,
-                    function_call: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                },
-                finish_reason: Some(FinishReason::Stop),
-                logprobs: None,
-            }],
-            usage: None, // Cloudflare doesn't provide usage stats
-            system_fingerprint: None,
-        })
+        let response = serde_json::from_slice(raw_response)
+            .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))?;
+        Self::decode_response(&response, model, request_id)
     }
 
     fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
@@ -308,37 +330,8 @@ impl LLMProvider for CloudflareProvider {
         // Execute request
         let response = self.execute_request(model, cloudflare_request).await?;
 
-        // Transform response
-        let content = response["result"]["response"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
         let request_id = uuid::Uuid::new_v4().to_string();
-
-        Ok(ChatResponse {
-            id: request_id.clone(),
-            object: "chat.completion".to_string(),
-            created: chrono::Utc::now().timestamp(),
-            model: request.model.clone(),
-            choices: vec![crate::core::types::responses::ChatChoice {
-                index: 0,
-                message: crate::core::types::chat::ChatMessage {
-                    role: crate::core::types::message::MessageRole::Assistant,
-                    content: Some(crate::core::types::message::MessageContent::Text(content)),
-                    thinking: None,
-                    audio: None,
-                    name: None,
-                    function_call: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                },
-                finish_reason: Some(FinishReason::Stop),
-                logprobs: None,
-            }],
-            usage: None,
-            system_fingerprint: None,
-        })
+        Self::decode_response(&response, &request.model, &request_id)
     }
 
     async fn chat_completion_stream(
