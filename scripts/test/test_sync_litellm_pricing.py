@@ -934,8 +934,9 @@ class CatalogAuthorityTests(unittest.TestCase):
 
         self.assertEqual(authority["_metadata"]["total_entry_count"], len(prices))
         # Scheduled imports may add pending rows, but cannot change reviewed ones.
-        self.assertEqual(target_counts["callable"], 171)
-        self.assertEqual(target_counts["pricing_only"], 409)
+        # Retirement review #1373 moved 20 entries to historical pricing only.
+        self.assertEqual(target_counts["callable"], 151)
+        self.assertEqual(target_counts["pricing_only"], 429)
         self.assertGreaterEqual(target_counts["unreviewed"], 76)
         self.assertEqual(
             sorted(callable_with_explicit_contract),
