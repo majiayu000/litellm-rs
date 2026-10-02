@@ -118,7 +118,7 @@ fn test_transform_chat_response_preserves_cache_details_without_double_counting(
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "usage": {
             "input_tokens": 100,

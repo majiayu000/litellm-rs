@@ -392,9 +392,9 @@ mod tests {
     fn test_model_registry() {
         let registry = get_gemini_registry();
 
-        // Test Gemini 2.0 Flash
-        let flash_spec = registry.get_model_spec("gemini-2.0-flash-exp").unwrap();
-        assert_eq!(flash_spec.family, GeminiModelFamily::Gemini20Flash);
+        // Test Gemini 2.5 Flash
+        let flash_spec = registry.get_model_spec("gemini-2.5-flash").unwrap();
+        assert_eq!(flash_spec.family, GeminiModelFamily::Gemini25Flash);
         assert!(
             flash_spec
                 .features
@@ -407,8 +407,8 @@ mod tests {
         );
 
         // Test pricing
-        assert_eq!(flash_spec.pricing.input_cost_per_1k_tokens, 0.00001);
-        assert_eq!(flash_spec.pricing.output_cost_per_1k_tokens, 0.00004);
+        assert_eq!(flash_spec.pricing.input_cost_per_1k_tokens, 0.0003);
+        assert_eq!(flash_spec.pricing.output_cost_per_1k_tokens, 0.0025);
     }
 
     #[test]
@@ -458,10 +458,8 @@ mod tests {
     fn test_feature_support() {
         let registry = get_gemini_registry();
 
-        // Gemini 2.0 Flash supports video understanding
-        assert!(
-            registry.supports_feature("gemini-2.0-flash-exp", &ModelFeature::VideoUnderstanding)
-        );
+        // Gemini 2.5 Flash supports video understanding
+        assert!(registry.supports_feature("gemini-2.5-flash", &ModelFeature::VideoUnderstanding));
 
         // Gemini 1.0 Pro does not support multimodal
         assert!(!registry.supports_feature("gemini-1.0-pro", &ModelFeature::VideoUnderstanding));
@@ -484,9 +482,9 @@ mod tests {
     #[test]
     fn test_get_model_family() {
         let registry = get_gemini_registry();
-        let family = registry.get_model_family("gemini-1.5-pro");
+        let family = registry.get_model_family("gemini-2.5-pro");
         assert!(family.is_some());
-        assert_eq!(*family.unwrap(), GeminiModelFamily::Gemini15Pro);
+        assert_eq!(*family.unwrap(), GeminiModelFamily::Gemini25Pro);
 
         let family_unknown = registry.get_model_family("unknown-model");
         assert!(family_unknown.is_none());
@@ -495,11 +493,11 @@ mod tests {
     #[test]
     fn test_get_model_pricing() {
         let registry = get_gemini_registry();
-        let pricing = registry.get_model_pricing("gemini-1.5-flash");
+        let pricing = registry.get_model_pricing("gemini-2.5-flash");
         assert!(pricing.is_some());
         let pricing_value = pricing.unwrap();
-        assert_eq!(pricing_value.input_cost_per_1k_tokens, 0.000075);
-        assert_eq!(pricing_value.output_cost_per_1k_tokens, 0.0003);
+        assert_eq!(pricing_value.input_cost_per_1k_tokens, 0.0003);
+        assert_eq!(pricing_value.output_cost_per_1k_tokens, 0.0025);
         assert!(pricing_value.cache_read_input_token_cost.is_some());
     }
 
@@ -507,22 +505,22 @@ mod tests {
     fn test_core_model_pricing_conversion() {
         let registry = get_gemini_registry();
         let pricing = registry
-            .get_core_model_pricing("gemini-1.5-flash")
+            .get_core_model_pricing("gemini-2.5-flash")
             .expect("registry pricing should convert to core pricing");
 
-        assert_eq!(pricing.model, "gemini-1.5-flash");
-        assert_eq!(pricing.input_cost_per_1k_tokens, 0.000075);
-        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0003);
-        assert_eq!(pricing.cache_read_input_token_cost, Some(0.00001875));
-        assert_eq!(pricing.video_cost_per_second, Some(0.0002));
-        assert_eq!(pricing.audio_cost_per_second, Some(0.0001));
+        assert_eq!(pricing.model, "gemini-2.5-flash");
+        assert_eq!(pricing.input_cost_per_1k_tokens, 0.0003);
+        assert_eq!(pricing.output_cost_per_1k_tokens, 0.0025);
+        assert!((pricing.cache_read_input_token_cost.unwrap() - 0.00003).abs() < 1e-12);
+        assert_eq!(pricing.video_cost_per_second, None);
+        assert_eq!(pricing.audio_cost_per_second, None);
         assert_eq!(
             pricing
                 .cost_per_image
                 .as_ref()
                 .and_then(|costs| costs.get("default"))
                 .copied(),
-            Some(0.0002)
+            None
         );
         assert_eq!(pricing.currency, "USD");
     }
@@ -560,16 +558,9 @@ mod tests {
             "gemini-2.5-pro",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
-            "gemini-3-pro",
-            "gemini-3-pro-deep-think",
             "gemini-3-flash-preview",
             "gemini-3.1-pro-preview",
-            "gemini-3.1-flash",
             "gemini-3.1-flash-lite",
-            "gemini-2.0-flash-exp",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
         ];
 
         for model_id in full_capability_models {
@@ -587,38 +578,16 @@ mod tests {
                 );
             }
         }
-
-        let Some(gemini_10) = registry.get_model_spec("gemini-1.0-pro") else {
-            panic!("gemini-1.0-pro should be registered");
-        };
-        assert!(
-            gemini_10
-                .model_info
-                .capabilities
-                .contains(&ProviderCapability::FunctionCalling)
-        );
-        assert!(
-            gemini_10
-                .model_info
-                .capabilities
-                .contains(&ProviderCapability::BatchProcessing)
-        );
-        assert!(
-            !gemini_10
-                .model_info
-                .capabilities
-                .contains(&ProviderCapability::CodeExecution)
-        );
     }
 
     #[test]
     fn test_get_model_limits() {
         let registry = get_gemini_registry();
-        let limits = registry.get_model_limits("gemini-1.5-pro");
+        let limits = registry.get_model_limits("gemini-2.5-pro");
         assert!(limits.is_some());
         let limits_value = limits.unwrap();
-        assert_eq!(limits_value.max_context_length, 2_097_152);
-        assert_eq!(limits_value.max_output_tokens, 8192);
+        assert_eq!(limits_value.max_context_length, 1_048_576);
+        assert_eq!(limits_value.max_output_tokens, 65536);
     }
 
     #[test]
@@ -705,7 +674,7 @@ mod tests {
     #[test]
     fn test_multimodal_cost_calculation() {
         let cost = CostCalculator::calculate_multimodal_cost(
-            "gemini-1.5-flash",
+            "gemini-2.5-flash",
             1000,
             500,
             Some(200),
@@ -721,7 +690,7 @@ mod tests {
     #[test]
     fn test_multimodal_cost_with_video_and_audio() {
         let cost = CostCalculator::calculate_multimodal_cost(
-            "gemini-2.0-flash-exp",
+            "gemini-2.5-flash",
             1000,
             500,
             None,
@@ -747,9 +716,9 @@ mod tests {
     }
 
     #[test]
-    fn test_gemini_15_pro_features() {
+    fn test_gemini_25_pro_features() {
         let registry = get_gemini_registry();
-        let spec = registry.get_model_spec("gemini-1.5-pro").unwrap();
+        let spec = registry.get_model_spec("gemini-2.5-pro").unwrap();
 
         assert!(spec.features.contains(&ModelFeature::ToolCalling));
         assert!(spec.features.contains(&ModelFeature::FunctionCalling));
@@ -765,18 +734,26 @@ mod tests {
     }
 
     #[test]
-    fn test_gemini_10_pro_limited_features() {
+    fn retired_models_are_not_callable() {
         let registry = get_gemini_registry();
-        let spec = registry.get_model_spec("gemini-1.0-pro").unwrap();
-
-        // Gemini 1.0 Pro should not have multimodal support
-        assert!(!spec.features.contains(&ModelFeature::MultimodalSupport));
-        assert!(!spec.features.contains(&ModelFeature::VideoUnderstanding));
-        assert!(!spec.features.contains(&ModelFeature::AudioUnderstanding));
-
-        // But should have basic features
-        assert!(spec.features.contains(&ModelFeature::ToolCalling));
-        assert!(spec.features.contains(&ModelFeature::StreamingSupport));
+        for model in [
+            "gemini-1.0-pro",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-2.0-flash-exp",
+            "gemini-2.0-flash-thinking-exp",
+            "gemini-3-pro-image-preview",
+            "gemini-3-pro",
+            "gemini-3-pro-deep-think",
+            "gemini-3.1-flash",
+        ] {
+            assert!(registry.get_model_spec(model).is_none(), "{model}");
+            assert!(
+                !registry.supports_feature(model, &ModelFeature::StreamingSupport),
+                "{model}"
+            );
+        }
     }
 
     #[test]
