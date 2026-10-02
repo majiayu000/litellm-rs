@@ -74,8 +74,8 @@ async fn vertex_model_metadata_uses_per_1k_units() {
     let pro = provider
         .models()
         .iter()
-        .find(|model| model.id == "gemini-1.5-pro")
-        .expect("Gemini 1.5 Pro metadata should exist");
+        .find(|model| model.id == "gemini-2.5-pro")
+        .expect("Gemini 2.5 Pro metadata should exist");
 
     let input = pro
         .input_cost_per_1k_tokens
@@ -83,8 +83,8 @@ async fn vertex_model_metadata_uses_per_1k_units() {
     let output = pro
         .output_cost_per_1k_tokens
         .expect("output pricing should be present");
-    assert!((input - 0.0035).abs() < 1e-12);
-    assert!((output - 0.0105).abs() < 1e-12);
+    assert!((input - 0.00125).abs() < 1e-12);
+    assert!((output - 0.010).abs() < 1e-12);
 }
 
 #[test]
@@ -443,7 +443,7 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
     experimental_config.enable_experimental = true;
     let experimental_provider = VertexAIProvider::new(experimental_config).await.unwrap();
     assert!(
-        experimental_provider
+        !experimental_provider
             .models()
             .iter()
             .any(|model| model.id == "gemini-2.0-flash-exp")
@@ -460,7 +460,7 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
         serde_json::json!("bearer_token")
     );
 
-    for model_id in ["gemini-1.5-flash", "gemini-3-flash-preview"] {
+    for model_id in ["gemini-2.5-flash", "gemini-3-flash-preview"] {
         let advertised = provider
             .models()
             .iter()
@@ -674,7 +674,7 @@ async fn test_vertex_shared_catalog_new_model_request_contract() {
         )
     );
     assert!(
-        crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
             "gemini-2.0-flash-exp",
             true
         )
