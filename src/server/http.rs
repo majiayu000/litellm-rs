@@ -250,6 +250,12 @@ impl HttpServer {
             .configure(routes::admin_dashboard::configure_routes)
             .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
+            .configure(|cfg| {
+                #[cfg(feature = "mcp")]
+                routes::mcp::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "mcp"))]
+                let _ = cfg;
+            })
     }
 
     fn validate_cors_config(cors_config: &CorsConfig) -> Result<()> {

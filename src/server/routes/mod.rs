@@ -14,6 +14,8 @@ pub mod auth;
 pub mod budget;
 pub mod health;
 pub mod keys;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod pricing;
 pub mod teams;
 

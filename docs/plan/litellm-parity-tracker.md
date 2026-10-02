@@ -20,7 +20,7 @@
 | F10 | P1 | 模型退役与目录一致性 | 去除已退役模型的可调用声明；优先修 Cloudflare；复核全部现有静态供应商目录、示例、价格和能力来源 | 进行中 | [#1373](https://github.com/majiayu000/litellm-rs/issues/1373)；首批修正 OpenAI/Azure 20 条退役 callable 决策；Cloudflare 清理 10 条过时/未验证记录；Copilot 清理 12 条退役或非公开可选记录；Bedrock 退役条目保留历史价格但不再进入路由；[PR #1376](https://github.com/majiayu000/litellm-rs/pull/1376)；2,797 项扩展 provider 测试、7,217 项默认库测试及全量 check/clippy 通过；其余静态目录逐项复核尚未完成；已有逐条基线：`docs/audit/model-catalog-2026-10-01.entries.json` |
 | F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 待开始 | `src/core/providers/registry/support_matrix.rs` |
 | F12 | P2 | 自定义供应商注册 | 外部实现可通过公开 API 注册并被路由，无须修改内部 Provider 枚举；覆盖构造、能力、错误和流式测试 | 待开始 | `src/core/providers/mod.rs` |
-| F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 待开始 | 目前只有 feature-gated 类型，缺 HTTP 挂载 |
+| F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 待验收 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388)；Streamable HTTP 按服务器入口及单服务器 /mcp 已接入；9 项路由测试和 122 项 core MCP 测试通过，覆盖工具/资源/提示词、JSON/SSE、网关鉴权、密钥限制、跨用户与跨密钥隔离、会话到期/账户变更、DELETE、错误/恢复、断线回收及凭据脱敏；默认全量 test/check/clippy 和 gateway/sqlite/mcp-validation clippy 通过；等待 PR/CI/review。进程内会话需要多实例亲和，不含跨实例恢复或多服务器聚合，见 docs/gateway/mcp.md |
 | F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 待开始 | 目前只有 feature-gated 类型，缺 HTTP 挂载 |
 | F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 待开始 | 目前没有公开网关路由 |
 | F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 待开始 | 依赖对应功能完成；不作无关架构重写 |

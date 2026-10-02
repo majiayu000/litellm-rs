@@ -9,7 +9,7 @@ use super::transport::Transport;
 use crate::core::net::validate_outbound_url_str_without_resolution;
 
 /// MCP Server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     /// Server name/alias (used as identifier)
     pub name: String,
@@ -86,6 +86,71 @@ impl Default for McpServerConfig {
 }
 
 impl McpServerConfig {
+    /// Validate the subset exposed by the public Streamable HTTP gateway.
+    pub fn validate_http_gateway(&self, route_name: &str) -> Result<(), String> {
+        self.validate()?;
+        if route_name != self.name
+            || route_name.is_empty()
+            || !route_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(
+                "MCP route name must match the server name and use letters, digits, - or _".into(),
+            );
+        }
+        if self.transport != Transport::Http {
+            return Err("MCP gateway supports Streamable HTTP only (transport: http)".into());
+        }
+        if self.timeout_ms == 0
+            || self.rate_limit_rpm.is_some()
+            || self.spec_path.is_some()
+            || !self.forward_headers.is_empty()
+        {
+            return Err("MCP gateway requires a positive timeout; per-server rate limits, OpenAPI generation and client header forwarding are not supported".into());
+        }
+        if let Some(auth) = &self.auth
+            && auth.auth_type == McpAuthType::OAuth2
+        {
+            return Err("MCP gateway requires a configured upstream credential; OAuth acquisition is not supported".into());
+        }
+        for (name, value) in self
+            .static_headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .chain(
+                self.auth
+                    .iter()
+                    .filter_map(|a| a.get_header_value().map(|_| (a.get_header_name(), ""))),
+            )
+        {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| "Invalid MCP header name")?;
+            if matches!(
+                name.as_str(),
+                "host"
+                    | "content-length"
+                    | "transfer-encoding"
+                    | "connection"
+                    | "content-type"
+                    | "accept"
+                    | "origin"
+                    | "mcp-session-id"
+                    | "mcp-protocol-version"
+                    | "last-event-id"
+            ) {
+                return Err("MCP upstream headers cannot override transport headers".into());
+            }
+            reqwest::header::HeaderValue::from_str(value)
+                .map_err(|_| "Invalid MCP header value")?;
+        }
+        if let Some(value) = self.auth.as_ref().and_then(|a| a.get_header_value()) {
+            reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|_| "Invalid MCP auth header value")?;
+        }
+        Ok(())
+    }
+
     /// Create a new MCP server config with name and URL
     pub fn new(name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
@@ -171,7 +236,7 @@ impl McpServerConfig {
 }
 
 /// Authentication configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Authentication type
     #[serde(rename = "type")]
@@ -426,6 +491,23 @@ impl McpGatewayConfig {
         } else {
             Err(errors)
         }
+    }
+}
+
+impl std::fmt::Debug for McpServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerConfig")
+            .field("name", &self.name)
+            .field("transport", &self.transport)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("auth_type", &self.auth_type)
+            .finish_non_exhaustive()
     }
 }
 
