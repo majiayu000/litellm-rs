@@ -96,10 +96,14 @@ pub fn get_model_config_for_model_id(
 ) -> Result<&'static super::model_config::ModelConfig, crate::core::providers::ProviderError> {
     let parsed = parse_bedrock_model_id(model_id);
     for lookup_id in &parsed.metadata_lookup_ids {
-        // A known historical catalog entry must not fall through to the
-        // runtime-profile defaults after its routable configuration is removed.
-        if super::catalog::get_catalog_entry(lookup_id).is_some() {
-            return super::model_config::get_model_config(lookup_id);
+        match super::model_config::get_model_config(lookup_id) {
+            Ok(config) => return Ok(config),
+            Err(error) => {
+                // A known historical entry must not regain runtime defaults.
+                if super::catalog::get_catalog_entry(lookup_id).is_some() {
+                    return Err(error);
+                }
+            }
         }
     }
 
