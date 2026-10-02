@@ -10,7 +10,13 @@ use tracing::debug;
 
 use super::config::CloudflareConfig;
 use super::model_info::{calculate_cost, get_available_models, get_model_info};
-use crate::core::providers::base::{GlobalPoolManager, HttpMethod, header};
+use crate::core::providers::base::sse::{OpenAICompatibleTransformer, UnifiedSSEStream};
+use crate::core::providers::base::{
+    GlobalPoolManager, HttpMethod, header, read_streaming_error_body,
+};
+use crate::core::providers::openai::{
+    OpenAIRequestTransformer, OpenAIResponseTransformer, models::OpenAIChatResponse,
+};
 use crate::core::providers::unified_provider::{ProviderError, default_http_error_mapper};
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::{
@@ -23,13 +29,14 @@ use crate::core::types::{
     health::HealthStatus,
     model::ModelInfo,
     model::ProviderCapability,
-    responses::{ChatChunk, ChatResponse, EmbeddingResponse, FinishReason},
+    responses::{ChatChunk, ChatResponse, EmbeddingResponse},
 };
 
 /// Static capabilities for Cloudflare provider
 const CLOUDFLARE_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
 ];
 
 /// Cloudflare Workers AI provider implementation
@@ -62,6 +69,9 @@ impl CloudflareProvider {
             .filter_map(|id| get_model_info(id))
             .map(|info| {
                 let mut capabilities = vec![ProviderCapability::ChatCompletion];
+                if info.supports_tools {
+                    capabilities.push(ProviderCapability::ToolCalling);
+                }
                 if info.supports_streaming {
                     capabilities.push(ProviderCapability::ChatCompletionStream);
                 }
@@ -106,23 +116,24 @@ impl CloudflareProvider {
         Self::new(config).await
     }
 
-    /// Execute an HTTP request
-    async fn execute_request(
-        &self,
-        endpoint: &str,
-        body: serde_json::Value,
-    ) -> Result<serde_json::Value, ProviderError> {
+    fn chat_url(&self) -> Result<String, ProviderError> {
         let account_id = self
             .config
             .get_account_id()
             .ok_or_else(|| ProviderError::configuration("cloudflare", "Account ID is required"))?;
+        Ok(format!(
+            "{}/accounts/{}/ai/v1/chat/completions",
+            self.config.get_api_base().trim_end_matches('/'),
+            account_id
+        ))
+    }
 
-        let url = format!(
-            "{}/accounts/{}/ai/run/{}",
-            self.config.get_api_base(),
-            account_id,
-            endpoint
-        );
+    /// Execute a non-streaming OpenAI-compatible chat request.
+    async fn execute_request(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let url = self.chat_url()?;
 
         let mut headers = Vec::with_capacity(2);
         if let Some(api_token) = self.config.get_api_token() {
@@ -169,82 +180,41 @@ impl CloudflareProvider {
         default_http_error_mapper("cloudflare", status, body)
     }
 
-    fn decode_response(
-        response: &serde_json::Value,
-        model: &str,
-        request_id: &str,
-    ) -> Result<ChatResponse, ProviderError> {
-        if response.get("success") == Some(&serde_json::Value::Bool(false)) {
-            let message = response["errors"]
-                .as_array()
-                .and_then(|errors| errors.first())
-                .and_then(|error| error["message"].as_str())
-                .unwrap_or("Cloudflare reported an unsuccessful response");
-            return Err(ProviderError::api_error("cloudflare", 502, message));
+    fn decode_response(response: serde_json::Value) -> Result<ChatResponse, ProviderError> {
+        let response: OpenAIChatResponse = serde_json::from_value(response)
+            .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))?;
+        if response.choices.is_empty() {
+            return Err(ProviderError::response_parsing(
+                "cloudflare",
+                "Missing completion choices",
+            ));
         }
-        let content = response["result"]["response"].as_str().ok_or_else(|| {
-            ProviderError::response_parsing("cloudflare", "Missing text result.response")
-        })?;
-        Ok(ChatResponse {
-            id: request_id.to_string(),
-            object: "chat.completion".to_string(),
-            created: chrono::Utc::now().timestamp(),
-            model: model.to_string(),
-            choices: vec![crate::core::types::responses::ChatChoice {
-                index: 0,
-                message: crate::core::types::chat::ChatMessage {
-                    role: crate::core::types::message::MessageRole::Assistant,
-                    content: Some(crate::core::types::message::MessageContent::Text(
-                        content.to_string(),
-                    )),
-                    ..Default::default()
-                },
-                finish_reason: Some(FinishReason::Stop),
-                logprobs: None,
-            }],
-            usage: None,
-            system_fingerprint: None,
-        })
+        OpenAIResponseTransformer::transform(response)
+            .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))
     }
 
-    /// Transform OpenAI-style request to Cloudflare format
-    fn transform_to_cloudflare_format(&self, request: &ChatRequest) -> serde_json::Value {
-        // Cloudflare uses a simpler format
-        let mut messages = Vec::new();
-        for msg in &request.messages {
-            let mut message = serde_json::json!({
-                "role": msg.role.to_string().to_lowercase(),
-            });
-
-            if let Some(ref content) = msg.content {
-                message["content"] = serde_json::json!(content.to_string());
-            }
-
-            messages.push(message);
+    fn transform_to_cloudflare_format(
+        &self,
+        request: &ChatRequest,
+    ) -> Result<serde_json::Value, ProviderError> {
+        if request.thinking.is_some() {
+            return Err(ProviderError::not_supported(
+                "cloudflare",
+                "Use reasoning_effort or provider-native parameters for reasoning configuration",
+            ));
         }
-
-        let mut body = serde_json::json!({
-            "messages": messages,
-        });
-
-        // Add optional parameters
-        if let Some(temperature) = request.temperature {
-            body["temperature"] = serde_json::json!(temperature);
-        }
-
-        if let Some(max_tokens) = request.max_tokens {
-            body["max_tokens"] = serde_json::json!(max_tokens);
-        }
-
-        if let Some(top_p) = request.top_p {
-            body["top_p"] = serde_json::json!(top_p);
-        }
-
-        if request.stream {
-            body["stream"] = serde_json::json!(true);
-        }
-
-        body
+        let mut request = request.clone();
+        request.model = request
+            .model
+            .strip_prefix("cloudflare/")
+            .unwrap_or(&request.model)
+            .to_string();
+        let stream = request.stream;
+        let mut wire = OpenAIRequestTransformer::transform(request)
+            .map_err(|e| ProviderError::invalid_request("cloudflare", e.to_string()))?;
+        wire.stream = Some(stream);
+        serde_json::to_value(wire)
+            .map_err(|e| ProviderError::serialization("cloudflare", e.to_string()))
     }
 }
 
@@ -276,6 +246,13 @@ impl LLMProvider for CloudflareProvider {
             "presence_penalty",
             "n",
             "seed",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "reasoning_effort",
+            "stream_options",
+            "max_completion_tokens",
+            "parallel_tool_calls",
         ]
     }
 
@@ -293,18 +270,18 @@ impl LLMProvider for CloudflareProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<serde_json::Value, ProviderError> {
-        Ok(self.transform_to_cloudflare_format(&request))
+        self.transform_to_cloudflare_format(&request)
     }
 
     async fn transform_response(
         &self,
         raw_response: &[u8],
-        model: &str,
-        request_id: &str,
+        _model: &str,
+        _request_id: &str,
     ) -> Result<ChatResponse, ProviderError> {
         let response = serde_json::from_slice(raw_response)
             .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))?;
-        Self::decode_response(&response, model, request_id)
+        Self::decode_response(response)
     }
 
     fn get_error_mapper(&self) -> Box<dyn ErrorMapper<ProviderError>> {
@@ -318,20 +295,11 @@ impl LLMProvider for CloudflareProvider {
     ) -> Result<ChatResponse, ProviderError> {
         debug!("Cloudflare chat request: model={}", request.model);
 
-        // Remove cloudflare/ prefix if present
-        let model = request
-            .model
-            .strip_prefix("cloudflare/")
-            .unwrap_or(&request.model);
-
-        // Transform request
-        let cloudflare_request = self.transform_to_cloudflare_format(&request);
-
-        // Execute request
-        let response = self.execute_request(model, cloudflare_request).await?;
-
-        let request_id = uuid::Uuid::new_v4().to_string();
-        Self::decode_response(&response, &request.model, &request_id)
+        let mut request = request;
+        request.stream = false;
+        let body = self.transform_to_cloudflare_format(&request)?;
+        let response = self.execute_request(body).await?;
+        Self::decode_response(response)
     }
 
     async fn chat_completion_stream(
@@ -340,17 +308,32 @@ impl LLMProvider for CloudflareProvider {
         _context: RequestContext,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>, ProviderError>
     {
-        debug!("Cloudflare streaming request: model={}", request.model);
-
-        // Set streaming flag
         request.stream = true;
-
-        // NOTE: SSE streaming for Cloudflare not yet implemented
-        // For now, return an error as streaming implementation needs more work
-        Err(ProviderError::not_supported(
-            "cloudflare",
-            "Streaming is not yet fully implemented for Cloudflare provider",
-        ))
+        let body = self.transform_to_cloudflare_format(&request)?;
+        let mut headers = vec![header("Content-Type", "application/json".to_string())];
+        if let Some(token) = self.config.get_api_token() {
+            headers.push(header("Authorization", format!("Bearer {}", token)));
+        }
+        let response = self
+            .pool_manager
+            .execute_streaming_request(&self.chat_url()?, headers, body, "cloudflare")
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
+            let body = read_streaming_error_body(response)
+                .await
+                .map_err(|e| Self::http_error(status.as_u16(), &e.to_string(), retry_after))?;
+            return Err(Self::http_error(status.as_u16(), &body, retry_after));
+        }
+        Ok(Box::pin(UnifiedSSEStream::new(
+            response.bytes_stream(),
+            OpenAICompatibleTransformer::new("cloudflare"),
+        )))
     }
 
     async fn embeddings(
