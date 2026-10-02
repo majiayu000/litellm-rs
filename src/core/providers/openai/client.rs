@@ -88,6 +88,44 @@ impl OpenAIProvider {
         .await
     }
 
+    #[cfg(feature = "gateway")]
+    pub(crate) fn native_response_binding(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        let base = self.config.get_api_base();
+        hash.update((base.len() as u64).to_be_bytes());
+        hash.update(base.as_bytes());
+        let mut headers = self.get_request_headers();
+        headers.sort_unstable();
+        for (name, value) in headers {
+            for part in [name.as_ref(), value.as_ref()] {
+                hash.update((part.len() as u64).to_be_bytes());
+                hash.update(part.as_bytes());
+            }
+        }
+        format!("{:x}", hash.finalize())
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response_lifecycle(
+        &self,
+        id: &str,
+        method: HttpMethod,
+        suffix: Option<&str>,
+        query: &str,
+    ) -> Result<reqwest::Response, ProviderError> {
+        super::super::responses_native::lifecycle(
+            &self.pool_manager,
+            &self.config.get_api_base(),
+            self.get_request_headers(),
+            id,
+            method,
+            suffix,
+            query,
+        )
+        .await
+    }
+
     /// Generate headers for OpenAI API requests
     ///
     /// Uses `HeaderPair` with Cow for static keys to avoid allocations.

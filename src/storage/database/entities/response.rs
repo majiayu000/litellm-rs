@@ -11,6 +11,8 @@ pub struct Model {
     pub input_json: String,
     /// None for the chat adapter; native IDs are bound to one deployment.
     pub deployment_id: Option<String>,
+    /// Digest of the upstream endpoint/account binding, never the credentials.
+    pub deployment_binding: Option<String>,
     pub background: bool,
     pub status: String,
     pub expires_at: i64,

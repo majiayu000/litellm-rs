@@ -722,7 +722,7 @@ Both implementations provide strong OpenAI API compatibility for core functional
 
 The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.
 
-This implementation is not ready for release: it currently requires `store=false`, `background=false`, and no `previous_response_id`. Shared, owner-scoped lifecycle bindings and the exact provider/model endpoint matrix remain outstanding (parity tracker F06/F07). Native stored responses must not be enabled before those bindings exist. Token reservation includes the serialized request and image overhead; provider-hosted tools, file contents and retained server-side context need additional accounting coverage.
+This implementation is not ready for release: native background execution, previous-response continuation and stream resumption remain restricted while their lifecycle/accounting coverage is completed. Authenticated native JSON and streaming creation now support stored response IDs bound to their owner and deployment (F07 below). The OpenAI endpoint matrix is verified per model; Copilot and Bedrock integration remains pending in F06. Token reservation includes serialized request text and image overhead; provider-hosted tools, file contents and retained server-side context need additional accounting coverage.
 
 ### Native OpenAI endpoint matrix (F06, unreleased)
 
@@ -747,4 +747,6 @@ The chat-adapter Responses lifecycle now stores response bodies, inputs and auth
 
 Durability requires an enabled file-backed SQLite or PostgreSQL database. Replicas must use the same database; a separate local SQLite fallback does not share state. `storage.database.enabled=false` uses a separate in-memory database and does **not** survive restart. Migrate the schema before startup when `auto_migrate=false`.
 
-Native Responses owner/deployment binding and background accounting are still pending in F07. The native route therefore retains its `store=false`, no-background and no-previous-response restrictions for now.
+Native Responses JSON and completed streams now support authenticated storage and owner-scoped retrieval, input-item listing and upstream deletion. Stored IDs bind to the selected deployment and a digest of its endpoint/account headers. Changing that account configuration invalidates lifecycle forwarding for existing records; restoring the same configuration permits access again. The digest contains no plaintext credentials. Native JSON and extension fields are preserved. GET/DELETE operations do not settle generation usage again.
+
+Native background accounting, previous-response continuation and stream resumption remain pending in F07 and are rejected explicitly. Anonymous native creation still requires `store=false`.

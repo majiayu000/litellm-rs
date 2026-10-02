@@ -335,7 +335,7 @@ async fn lifecycle_handlers_enforce_owner_delete_and_input_items_shape() {
     .unwrap();
     assert_eq!(deleted.status(), StatusCode::OK);
     let deleted_body = read_json(deleted).await;
-    assert_eq!(deleted_body["object"], "response");
+    assert_eq!(deleted_body["object"], "response.deleted");
     assert_eq!(deleted_body["deleted"], true);
     assert!(
         get_owned_response(db, &id, &Some(user_owner("route-owner")))

@@ -15,7 +15,9 @@ use serde_json::Value;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tracing::error;
 
+use super::super::responses_native::lifecycle as native_lifecycle;
 use super::{convert_to_responses_api, current_unix_ts, uuid_v4_hex};
+use crate::core::providers::base::HttpMethod;
 use crate::server::routes::ai::openai_errors;
 
 const RESPONSE_STORE_TTL_SECS: i64 = 86_400;
@@ -28,7 +30,7 @@ pub(super) struct StoredResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ResponseOwner(String);
+pub(crate) struct ResponseOwner(pub(crate) String);
 
 #[derive(Serialize)]
 struct DeletedResponse {
@@ -77,10 +79,17 @@ pub async fn get_response(
     response_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    match get_owned_response(&state.storage.database, response_id.as_str(), &owner).await {
-        Ok(stored) => Ok(HttpResponse::Ok().json(stored.response)),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+    let result = async {
+        let record =
+            get_owned_record(&state.storage.database, response_id.as_str(), &owner).await?;
+        if record.deployment_id.is_some() {
+            native_lifecycle::lifecycle(&state, &req, record, HttpMethod::GET, None).await
+        } else {
+            Ok(HttpResponse::Ok().json(decode_stored_response(record)?.response))
+        }
     }
+    .await;
+    Ok(result.unwrap_or_else(|error| openai_errors::gateway_error_response(&error)))
 }
 
 pub async fn delete_response(
@@ -89,28 +98,29 @@ pub async fn delete_response(
     response_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    let response_id = response_id.into_inner();
-    let result = match owner {
-        Some(owner) => {
-            state
-                .storage
-                .database
-                .delete_owned_response(&response_id, &owner.0, current_unix_ts())
-                .await
+    let result = async {
+        let record =
+            get_owned_record(&state.storage.database, response_id.as_str(), &owner).await?;
+        if record.deployment_id.is_some() {
+            return native_lifecycle::lifecycle(&state, &req, record, HttpMethod::DELETE, None)
+                .await;
         }
-        None => Ok(false),
-    };
-    match result {
-        Ok(true) => Ok(HttpResponse::Ok().json(DeletedResponse {
-            id: response_id,
-            object: "response",
+        if !state
+            .storage
+            .database
+            .delete_owned_response(&record.id, &record.owner, current_unix_ts())
+            .await?
+        {
+            return Err(response_not_found(&record.id));
+        }
+        Ok(HttpResponse::Ok().json(DeletedResponse {
+            id: record.id,
+            object: "response.deleted",
             deleted: true,
-        })),
-        Ok(false) => Ok(openai_errors::gateway_error_response(&response_not_found(
-            &response_id,
-        ))),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+        }))
     }
+    .await;
+    Ok(result.unwrap_or_else(|error| openai_errors::gateway_error_response(&error)))
 }
 
 pub async fn cancel_response(
@@ -119,12 +129,34 @@ pub async fn cancel_response(
     response_id: web::Path<String>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    match cancel_stored_background_response(&state.storage.database, response_id.as_str(), &owner)
+    let result = async {
+        let record =
+            get_owned_record(&state.storage.database, response_id.as_str(), &owner).await?;
+        if record.deployment_id.is_some() {
+            if !record.background {
+                return Err(GatewayError::conflict(
+                    "Only background Responses tasks can be canceled",
+                ));
+            }
+            return native_lifecycle::lifecycle(
+                &state,
+                &req,
+                record,
+                HttpMethod::POST,
+                Some("cancel"),
+            )
+            .await;
+        }
+        cancel_background_record(
+            &state.storage.database,
+            decode_stored_response(record)?,
+            &owner,
+        )
         .await
-    {
-        Ok(response) => Ok(HttpResponse::Ok().json(response)),
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+        .map(|response| HttpResponse::Ok().json(response))
     }
+    .await;
+    Ok(result.unwrap_or_else(|error| openai_errors::gateway_error_response(&error)))
 }
 
 pub async fn list_response_input_items(
@@ -134,13 +166,24 @@ pub async fn list_response_input_items(
     query: web::Query<InputItemsQuery>,
 ) -> ActixResult<HttpResponse> {
     let owner = response_owner(&super::super::context::get_request_context(&req)?);
-    match get_owned_response(&state.storage.database, response_id.as_str(), &owner).await {
-        Ok(stored) => match input_items_page(&stored.input, &query) {
-            Ok(page) => Ok(HttpResponse::Ok().json(page)),
-            Err(error) => Ok(openai_errors::gateway_error_response(&error)),
-        },
-        Err(error) => Ok(openai_errors::gateway_error_response(&error)),
+    let result = async {
+        let record =
+            get_owned_record(&state.storage.database, response_id.as_str(), &owner).await?;
+        if record.deployment_id.is_some() {
+            return native_lifecycle::lifecycle(
+                &state,
+                &req,
+                record,
+                HttpMethod::GET,
+                Some("input_items"),
+            )
+            .await;
+        }
+        let stored = decode_stored_response(record)?;
+        input_items_page(&stored.input, &query).map(|page| HttpResponse::Ok().json(page))
     }
+    .await;
+    Ok(result.unwrap_or_else(|error| openai_errors::gateway_error_response(&error)))
 }
 
 pub(super) async fn handle_background_response(
@@ -252,6 +295,7 @@ fn response_record(
         response_json: serde_json::to_string(response)?,
         input_json: serde_json::to_string(&original.input)?,
         deployment_id: None,
+        deployment_binding: None,
         background,
         status: response.status.clone(),
         expires_at: current_unix_ts() + RESPONSE_STORE_TTL_SECS,
@@ -292,7 +336,7 @@ pub(super) async fn resolve_previous_response_context(
     Ok(request)
 }
 
-pub(super) fn response_owner(
+pub(crate) fn response_owner(
     context: &crate::core::types::context::RequestContext,
 ) -> Option<ResponseOwner> {
     if let Some(api_key_id) = context.api_key_id() {
@@ -350,12 +394,22 @@ async fn finish_background_response(
         .await
 }
 
+#[cfg(test)]
 async fn cancel_stored_background_response(
     database: &Database,
     response_id: &str,
     owner: &Option<ResponseOwner>,
 ) -> Result<ResponsesApiResponse, GatewayError> {
-    let mut stored = get_owned_response(database, response_id, owner).await?;
+    let stored = get_owned_response(database, response_id, owner).await?;
+    cancel_background_record(database, stored, owner).await
+}
+
+async fn cancel_background_record(
+    database: &Database,
+    mut stored: StoredResponse,
+    owner: &Option<ResponseOwner>,
+) -> Result<ResponsesApiResponse, GatewayError> {
+    let response_id = stored.record.id.clone();
     if !stored.record.background {
         return Err(GatewayError::conflict(
             "Only background Responses tasks can be canceled",
@@ -368,7 +422,7 @@ async fn cancel_stored_background_response(
             if finish_background_response(database, &stored.record, &stored.response).await? {
                 return Ok(stored.response);
             }
-            let latest = get_owned_response(database, response_id, owner).await?;
+            let latest = get_owned_response(database, &response_id, owner).await?;
             if latest.response.status == "cancelled" {
                 Ok(latest.response)
             } else {
@@ -388,6 +442,27 @@ async fn get_owned_response(
     response_id: &str,
     owner: &Option<ResponseOwner>,
 ) -> Result<StoredResponse, GatewayError> {
+    decode_stored_response(get_owned_record(database, response_id, owner).await?)
+}
+
+fn decode_stored_response(record: ResponseRecord) -> Result<StoredResponse, GatewayError> {
+    if record.deployment_id.is_some() {
+        return Err(GatewayError::validation(
+            "A native response cannot be continued through the chat adapter",
+        ));
+    }
+    Ok(StoredResponse {
+        response: serde_json::from_str(&record.response_json)?,
+        input: serde_json::from_str(&record.input_json)?,
+        record,
+    })
+}
+
+async fn get_owned_record(
+    database: &Database,
+    response_id: &str,
+    owner: &Option<ResponseOwner>,
+) -> Result<ResponseRecord, GatewayError> {
     let Some(owner) = owner else {
         return Err(response_not_found(response_id));
     };
@@ -396,10 +471,10 @@ async fn get_owned_response(
         .owned_response(response_id, &owner.0, now)
         .await?
         .ok_or_else(|| response_not_found(response_id))?;
-    let mut response: ResponsesApiResponse = serde_json::from_str(&record.response_json)?;
     if record.lease_until.is_some_and(|deadline| deadline <= now)
         && matches!(record.status.as_str(), "queued" | "in_progress")
     {
+        let mut response: ResponsesApiResponse = serde_json::from_str(&record.response_json)?;
         response.status = "failed".into();
         response.error = Some(
             crate::core::models::openai::responses_api::ResponseApiError {
@@ -410,18 +485,12 @@ async fn get_owned_response(
         database
             .fail_abandoned_response(&record, serde_json::to_string(&response)?, now)
             .await?;
-        // Another replica may have completed, cancelled, or renewed the worker.
         record = database
             .owned_response(response_id, &owner.0, now)
             .await?
             .ok_or_else(|| response_not_found(response_id))?;
-        response = serde_json::from_str(&record.response_json)?;
     }
-    Ok(StoredResponse {
-        response,
-        input: serde_json::from_str(&record.input_json)?,
-        record,
-    })
+    Ok(record)
 }
 
 fn append_previous_context(

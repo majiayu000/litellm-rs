@@ -34,7 +34,7 @@ use super::openai_errors;
 mod codex_compat_tests;
 mod input_guardrail;
 mod lifecycle;
-pub(crate) use lifecycle::{ResponseOwner, store_response_if_requested};
+pub(crate) use lifecycle::{ResponseOwner, response_owner, store_response_if_requested};
 pub use lifecycle::{cancel_response, delete_response, get_response, list_response_input_items};
 #[cfg(test)]
 static PROVIDER_DISPATCH_COUNT: std::sync::atomic::AtomicUsize =

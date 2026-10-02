@@ -3,7 +3,9 @@
 #[path = "common/providers.rs"]
 pub mod provider_fixtures;
 
-use actix_web::{App, HttpResponse, HttpServer, http::StatusCode, test, web};
+use actix_web::{
+    App, HttpMessage, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web,
+};
 use litellm_rs::{Config, server::state::AppState};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -13,6 +15,7 @@ struct Upstream {
     seen: Arc<Mutex<Vec<Value>>>,
     status: StatusCode,
     output: Value,
+    lifecycle_calls: Arc<Mutex<Vec<String>>>,
 }
 
 async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResponse {
@@ -23,9 +26,25 @@ async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResp
             .json(json!({"error":{"message":"capacity unavailable"}}));
     }
     if body["stream"] == true {
+        let created = json!({"type":"response.created", "response":{"id":data.output["id"],"object":"response","status":"in_progress","output":[]}});
         let delta = json!({"type":"response.output_text.delta","output_index":0,"delta":"你好","future_event_field":{"native":true}});
         let completed = json!({"type":"response.completed", "response":data.output});
-        return HttpResponse::Ok().insert_header(("content-type", "text/event-stream")).body(format!("event: response.output_text.delta\ndata: {delta}\n\nevent: response.completed\ndata: {completed}\n\n"));
+        return HttpResponse::Ok().insert_header(("content-type", "text/event-stream")).body(format!("event: response.created\ndata: {created}\n\nevent: response.output_text.delta\ndata: {delta}\n\nevent: response.completed\ndata: {completed}\n\n"));
+    }
+    HttpResponse::Ok().json(&data.output)
+}
+
+async fn upstream_lifecycle(data: web::Data<Upstream>, req: HttpRequest) -> HttpResponse {
+    data.lifecycle_calls
+        .lock()
+        .unwrap()
+        .push(format!("{} {}", req.method(), req.uri()));
+    if req.path().ends_with("/input_items") {
+        return HttpResponse::Ok().json(json!({"object":"list", "data":[{"id":"item_native", "type":"message", "role":"user", "content":[{"type":"input_text","text":"Hello"}], "future_input_field":true}], "has_more":false}));
+    }
+    if req.method() == actix_web::http::Method::DELETE {
+        return HttpResponse::Ok()
+            .json(json!({"id":"resp_native", "object":"response.deleted", "deleted":true}));
     }
     HttpResponse::Ok().json(&data.output)
 }
@@ -37,6 +56,7 @@ async fn fixture(
     let upstream_state = Upstream {
         seen: Arc::default(),
         status,
+        lifecycle_calls: Arc::default(),
         output: json!({"id":"resp_native","object":"response","status":"completed","model":"gpt-4o-mini","output":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","content":[{"type":"output_text","text":"你好"}]}],"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15,"input_tokens_details":{"cached_tokens":4},"output_tokens_details":{"reasoning_tokens":1}},"future_response_field":{"preserved":true}}),
     };
     let data = upstream_state.clone();
@@ -46,6 +66,12 @@ async fn fixture(
         App::new()
             .app_data(web::Data::new(data.clone()))
             .route("/v1/responses", web::post().to(upstream))
+            .route("/v1/responses/{id}", web::get().to(upstream_lifecycle))
+            .route("/v1/responses/{id}", web::delete().to(upstream_lifecycle))
+            .route(
+                "/v1/responses/{id}/input_items",
+                web::get().to(upstream_lifecycle),
+            )
     })
     .workers(1)
     .listen(listener)
@@ -297,5 +323,170 @@ async fn chat_only_model_does_not_fall_back_from_native_responses() {
     .await;
     assert!(!response.status().is_success());
     assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn native_stored_json_and_sse_are_owner_scoped_across_gateways_and_account_changes() {
+    use litellm_rs::core::types::context::RequestContext;
+    for streaming in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+            config.gateway.storage.database.enabled = true;
+            config.gateway.storage.database.auto_migrate = true;
+            config.gateway.storage.database.url = format!(
+                "sqlite://{}?mode=rwc",
+                dir.path().join("native.db").display()
+            );
+        })
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let mut body = request(streaming);
+        body.as_object_mut().unwrap().remove("store");
+        let req = test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(body)
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let wire = test::read_body(response).await;
+        assert!(String::from_utf8_lossy(&wire).contains("future_response_field"));
+        drop(app);
+        let second = litellm_rs::server::HttpServer::new(&state.config())
+            .await
+            .unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(second.state().clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/v1/responses/resp_native")
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("bob"));
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert!(upstream.lifecycle_calls.lock().unwrap().is_empty());
+        let req = test::TestRequest::get()
+            .uri("/v1/responses/resp_native?include%5B%5D=reasoning.encrypted_content")
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value, upstream.output);
+        assert!(
+            upstream.lifecycle_calls.lock().unwrap()[0]
+                .contains("include%5B%5D=reasoning.encrypted_content")
+        );
+        let req = test::TestRequest::get()
+            .uri("/v1/responses/resp_native/input_items?limit=1&order=asc")
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["data"][0]["future_input_field"], true);
+
+        let mut changed = state.config().as_ref().clone();
+        changed.gateway.providers[0].api_key =
+            "sk-another-test-account-12345678901234567890".into();
+        let changed = litellm_rs::server::HttpServer::new(&changed).await.unwrap();
+        let changed_app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(changed.state().clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let before = upstream.lifecycle_calls.lock().unwrap().len();
+        let req = test::TestRequest::get()
+            .uri("/v1/responses/resp_native")
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        assert_eq!(
+            test::call_service(&changed_app, req).await.status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(upstream.lifecycle_calls.lock().unwrap().len(), before);
+
+        let req = test::TestRequest::delete()
+            .uri("/v1/responses/resp_native")
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["object"], "response.deleted");
+        let before = upstream.lifecycle_calls.lock().unwrap().len();
+        let req = test::TestRequest::get()
+            .uri("/v1/responses/resp_native")
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id("alice"));
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(upstream.lifecycle_calls.lock().unwrap().len(), before);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn native_storage_requires_owner_and_store_false_never_creates_a_handle() {
+    use litellm_rs::core::types::context::RequestContext;
+    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut stored = request(false);
+    stored.as_object_mut().unwrap().remove("store");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(stored)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(request(false))
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = test::read_body(response).await;
+    let req = test::TestRequest::get()
+        .uri("/v1/responses/resp_native")
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(upstream.lifecycle_calls.lock().unwrap().is_empty());
     handle.stop(false).await;
 }

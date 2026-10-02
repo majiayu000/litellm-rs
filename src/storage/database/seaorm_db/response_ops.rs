@@ -142,6 +142,7 @@ mod tests {
             response_json: "{}".into(),
             input_json: "[]".into(),
             deployment_id: Some("deployment-a".into()),
+            deployment_binding: Some("binding-a".into()),
             background: true,
             status: "in_progress".into(),
             expires_at: now + 100,

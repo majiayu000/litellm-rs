@@ -20,6 +20,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Responses::ResponseJson).text().not_null())
                     .col(ColumnDef::new(Responses::InputJson).text().not_null())
                     .col(ColumnDef::new(Responses::DeploymentId).string().null())
+                    .col(ColumnDef::new(Responses::DeploymentBinding).string().null())
                     .col(ColumnDef::new(Responses::Background).boolean().not_null())
                     .col(ColumnDef::new(Responses::Status).string().not_null())
                     .col(
@@ -57,6 +58,7 @@ enum Responses {
     ResponseJson,
     InputJson,
     DeploymentId,
+    DeploymentBinding,
     Background,
     Status,
     ExpiresAt,

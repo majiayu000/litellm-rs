@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(delete_resp.status(), StatusCode::OK);
         let deleted: Value = test::read_body_json(delete_resp).await;
         assert_eq!(deleted["id"], response_id);
-        assert_eq!(deleted["object"], "response");
+        assert_eq!(deleted["object"], "response.deleted");
         assert_eq!(deleted["deleted"], true);
 
         assert_eq!(mock.requests().len(), 1);

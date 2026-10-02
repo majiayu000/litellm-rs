@@ -17,8 +17,11 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::{budgeted, openai_errors, spend};
+#[path = "responses_native_lifecycle.rs"]
+pub(super) mod lifecycle;
 #[path = "responses_native_stream.rs"]
 mod stream;
+use lifecycle::NativeResponseStorage;
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -65,6 +68,7 @@ struct NativeCall {
     pricing: spend::RequestPricing,
     reservation: Option<UnifiedBudgetReservation>,
     key_reservation: Option<BudgetReservation>,
+    storage: Option<NativeResponseStorage>,
 }
 
 async fn create_native(
@@ -86,16 +90,24 @@ async fn create_native(
         return Err(GatewayError::Auth("Unauthorized".into()));
     }
     super::token_policy::attach_api_key_token_limit(req, &mut context)?;
-    // Native lifecycle handles must be bound to an authenticated owner and deployment
-    // before they can cross this gateway. F07 supplies that persistent binding.
-    if body.get("store") != Some(&Value::Bool(false))
-        || body.get("background") == Some(&Value::Bool(true))
+    let owner = super::responses::response_owner(&context);
+    let store = match body.get("store") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(GatewayError::validation("store must be a boolean")),
+    };
+    if store && owner.is_none() {
+        return Err(GatewayError::validation(
+            "Responses lifecycle storage requires authentication; set store=false for anonymous requests",
+        ));
+    }
+    if body.get("background") == Some(&Value::Bool(true))
         || body
             .get("previous_response_id")
             .is_some_and(|value| !value.is_null())
     {
         return Err(GatewayError::validation(
-            "Native Responses currently requires store=false, background=false and no previous_response_id; shared lifecycle support is pending",
+            "Native background and previous_response_id support is pending",
         ));
     }
     let requested_model = body
@@ -147,10 +159,12 @@ async fn create_native(
         {
             let context = context.clone();
             let callback = callback.clone();
+            let owner = owner.clone();
             move |provider, model, deployment| {
                 let mut body = body.clone();
                 let context = context.clone();
                 let callback = callback.clone();
+                let owner = owner.clone();
                 async move {
                     body["model"] = model.clone().into();
                     let provider_name = provider.name().to_string();
@@ -163,6 +177,25 @@ async fn create_native(
                     // This projection is only for the token reservation. The native wire body
                     // never passes through the chat transformer, including tools and reasoning.
                     let budget_request = budget_request(&body, &model);
+                    let storage = if store {
+                        let binding = provider.native_response_binding().ok_or_else(|| {
+                            ProviderError::not_supported("responses", "Stored native responses")
+                        })?;
+                        let owner = owner.as_ref().ok_or_else(|| {
+                            ProviderError::invalid_request(
+                                "responses",
+                                "Stored responses require an authenticated owner",
+                            )
+                        })?;
+                        Some(NativeResponseStorage::new(
+                            owner.0.clone(),
+                            &body,
+                            deployment.clone(),
+                            binding,
+                        ))
+                    } else {
+                        None
+                    };
                     let limits = state.budgeted.budget_limits();
                     let (response, reservations) = state
                         .budgeted
@@ -203,6 +236,7 @@ async fn create_native(
                         pricing,
                         reservation,
                         key_reservation,
+                        storage,
                     })
                 }
             }
@@ -224,6 +258,7 @@ async fn create_native(
         pricing,
         reservation,
         key_reservation,
+        mut storage,
     } = call;
     let mut body_stream = response.bytes_stream();
     let mut bytes = Vec::new();
@@ -300,6 +335,14 @@ async fn create_native(
         .inspect_err(|error| {
             callback.fail(error.to_string(), "guardrail_error");
         })?;
+    if let Some(storage) = storage.as_mut() {
+        storage
+            .save(&state.storage.database, &value)
+            .await
+            .inspect_err(|error| {
+                callback.fail(error.to_string(), "storage_error");
+            })?;
+    }
     callback.complete_usage(usage.as_ref(), "success");
     Ok(HttpResponse::Ok().json(value))
 }

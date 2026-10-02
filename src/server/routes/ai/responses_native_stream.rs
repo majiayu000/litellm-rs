@@ -30,6 +30,7 @@ pub(super) fn response(
             pricing,
             reservation,
             key_reservation,
+            mut storage,
         } = call;
         let mut upstream = response.bytes_stream();
         let mut frames = Frames::default();
@@ -87,6 +88,31 @@ pub(super) fn response(
                             } else if event == "error" {
                                 terminal = true;
                                 upstream_failed = true;
+                            }
+                            if matches!(
+                                event,
+                                "response.created"
+                                    | "response.completed"
+                                    | "response.incomplete"
+                                    | "response.failed"
+                            ) && let Some(storage) = storage.as_mut()
+                            {
+                                let Some(response) = value.get("response") else {
+                                    failure =
+                                        Some(invalid("Response event is missing its response"));
+                                    break 'upstream;
+                                };
+                                if let Err(error) =
+                                    storage.save(&state.storage.database, response).await
+                                {
+                                    tracing::error!("Native response could not be stored: {error}");
+                                    failure = Some(ProviderError::api_error(
+                                        "responses",
+                                        500,
+                                        "Native response storage failed",
+                                    ));
+                                    break 'upstream;
+                                }
                             }
                             // Keep each output's delta sequence contiguous for split-token checks.
                             if let Some(delta) = value.get("delta").and_then(Value::as_str) {
