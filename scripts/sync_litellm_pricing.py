@@ -735,7 +735,7 @@ def add_unreviewed_decisions(
         "sha256": source_sha256,
     }
     existing_source = sources.get(source_id)
-    if existing_source is not None:
+    if source_id in sources:
         # A prior import of this commit must retain its original observation date.
         source["reviewed_on"] = (
             existing_source.get("reviewed_on")

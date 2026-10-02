@@ -555,6 +555,39 @@ class CatalogAuthorityTests(unittest.TestCase):
             new = next(row for row in rows if row["pricing_key"] == "new-upstream-test")
             self.assertEqual(new["decision"], "unreviewed")
 
+    def test_main_refresh_rejects_null_source_without_writing_outputs(self) -> None:
+        source_commit = "d" * 40
+        source = sync.model_entries(sync.load_json(CATALOG_PATH))
+        source["new-upstream-test"] = {
+            "litellm_provider": "openai", "mode": "chat",
+            "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = pathlib.Path(temp_dir)
+            decisions = directory / "decisions.json"
+            document = sync.load_json(CATALOG_DECISIONS_PATH)
+            document["sources"][f"upstream-pricing-{source_commit}"] = None
+            decisions.write_text(json.dumps(document), encoding="utf-8")
+            before = decisions.read_bytes()
+            args = SimpleNamespace(
+                source_catalog=None,
+                source_url=sync.DEFAULT_SOURCE_URL.replace(sync.DEFAULT_SOURCE_COMMIT, source_commit),
+                source_commit=source_commit,
+                output=directory / "prices.json", catalog_decisions=decisions,
+                catalog_authority_output=directory / "authority.json",
+                overlay_file=[CATALOG_PATH], min_models=sync.DEFAULT_MIN_MODELS,
+                check=False,
+            )
+            with (
+                mock.patch.object(sync, "parse_args", return_value=args),
+                mock.patch.object(sync, "load_url", return_value=(source, "f" * 64)),
+                self.assertRaisesRegex(SystemExit, "conflicting pricing evidence"),
+            ):
+                sync.main()
+            self.assertEqual(decisions.read_bytes(), before)
+            self.assertFalse(args.output.exists())
+            self.assertFalse(args.catalog_authority_output.exists())
+
     def test_refresh_does_not_hide_malformed_or_duplicate_decisions(self) -> None:
         prices = {"known": {"litellm_provider": "other"}, "new": {"litellm_provider": "other"}}
         duplicate = self.decision("other", "known", "unreviewed")
