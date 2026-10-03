@@ -37,6 +37,27 @@ const DEEPINFRA_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
 ];
+
+const XINFERENCE_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+    ProviderCapability::TextToSpeech,
+];
+
+const OOBABOOGA_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+];
 const EMBEDDING_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -483,7 +504,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             )
         },
         ProviderDefinition {
-            capabilities: TOGETHER_CAPABILITIES,
+            capabilities: XINFERENCE_CAPABILITIES,
             ..def_local_chat("xinference", "Xinference", "http://localhost:9997/v1")
         },
         ProviderDefinition {
@@ -491,7 +512,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             ..def_local_chat("infinity", "Infinity", "http://localhost:7997")
         },
         ProviderDefinition {
-            capabilities: DEEPINFRA_CAPABILITIES,
+            capabilities: OOBABOOGA_CAPABILITIES,
             ..def_local_chat("oobabooga", "Oobabooga", "http://localhost:5000/v1")
         },
         // ===== Group 1d: Chinese OpenAI-compatible =====
