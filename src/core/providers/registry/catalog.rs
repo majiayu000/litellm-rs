@@ -9,6 +9,15 @@ use std::sync::LazyLock;
 use super::definition::{AuthType, ProviderDefinition};
 use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
+const GROQ_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+    ProviderCapability::TextToSpeech,
+];
 const TOGETHER_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -200,12 +209,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
     let defs: Vec<ProviderDefinition> = vec![
         // ===== Group 1b: Cloud OpenAI-compatible =====
         // ===== Group 1b: Cloud OpenAI-compatible =====
-        def_chat(
-            "groq",
-            "Groq",
-            "https://api.groq.com/openai/v1",
-            "GROQ_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: GROQ_CAPABILITIES,
+            ..def_chat(
+                "groq",
+                "Groq",
+                "https://api.groq.com/openai/v1",
+                "GROQ_API_KEY",
+            )
+        },
         def_chat(
             "ai21",
             "AI21",
