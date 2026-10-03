@@ -516,6 +516,7 @@ mod tests {
                 let requests = mock.requests();
                 assert_eq!(requests.len(), 1);
                 assert_eq!(requests[0].path, "/stt");
+                assert!(!String::from_utf8_lossy(&requests[0].body).contains("name=\"format\""));
                 assert!(!String::from_utf8_lossy(&requests[0].body).contains("response_format"));
             } else {
                 assert!(mock.requests().is_empty());
