@@ -602,12 +602,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "DASHSCOPE_API_KEY",
             )
         },
-        def_chat(
-            "baichuan",
-            "Baichuan",
-            "https://api.baichuan-ai.com/v1",
-            "BAICHUAN_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "baichuan",
+                "Baichuan",
+                "https://api.baichuan-ai.com/v1",
+                "BAICHUAN_API_KEY",
+            )
+        },
         def_chat(
             "minimax",
             "MiniMax",
