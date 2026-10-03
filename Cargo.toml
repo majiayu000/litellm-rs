@@ -223,9 +223,9 @@ metrics = ["dep:sysinfo"]
 tracing = ["dep:tracing-subscriber"]
 
 # Default-off protocol and platform experiments. These features expose library
-# modules only; they do not mount gateway routes by themselves.
+# modules; gateway+mcp also mounts configured MCP Streamable HTTP routes.
 a2a = []
-mcp = []
+mcp = ["serde_json/arbitrary_precision"]
 webhooks = []
 
 # JSON Schema validation for MCP tool parameters
