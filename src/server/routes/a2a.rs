@@ -86,6 +86,19 @@ impl TaskOwners {
                 })
         })
     }
+    fn has_live_context(&self, binding: &[u8], principal: &str, task: &str) -> bool {
+        self.entries.lock().ok().is_some_and(|entries| {
+            let now = Instant::now();
+            entries
+                .get(&(binding.to_vec(), "task".into(), task.into()))
+                .filter(|owner| owner.principal == principal && owner.expires > now)
+                .and_then(|owner| owner.context.as_ref())
+                .and_then(|context| {
+                    entries.get(&(binding.to_vec(), "context".into(), context.clone()))
+                })
+                .is_some_and(|owner| owner.principal == principal && owner.expires > now)
+        })
+    }
     fn observe(
         &self,
         binding: &[u8],
@@ -651,7 +664,10 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         request = request.header("a2a-extensions", value.as_bytes());
     }
     let mut reservation = if send {
-        let slots = usize::from(task.is_none()) + usize::from(context.is_none());
+        let needs_context = context.is_none()
+            && task
+                .is_none_or(|task| !state.a2a_tasks.has_live_context(&binding, &principal, task));
+        let slots = usize::from(task.is_none()) + usize::from(needs_context);
         match state.a2a_tasks.reserve(slots) {
             Ok(reservation) => Some(reservation),
             Err(message) => return error(StatusCode::SERVICE_UNAVAILABLE, id, -32000, message),

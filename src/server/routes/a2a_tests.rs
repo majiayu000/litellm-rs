@@ -1500,3 +1500,48 @@ async fn private_agent_requires_named_key_permission() {
     assert_eq!(calls.lock().unwrap().len(), 2);
     handle.stop(false).await;
 }
+
+#[actix_web::test]
+async fn task_only_continuation_reuses_context_capacity() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let response = test::call_service(&app, request("SendMessage", message(), &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    {
+        let mut entries = state.a2a_tasks.entries.lock().unwrap();
+        assert_eq!(entries.len(), 2);
+        for index in 0..4094 {
+            entries.insert(
+                (vec![], "task".into(), index.to_string()),
+                Owner {
+                    principal: "other".into(),
+                    expires: Instant::now() + Duration::from_secs(60),
+                    context: None,
+                },
+            );
+        }
+    }
+    let mut params = message();
+    params["message"]["taskId"] = json!("task-1");
+    let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.a2a_tasks.entries.lock().unwrap().len(), 4096);
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .pointer("/params/message/contextId")
+            .is_none()
+    );
+    handle.stop(false).await;
+}
