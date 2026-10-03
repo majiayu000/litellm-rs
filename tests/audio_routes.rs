@@ -321,18 +321,23 @@ mod tests {
         let boundary = "litellm-rs-audio-boundary";
         let audio_content = vec![b'a'; 32_000];
 
+        let mut multipart = Vec::new();
+        for granularity in ["word", "segment"] {
+            multipart.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"timestamp_granularities[]\"\r\n\r\n{granularity}\r\n").as_bytes());
+        }
+        multipart.extend(audio_multipart_body(
+            boundary,
+            "whisper-1",
+            "sample.mp3",
+            &audio_content,
+        ));
         let req = test::TestRequest::post()
             .uri("/v1/audio/transcriptions")
             .insert_header((
                 "content-type",
                 format!("multipart/form-data; boundary={boundary}"),
             ))
-            .set_payload(audio_multipart_body(
-                boundary,
-                "whisper-1",
-                "sample.mp3",
-                &audio_content,
-            ))
+            .set_payload(multipart)
             .to_request();
         let resp = test::call_service(&app, req).await;
 
@@ -352,6 +357,14 @@ mod tests {
                 .contains("multipart/form-data")
         );
         let multipart_body = String::from_utf8_lossy(&captured[0].body);
+        assert_eq!(
+            multipart_body
+                .matches("name=\"timestamp_granularities[]\"")
+                .count(),
+            2
+        );
+        assert!(multipart_body.contains("\r\nword\r\n"));
+        assert!(multipart_body.contains("\r\nsegment\r\n"));
         assert!(multipart_body.contains("name=\"model\""));
         assert!(multipart_body.contains("whisper-1"));
         assert!(multipart_body.contains("filename=\"sample.mp3\""));
