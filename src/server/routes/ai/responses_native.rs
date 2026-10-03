@@ -17,6 +17,8 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::{budgeted, openai_errors, spend};
+#[path = "responses_native_request.rs"]
+mod request;
 #[path = "responses_native_stream.rs"]
 mod stream;
 
@@ -98,6 +100,7 @@ async fn create_native(
             "Native Responses currently requires store=false, background=false and no previous_response_id; shared lifecycle support is pending",
         ));
     }
+    let needs_input_count = request::validate(&body)?;
     let requested_model = body
         .get("model")
         .and_then(Value::as_str)
@@ -163,6 +166,15 @@ async fn create_native(
                     // This projection is only for the token reservation. The native wire body
                     // never passes through the chat transformer, including tools and reasoning.
                     let budget_request = budget_request(&body, &model);
+                    let counted_input = if needs_input_count {
+                        Some(
+                            provider
+                                .native_response_input_tokens(request::count_body(&body))
+                                .await?,
+                        )
+                    } else {
+                        None
+                    };
                     let limits = state.budgeted.budget_limits();
                     let (response, reservations) = state
                         .budgeted
@@ -174,14 +186,26 @@ async fn create_native(
                         )
                         .reserve_call(
                             |_| {
-                                spend::reserve_chat_completion_budget_with_request_pricing(
-                                    &pricing,
-                                    &state.config().gateway.pricing,
-                                    &limits,
-                                    &provider_name,
-                                    &model,
-                                    &budget_request,
-                                )
+                                if let Some(input_tokens) = counted_input {
+                                    spend::reserve_completion_budget_with_counted_input(
+                                        &pricing,
+                                        &state.config().gateway.pricing,
+                                        &limits,
+                                        &provider_name,
+                                        &model,
+                                        input_tokens,
+                                        budget_request.max_tokens,
+                                    )
+                                } else {
+                                    spend::reserve_chat_completion_budget_with_request_pricing(
+                                        &pricing,
+                                        &state.config().gateway.pricing,
+                                        &limits,
+                                        &provider_name,
+                                        &model,
+                                        &budget_request,
+                                    )
+                                }
                             },
                             || {
                                 callback.begin_provider_execution_with_pricing(
@@ -414,6 +438,35 @@ async fn settle(
     let budgeted = &state.budgeted;
     let limits = budgeted.budget_limits();
     let keys = budgeted.key_manager();
+    if usage.is_none() {
+        spend::capture_ledger_settlement(facts.as_ref(), provider, model, None, None);
+        // Preserve the budget upper bound without presenting it as an actual bill.
+        if let Some(reservation) = reservation {
+            let reserved = reservation.reserved_amount();
+            if let Err(error) = reservation.settle(reserved) {
+                tracing::error!(%provider, %model, ?error, "failed to retain unknown Responses budget");
+            }
+        }
+        if let Some(reservation) = key_reservation {
+            let reserved = reservation.reserved_amount();
+            spend::settle_api_key_budget_reservation(
+                Some(reservation),
+                reserved,
+                "Responses usage unknown",
+            );
+        }
+        if let Some(key_id) = context.api_key_id()
+            && let Err(error) = keys
+                .record_usage_record(
+                    key_id,
+                    crate::core::keys::UsageRecord::unpriced(0, 0.0, "responses_usage_unknown"),
+                )
+                .await
+        {
+            tracing::error!(%key_id, %error, "failed to record unknown Responses usage");
+        }
+        return;
+    }
     let settlement = spend::usage_spend_settlement_with_request_pricing(
         (&limits, &keys, context.api_key_id()),
         (provider, model, usage),

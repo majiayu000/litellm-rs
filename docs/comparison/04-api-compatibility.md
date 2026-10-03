@@ -722,7 +722,7 @@ Both implementations provide strong OpenAI API compatibility for core functional
 
 The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.
 
-This implementation is not ready for release: it currently requires `store=false`, `background=false`, and no `previous_response_id`. Shared, owner-scoped lifecycle bindings and the exact provider/model endpoint matrix remain outstanding (parity tracker F06/F07). Native stored responses must not be enabled before those bindings exist. Token reservation includes the serialized request and image overhead; provider-hosted tools, file contents and retained server-side context need additional accounting coverage.
+This implementation is not ready for release: it currently requires `store=false`, `background=false`, and no `previous_response_id`. Shared, owner-scoped lifecycle bindings and the exact provider/model endpoint matrix remain outstanding (parity tracker F06/F07). Native stored responses must not be enabled before those bindings exist. The first billing-safe scope is client function/custom tools and standard-tier token-priced output. Inline images/PDFs and uploaded file IDs use OpenAI’s processed-input token-count endpoint before reservation; generation retains the original native inputs. Hosted tools, mutable remote image/file URLs, prompt/conversation handles and nondefault service tiers are rejected before generation. See [native Responses billing boundaries](../providers/native-responses-billing.md) for evidence and limits.
 
 ### Native OpenAI endpoint matrix (F06, unreleased)
 
@@ -737,6 +737,7 @@ models do not acquire chat support from a `gpt-` prefix. An OpenAI model without
 Responses support is rejected instead of silently entering the chat adapter.
 Other providers' compatibility adapters retain their documented behavior.
 
-This implements the OpenAI portion of F06. Copilot and Bedrock require their own
-endpoint/authentication contracts and are still pending; F07 lifecycle restrictions
-also remain. It does not establish account access or claim paid upstream validation.
+Copilot authenticated model metadata and the verified Bedrock Runtime/Mantle
+endpoint/authentication matrix are implemented separately; see
+[native Responses routing](../providers/native-responses-routing.md). F07 lifecycle restrictions
+still remain on this branch. It does not establish account access or claim paid upstream validation.
