@@ -262,30 +262,26 @@ for provider in [openai, anthropic] {
 
 ### Advanced Usage with Error Handling
 
-```rust
-use litellm_rs::core::providers::{Provider, ProviderError};
+Use the router's policy with the actual attempt, remaining budget and deadline.
+Choose the context for the operation: non-idempotent requests and streams that
+have already emitted output must not use an idempotent unary context.
 
-async fn try_providers(
-    providers: Vec<Provider>, 
-    request: ChatRequest
-) -> Result<ChatResponse, ProviderError> {
-    for provider in providers {
-        match provider.chat_completion(request.clone(), context.clone()).await {
-            Ok(response) => return Ok(response),
-            Err(e) if e.is_retryable() => {
-                if let Some(delay) = e.retry_delay() {
-                    tokio::time::sleep(Duration::from_secs(delay)).await;
-                }
-                continue;
+```rust
+use litellm_rs::core::router::retry_policy::RetryPolicy;
+
+match provider.chat_completion(request, context).await {
+    Ok(response) => { /* consume the response */ }
+    Err(error) => {
+        let decision = RetryPolicy.decide(&router_config, &error, retry_context);
+        if decision.should_retry {
+            if let Some(delay) = decision.delay {
+                tokio::time::sleep(delay).await;
             }
-            Err(e) => {
-                eprintln!("Provider {} failed: {}", provider.name(), e);
-                continue;
-            }
+            // Schedule the next attempt and update retry_context.
+        } else {
+            return Err(error);
         }
     }
-    
-    Err(ProviderError::other("all_providers", "All providers failed"))
 }
 ```
 

@@ -46,7 +46,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "a2a",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: a2a"),
-        note: "A2A library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
+        note: "Opt-in A2A 1.0 JSON-RPC HTTP gateway with caller-bound tasks and Streamable events; ownership is process-local.",
     },
     CoreSubsystem {
         name: "analytics",
@@ -281,12 +281,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         decision: SubsystemDecision::Wired,
         runtime_path: Some("AppState canonical RuntimeVirtualKeyManager"),
         note: "The virtual-keys runtime facade resolves to the canonical KeyManager used by auth and /v1/keys; storage record types remain in use.",
-    },
-    CoreSubsystem {
-        name: "webhooks",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: webhooks"),
-        note: "Webhook library types are excluded from the default build and are not advertised as a gateway runtime capability.",
     },
 ];
 

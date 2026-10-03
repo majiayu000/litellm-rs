@@ -480,15 +480,6 @@ impl ProviderError {
         }
     }
 
-    /// Check if this error is retryable
-    #[deprecated(
-        since = "0.6.0",
-        note = "use RetryPolicy::decide with ProviderFailureFacts for provider routing/retry; removal tracked in 0.7.0 follow-up (SP965-T010)"
-    )]
-    pub fn is_retryable(&self) -> bool {
-        ProviderFailureFacts::from_error(self).legacy_retryable
-    }
-
     /// Get retry delay in seconds
     pub fn retry_delay(&self) -> Option<u64> {
         ProviderFailureFacts::from_error(self)

@@ -43,10 +43,6 @@ impl ProviderErrorTrait for TestError {
         }
     }
 
-    fn is_retryable(&self) -> bool {
-        matches!(self, Self::Network(_) | Self::RateLimit(_))
-    }
-
     fn retry_delay(&self) -> Option<u64> {
         match self {
             Self::RateLimit(delay) => *delay,

@@ -176,9 +176,9 @@ impl ErrorMapper<ProviderError> for BedrockErrorMapper {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
+    use crate::utils::error::CanonicalError;
     use serde_json::json;
 
     #[test]
@@ -197,7 +197,7 @@ mod tests {
             crate::core::providers::unified_provider::provider_http_error_facts(&error).status,
             403
         );
-        assert!(!error.is_retryable());
+        assert!(!error.canonical_retryable());
 
         let error = mapper.map_http_error(429, "Rate limited");
         assert!(matches!(error, ProviderError::RateLimit { .. }));
@@ -207,7 +207,7 @@ mod tests {
             "ModelNotReadyException: misleading ordinary HTTP message",
         );
         assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));
-        assert!(!error.is_retryable());
+        assert!(!error.canonical_retryable());
         assert_eq!(error.retry_delay(), None);
     }
 
@@ -225,7 +225,10 @@ mod tests {
                 crate::core::providers::unified_provider::provider_http_error_facts(&error).status,
                 424
             );
-            assert!(error.is_retryable(), "expected retryable error for {body}");
+            assert!(
+                error.canonical_retryable(),
+                "expected retryable error for {body}"
+            );
             assert!(error.retry_delay().is_some());
         }
 
@@ -233,7 +236,7 @@ mod tests {
             424,
             r#"{"code":"ModelErrorException","message":"ModelNotReadyException: misleading"}"#,
         );
-        assert!(!error.is_retryable());
+        assert!(!error.canonical_retryable());
         assert_eq!(error.retry_delay(), None);
 
         let error = mapper.map_http_response_error(
@@ -246,7 +249,7 @@ mod tests {
             crate::core::providers::unified_provider::provider_http_error_facts(&error).status,
             424
         );
-        assert!(error.is_retryable());
+        assert!(error.canonical_retryable());
 
         let error = mapper.map_http_response_error(
             424,
@@ -254,7 +257,7 @@ mod tests {
             Some("ModelErrorException"),
         );
         assert!(matches!(error, ProviderError::ApiError { status: 424, .. }));
-        assert!(!error.is_retryable());
+        assert!(!error.canonical_retryable());
     }
 
     #[test]

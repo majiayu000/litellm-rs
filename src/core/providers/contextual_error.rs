@@ -62,16 +62,6 @@ impl ContextualError {
         self.model.as_deref()
     }
 
-    /// Check if this error is retryable
-    #[deprecated(
-        since = "0.6.0",
-        note = "use RetryPolicy::decide with ProviderFailureFacts for provider routing/retry; removal tracked in 0.7.0 follow-up (SP965-T010)"
-    )]
-    #[allow(deprecated)]
-    pub fn is_retryable(&self) -> bool {
-        self.inner.is_retryable()
-    }
-
     /// Get retry delay in seconds
     pub fn retry_delay(&self) -> Option<u64> {
         self.inner.retry_delay()
@@ -88,7 +78,6 @@ impl ContextualError {
     }
 
     /// Convert to a JSON-serializable error response
-    #[allow(deprecated)]
     pub fn to_error_response(&self) -> serde_json::Value {
         serde_json::json!({
             "error": {
@@ -98,7 +87,7 @@ impl ContextualError {
                 "request_id": self.request_id,
                 "model": self.model,
                 "provider": self.provider(),
-                "retryable": self.is_retryable(),
+                "retryable": crate::core::providers::failure::ProviderFailureFacts::from_error(&self.inner).legacy_retryable,
                 "retry_after": self.retry_delay(),
             }
         })
