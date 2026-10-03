@@ -785,6 +785,21 @@ impl OpenAILikeProvider {
     }
 
     pub fn get_model_info(&self, model_id: &str) -> ModelInfo {
+        if self.provider_name == "xai"
+            && self.config.get_effective_model(model_id) == "grok-voice-transcribe-2.0"
+        {
+            return ModelInfo {
+                id: model_id.into(),
+                name: "Grok Voice Transcribe 2.0".into(),
+                provider: "xai".into(),
+                max_context_length: 0,
+                max_output_length: None,
+                supports_streaming: false,
+                supports_tools: false,
+                capabilities: vec![ProviderCapability::AudioTranscription],
+                ..ModelInfo::default()
+            };
+        }
         if let Some(info) = crate::core::providers::registry::catalog_policy::catalog_model_info(
             &self.provider_name,
             model_id,
@@ -887,6 +902,9 @@ impl LLMProvider for OpenAILikeProvider {
 
     fn supports_model(&self, model: &str) -> bool {
         if self.provider_name == "xai" {
+            if self.config.get_effective_model(model) == "grok-voice-transcribe-2.0" {
+                return true;
+            }
             return self
                 .model_registry
                 .is_known_model(&self.config.get_effective_model(model));
@@ -955,6 +973,15 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<TranscriptionResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
+        if self.provider_name == "xai" {
+            return crate::core::providers::openai::execute_xai_transcription(
+                self.config.base.clone(),
+                &self.config.get_api_base(),
+                self.get_request_headers(),
+                request,
+            )
+            .await;
+        }
         // Verbose JSON includes duration for settlement. CompactifAI's plain JSON
         // uses a usage.seconds envelope that the common response does not expose.
         if matches!(self.provider_name.as_str(), "groq" | "compactifai")

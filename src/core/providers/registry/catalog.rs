@@ -9,6 +9,13 @@ use std::sync::LazyLock;
 use super::definition::{AuthType, ProviderDefinition};
 use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
+const XAI_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::AudioTranscription,
+];
 const COMPACTIFAI_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -545,6 +552,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         // passed through instead of enumerated in this static provider catalog.
         ProviderDefinition {
             model_prefix: Some("xai/"),
+            capabilities: XAI_CAPABILITIES,
             ..def_chat("xai", "xAI", "https://api.x.ai/v1", "XAI_API_KEY")
         },
         // ===== Group 1c: Local inference (no API key) =====

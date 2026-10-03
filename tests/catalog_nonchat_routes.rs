@@ -59,6 +59,14 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
             HttpResponse::Ok().insert_header(("content-type", mime)).body("test-audio")
         },
         "/v1/audio/transcriptions" | "/v1/audio/translations" => HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0})),
+        "/v1/stt" => {
+            let multipart = String::from_utf8_lossy(&body);
+            if multipart.contains("bad-response") {
+                HttpResponse::Ok().json(json!({"text":"missing duration"}))
+            } else {
+                HttpResponse::Ok().json(json!({"text":"transcribed", "language":"en", "duration":1.25, "words":[{"text":"transcribed","start":0.0,"end":1.25}]}))
+            }
+        }
         _ => HttpResponse::NotFound().finish(),
     }
 }
@@ -122,6 +130,8 @@ async fn fixture(
     let router = UnifiedRouter::default();
     let models = if selector == "groq" {
         vec!["whisper-large-v3", "canopylabs/orpheus-v1-english"]
+    } else if selector == "xai" {
+        vec!["grok-voice-transcribe-2.0"]
     } else {
         vec!["test-model"]
     };
@@ -2098,5 +2108,102 @@ async fn aiml_embeddings_require_prices_and_obey_gateway_budgets() {
         .unwrap()
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+#[tokio::test]
+async fn xai_native_transcription_maps_upload_words_and_upstream_errors() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::UNAUTHORIZED,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::BAD_GATEWAY,
+    ] {
+        let (router, upstream, handle) = fixture("xai", status).await;
+        let provider = selected(&router, ProviderCapability::AudioTranscription);
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::AudioTranslation,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        assert!(!provider.supports_capability_for_model(
+            "grok-voice-transcribe-1.0",
+            &ProviderCapability::AudioTranscription
+        ));
+        let request = TranscriptionRequest {
+            model: "xai/grok-voice-transcribe-2.0".into(),
+            file: vec![1, 2],
+            filename: "sample.wav".into(),
+            language: Some("en".into()),
+            prompt: None,
+            response_format: Some("verbose_json".into()),
+            temperature: None,
+            timestamp_granularities: Some(vec!["word".into()]),
+        };
+        let result = provider
+            .audio_transcription(request, RequestContext::default())
+            .await;
+        if status == StatusCode::OK {
+            let response = result.unwrap();
+            assert_eq!(response.duration, Some(1.25));
+            assert_eq!(response.words.unwrap()[0].word, "transcribed");
+        } else if status == StatusCode::TOO_MANY_REQUESTS {
+            assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        } else {
+            assert!(result.is_err());
+        }
+        let calls = upstream.seen.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "/v1/stt");
+        let body = String::from_utf8_lossy(&calls[0].1);
+        assert!(body.contains("grok-voice-transcribe-2.0"));
+        assert!(!body.contains("xai/grok"));
+        assert!(body.find("name=\"language\"").unwrap() < body.find("name=\"file\"").unwrap());
+        assert!(!body.contains("response_format"));
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn xai_transcription_rejects_unsupported_options_and_malformed_success() {
+    let (router, upstream, handle) = fixture("xai", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::AudioTranscription);
+    let mut request = TranscriptionRequest {
+        model: "grok-voice-transcribe-2.0".into(),
+        file: vec![1, 2],
+        filename: "sample.wav".into(),
+        language: None,
+        prompt: Some("unsupported".into()),
+        response_format: None,
+        temperature: None,
+        timestamp_granularities: None,
+    };
+    assert!(
+        provider
+            .audio_transcription(request.clone(), RequestContext::default())
+            .await
+            .is_err()
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    request.prompt = None;
+    request.language = Some("bad-response".into());
+    assert!(
+        provider
+            .audio_transcription(request, RequestContext::default())
+            .await
+            .is_err()
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
     handle.stop(false).await;
 }

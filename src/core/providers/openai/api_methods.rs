@@ -304,6 +304,85 @@ pub(crate) async fn execute_audio_transcription(
     })
 }
 
+/// Map the upload-only transcription surface to xAI's native STT contract.
+pub(crate) async fn execute_xai_transcription(
+    base: BaseConfig,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    request: TranscriptionRequest,
+) -> Result<TranscriptionResponse, OpenAIError> {
+    const PROVIDER: &str = "xai";
+    if request.prompt.is_some()
+        || request.temperature.is_some()
+        || !matches!(
+            request.response_format.as_deref(),
+            None | Some("json" | "verbose_json")
+        )
+        || request
+            .timestamp_granularities
+            .as_ref()
+            .is_some_and(|values| values.iter().any(|value| value != "word"))
+    {
+        return Err(OpenAIError::invalid_request(
+            PROVIDER,
+            "xAI transcription supports language, JSON/verbose_json and word timestamps; prompt, temperature and segment timestamps are unsupported",
+        ));
+    }
+    // The native API requires the file to be the final multipart field.
+    let form = multipart::Form::new()
+        .text("model", request.model)
+        .optional_text("language", request.language)
+        .part("file", audio_file_part(request.file, request.filename));
+    let bytes = execute_audio_multipart(
+        base,
+        headers,
+        PROVIDER,
+        format!("{}/stt", api_base.trim_end_matches('/')),
+        "audio transcription",
+        form,
+    )
+    .await?;
+    #[derive(serde::Deserialize)]
+    struct NativeWord {
+        text: String,
+        start: f64,
+        end: f64,
+    }
+    #[derive(serde::Deserialize)]
+    struct NativeResponse {
+        text: String,
+        language: String,
+        duration: f64,
+        words: Option<Vec<NativeWord>>,
+    }
+    let response: NativeResponse = serde_json::from_slice(&bytes).map_err(|error| {
+        OpenAIError::response_parsing(PROVIDER, format!("invalid transcription response: {error}"))
+    })?;
+    if !response.duration.is_finite() || response.duration <= 0.0 {
+        return Err(OpenAIError::response_parsing(
+            PROVIDER,
+            "transcription response lacks a positive audio duration",
+        ));
+    }
+    Ok(TranscriptionResponse {
+        text: response.text,
+        task: Some("transcribe".into()),
+        language: Some(response.language),
+        duration: Some(response.duration),
+        words: response.words.map(|words| {
+            words
+                .into_iter()
+                .map(|word| crate::core::audio::types::WordInfo {
+                    word: word.text,
+                    start: word.start,
+                    end: word.end,
+                })
+                .collect()
+        }),
+        segments: None,
+    })
+}
+
 pub(crate) async fn execute_audio_translation(
     base: BaseConfig,
     api_base: &str,
@@ -458,6 +537,12 @@ fn translation_form(request: TranslationRequest) -> multipart::Form {
 }
 
 fn audio_file_form(model: String, file: Vec<u8>, filename: String) -> multipart::Form {
+    multipart::Form::new()
+        .text("model", model)
+        .part("file", audio_file_part(file, filename))
+}
+
+fn audio_file_part(file: Vec<u8>, filename: String) -> multipart::Part {
     let filename = if filename.trim().is_empty() {
         "audio.mp3".to_string()
     } else {
@@ -482,12 +567,9 @@ fn audio_file_form(model: String, file: Vec<u8>, filename: String) -> multipart:
     };
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
-    multipart::Form::new().text("model", model).part(
-        "file",
-        multipart::Part::bytes(file)
-            .file_name(filename)
-            .headers(headers),
-    )
+    multipart::Part::bytes(file)
+        .file_name(filename)
+        .headers(headers)
 }
 
 trait OptionalMultipartText {
