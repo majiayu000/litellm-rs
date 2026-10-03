@@ -1,6 +1,6 @@
 # LiteLLM 差距补齐清单
 
-更新日期：2026-10-04T06:09:12+08:00（北京时间）。本轮累计验收合并 28 个 PR（逐项回执见下表）；当前 main `3c0d1610`。快照有 4 个开放 issue、1 个开放 PR；文档自身后续合并状态以 GitHub 为准。
+更新日期：2026-10-04T06:41:10+08:00（北京时间）。本轮累计验收合并 28 个 PR（逐项回执见下表）；当前 main `3c0d1610`。06:09 归档快照有 4 个开放 issue、1 个开放 PR；随后为尚未完成的 F11 建立单协议后续 #1440，当前有 5 个开放 issue、1 个开放 PR。文档自身后续合并状态以 GitHub 为准。
 
 本文件是 F01–F18 的执行台账。已合并与已发布分别记录；当前正式版本仍为 v0.7.0。下方保留原始验收条件、实际源码/检查/合并记录和剩余事项。
 
@@ -144,7 +144,7 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 
 ## F11 剩余兼容供应商
 
-首批 #1386 / #1389 已完成；Groq #1398 / #1399 已合并（`d6ab3e72`）。剩余供应商在开始下一批时先搜索 issue/PR，按实际缺口建立有边界的 issue。
+首批 #1386 / #1389 已完成；Groq #1398 / #1399 已合并（`d6ab3e72`）。#1435 / #1436 只完成媒体协议审计，未完成全部媒体适配。下一单协议实现已建 [#1440](https://github.com/majiayu000/litellm-rs/issues/1440)：Nebius 图片请求/响应及计费；其余供应商缺口仍按现有审核矩阵逐批处理，每批开始前先搜索 issue/PR。
 
 - [x] 将具名 registry 选择器逐项列入现有 compatible-nonchat 文档，记录已验证能力、官方协议路径及尚未核验范围，不能用聊天兼容性推断其他端点。
 - [ ] 核对剩余 embeddings/images/audio 能力；仅同协议、同 base 的能力复用现有通路，原生专用路径单独判断是否属于本项必要实现。
@@ -195,7 +195,7 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 - [ ] 逐条核实审查意见的当前代码和官方依据，修复有效问题，对已修复或不适用意见说明证据并解决线程；最新 CI 全绿且 review threads 已解决后合并。
 - [ ] 每项完成时更新本文件的状态、PR、合并提交、验证链接和剩余限制；发布版本在 F18 验证后补记。
 
-已完成的 F01–F04、F06、F08、F12、F13、F14、F17 不重复实施，仅参加受影响回归和最终发行验收。F17 当前样本只支持已记录的本地非流式聊天结论；生产负载或其他协议基准不作为本轮新增任务。
+已完成的 F01–F04、F06–F09、F12–F15、F17 不重复实施，仅参加受影响回归和最终发行验收。F07、F09、F15 仅限各自已接受并记录的范围，F05 内置工具和 F11 未完成能力仍单独处理。F17 当前样本只支持已记录的本地非流式聊天结论；生产负载或其他协议基准不作为本轮新增任务。
 
 ## 本次清单整理记录
 
@@ -265,16 +265,19 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 | [#1438](https://github.com/majiayu000/litellm-rs/pull/1438) | #1437 / 原生xAI转写 | 验收 head `5ca350aa`，全部 15 项 CI 成功、审查线程解决后合并 `7b9dbb67`。 |
 | [#1439](https://github.com/majiayu000/litellm-rs/pull/1439) | xAI language 格式化延迟审查修复（原 #1438 已合并） | 验收 head `0f5ff352`，全部 15 项 CI 成功、审查线程解决后合并 `3c0d1610`。 |
 
-### 仍开放的总项与下一步
+### 路线图剩余事项与下一步
+
+原四个开放总项不是整个路线图的全部剩余工作：F11 的媒体协议审计已完成，但以下原生能力仍未适配。为它的下一项 Nebius 图片实现新增 #1440，不重开已完成审计的 #1435，也不把 xAI 转写修复视为 xAI 图片/TTS 完成。
 
 | Issue | 已有证据与剩余范围 | 处理顺序 |
 | --- | --- | --- |
 | [#1372](https://github.com/majiayu000/litellm-rs/issues/1372) / F05 | 原生 JSON/SSE、推理、客户端函数/custom 工具、现有授权/预算以及 F07 持久生命周期已接受。原 issue 要求原生内置工具；当前托管搜索、容器、图片生成和远程 MCP 等因账务边界尚未建立而明确拒绝，所以不能关闭。 | 先按官方单项协议建立可靠的请求费用上限和终态计费单位，再接通一种内置工具并用真实 mock gateway/预算/结算验证；不把传输保留等同完整收费支持。 |
 | [#1373](https://github.com/majiayu000/litellm-rs/issues/1373) / F10 | 当前目录 154 callable、439 pricing_only、3976 unreviewed；callable 行没有已过 deprecation_date，但这不证明所有静态运行时声明已核验。Azure mapped authority 35 条、GitHub Models、Nova/Meta/v0、剩余音频/非 Gemini Vertex 等仍需官方逐条核对。 | 先按现有条目及官方 shutdown/model 文档核验 provider/pricing_key/能力/限额；仅确认退役才取消 callable，保留历史价格。每批独立 issue/PR，不新增规则引擎。 |
+| [#1440](https://github.com/majiayu000/litellm-rs/issues/1440) / F11 下一批 | [已接受媒体协议审计](https://github.com/majiayu000/litellm-rs/blob/3c0d1610680b9ee64c7f5f754d02a41eec2a3e5e/docs/audit/compatible-media-followup-2026-10-03.md)记录 Nebius width/height 与 data/id 协议差异，具名选择器尚未开放图片。OpenRouter 媒体、xAI 图片/TTS、NVIDIA 独立部署和 Fireworks 等仍有未适配或未确认范围，F11 保持进行中。 | 下一实现 PR 仅处理 Nebius 图片：重新核对官方合同、沿用现有 factory/Router/gateway 做字段与响应转换、真实 HTTP/预算/费用结算回归；其余能力按矩阵逐协议另立 issue，不因本批完成而关闭整个 F11。 |
 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / F16 | 多个过期 manager、analytics/cache、重复 provider、observability/retry 表面已清理。旧 core::realtime 4 文件未被 server 引用；MCP/A2A 配置及错误类型有真实引用，兼容 client/export 尚待追踪。registry observability 与 core 的 module-only 注释、MCP 会话说明有过时描述；38 条 registry 声明已入源码清单，引用存在不等于运行验收。 | 先以已接受协议为基线删除确实无用的过期 API；保留 auth/storage/proxy 真实使用的 domain/config/error 类型，再同步 registry/README/Cargo/入口声明并运行必要特性检查。 |
 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403) / F18 | 发行准备代码和精确 shipped-profile 检查可验收；现有版本 v0.7.0 的发布日期为 2026-09-30。历史 ARM64 dirty 预验证不是最终候选。 | 固定全部已接受代码与版本；制作不可变 crate/跨平台二进制/镜像，验证干净安装及本地 mock 协议冒烟；真实发布后登记 tag/commit/checksum/digest/platforms，才关闭。 |
 
-这些总项保持开放是实际剩余工作的记录。其他仍开放的实现 issue 只在对应 PR 的当前 CI/review、合并及自身范围完成后关闭。#1372 的原生内置工具验收条件未满足，单独保留。
+这五个开放 issue 记录当前已排定的剩余工作，其中 #1440 是 F11 的下一单协议实现，不代表整个 F11 的所有缺口只剩这一项。只有对应 PR 的当前 CI/review、合并及自身范围完成后才关闭 issue。#1372 的原生内置工具验收条件未满足，单独保留。
 
 ### 最新远端快照
 
@@ -282,7 +285,7 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 | --- | --- | --- | --- | --- |
 | [#1390](https://github.com/majiayu000/litellm-rs/pull/1390)（本报告） | 新提交另行核对 | 独立 CI | 文档验收后解决 | 最终状态以 GitHub 为准 |
 
-快照只适用于所列 head 和时间点，文档自身新提交须独立验收。合并前重新核对 expected head、非 Draft、MERGEABLE、全部 CI 成功及全部线程 resolved。
+归档快照捕获于 06:09，早于 #1440 和本次两条文档审查修正；只适用于所列 head 和时间点，文档自身新提交须独立验收。合并前重新核对 expected head、非 Draft、MERGEABLE、全部 CI 成功及全部线程 resolved。
 
 ### 可复核证据与限制
 
