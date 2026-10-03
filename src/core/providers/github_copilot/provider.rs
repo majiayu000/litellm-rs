@@ -17,7 +17,7 @@ use super::model_info::{
     get_available_models, get_model_info, is_claude_model, supports_reasoning,
 };
 use crate::ProviderError;
-use crate::core::providers::base::HttpErrorMapper;
+use crate::core::providers::base::{BaseConfig, BaseHttpClient, HttpErrorMapper};
 use crate::core::streaming::utils::is_done_marker;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
@@ -52,6 +52,8 @@ pub struct GitHubCopilotProvider {
     cached_api_key: Arc<RwLock<Option<String>>>,
     /// Cached API base
     cached_api_base: Arc<RwLock<Option<String>>>,
+    #[cfg(test)]
+    native_endpoint_access: crate::core::net::ProviderEndpointAccess,
 }
 
 impl Clone for GitHubCopilotProvider {
@@ -62,6 +64,8 @@ impl Clone for GitHubCopilotProvider {
             models: self.models.clone(),
             cached_api_key: Arc::new(RwLock::new(None)),
             cached_api_base: Arc::new(RwLock::new(None)),
+            #[cfg(test)]
+            native_endpoint_access: crate::core::net::ProviderEndpointAccess::PublicOnly,
         }
     }
 }
@@ -112,7 +116,28 @@ impl GitHubCopilotProvider {
             models,
             cached_api_key: Arc::new(RwLock::new(None)),
             cached_api_base: Arc::new(RwLock::new(None)),
+            #[cfg(test)]
+            native_endpoint_access: crate::core::net::ProviderEndpointAccess::PublicOnly,
         })
+    }
+
+    fn native_http_client(
+        &self,
+        api_base: &str,
+        streaming: bool,
+    ) -> Result<BaseHttpClient, ProviderError> {
+        let config = BaseConfig {
+            api_base: Some(api_base.to_string()),
+            timeout: self.config.timeout,
+            #[cfg(test)]
+            endpoint_access: self.native_endpoint_access,
+            ..Default::default()
+        };
+        if streaming {
+            BaseHttpClient::new_for_provider_streaming_no_redirect("github_copilot", config)
+        } else {
+            BaseHttpClient::new_for_provider_no_redirect("github_copilot", config)
+        }
     }
 
     /// The account model catalog, not the model name or price table, decides
@@ -123,14 +148,15 @@ impl GitHubCopilotProvider {
         endpoint: &str,
         headers: &reqwest::header::HeaderMap,
     ) -> Result<(), ProviderError> {
-        let url = format!("{}/models", self.get_api_base().await.trim_end_matches('/'));
-        let response = crate::core::http::outbound::default_outbound_client()
-            .get(url)
+        let api_base = self.get_api_base().await;
+        let url = format!("{}/models", api_base.trim_end_matches('/'));
+        let client = self.native_http_client(&api_base, false)?;
+        let response = client
+            .get(url)?
             .headers(headers.clone())
-            .timeout(std::time::Duration::from_secs(self.config.timeout))
             .send()
             .await
-            .map_err(|error| ProviderError::network("github_copilot", error.to_string()))?;
+            .map_err(|error| client.map_preserved_request_error(error))?;
         let response = self.check_native_status(response).await?;
         let catalog: serde_json::Value = response.json().await.map_err(|_| {
             ProviderError::response_parsing("github_copilot", "Invalid account model catalog")
@@ -234,22 +260,17 @@ impl GitHubCopilotProvider {
                 reqwest::header::HeaderValue::from_static("true"),
             );
         }
-        let url = format!(
-            "{}/responses",
-            self.get_api_base().await.trim_end_matches('/')
-        );
-        let client = if body.get("stream") == Some(&Value::Bool(true)) {
-            crate::core::http::outbound::streaming_outbound_client()
-        } else {
-            crate::core::http::outbound::default_outbound_client()
-        };
+        let api_base = self.get_api_base().await;
+        let url = format!("{}/responses", api_base.trim_end_matches('/'));
+        let client =
+            self.native_http_client(&api_base, body.get("stream") == Some(&Value::Bool(true)))?;
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(self.config.timeout),
-            client.post(url).headers(headers).json(&body).send(),
+            client.post(url)?.headers(headers).json(&body).send(),
         )
         .await
         .map_err(|_| ProviderError::timeout("github_copilot", "Responses upstream timed out"))?
-        .map_err(|error| ProviderError::network("github_copilot", error.to_string()))?;
+        .map_err(|error| client.map_preserved_request_error(error))?;
         self.check_native_status(response).await
     }
 
@@ -918,6 +939,8 @@ mod tests {
             models: vec![],
             cached_api_key: Arc::new(RwLock::new(None)),
             cached_api_base: Arc::new(RwLock::new(None)),
+            #[cfg(test)]
+            native_endpoint_access: crate::core::net::ProviderEndpointAccess::PublicOnly,
         };
 
         let messages = vec![text_message(MessageRole::User, "Hello")];

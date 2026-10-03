@@ -237,8 +237,8 @@ fn current_bedrock_models_keep_platform_specific_limits_and_scopes() {
     assert_eq!(
         sol.inference_profiles,
         &[
-            InferenceProfileScope::UnitedStates,
-            InferenceProfileScope::Global
+            InferenceProfileScope::Global,
+            InferenceProfileScope::UnitedStates
         ]
     );
     assert_eq!(

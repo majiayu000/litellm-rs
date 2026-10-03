@@ -78,12 +78,13 @@ async fn fixture(
     .run();
     let handle = server.handle();
     tokio::spawn(server);
-    let provider = GitHubCopilotProvider::new(GitHubCopilotConfig {
+    let mut provider = GitHubCopilotProvider::new(GitHubCopilotConfig {
         api_base: Some(format!("http://{address}")),
         ..Default::default()
     })
     .await
     .unwrap();
+    provider.native_endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
     *provider.cached_api_key.write().await = Some("fake-local-copilot-token".into());
     (provider, state, handle)
 }
@@ -171,7 +172,7 @@ async fn discovery_errors_preserve_classification_and_never_fall_back() {
         match status {
             401 => assert!(matches!(error, ProviderError::Authentication { .. })),
             429 => assert!(matches!(error, ProviderError::RateLimit { .. })),
-            _ => assert!(matches!(error, ProviderError::ApiError { status: 503, .. })),
+            _ => assert!(matches!(error, ProviderError::ProviderUnavailable { .. })),
         }
         assert_eq!(state.seen.lock().unwrap().len(), 1);
         server.stop(false).await;
@@ -196,7 +197,7 @@ async fn native_json_and_upstream_errors_are_preserved() {
         match status {
             401 => assert!(matches!(error, ProviderError::Authentication { .. })),
             429 => assert!(matches!(error, ProviderError::RateLimit { .. })),
-            _ => assert!(matches!(error, ProviderError::ApiError { status: 503, .. })),
+            _ => assert!(matches!(error, ProviderError::ProviderUnavailable { .. })),
         }
     }
     assert_eq!(state.seen.lock().unwrap().len(), 8);

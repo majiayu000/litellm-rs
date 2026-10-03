@@ -113,6 +113,11 @@ impl BedrockProvider {
     }
 
     #[cfg(feature = "gateway")]
+    pub(crate) fn responses_pricing_identity(&self, model: &str) -> Option<(&'static str, String)> {
+        self.client.responses_pricing_identity(model)
+    }
+
+    #[cfg(feature = "gateway")]
     pub(crate) fn supports_responses_model(&self, model: &str) -> bool {
         self.client.supports_responses_model(model)
     }

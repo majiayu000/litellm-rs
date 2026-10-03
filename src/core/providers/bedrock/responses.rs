@@ -166,6 +166,21 @@ fn response_target<'a>(
 }
 
 impl BedrockClient {
+    pub(crate) fn responses_pricing_identity(&self, model: &str) -> Option<(&'static str, String)> {
+        response_target(model, &self.auth.credentials().region)
+            .ok()
+            .map(|(endpoint, wire, _)| {
+                (
+                    if endpoint == ResponsesEndpoint::Runtime {
+                        "bedrock_converse"
+                    } else {
+                        "bedrock_mantle"
+                    },
+                    wire.to_string(),
+                )
+            })
+    }
+
     pub(crate) fn supports_responses_model(&self, model: &str) -> bool {
         response_target(model, &self.auth.credentials().region).is_ok()
     }

@@ -67,3 +67,12 @@ endpoint correction. Below are SHA-256 digests of the fetched official HTML:
 - `gpt-6-1-sol`: `bc1ef99b8f5b8865a239ac0021422b3442e946cea6f7f27254c7be40a4bff2fe`
 - `gpt-oss-120b`: `b7a8cdf87f144f0dbdd039f85e18af751ca361d1e76a00069f9c68e457018f5b`
 - `gpt-oss-20b`: `4d24d0edbbd6110a63e8c2fcc786b1e7ae2b9050dd23e88fafc5f7905631c2e3`
+
+Budget and usage settlement use the same endpoint decision: Mantle looks up
+`bedrock_mantle` pricing for its actual wire model; Runtime retains the exact
+Bedrock profile. This prevents applying global reference prices to regional
+Mantle requests. No second price table is introduced. Copilot subscriptions do
+not imply a zero token price: existing `unpriced_model_policy` remains in force
+(default reject). Operators need their own verified price configuration or the
+existing explicit `allow_unpriced` policy; endpoint support is still checked
+against the authenticated account catalog.
