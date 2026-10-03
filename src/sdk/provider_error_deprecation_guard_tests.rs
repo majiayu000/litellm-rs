@@ -7,8 +7,6 @@ use std::process::Command;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{Expr, GenericArgument, ItemImpl, Meta, PathArguments, Type, UseTree};
-const MARKER: &str = "SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError";
-const META: &str = "#[deprecated(\n        since = \"0.6.0\",\n        note = \"use the existing typed SDK categories returned by ProviderError conversion\"\n    )]\n    ProviderError(String),";
 type Finding = (String, String, String); type Sources = BTreeMap<String, String>; type LintFiles = Vec<(String, String)>;
 fn id(value: &syn::Ident) -> String { value.unraw().to_string() }
 fn lint_suppression(meta: &Meta) -> bool {
@@ -73,6 +71,10 @@ impl SourceVisitor<'_> {
     }
 }
 impl<'ast> Visit<'ast> for SourceVisitor<'_> {
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        if id(&item.ident) == "SDKError" && item.variants.iter().any(|variant| id(&variant.ident) == "ProviderError") { self.hit("definition"); }
+        visit::visit_item_enum(self, item);
+    }
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
         let old = std::mem::replace(&mut self.impl_owner, impl_name(item));
         self.owned(format!("impl:{}", self.impl_owner), |this| {
@@ -199,34 +201,16 @@ fn lint_ok(source: &str, path: &str) -> Result<(), String> {
     { Err(format!("lint downgrade: {path}")) } else { Ok(()) }
 }
 fn expected_findings() -> Vec<Finding> {
-    let errors = "src/sdk/errors.rs".to_string();
-    let mut expected = vec![
-        (errors.clone(), "from@GatewayError".into(), "construct".into()), (errors.clone(), "from@ProviderError".into(), "construct".into()),
-        (errors.clone(), "is_retryable@SDKError".into(), "macro".into()), (errors.clone(), "sdk_variant".into(), "pattern".into()),
-        (errors.clone(), "test_sdk_error_provider_error".into(), "construct".into()), (errors.clone(), "test_is_retryable_provider_error".into(), "construct".into()),
-        (errors.clone(), "test_from_gateway_error_provider_unavailable".into(), "macro".into()),
-        (errors, "test_sdk_error_empty_message".into(), "construct".into()),
-        ("src/sdk/client/completions.rs".into(), "execute_chat_request@LLMClient".into(), "provider-type-match".into()), ("src/sdk/client/completions.rs".into(), "wildcard-arm#3@match:provider.provider_type@execute_chat_request@LLMClient".into(), "construct".into()),
-    ]; expected.sort(); expected
+    // Preserve the existing match-boundary check; no retired variant use is allowed.
+    vec![("src/sdk/client/completions.rs".into(), "execute_chat_request@LLMClient".into(), "provider-type-match".into())]
 }
 fn expected_attrs(sources: &Sources) -> BTreeMap<String, usize> {
     let mut expected = BTreeMap::from([
-        ("src/sdk/errors.rs".into(), 9), ("src/sdk/client/completions.rs".into(), 1),
         ("src/core/traits/provider/llm_provider/sub_traits.rs".into(), 9),
         ("src/server/routes/mod.rs".into(), 1),
-        // SP965-T017 (GH965 D1E-c): allow(deprecated) sites for the six 0.6-deprecated retry helpers.
         // GH838 compatibility adapters consume protocol modules deprecated for 0.7 removal.
-        ("src/utils/error/canonical.rs".into(), 5),
+        ("src/utils/error/canonical.rs".into(), 4),
         ("src/utils/error/gateway_error/conversions.rs".into(), 6),
-        ("src/core/providers/provider_error_conversions.rs".into(), 1),
-        ("src/core/providers/contextual_error.rs".into(), 2),
-        ("src/core/providers/unified_provider_tests.rs".into(), 1),
-        ("src/core/providers/openai_like/provider/tests.rs".into(), 1),
-        ("tests/integration/error_handling_tests.rs".into(), 1),
-        ("src/core/providers/bedrock/error.rs".into(), 1),
-        ("src/core/providers/bedrock/streaming/event_stream.rs".into(), 1),
-        ("src/core/providers/failure.rs".into(), 1),
-        ("src/utils/error/utils/retry.rs".into(), 1),
     ]);
     for path in ["src/core/router/tests/concurrency_edge_case_tests.rs", "src/core/router/tests/execution_tests.rs",
         "src/core/router/tests/router_tests.rs", "src/core/router/tests/selection_tests.rs",
@@ -245,11 +229,6 @@ fn verify(sources: &Sources, lint: &[(String, String)]) -> Result<(), String> {
     }
     findings.sort(); if findings != expected_findings() { return Err(format!("legacy findings: {findings:#?}")); }
     if attrs != expected_attrs(sources) { return Err(format!("deprecated attrs: {attrs:#?}")); }
-    let errors = &sources["src/sdk/errors.rs"]; let completions = &sources["src/sdk/client/completions.rs"];
-    if errors.matches(META).count() != 1 { return Err("legacy metadata changed".into()); }
-    let adjacent = |source: &str| source.lines().collect::<Vec<_>>().windows(2)
-        .filter(|lines| lines[0].trim() == format!("// {MARKER}") && lines[1].trim() == "#[allow(deprecated)]").count();
-    if adjacent(errors) != 8 || adjacent(completions) != 1 { return Err("marker/allow adjacency changed".into()); }
     let anchors = [
         ("src/server/routes/mod.rs", "fn test_api_response_to_http_response_remains_compatibility_shim"),
         ("src/core/traits/provider/llm_provider/sub_traits.rs", "impl<T: LLMProvider> LLMChat for T"),
@@ -272,41 +251,26 @@ fn verify(sources: &Sources, lint: &[(String, String)]) -> Result<(), String> {
 }
 fn replace_once(source: &str, old: &str, new: &str) -> String { assert_eq!(source.matches(old).count(), 1, "mutation anchor: {old}"); source.replacen(old, new, 1) }
 fn rejected(label: &str, sources: &Sources, lint: &[(String, String)]) { assert!(verify(sources, lint).is_err(), "mutation accepted: {label}"); }
-#[test] fn legacy_provider_error_deprecation_allowlist_does_not_grow() {
+#[test] fn retired_provider_error_cannot_be_reintroduced() {
     let (sources, lint) = inventory().unwrap(); verify(&sources, &lint).unwrap();
-    let errors = &sources["src/sdk/errors.rs"]; let mut mutated = sources.clone();
-    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "mod tests {\n", "mod tests {\n    #![allow(warnings)]\n"));
-    rejected("allow warnings", &mutated, &lint);
-    mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), format!("macro_rules! smuggle {{ () => {{ #[cfg_attr(all(), allow(warnings))] fn hidden() {{}} }}; }}\n{errors}"));
-    rejected("macro cfg_attr smuggle", &mutated, &lint);
-    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "mod tests {\n", "mod tests {\n    #![cfg_attr(all(), allow(warnings))]\n"));
-    rejected("cfg_attr warnings", &mutated, &lint);
-    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors,
-        "let error = SDKError::ProviderError(\"unavailable\".to_string());",
-        "let make = SDKError::ProviderError;\n        let error = make(\"unavailable\".to_string());"));
-    rejected("value alias", &mutated, &lint);
-    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"unavailable\".to_string());",
-        "let make = |message| SDKError::ProviderError(message);\n        let error = make(\"unavailable\".to_string());"));
-    rejected("closure alias", &mutated, &lint);
-    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());",
-        "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        let _ = <SDKError>::ProviderError(String::new());\n        let _ = SDKError::r#ProviderError(String::new());"));
-    rejected("qself/raw paths", &mutated, &lint);
-    for (label, replacement) in [
-        ("generic macro composition", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        macro_rules! make { ($ty:path, $variant:ident, $value:expr) => { $ty::$variant($value) }; }\n        let extra = make!(SDKError, ProviderError, \"extra\".to_string());"),
-        ("split constructor macro", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        macro_rules! bind { ($name:ident = $ctor:path) => { let $name = $ctor; }; }\n        bind!(make = SDKError::ProviderError);\n        let extra = make(\"extra\".into());"),
-        ("split variant macro", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        macro_rules! make_sdk { ($variant:ident, $value:expr) => { SDKError::$variant($value) }; }\n        let extra = make_sdk!(ProviderError, \"extra\".into());"),
+    let errors = &sources["src/sdk/errors.rs"];
+    for (label, injection) in [
+        ("constructor", "fn regression() { let _ = SDKError::ProviderError(String::new()); }"),
+        ("value alias", "fn regression() { let make = SDKError::ProviderError; }"),
+        ("type alias", "type Alias = SDKError; fn regression() { let _ = Alias::ProviderError(String::new()); }"),
+        ("closure alias", "fn regression() { let make = |m| SDKError::ProviderError(m); }"),
+        ("qself/raw", "fn regression() { let _ = <SDKError>::ProviderError(String::new()); let _ = SDKError::r#ProviderError(String::new()); }"),
+        ("macro", "macro_rules! make { ($ty:path, $variant:ident, $value:expr) => { $ty::$variant($value) }; } fn regression() { let _ = make!(SDKError, ProviderError, String::new()); }"),
+        ("split macro", "macro_rules! bind { ($name:ident = $ctor:path) => { let $name = $ctor; }; } fn regression() { bind!(make = SDKError::ProviderError); }"),
+        ("lint suppression", "#[allow(warnings)] fn regression() {}"),
+        ("cfg lint suppression", "#[cfg_attr(all(), allow(deprecated))] fn regression() {}"),
     ] {
-        mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", replacement)); rejected(label, &mutated, &lint);
+        let mut mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), format!("{errors}\n{injection}")); rejected(label, &mutated, &lint);
     }
-    mutated = sources.clone(); mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "let error = SDKError::ProviderError(\"API unavailable\".to_string());", "let error = SDKError::ProviderError(\"API unavailable\".to_string());\n        let unrelated = matches!((error, provider), (SDKError::Internal(_), ProviderError::Timeout(_)));")); assert!(verify(&mutated, &lint).is_ok());
-    let completions = &sources["src/sdk/client/completions.rs"];
-    mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), format!("macro_rules! relocated {{ () => {{ SDKError::ProviderError(String::new()) }}; }}\n{}", replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => Err(SDKError::Internal(format!("))); rejected("macro owner", &mutated, &lint);
-    let relocated = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), relocated); rejected("fallback arm relocation", &mutated, &lint);
-    let nested = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "crate::sdk::config::ProviderType::Azure => match () { _ => Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))) },\n            _ => Err(SDKError::Internal(String::new())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), nested); rejected("nested fallback arm relocation", &mutated, &lint);
-    let duplicated = replace_once(completions, "match provider.provider_type {\n            crate::sdk::config::ProviderType::Anthropic", "if false { match provider.provider_type { _ => {} } }\n        match provider.provider_type {\n            crate::sdk::config::ProviderType::Anthropic"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), duplicated); rejected("duplicate provider-type match", &mutated, &lint);
-    let decoy = replace_once(completions, "            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError\n            #[allow(deprecated)]\n            _ => Err(SDKError::ProviderError(format!(\n                \"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "            _ => Err(SDKError::Internal(format!(\n                \"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),\n            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError\n            #[allow(deprecated)]\n            _ => Err(SDKError::ProviderError(\"decoy\".into())),"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), decoy); rejected("same-level wildcard decoy", &mutated, &lint);
-    let smuggled = replace_once(&replace_once(completions, "_ => Err(SDKError::ProviderError(format!(", "_ => { macro_rules! legacy { ($ty:ident, $variant:ident, $message:expr) => { $ty::$variant($message) }; } let _ = legacy!(SDKError, ProviderError, String::new()); Err(SDKError::ProviderError(format!("), "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            ))),", "\"Provider type {:?} is not implemented in SDK client\",\n                provider.provider_type\n            )))\n            },"); mutated = sources.clone(); mutated.insert("src/sdk/client/completions.rs".into(), smuggled); rejected("generic macro smuggle", &mutated, &lint);
-    mutated = sources.clone(); mutated.remove("tests/integration/router_tests.rs");
-    verify(&mutated, &lint).unwrap(); assert!(lint_ok("RUSTFLAGS='--cap-lints allow'", "mutation").is_err());
+    let mut mutated = sources.clone();
+    mutated.insert("src/sdk/errors.rs".into(), replace_once(errors, "pub enum SDKError {", "pub enum SDKError { ProviderError(String),"));
+    rejected("enum definition", &mutated, &lint);
+    mutated = sources.clone(); mutated.remove("tests/integration/router_tests.rs"); verify(&mutated, &lint).unwrap();
+    assert!(lint_ok("RUSTFLAGS='--cap-lints allow'", "mutation").is_err());
 }
 }

@@ -38,11 +38,9 @@
 //! let err = ProviderError::authentication("openai", "Invalid API key");
 //! let err = ProviderError::rate_limit("anthropic", Some(60));
 //!
-//! // 3. Check error properties
-//! if err.is_retryable() {
-//!     if let Some(delay) = err.retry_delay() {
-//!         println!("Retry after {} seconds", delay);
-//!     }
+//! // 3. Inspect error facts; routing decisions use RetryPolicy::decide
+//! if let Some(delay) = err.retry_delay() {
+//!     println!("Provider suggested retry delay: {} seconds", delay);
 //! }
 //! ```
 //!

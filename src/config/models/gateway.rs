@@ -257,6 +257,10 @@ pub struct GatewayConfig {
     pub server: ServerConfig,
     /// Provider configurations
     pub providers: Vec<ProviderConfig>,
+    /// Named A2A 1.0 JSON-RPC agents exposed by the HTTP gateway.
+    #[cfg(feature = "a2a")]
+    #[serde(default)]
+    pub a2a_agents: HashMap<String, crate::core::a2a::config::AgentConfig>,
     /// Public model aliases resolved by the runtime router
     #[serde(default)]
     pub model_aliases: HashMap<String, String>,
@@ -284,6 +288,10 @@ pub struct GatewayConfig {
     /// IP access policy. Empty/default rules preserve allow-all behavior.
     #[serde(default)]
     pub ip_access: IpAccessConfig,
+    /// Named MCP servers exposed through Streamable HTTP.
+    #[cfg(feature = "mcp")]
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, crate::core::mcp::config::McpServerConfig>,
     /// Enterprise features configuration
     #[serde(default)]
     pub enterprise: EnterpriseConfig,
@@ -302,6 +310,8 @@ impl Default for GatewayConfig {
             schema_version: default_schema_version(),
             server: ServerConfig::default(),
             providers: Vec::new(),
+            #[cfg(feature = "a2a")]
+            a2a_agents: HashMap::new(),
             model_aliases: HashMap::new(),
             router: GatewayRouterConfig::default(),
             storage: StorageConfig::default(),
@@ -311,6 +321,8 @@ impl Default for GatewayConfig {
             rate_limit: RateLimitConfig::default(),
             guardrails: default_gateway_guardrails(),
             ip_access: IpAccessConfig::default(),
+            #[cfg(feature = "mcp")]
+            mcp_servers: HashMap::new(),
             enterprise: EnterpriseConfig::default(),
             pricing: GatewayPricingConfig::default(),
         }
@@ -342,6 +354,8 @@ impl GatewayConfig {
         }
 
         self.providers = provider_map.into_values().collect();
+        #[cfg(feature = "a2a")]
+        self.a2a_agents.extend(other.a2a_agents);
         self.model_aliases.extend(other.model_aliases);
         self.router = self.router.merge(other.router);
         self.storage = self
@@ -353,6 +367,8 @@ impl GatewayConfig {
         self.rate_limit = self.rate_limit.merge(other.rate_limit);
         self.guardrails = other.guardrails;
         self.ip_access = other.ip_access;
+        #[cfg(feature = "mcp")]
+        self.mcp_servers.extend(other.mcp_servers);
         self.enterprise = self.enterprise.merge(other.enterprise);
         self.pricing = self.pricing.merge(other.pricing);
 

@@ -99,6 +99,51 @@ impl Validate for GatewayConfig {
             Validate::validate(provider)?;
         }
 
+        #[cfg(feature = "a2a")]
+        for (name, agent) in &self.a2a_agents {
+            agent.validate_http_gateway(name)?;
+            if agent.enabled && !self.auth.enable_api_key && !self.auth.enable_jwt {
+                return Err("Enabled A2A agents require API key or JWT authentication".into());
+            }
+            if agent.enabled
+                && self.auth.enable_api_key
+                && ["accept", "content-type", "a2a-version", "a2a-extensions"]
+                    .iter()
+                    .any(|name| self.auth.api_key_header.eq_ignore_ascii_case(name))
+            {
+                return Err("A2A API key header conflicts with a protocol header".into());
+            }
+        }
+        #[cfg(feature = "mcp")]
+        for (name, server) in &self.mcp_servers {
+            if server.enabled && !self.auth.enable_api_key && !self.auth.enable_jwt {
+                return Err("Enabled MCP servers require API key or JWT authentication".into());
+            }
+            server.validate_http_gateway(name)?;
+            if server.enabled
+                && self.auth.enable_api_key
+                && ([
+                    "accept",
+                    "content-type",
+                    "mcp-protocol-version",
+                    "mcp-method",
+                    "mcp-name",
+                    "mcp-session-id",
+                    "last-event-id",
+                    "origin",
+                    "accept-encoding",
+                ]
+                .iter()
+                .any(|header| header.eq_ignore_ascii_case(&self.auth.api_key_header))
+                    || self
+                        .auth
+                        .api_key_header
+                        .to_ascii_lowercase()
+                        .starts_with("mcp-param-"))
+            {
+                return Err("Gateway API key header conflicts with MCP transport headers".into());
+            }
+        }
         Self::validate_model_alias_map(&self.model_aliases)?;
         Validate::validate(&self.router)?;
         Validate::validate(&self.storage)?;

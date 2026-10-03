@@ -14,6 +14,8 @@ pub mod auth;
 pub mod budget;
 pub mod health;
 pub mod keys;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod pricing;
 pub mod teams;
 
@@ -396,3 +398,6 @@ mod tests {
         assert!(invalid_order.validate(valid_fields).is_err());
     }
 }
+
+#[cfg(feature = "a2a")]
+pub mod a2a;

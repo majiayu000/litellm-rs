@@ -207,6 +207,12 @@ impl HttpServer {
         });
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
+        #[cfg(any(feature = "a2a", feature = "mcp"))]
+        let cors = if cfg.gateway.auth.enable_api_key {
+            cors.allowed_header(cfg.gateway.auth.api_key_header.as_str())
+        } else {
+            cors
+        };
         let max_body_size = cfg.gateway.server.max_body_size;
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));
@@ -246,6 +252,12 @@ impl HttpServer {
                 audit
             }))
             .wrap(RequestIdMiddleware)
+            .configure(|cfg| {
+                #[cfg(feature = "mcp")]
+                routes::mcp::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "mcp"))]
+                let _ = cfg;
+            })
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -255,6 +267,12 @@ impl HttpServer {
             .configure(routes::admin_dashboard::configure_routes)
             .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
+            .configure(|cfg| {
+                #[cfg(feature = "a2a")]
+                routes::a2a::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "a2a"))]
+                let _ = cfg;
+            })
     }
 
     fn validate_cors_config(cors_config: &CorsConfig) -> Result<()> {
@@ -295,6 +313,27 @@ impl HttpServer {
             .collect();
         if !headers.is_empty() {
             cors = cors.allowed_headers(headers);
+        }
+
+        #[cfg(feature = "a2a")]
+        {
+            cors = cors
+                .allowed_header("x-api-key")
+                .allowed_header("a2a-version")
+                .allowed_header("a2a-extensions")
+                .expose_headers(["a2a-version", "a2a-extensions", "retry-after"]);
+        }
+        #[cfg(feature = "mcp")]
+        {
+            for name in [
+                "x-api-key",
+                "mcp-method",
+                "mcp-protocol-version",
+                "mcp-name",
+            ] {
+                cors = cors.allowed_header(name);
+            }
+            cors = cors.expose_headers(["mcp-protocol-version", "retry-after"]);
         }
 
         cors = cors.max_age(cors_config.max_age as usize);
