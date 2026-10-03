@@ -313,8 +313,6 @@ fn test_cache_validation_skips_when_disabled() {
         enabled: false,
         ttl: 0,
         max_size: 0,
-        semantic_cache: false,
-        similarity_threshold: 2.0,
     };
     assert!(Validate::validate(&config).is_ok());
 }
@@ -340,46 +338,6 @@ fn test_cache_validation_rejects_enabled_zero_ttl() {
     let error = config.validate().unwrap_err();
     assert!(error.contains("ttl"));
     assert!(error.contains("greater than 0"));
-}
-
-#[test]
-fn test_cache_validation_rejects_unwired_semantic_cache() {
-    let config = CacheConfig {
-        semantic_cache: true,
-        ..Default::default()
-    };
-
-    let error = config.validate().unwrap_err();
-    assert!(error.contains("not wired into runtime"));
-}
-
-#[test]
-fn test_gateway_validation_rejects_unwired_semantic_cache() {
-    let mut config = GatewayConfig {
-        providers: vec![ProviderConfig {
-            name: "test-provider".to_string(),
-            provider_type: "openai".to_string(),
-            api_key: "test-key".to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    #[cfg(feature = "sqlite")]
-    {
-        config.storage.database.enabled = true;
-        config.storage.database.url = "sqlite::memory:".to_string();
-    }
-    #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
-    {
-        config.storage.database.enabled = true;
-        config.storage.database.url = "postgres://localhost/test".to_string();
-    }
-    config.auth.jwt_secret = "StrongJwtSecretWithMixedCaseAndNumbers1234!".to_string();
-    config.cache.semantic_cache = true;
-
-    let error = config.validate().unwrap_err();
-    assert!(error.to_ascii_lowercase().contains("semantic cache"));
-    assert!(error.contains("not wired into runtime"));
 }
 
 #[test]
@@ -509,7 +467,6 @@ fn test_enterprise_validation_skips_when_disabled() {
             settings: Default::default(),
         }),
         audit_logging: false,
-        advanced_analytics: false,
     };
     assert!(Validate::validate(&config).is_ok());
 }
@@ -522,18 +479,6 @@ fn test_enterprise_validation_accepts_wired_audit_logging() {
     };
 
     assert!(Validate::validate(&config).is_ok());
-}
-
-#[test]
-fn test_enterprise_validation_rejects_unwired_advanced_analytics() {
-    let config = EnterpriseConfig {
-        advanced_analytics: true,
-        ..Default::default()
-    };
-
-    let error = Validate::validate(&config).unwrap_err();
-    assert!(error.contains("enterprise.advanced_analytics"));
-    assert!(error.contains("not wired into the gateway runtime"));
 }
 
 // ==================== SSRF Validation - Valid URLs ====================
@@ -765,4 +710,23 @@ fn test_ssrf_context_message() {
     let error_message = result.unwrap_err();
     assert!(error_message.contains("provider_url"));
     assert!(error_message.contains("SSRF"));
+}
+
+#[test]
+fn removed_unwired_cache_and_analytics_fields_are_not_silently_accepted() {
+    for body in [
+        serde_json::json!({"cache":{"semantic_cache":false}}),
+        serde_json::json!({"cache":{"similarity_threshold":0.95}}),
+        serde_json::json!({"enterprise":{"advanced_analytics":false}}),
+    ] {
+        let error = serde_json::from_value::<GatewayConfig>(body.clone()).unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+        let yaml = serde_yml::to_string(&body).unwrap();
+        assert!(
+            serde_yml::from_str::<GatewayConfig>(&yaml)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+    }
 }

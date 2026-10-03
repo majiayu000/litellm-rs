@@ -87,8 +87,6 @@ pub(super) fn build_response_cache(
         chat_ttl: ttl,
         embedding_ttl: ttl,
         user_specific: true,
-        semantic_cache_enabled: false,
-        similarity_threshold: config.gateway.cache.similarity_threshold,
     };
     let cache = Arc::new(LLMCache::new(llm_config, redis_pool));
     cache.start_cleanup_tasks();
