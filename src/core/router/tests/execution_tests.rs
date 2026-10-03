@@ -8,74 +8,76 @@ use crate::core::providers::unified_provider::ProviderError;
 use crate::core::router::RetrySchedule;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::error::RouterError;
-use crate::core::router::execution::is_retryable_error;
 use crate::core::router::fallback::{ExecutionResult, FallbackConfig};
+use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
 use crate::core::router::unified::Router;
 use crate::core::types::model::ProviderCapability;
 use std::sync::atomic::Ordering;
 
 #[test]
-fn test_is_retryable_error() {
-    assert!(is_retryable_error(&ProviderError::rate_limit(
-        "test",
-        Some(60)
-    )));
-    assert!(is_retryable_error(&ProviderError::timeout(
+fn test_retry_policy_for_execution_failure_facts() {
+    let should_retry = |error: &ProviderError| {
+        RetryPolicy
+            .decide(&RouterConfig::default(), error, RetryContext::unary(1, 2))
+            .should_retry
+    };
+    assert!(should_retry(&ProviderError::rate_limit("test", Some(60))));
+    assert!(should_retry(&ProviderError::timeout(
         "test",
         "Request timed out"
     )));
-    assert!(is_retryable_error(&ProviderError::network(
+    assert!(should_retry(&ProviderError::network(
         "test",
         "Connection failed"
     )));
-    assert!(is_retryable_error(&ProviderError::ProviderUnavailable {
+    assert!(should_retry(&ProviderError::ProviderUnavailable {
         provider: "test",
         message: "Service unavailable".to_string(),
     }));
     let not_ready =
         BedrockErrorMapper::map_service_error("ModelNotReadyException", "model not ready")
             .expect("modeled Bedrock service error");
-    assert!(is_retryable_error(&not_ready));
-    assert!(!is_retryable_error(&ProviderError::api_error(
+    assert!(should_retry(&not_ready));
+    assert!(!should_retry(&ProviderError::api_error(
         "bedrock",
         424,
         "ModelNotReadyException: misleading ordinary HTTP message"
     )));
-    assert!(!is_retryable_error(&ProviderError::api_error(
+    assert!(!should_retry(&ProviderError::api_error(
         "bedrock",
         404,
         "resource not found"
     )));
-    assert!(!is_retryable_error(&ProviderError::api_error(
+    assert!(!should_retry(&ProviderError::api_error(
         "custom_httpx",
         424,
         "failed dependency"
     )));
 
-    assert!(!is_retryable_error(&ProviderError::authentication(
+    assert!(!should_retry(&ProviderError::authentication(
         "test",
         "Invalid API key"
     )));
-    assert!(!is_retryable_error(&ProviderError::model_not_found(
+    assert!(!should_retry(&ProviderError::model_not_found(
         "test", "gpt-5"
     )));
-    assert!(!is_retryable_error(&ProviderError::invalid_request(
+    assert!(!should_retry(&ProviderError::invalid_request(
         "test",
         "Bad request"
     )));
-    assert!(is_retryable_error(&ProviderError::quota_exceeded(
+    assert!(!should_retry(&ProviderError::quota_exceeded(
         "budget",
         "provider 'openai' budget exceeded"
     )));
-    assert!(!is_retryable_error(&ProviderError::quota_exceeded(
+    assert!(!should_retry(&ProviderError::quota_exceeded(
         "budget",
         "budget exceeded for provider 'openai' model 'gpt-4o'"
     )));
-    assert!(is_retryable_error(&ProviderError::quota_exceeded(
+    assert!(!should_retry(&ProviderError::quota_exceeded(
         "budget",
         "model 'gpt-4o' budget exceeded"
     )));
-    assert!(!is_retryable_error(&ProviderError::quota_exceeded(
+    assert!(!should_retry(&ProviderError::quota_exceeded(
         "openai",
         "account quota exceeded"
     )));
