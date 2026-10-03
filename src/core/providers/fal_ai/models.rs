@@ -116,125 +116,81 @@ impl FalAIModelRegistry {
     pub fn new() -> Self {
         let mut models = HashMap::new();
 
-        // Flux models
-        models.insert(
-            "fal-ai/flux/schnell".to_string(),
-            FalAIModel::new(
-                "fal-ai/flux/schnell",
-                "Flux Schnell",
-                "Fast high-quality image generation",
-                0.003,
-            ),
-        );
-
-        models.insert(
-            "fal-ai/flux-pro/v1.1".to_string(),
-            FalAIModel::new(
+        // Official endpoint schemas and pricing cards, reviewed 2026-10-03.
+        // None means the tariff needs facts unavailable to token-only pricing.
+        let entries = [
+            ("fal-ai/flux/schnell", "Flux Schnell", None, 4, false, false),
+            (
                 "fal-ai/flux-pro/v1.1",
                 "Flux Pro v1.1",
-                "Professional quality image generation",
-                0.05,
-            )
-            .with_prompt_enhancement(),
-        );
-
-        models.insert(
-            "fal-ai/flux-pro/v1.1-ultra".to_string(),
-            FalAIModel::new(
+                None,
+                4,
+                false,
+                true,
+            ),
+            (
                 "fal-ai/flux-pro/v1.1-ultra",
                 "Flux Pro v1.1 Ultra",
-                "Ultra high-quality image generation",
-                0.06,
-            )
-            .with_prompt_enhancement(),
-        );
-
-        // Stable Diffusion models
-        models.insert(
-            "fal-ai/stable-diffusion-v3-medium".to_string(),
-            FalAIModel::new(
+                None,
+                4,
+                true,
+                true,
+            ),
+            (
                 "fal-ai/stable-diffusion-v3-medium",
                 "Stable Diffusion 3 Medium",
-                "Stable Diffusion 3 medium quality",
-                0.035,
+                Some(0.035),
+                4,
+                false,
+                false,
             ),
-        );
-
-        // Recraft model
-        models.insert(
-            "fal-ai/recraft/v3/text-to-image".to_string(),
-            FalAIModel::new(
+            (
                 "fal-ai/recraft/v3/text-to-image",
                 "Recraft V3",
-                "High-quality artistic image generation",
-                0.04,
+                None,
+                1,
+                false,
+                false,
             ),
-        );
-
-        // Ideogram
-        models.insert(
-            "fal-ai/ideogram/v3".to_string(),
-            FalAIModel::new(
-                "fal-ai/ideogram/v3",
-                "Ideogram V3",
-                "Ideogram text-to-image model",
-                0.08,
-            ),
-        );
-
-        // BRIA models
-        models.insert(
-            "fal-ai/bria/text-to-image/hd".to_string(),
-            FalAIModel::new(
+            ("fal-ai/ideogram/v3", "Ideogram V3", None, 8, false, false),
+            (
                 "fal-ai/bria/text-to-image/hd",
                 "BRIA HD",
-                "BRIA high-definition image generation",
-                0.02,
+                None,
+                4,
+                true,
+                false,
             ),
-        );
-
-        // First-party fal model cards, reviewed 2026-10-01.
-        for (id, name, fixed_cost) in [
-            ("fal-ai/recraft/v4/text-to-image", "Recraft V4", Some(0.04)),
+            (
+                "fal-ai/recraft/v4/text-to-image",
+                "Recraft V4",
+                Some(0.04),
+                1,
+                false,
+                false,
+            ),
             (
                 "fal-ai/recraft/v4/pro/text-to-image",
                 "Recraft V4 Pro",
                 Some(0.25),
+                1,
+                false,
+                false,
             ),
-            ("fal-ai/flux-2-pro", "FLUX.2 Pro", None),
-            ("fal-ai/flux-2-flex", "FLUX.2 Flex", None),
-            ("ideogram/v4", "Ideogram V4", None),
-        ] {
+            ("fal-ai/flux-2-pro", "FLUX.2 Pro", None, 1, false, false),
+            ("fal-ai/flux-2-flex", "FLUX.2 Flex", None, 1, false, false),
+            ("ideogram/v4", "Ideogram V4", None, 4, false, false),
+        ];
+        for (id, name, fixed_cost, max_images, aspect_ratio_only, enhance_prompt) in entries {
             let mut model = FalAIModel::new(id, name, "Text-to-image generation", 0.0);
             model.cost_per_image = fixed_cost;
+            model.max_images = max_images;
+            model.supports_prompt_enhancement = enhance_prompt;
+            if aspect_ratio_only {
+                // These endpoints accept a ratio, not pixel sizes or presets.
+                model.supported_sizes.clear();
+            }
             models.insert(id.to_string(), model);
-        }
-
-        // Reviewed against fal's endpoint schemas and pricing cards on 2026-10-03.
-        // Token counts cannot price megapixels, rendering speed, style, or generations.
-        for id in [
-            "fal-ai/flux/schnell",
-            "fal-ai/flux-pro/v1.1",
-            "fal-ai/flux-pro/v1.1-ultra",
-            "fal-ai/recraft/v3/text-to-image",
-            "fal-ai/ideogram/v3",
-            "fal-ai/bria/text-to-image/hd",
-        ] {
-            models.get_mut(id).unwrap().cost_per_image = None;
-        }
-        for id in [
-            "fal-ai/recraft/v3/text-to-image",
-            "fal-ai/recraft/v4/text-to-image",
-            "fal-ai/recraft/v4/pro/text-to-image",
-            "fal-ai/flux-2-pro",
-            "fal-ai/flux-2-flex",
-        ] {
-            models.get_mut(id).unwrap().max_images = 1;
-        }
-        models.get_mut("fal-ai/ideogram/v3").unwrap().max_images = 8;
-        // These endpoints accept an aspect ratio, not a pixel size or image_size preset.
-        for id in ["fal-ai/flux-pro/v1.1-ultra", "fal-ai/bria/text-to-image/hd"] {
-            models.get_mut(id).unwrap().supported_sizes.clear();
         }
 
         Self { models }
