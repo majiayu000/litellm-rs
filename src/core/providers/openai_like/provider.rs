@@ -917,7 +917,9 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        if self.provider_name == "groq" && request.response_format.is_none() {
+        if matches!(self.provider_name.as_str(), "groq" | "zhipu")
+            && request.response_format.is_none()
+        {
             request.response_format = Some("wav".into());
         }
         let together_pcm = matches!(self.provider_name.as_str(), "together" | "together_ai")

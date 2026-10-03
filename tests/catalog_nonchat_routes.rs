@@ -21,6 +21,7 @@ struct Upstream {
     seen: RecordedCalls,
     status: StatusCode,
     auth: bool,
+    image_url: bool,
 }
 async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>) -> HttpResponse {
     assert_eq!(
@@ -39,13 +40,17 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
             .insert_header(("retry-after", "7"))
             .json(json!({"error":{"message":"upstream unavailable"}}));
     }
-    match req.path() {
+    let path = req
+        .path()
+        .replace("/api/paas/v4", "/v1")
+        .replace("/compatible-mode/v1", "/v1");
+    match path.as_str() {
         "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}})),
-        "/v1/images/generations" => HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]})),
+        "/v1/images/generations" => HttpResponse::Ok().json(if state.image_url { json!({"created":1,"data":[{"url":"https://example.test/generated.png"}]}) } else { json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]}) }),
         "/v1/audio/speech" => {
             let request: Value = serde_json::from_slice(&body).unwrap();
             assert!(request.get("speed").is_none_or(|v| !v.is_null()));
-            let mime = if request["response_format"] == "wav" { "audio/wav" } else { "audio/mpeg" };
+            let mime = match request["response_format"].as_str() { Some("wav") => "audio/wav", Some("pcm" | "raw") => "audio/pcm", _ => "audio/mpeg" };
             HttpResponse::Ok().insert_header(("content-type", mime)).body("test-audio")
         },
         "/v1/audio/transcriptions" | "/v1/audio/translations" => HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0})),
@@ -59,6 +64,7 @@ async fn fixture(
     let seen = Upstream {
         seen: Arc::default(),
         status,
+        image_url: matches!(selector, "zhipu" | "zai"),
         auth: !matches!(
             selector,
             "lm_studio"
@@ -94,6 +100,8 @@ async fn fixture(
             match selector {
                 "infinity" => "",
                 "docker_model_runner" => "/engines/llama.cpp/v1",
+                "zhipu" | "zai" => "/api/paas/v4",
+                "dashscope" | "qwen" => "/compatible-mode/v1",
                 _ => "/v1",
             }
         ),
@@ -775,4 +783,235 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
     handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn chinese_embeddings_preserve_native_bases_and_float_usage() {
+    for selector in ["dashscope", "qwen", "zhipu", "siliconflow"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request =
+            serde_json::from_value(json!({"model":"test-model","input":["你好"]})).unwrap();
+        let response = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+        assert_eq!(response.usage.unwrap().total_tokens, 2);
+        let expected = match selector {
+            "zhipu" => "/api/paas/v4/embeddings",
+            "dashscope" | "qwen" => "/compatible-mode/v1/embeddings",
+            _ => "/v1/embeddings",
+        };
+        assert_eq!(upstream.seen.lock().unwrap()[0].0, expected);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn zhipu_and_zai_images_preserve_url_responses() {
+    for selector in ["zhipu", "zai"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request = serde_json::from_value(
+            json!({"model":"test-model","prompt":"山水","size":"1280x1280","quality":"hd"}),
+        )
+        .unwrap();
+        let response = selected(&router, ProviderCapability::ImageGeneration)
+            .create_images(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.data[0].url.as_deref(),
+            Some("https://example.test/generated.png")
+        );
+        let (path, body) = upstream.seen.lock().unwrap()[0].clone();
+        assert_eq!(path, "/api/paas/v4/images/generations");
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["size"], "1280x1280");
+        assert_eq!(body["quality"], "hd");
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn zhipu_speech_uses_wav_and_preserves_explicit_formats() {
+    let (router, upstream, handle) = fixture("zhipu", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::TextToSpeech);
+    for format in [None, Some("pcm")] {
+        let request = serde_json::from_value(
+            json!({"model":"glm-tts","input":"你好","voice":"tongtong","response_format":format}),
+        )
+        .unwrap();
+        let response = provider
+            .text_to_speech(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(response.audio, b"test-audio");
+        let calls = upstream.seen.lock().unwrap();
+        let (path, body) = calls.last().unwrap();
+        assert_eq!(path, "/api/paas/v4/audio/speech");
+        assert_eq!(
+            serde_json::from_slice::<Value>(body).unwrap()["response_format"],
+            format.unwrap_or("wav")
+        );
+    }
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn zhipu_speech_requires_prices_and_settles_unicode_characters() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("zhipu", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::TextToSpeech);
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("catalog provider")
+    };
+    let mut config = litellm_rs::Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+        "zhipu",
+        "zhipu",
+        "test-key",
+        &provider.config().get_api_base(),
+        vec!["test-model".into()],
+    )];
+    let state = litellm_rs::server::HttpServer::new(&config)
+        .await
+        .unwrap()
+        .state()
+        .clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::post()
+            .uri("/v1/audio/speech")
+            .set_json(json!({"model":"test-model","input":"你好","voice":"tongtong"}))
+            .to_request()
+    };
+    let response = test::call_service(&app, request()).await;
+    assert!(!response.status().is_success());
+    let error: Value = test::read_body_json(response).await;
+    assert!(
+        error.to_string().to_lowercase().contains("pricing"),
+        "{error}"
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let (_, mut price) = state
+        .pricing
+        .get_model_info_for_provider("openai", "tts-1")
+        .unwrap();
+    price.litellm_provider = "zhipu".into();
+    price.input_cost_per_token = None;
+    price.output_cost_per_token = None;
+    price.input_cost_per_character = Some(0.1);
+    price.output_cost_per_character = None;
+    state.pricing.add_custom_model("test-model".into(), price);
+    state.budget_limits.providers.set_provider_limit(
+        "zhipu",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    assert_eq!(
+        test::call_service(&app, request()).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    state.budget_limits.providers.set_provider_limit(
+        "zhipu",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let response = test::call_service(&app, request()).await;
+    let status = response.status();
+    let body = test::read_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body.as_ref(), b"test-audio");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("zhipu")
+        .unwrap()
+        .current_spend;
+    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn chinese_nonchat_errors_and_unverified_operations_fail_closed() {
+    for selector in ["dashscope", "qwen", "zhipu", "zai", "siliconflow"] {
+        for status in [StatusCode::BAD_REQUEST, StatusCode::TOO_MANY_REQUESTS] {
+            let (router, _, handle) = fixture(selector, status).await;
+            let error = if selector == "zai" {
+                selected(&router, ProviderCapability::ImageGeneration)
+                    .create_images(
+                        serde_json::from_value(json!({"model":"test-model","prompt":"test"}))
+                            .unwrap(),
+                        RequestContext::default(),
+                    )
+                    .await
+                    .unwrap_err()
+            } else {
+                selected(&router, ProviderCapability::Embeddings)
+                    .create_embeddings(embedding_request(), RequestContext::default())
+                    .await
+                    .unwrap_err()
+            };
+            if status == StatusCode::BAD_REQUEST {
+                assert!(matches!(
+                    error,
+                    ProviderError::InvalidRequest { .. }
+                        | ProviderError::ApiError { status: 400, .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    ProviderError::RateLimit {
+                        retry_after: Some(7),
+                        ..
+                    }
+                ));
+            }
+            for capability in [
+                ProviderCapability::AudioTranscription,
+                ProviderCapability::AudioTranslation,
+                ProviderCapability::ImageEdit,
+            ] {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability("public", &capability)
+                        .is_err()
+                );
+            }
+            if selector != "zhipu" {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability(
+                            "public",
+                            &ProviderCapability::TextToSpeech
+                        )
+                        .is_err()
+                );
+            }
+            if selector == "zai" {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability(
+                            "public",
+                            &ProviderCapability::Embeddings
+                        )
+                        .is_err()
+                );
+            }
+            handle.stop(false).await;
+        }
+    }
 }

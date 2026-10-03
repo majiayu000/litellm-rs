@@ -60,6 +60,12 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 逐项官方链接、固定源码版本和剩余限制见 [本地非聊天协议审计](../audit/local-compatible-nonchat-2026-10-03.md)。实测均为本地 HTTP 模拟：覆盖 factory/Router、实际 JSON/multipart/二进制传输、模型与参数错误、429 Retry-After，以及本地模型缺价、预算不足和按真实 usage 结算。未安装模型、未运行 GPU 推理或供应商付费调用。
 
+中国供应商批次（#1420，核验 2026-10-03）：`dashscope/qwen`、`zhipu`、`siliconflow` 接入文本 embeddings，`zhipu/zai` 接入同步图片生成，`zhipu` 接入按输入字符计费的 GLM-TTS。沿用各选择器的官方 base 和现有显式配置；DashScope 新 workspace 域名可用原配置指定，旧域名官方仍支持。
+
+智谱语音未指定格式时显式发送 WAV，显式 PCM 保留；仅非流式单声音合成，不包含克隆。图片仅同步调用，保留上游 URL，不冒充下载后的二进制；size/quality 等按模型协议校验。向量只验证文本输入/浮点结果。图像/音频输入不等于生成能力，国内智谱与国际 Z.AI 也不互相推导能力。定价缺失仍拒绝；官方人民币价格没有自动转换成美元价格。
+
+[逐选择器审计与限制](../audit/chinese-compatible-nonchat-2026-10-03.md) 记录原始官方链接及哈希。GLM-ASR 按输入 token 计费，当前音频网关按秒计量，故没有提前挂载；SiliconFlow 图片的 `images/timings` 返回以及音频模型的计费差异仍需专门适配。本批 HTTP 测试覆盖原生路径前缀、向量用量、URL 图片、WAV/PCM 请求、400/429、未支持操作拒绝与中文字符预算结算。未运行供应商付费请求。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -103,14 +109,14 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `infinity` | 文本 embeddings；默认根路径 /embeddings；移除原来虚假的聊天声明；图像/音频 embedding 待扩展输入 |
 | `oobabooga` | embeddings、images/generations；依赖已加载模型；音频转写源实现异常待上游确认 |
 | `moonshot` | 待核验；本批未扩展非聊天声明 |
-| `dashscope` | 待核验；本批未扩展非聊天声明 |
-| `qwen` | 待核验；本批未扩展非聊天声明 |
+| `dashscope` | 文本 embeddings；v3/v4按区域/模型限制，multimodal/sparse 不在兼容协议内；其他原生图片/音频待适配 |
+| `qwen` | 同 dashscope；使用原区域 key/base，workspace域名可由既有配置指定 |
 | `baichuan` | 待核验；本批未扩展非聊天声明 |
 | `minimax` | 待核验；本批未扩展非聊天声明 |
 | `volcengine` | 待核验；本批未扩展非聊天声明 |
 | `xiaomi_mimo` | 待核验；本批未扩展非聊天声明 |
-| `zhipu` | 待核验；本批未扩展非聊天声明 |
-| `zai` | 待核验；本批未扩展非聊天声明 |
+| `zhipu` | 文本 embeddings、同步 images/generations、GLM-TTS WAV/PCM；ASR token计费未接；不含异步图片/克隆/streaming |
+| `zai` | 同步 images/generations；GLM-ASR token计费未接，未从国内zhipu推断embedding/TTS |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
 | `linkup` | 待核验；本批未扩展非聊天声明 |
 | `poe` | 待核验；本批未扩展非聊天声明 |
@@ -124,7 +130,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `comet_api` | 待核验；本批未扩展非聊天声明 |
 | `compactifai` | 待核验；本批未扩展非聊天声明 |
 | `maritalk` | 待核验；本批未扩展非聊天声明 |
-| `siliconflow` | 待核验；本批未扩展非聊天声明 |
+| `siliconflow` | 文本 embeddings；图片 images/timings 与当前通用response不同，音频计费待核验，不先声明 |
 | `yi` | 待核验；本批未扩展非聊天声明 |
 | `lambda_ai` | 待核验；本批未扩展非聊天声明 |
 | `ovhcloud` | 待核验；本批未扩展非聊天声明 |
