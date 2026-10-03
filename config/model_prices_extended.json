@@ -221,8 +221,8 @@
     ],
     "total_model_count": 4569,
     "catalog_decision_revision": "model-retirement-review-20261003",
-    "catalog_decision_source_sha256": "4bb8fadf52d381da04773c091edf9e76192b0c8c0f0c076fbeb081cda6df1cc2",
-    "catalog_authority_sha256": "40b76b687c817a3976c5a7016b9a1c8ab544dc8ce434aca0ef081d03437d8aa4",
+    "catalog_decision_source_sha256": "a0fea9220123c9e62ea7f3909799af86fb0d8c362ae4fd7d8e7b44dfa791a4eb",
+    "catalog_authority_sha256": "878b70b0d386551e858aadd6428ff70a8723e1d6c5a8d45dc599bf336a8d5753",
     "catalog_authority_entry_count": 4569,
     "catalog_authority_enforced_providers": [
       "azure",
@@ -397,8 +397,8 @@
       },
       "deepseek": {
         "callable": 0,
-        "pricing_only": 0,
-        "unreviewed": 17
+        "pricing_only": 4,
+        "unreviewed": 13
       },
       "duckduckgo": {
         "callable": 0,
@@ -59782,7 +59782,8 @@
     "supports_reasoning": true,
     "thinking_mode_default": "enabled",
     "pricing_status": "official_off_peak_rate_checked_2026_10_01",
-    "source": "https://api-docs.deepseek.com/quick_start/pricing/"
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "supports_vision": false
   },
   "deepseek/deepseek-flash": {
     "cache_creation_input_token_cost": 0.0,
@@ -60002,9 +60003,9 @@
     "input_cost_per_token": 6.6e-07,
     "input_cost_per_token_cache_hit": 2.2e-08,
     "litellm_provider": "deepseek",
-    "max_input_tokens": 1000000,
-    "max_output_tokens": 8192,
-    "max_tokens": 8192,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 393216,
+    "max_tokens": 1048576,
     "mode": "chat",
     "output_cost_per_token": 1.98e-06,
     "pricing_status": "official_off_peak_rate_checked_2026_10_01",

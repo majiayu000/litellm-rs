@@ -630,9 +630,9 @@ impl ModelUtils {
                 .collect(),
             "google" => crate::core::providers::gemini::supported_models(),
             "cohere" => vec![
-                "command".to_string(),
-                "command-r".to_string(),
-                "command-r-plus".to_string(),
+                "command-a-03-2025".to_string(),
+                "command-r-08-2024".to_string(),
+                "command-r-plus-08-2024".to_string(),
             ],
             "mistral" => vec![
                 "mistral-tiny".to_string(),

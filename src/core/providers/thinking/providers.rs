@@ -218,8 +218,9 @@ pub mod anthropic_thinking {
 pub mod deepseek_thinking {
     use super::*;
 
-    /// DeepSeek thinking models
+    /// Thinking formats, including historical/self-hosted R1; not a callable catalog.
     const DEEPSEEK_THINKING_MODELS: &[&str] = &[
+        "deepseek-flash",
         "deepseek-v4-flash",
         "deepseek-v4-pro",
         "deepseek-r1",
@@ -260,7 +261,8 @@ pub mod deepseek_thinking {
                 // The canonical V4 IDs (`deepseek-v4-flash`, `deepseek-v4-pro`)
                 // default to thinking enabled but support an optional
                 // non-thinking mode, so they are not always-on.
-                thinking_always_on: !model_lower.contains("deepseek-v4"),
+                thinking_always_on: !model_lower.contains("deepseek-v4")
+                    && !model_lower.contains("deepseek-flash"),
             }
         } else {
             ThinkingCapabilities::unsupported()

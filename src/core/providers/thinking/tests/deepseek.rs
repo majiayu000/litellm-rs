@@ -6,6 +6,8 @@ use super::*;
 
 #[test]
 fn test_deepseek_thinking_detection() {
+    assert!(deepseek_thinking::supports_thinking("deepseek-flash"));
+    assert!(!deepseek_thinking::capabilities("deepseek-flash").thinking_always_on);
     assert!(deepseek_thinking::supports_thinking("deepseek-r1"));
     assert!(deepseek_thinking::supports_thinking("deepseek-reasoner"));
     assert!(deepseek_thinking::supports_thinking("r1"));

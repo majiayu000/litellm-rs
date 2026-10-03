@@ -48,9 +48,9 @@ Each provider implements standardized traits for consistent behavior across the 
 ```rust
 //! DeepSeek AI Provider Module
 //! 
-//! DeepSeek V3.1 models with competitive performance and pricing:
-//! - deepseek-chat: Non-thinking mode for general tasks
-//! - deepseek-reasoner: Thinking mode for advanced reasoning
+//! DeepSeek V4 models with competitive performance and pricing:
+//! - deepseek-flash: Text/image model with optional thinking
+//! - deepseek-v4-pro: Text model with optional thinking
 
 pub mod client;
 pub mod config; 
@@ -150,7 +150,7 @@ pub struct ModelSpec {
 /// Model feature detection
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelFeature {
-    ReasoningMode,      // deepseek-reasoner
+    ReasoningMode,      // deepseek-v4-pro
     FunctionCalling,    // Tool/function support
     StreamingSupport,   // Real-time responses
     SystemMessages,     // System prompt support
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn test_model_registry() {
         let registry = get_deepseek_registry();
-        assert!(registry.supports_feature("deepseek-reasoner", &ModelFeature::ReasoningMode));
+        assert!(registry.supports_feature("deepseek-v4-pro", &ModelFeature::ReasoningMode));
     }
     
     #[tokio::test]
@@ -341,7 +341,7 @@ mod tests {
 #[ignore] // Requires API key
 async fn test_chat_completion_integration() {
     let provider = setup_test_provider().await;
-    let request = ChatRequest::new("deepseek-chat")
+    let request = ChatRequest::new("deepseek-flash")
         .add_user_message("Hello, world!");
     
     let response = provider.chat_completion(request, default_context()).await;
@@ -402,7 +402,7 @@ use litellm_rs::{completion, user_message, system_message};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Simple completion
     let response = completion(
-        "deepseek-chat",
+        "deepseek-flash",
         vec![
             system_message("You are a helpful assistant."),
             user_message("Explain quantum computing in simple terms."),
@@ -412,9 +412,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("Response: {}", response.choices[0].message.content);
     
-    // Advanced reasoning with deepseek-reasoner
+    // Advanced reasoning with deepseek-v4-pro
     let reasoning_response = completion(
-        "deepseek-reasoner", 
+        "deepseek-v4-pro",
         vec![user_message("Solve this logic puzzle: ...")],
         None,
     ).await?;
