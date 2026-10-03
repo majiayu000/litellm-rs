@@ -43,7 +43,6 @@ const NSCALE_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ToolCalling,
     ProviderCapability::FunctionCalling,
     ProviderCapability::Embeddings,
-    ProviderCapability::ImageGeneration,
 ];
 
 const XINFERENCE_CAPABILITIES: &[ProviderCapability] = &[
@@ -430,6 +429,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         ),
         ProviderDefinition {
             capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            alternate_auth_env_vars: &["INFERENCE_KEY", "EMBEDDING_KEY"],
             ..def_chat(
                 "heroku",
                 "Heroku",
@@ -671,6 +671,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         ),
         ProviderDefinition {
             capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            alternate_auth_env_vars: &["OVH_AI_ENDPOINTS_ACCESS_TOKEN"],
             ..def_chat(
                 "ovhcloud",
                 "OVHcloud",

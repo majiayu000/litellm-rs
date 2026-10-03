@@ -185,7 +185,7 @@ async fn named_catalog_embeddings_reach_the_verified_endpoint() {
 
 #[tokio::test]
 async fn named_catalog_images_reach_the_verified_endpoint() {
-    for selector in ["together", "together_ai", "deepinfra", "nscale"] {
+    for selector in ["together", "together_ai", "deepinfra"] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
         let provider = selected(&router, ProviderCapability::ImageGeneration);
         let request: ImageGenerationRequest = serde_json::from_value(
@@ -572,7 +572,7 @@ async fn cloud_embeddings_require_prices_and_obey_gateway_budgets() {
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.providers = vec![provider_fixtures::mock_provider_config(
-        "nscale",
+        "prod-nscale",
         "nscale",
         "test-key",
         &provider.config().get_api_base(),
@@ -612,7 +612,7 @@ async fn cloud_embeddings_require_prices_and_obey_gateway_budgets() {
     price.input_cost_per_token = Some(0.1);
     state.pricing.add_custom_model("test-model".into(), price);
     state.budget_limits.providers.set_provider_limit(
-        "nscale",
+        "prod-nscale",
         ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
     );
     assert_eq!(
@@ -621,7 +621,7 @@ async fn cloud_embeddings_require_prices_and_obey_gateway_budgets() {
     );
     assert!(upstream.seen.lock().unwrap().is_empty());
     state.budget_limits.providers.set_provider_limit(
-        "nscale",
+        "prod-nscale",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let response = test::call_service(&app, request()).await;
@@ -632,7 +632,7 @@ async fn cloud_embeddings_require_prices_and_obey_gateway_budgets() {
     let spend = state
         .budget_limits
         .providers
-        .get_provider_usage("nscale")
+        .get_provider_usage("prod-nscale")
         .unwrap()
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
@@ -918,5 +918,26 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
         .unwrap()
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn nscale_images_are_withheld_until_pixel_pricing_is_supported() {
+    let (router, upstream, handle) = fixture("nscale", StatusCode::OK).await;
+    assert!(
+        router
+            .select_deployment_lease_for_capability("public", &ProviderCapability::ImageGeneration)
+            .is_err()
+    );
+    let request = serde_json::from_value(
+        json!({"model":"test-model","prompt":"mountains","size":"1024x1024"}),
+    )
+    .unwrap();
+    let error = selected(&router, ProviderCapability::Embeddings)
+        .create_images(request, RequestContext::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ProviderError::NotSupported { .. }));
+    assert!(upstream.seen.lock().unwrap().is_empty());
     handle.stop(false).await;
 }

@@ -147,11 +147,14 @@ async fn handle_embedding_internal(
     let pricing_service = budgeted.pricing();
     let pricing_config = state.config().gateway.pricing.clone();
     let callback_for_execution = callback.clone();
+    let router = state.unified_router();
+    let router_for_execution = router.clone();
     let core_response = match run_unary(
-        &state.unified_router(),
+        &router,
         &requested_model,
         ProviderCapability::Embeddings,
         move |provider, selected_model, deployment_id| {
+            let router = router_for_execution.clone();
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
             let budgeted = budgeted.clone();
@@ -163,7 +166,9 @@ async fn handle_embedding_internal(
             let mut cache_request = cache_request_for_execution.clone();
             cache_request.model = selected_model.clone();
             async move {
-                let budget_provider = provider.name().to_string();
+                let budget_provider = router
+                    .configured_provider_name(&deployment_id)
+                    .unwrap_or_else(|| provider.name().to_string());
                 let request_pricing = super::spend::request_pricing_for_provider(
                     &pricing_service,
                     &provider,
