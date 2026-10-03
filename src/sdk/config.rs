@@ -180,20 +180,20 @@ impl SdkConfigBuilder {
 
     /// Add Anthropic provider
     pub fn add_anthropic(self, id: &str, api_key: &str) -> Self {
+        let mut models: Vec<_> =
+            crate::core::providers::anthropic::models::get_anthropic_registry()
+                .list_models()
+                .iter()
+                .map(|spec| spec.model_info.id.clone())
+                .collect();
+        models.sort_by(|a, b| (a != "claude-opus-4-8", a).cmp(&(b != "claude-opus-4-8", b)));
         self.add_provider(SdkProviderConfig {
             id: id.to_string(),
             provider_type: ProviderType::Anthropic,
             name: "Anthropic".to_string(),
             api_key: api_key.to_string(),
             base_url: None,
-            models: vec![
-                "claude-opus-4-8".to_string(),
-                "claude-opus-4-7".to_string(),
-                "claude-sonnet-4-6".to_string(),
-                "claude-haiku-4-5-20251001".to_string(),
-                "claude-haiku-4-5".to_string(),
-                "claude-3-5-haiku-20241022".to_string(),
-            ],
+            models,
             enabled: true,
             weight: 1.0,
             rate_limit_rpm: Some(1000),
@@ -611,6 +611,15 @@ mod tests {
             .build();
         assert_eq!(config.providers.len(), 1);
         assert_eq!(config.providers[0].id, "anthropic-prod");
+        assert_eq!(
+            config.providers[0].models.first().map(String::as_str),
+            Some("claude-opus-4-8")
+        );
+        assert!(
+            config.providers[0].models[1..]
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
         assert!(matches!(
             config.providers[0].provider_type,
             ProviderType::Anthropic

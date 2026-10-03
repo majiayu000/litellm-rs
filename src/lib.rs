@@ -38,7 +38,7 @@
 //!
 //!     // Call Anthropic with explicit provider
 //!     let response = completion(
-//!         "anthropic/claude-3-sonnet-20240229",
+//!         "anthropic/claude-sonnet-5-5",
 //!         vec![user_message("What is the capital of France?")],
 //!         None,
 //!     ).await?;

@@ -288,6 +288,18 @@ Cloudflare 本次逐型号核验：
 忽略项未视为已执行。测试不包含真实厂商付费 API 冒烟；官网只核验公开型号及选定字段，不能证明账号、区域或私有部署实际可调用。
 
 
+## 2026-10-03 静态目录退役复核（F10 第二批）
+
+- Anthropic：移除 Opus 4.1、Opus 4、Sonnet 4、Haiku 3.5、Sonnet 3.5、Opus 3、Sonnet 3、Haiku 3、Claude 2.1、Instant 1.2，以及指向它们的 12 个别名。健康探测改用仍可用的 Haiku 4.5。Sonnet 4.5 仅弃用、到 2026-11-30 才退役，本批保留。
+- Claude 4.6 起使用无日期的固定型号 ID，移除 5 个未经官方证实的日期/latest 别名，保留官方 pre-4.6 短别名。此前审计文档中的这些别名声明由本条更正。
+- Gemini：移除 1.0 Pro、1.5 Pro/Flash/Flash-8B、2.0 Flash experimental/thinking experimental、3 Pro Image preview；另外移除没有可核实公开 API ID 的 `gemini-3-pro`、`gemini-3-pro-deep-think`、`gemini-3.1-flash`，这三项不作有退役日期的断言。Developer API 原有过滤；本次消除共享注册表和 Vertex/experimental surface 中的残留。
+- Vertex 额外传输放行名单中的 1.5/2.0 型号也已移除；旧 ID 在网络调用前返回 ModelNotFound，历史费用查询仍可用。健康探测改用现有 Gemini 3.7 Flash；crate quick start 与 Claude 公共别名工具同步到保留型号。
+- Gemini 2.5 Pro/Flash/Flash-Lite 仍可用。按官方标准文本缓存价修正为 $0.125/$0.03/$0.01 每百万 tokens；媒体按 tokens 计费，移除目录中未经证实的固定每张图/每秒价格。中央价格库仍负责运行时分档、多模态计费，本批不建立第二套计费机制。
+- 历史价格库和历史模型家族分类保持独立，不因取消可调用声明而删除既有历史查询记录。真实供应商网络调用未运行。
+- 后续审查：公共 Gemini 校验改用精确目录；原生 generateContent/streamGenerateContent 在发送前按 Developer/Vertex surface 拒绝退役及不可用型号。SDK Claude 5 请求复用原生参数/prefill 校验，按 [Claude Messages 参数文档](https://platform.claude.com/docs/en/api/http/beta/messages/create) 和 [API primer](https://platform.claude.com/docs/en/claude_api_primer) 保留 InvalidRequest 分类。默认完整 test/check/clippy、格式检查通过（库 7,266 通过、1 忽略）；gateway/sqlite/providers-extra/providers-extended 的 Gemini 226 项、Vertex 254 项及 all-target clippy 通过。新原生测试同时覆盖 JSON/SSE，确认拒绝请求不触发本地 HTTP 连接。
+
+依据（2026-10-03 核对）：[Claude 退役表](https://platform.claude.com/docs/en/about-claude/model-deprecations)、[Claude ID 规范](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions)、[Gemini 退役表](https://ai.google.dev/gemini-api/docs/deprecations)、[Gemini 更新记录](https://ai.google.dev/gemini-api/docs/changelog)、[Vertex 生命周期](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions)、[Gemini 定价](https://ai.google.dev/gemini-api/docs/pricing)。
+
 ## 2026-10-03 Mistral 能力与固定快照复核
 
 Ministral 3 的 3B/8B/14B 都支持视觉；3B 的上下文上限应为 262,144，而非现有的 128,000/131,072。已修正三个 latest 与三个 2512 条目。价格单位核对后仍为每百万输入/输出分别 0.10、0.15、0.20 美元，不作无依据改价。
