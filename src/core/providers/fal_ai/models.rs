@@ -49,7 +49,7 @@ pub struct FalAIModel {
     pub name: String,
     /// Model description
     pub description: String,
-    /// Fixed cost per image in USD; None for dimension-dependent pricing.
+    /// Fixed cost per image in USD; None when pricing needs additional request facts.
     pub cost_per_image: Option<f64>,
     /// Supported image sizes
     pub supported_sizes: Vec<String>,
@@ -171,17 +171,6 @@ impl FalAIModelRegistry {
             ),
         );
 
-        // Imagen 4
-        models.insert(
-            "fal-ai/imagen4/preview".to_string(),
-            FalAIModel::new(
-                "fal-ai/imagen4/preview",
-                "Imagen 4 Preview",
-                "Google Imagen 4 preview model",
-                0.04,
-            ),
-        );
-
         // Ideogram
         models.insert(
             "fal-ai/ideogram/v3".to_string(),
@@ -221,6 +210,33 @@ impl FalAIModelRegistry {
             models.insert(id.to_string(), model);
         }
 
+        // Reviewed against fal's endpoint schemas and pricing cards on 2026-10-03.
+        // Token counts cannot price megapixels, rendering speed, style, or generations.
+        for id in [
+            "fal-ai/flux/schnell",
+            "fal-ai/flux-pro/v1.1",
+            "fal-ai/flux-pro/v1.1-ultra",
+            "fal-ai/recraft/v3/text-to-image",
+            "fal-ai/ideogram/v3",
+            "fal-ai/bria/text-to-image/hd",
+        ] {
+            models.get_mut(id).unwrap().cost_per_image = None;
+        }
+        for id in [
+            "fal-ai/recraft/v3/text-to-image",
+            "fal-ai/recraft/v4/text-to-image",
+            "fal-ai/recraft/v4/pro/text-to-image",
+            "fal-ai/flux-2-pro",
+            "fal-ai/flux-2-flex",
+        ] {
+            models.get_mut(id).unwrap().max_images = 1;
+        }
+        models.get_mut("fal-ai/ideogram/v3").unwrap().max_images = 8;
+        // These endpoints accept an aspect ratio, not a pixel size or image_size preset.
+        for id in ["fal-ai/flux-pro/v1.1-ultra", "fal-ai/bria/text-to-image/hd"] {
+            models.get_mut(id).unwrap().supported_sizes.clear();
+        }
+
         Self { models }
     }
 
@@ -241,10 +257,7 @@ impl FalAIModelRegistry {
 
     /// Get cost per image for a model
     pub fn get_cost_per_image(&self, model_id: &str) -> Option<f64> {
-        self.models
-            .get(model_id)
-            .map(|m| m.cost_per_image)
-            .unwrap_or(Some(0.0))
+        self.models.get(model_id).and_then(|m| m.cost_per_image)
     }
 
     /// Register a custom model
@@ -347,7 +360,7 @@ mod tests {
     #[test]
     fn test_model_registry_cost() {
         let registry = FalAIModelRegistry::new();
-        let cost = registry.get_cost_per_image("fal-ai/flux/schnell");
+        let cost = registry.get_cost_per_image("fal-ai/stable-diffusion-v3-medium");
         assert!(cost.unwrap() > 0.0);
     }
 
@@ -355,7 +368,7 @@ mod tests {
     fn test_model_registry_unknown() {
         let registry = FalAIModelRegistry::new();
         assert!(!registry.is_supported("unknown-model"));
-        assert_eq!(registry.get_cost_per_image("unknown-model"), Some(0.0));
+        assert_eq!(registry.get_cost_per_image("unknown-model"), None);
     }
 
     #[test]

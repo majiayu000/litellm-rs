@@ -144,6 +144,11 @@ impl Provider {
                     && LLMProvider::supports_capability(provider, capability)
             }
             #[cfg(feature = "providers-extended")]
+            Provider::FalAI(provider) => LLMProvider::models(provider)
+                .iter()
+                .find(|model_info| model_info.id == model)
+                .is_some_and(|model_info| model_info.capabilities.contains(capability)),
+            #[cfg(feature = "providers-extended")]
             Provider::Stability(provider) => LLMProvider::models(provider)
                 .iter()
                 .find(|model_info| model_info.id == model)
