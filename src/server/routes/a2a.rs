@@ -170,10 +170,7 @@ impl TaskOwners {
         if kind == "message"
             && (identifier(object.get("messageId")).ok().flatten().is_none()
                 || object.get("role").and_then(Value::as_str) != Some("ROLE_AGENT")
-                || object
-                    .get("parts")
-                    .and_then(Value::as_array)
-                    .is_none_or(|parts| parts.is_empty()))
+                || !valid_parts(object.get("parts")))
         {
             return Err("Invalid A2A message");
         }
@@ -182,10 +179,7 @@ impl TaskOwners {
                 .ok()
                 .flatten()
                 .is_none()
-                || object
-                    .pointer("/artifact/parts")
-                    .and_then(Value::as_array)
-                    .is_none_or(|parts| parts.is_empty()))
+                || !valid_parts(object.pointer("/artifact/parts")))
         {
             return Err("Invalid A2A artifact");
         }
@@ -195,6 +189,8 @@ impl TaskOwners {
         {
             return Err("A2A response changed task/context");
         }
+        // Optional response context inherits the authorized request context.
+        let context = context.or(expected_context);
         let mut ids: Vec<_> = [("task", task), ("context", context)]
             .into_iter()
             .filter_map(|(kind, id)| {
@@ -213,6 +209,34 @@ impl TaskOwners {
             && let Some(retained) = &owner.context
         {
             ids.push((binding.to_vec(), "context".into(), retained.clone()));
+        }
+        if matches!(kind, "task" | "statusUpdate") {
+            let associated_context = context.or_else(|| {
+                task.and_then(|task| entries.get(&(binding.to_vec(), "task".into(), task.into())))
+                    .filter(|owner| owner.principal == principal && owner.expires > now)
+                    .and_then(|owner| owner.context.as_deref())
+            });
+            let check_message = |message: &Value| -> Result<(), &'static str> {
+                if !message.is_object()
+                    || identifier(message.get("taskId"))
+                        .map_err(|_| "Invalid embedded A2A message task")?
+                        .is_some_and(|id| Some(id) != task)
+                    || identifier(message.get("contextId"))
+                        .map_err(|_| "Invalid embedded A2A message context")?
+                        .is_some_and(|id| Some(id) != associated_context)
+                {
+                    return Err("Embedded A2A message changed task/context");
+                }
+                Ok(())
+            };
+            if let Some(message) = object.pointer("/status/message") {
+                check_message(message)?;
+            }
+            if let Some(history) = object.get("history") {
+                for message in history.as_array().ok_or("Invalid A2A task history")? {
+                    check_message(message)?;
+                }
+            }
         }
         // Inspect this event and its retained task/context association. Full expiry
         // cleanup belongs to per-request reservation, not every artifact chunk.
@@ -603,10 +627,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 .get("messageId")
                 .and_then(Value::as_str)
                 .is_none_or(str::is_empty)
-            || message
-                .get("parts")
-                .and_then(Value::as_array)
-                .is_none_or(|p| p.is_empty()))
+            || !valid_parts(message.get("parts")))
     {
         return error(
             StatusCode::BAD_REQUEST,
@@ -936,6 +957,29 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         return error(StatusCode::BAD_GATEWAY, id, -32006, message);
     }
     response.body(bytes)
+}
+fn valid_parts(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_array).is_some_and(|parts| {
+        !parts.is_empty()
+            && parts.iter().all(|part| {
+                let variants = ["text", "raw", "url", "data"];
+                part.is_object()
+                    && variants
+                        .iter()
+                        .filter(|key| part.get(**key).is_some())
+                        .count()
+                        == 1
+                    && variants.iter().all(|key| {
+                        part.get(*key).is_none_or(|value| {
+                            if *key == "data" {
+                                value.is_object()
+                            } else {
+                                value.is_string()
+                            }
+                        })
+                    })
+            })
+    })
 }
 fn identifier(value: Option<&Value>) -> Result<Option<&str>, ()> {
     match value {

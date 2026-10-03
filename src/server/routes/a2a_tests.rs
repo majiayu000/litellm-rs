@@ -35,6 +35,13 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
                     .map(|b| Ok::<_, std::io::Error>(web::Bytes::from(vec![b]))),
             ));
     }
+    if let Some(result) = body.pointer("/params/metadata/test_result_stream") {
+        calls.lock().unwrap().push(body.clone());
+        let value = json!({"jsonrpc":"2.0","id":body["id"],"result":result});
+        return HttpResponse::Ok()
+            .content_type("text/event-stream")
+            .body(format!("data: {value}\n\n"));
+    }
     if let Some(result) = body.pointer("/params/metadata/test_result") {
         calls.lock().unwrap().push(body.clone());
         return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":result}));
@@ -1543,5 +1550,147 @@ async fn task_only_continuation_reuses_context_capacity() {
             .pointer("/params/message/contextId")
             .is_none()
     );
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn client_parts_require_one_typed_content_variant_before_dispatch() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for part in [
+        json!({}),
+        json!({"text":"hi","data":{}}),
+        json!({"text":12}),
+        json!({"raw":null}),
+        json!({"url":false}),
+        json!({"data":"bad"}),
+    ] {
+        let mut params = message();
+        params["message"]["parts"] = json!([part]);
+        let response = test::call_service(&app, request("SendMessage", params, &user())).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["code"], -32602);
+    }
+    assert!(calls.lock().unwrap().is_empty());
+    let mut params = message();
+    params["message"]["parts"] = json!([
+        {"text":"hello"}, {"raw":"aGk=","mediaType":"text/plain"},
+        {"url":"https://example.test/input.txt"}, {"data":{"keep":true},"future":1}
+    ]);
+    let response = test::call_service(&app, request("SendMessage", params.clone(), &user())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        calls.lock().unwrap()[0]["params"]["message"]["parts"],
+        params["message"]["parts"]
+    );
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn embedded_task_message_identities_are_checked_before_json_or_sse_delivery() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let seeded = test::call_service(&app, request("SendMessage", message(), &owner)).await;
+    assert_eq!(seeded.status(), StatusCode::OK);
+    for stream in [false, true] {
+        for field in ["history", "status"] {
+            for mismatched in [true, false] {
+                let mut task = json!({"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_COMPLETED"}});
+                let embedded = json!({"messageId":"nested","role":"ROLE_AGENT","taskId":if mismatched {"other-task"} else {"task-1"},"contextId":"context-1","parts":[{"text":"private-content"}]});
+                if field == "history" {
+                    task["history"] = json!([embedded]);
+                } else {
+                    task["status"]["message"] = embedded;
+                }
+                let mut params = message();
+                params["message"]["taskId"] = json!("task-1");
+                params["metadata"][if stream {
+                    "test_result_stream"
+                } else {
+                    "test_result"
+                }] = json!({"task":task});
+                let response = test::call_service(
+                    &app,
+                    request(
+                        if stream {
+                            "SendStreamingMessage"
+                        } else {
+                            "SendMessage"
+                        },
+                        params,
+                        &owner,
+                    ),
+                )
+                .await;
+                if stream {
+                    let body = test::try_read_body(response).await;
+                    if mismatched {
+                        assert!(body.is_err());
+                    } else {
+                        assert!(
+                            String::from_utf8_lossy(&body.unwrap()).contains("private-content")
+                        );
+                    }
+                } else {
+                    assert_eq!(
+                        response.status(),
+                        if mismatched {
+                            StatusCode::BAD_GATEWAY
+                        } else {
+                            StatusCode::OK
+                        }
+                    );
+                    let bytes = test::read_body(response).await;
+                    assert_eq!(
+                        String::from_utf8_lossy(&bytes).contains("private-content"),
+                        !mismatched
+                    );
+                }
+            }
+        }
+    }
+    let mut params = message();
+    params["message"]["taskId"] = json!("task-1");
+    params["metadata"] = json!({"test_result":{"task":{"id":"task-1","status":{"state":"TASK_STATE_COMPLETED","message":{"messageId":"nested","role":"ROLE_AGENT","contextId":"foreign-context","parts":[{"text":"secret"}]}}}}});
+    let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn new_contextless_task_retains_authorized_request_context_for_continuation() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let seeded = test::call_service(&app, request("SendMessage", message(), &owner)).await;
+    assert_eq!(seeded.status(), StatusCode::OK);
+    let mut params = message();
+    params["message"]["contextId"] = json!("context-1");
+    params["metadata"] =
+        json!({"test_result":{"task":{"id":"task-new","status":{"state":"TASK_STATE_COMPLETED"}}}});
+    let response = test::call_service(&app, request("SendMessage", params.clone(), &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    params["message"]["taskId"] = json!("task-new");
+    let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     handle.stop(false).await;
 }
