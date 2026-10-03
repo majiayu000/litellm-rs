@@ -209,7 +209,14 @@ impl AgentConfig {
         {
             return Err("A2A HTTP gateway requires an A2A agent and positive timeout; provider adapters, agent billing/limits and push notifications are not supported".into());
         }
-        if !self.url.starts_with("https://") && (self.api_key.is_some() || !self.headers.is_empty())
+        let url = url::Url::parse(&self.url).map_err(|_| "Invalid A2A upstream URL")?;
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(
+                "A2A URL userinfo is not supported; configure credentials separately".into(),
+            );
+        }
+        if url.scheme() != "https"
+            && (self.api_key.is_some() || !self.headers.is_empty() || url.query().is_some())
         {
             return Err("A2A credentials and static headers require an HTTPS upstream".into());
         }

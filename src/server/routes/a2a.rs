@@ -182,7 +182,7 @@ impl TaskOwners {
         {
             return Err("A2A response changed task/context");
         }
-        let ids: Vec<_> = [("task", task), ("context", context)]
+        let mut ids: Vec<_> = [("task", task), ("context", context)]
             .into_iter()
             .filter_map(|(kind, id)| {
                 id.map(|id| (binding.to_vec(), kind.to_owned(), id.to_owned()))
@@ -193,6 +193,14 @@ impl TaskOwners {
             .lock()
             .map_err(|_| "A2A ownership unavailable")?;
         let now = Instant::now();
+        if context.is_none()
+            && let Some(task) = task
+            && let Some(owner) = entries.get(&(binding.to_vec(), "task".into(), task.into()))
+            && owner.expires > now
+            && let Some(retained) = &owner.context
+        {
+            ids.push((binding.to_vec(), "context".into(), retained.clone()));
+        }
         // Only inspect identifiers carried by this event. Full expiry cleanup
         // belongs to per-request reservation, not every artifact chunk.
         for id in &ids {
@@ -364,8 +372,28 @@ async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
         requirements.push(json!({"schemes":{"gateway_jwt":{"list":[]}}}));
     }
     // Card describes this gateway endpoint, not the credential-bearing upstream URL.
-    let connection = req.connection_info();
-    let endpoint = format!("{}://{}/a2a/{name}", connection.scheme(), connection.host());
+    let trusted = req.peer_addr().is_some_and(|peer| {
+        crate::server::middleware::is_trusted_proxy(
+            peer.ip(),
+            &runtime.config.gateway.server.trusted_proxies,
+        )
+    });
+    let endpoint = if trusted {
+        let connection = req.connection_info();
+        format!("{}://{}/a2a/{name}", connection.scheme(), connection.host())
+    } else {
+        let scheme = if req.app_config().secure() {
+            "https"
+        } else {
+            "http"
+        };
+        let host = req
+            .headers()
+            .get(actix_web::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| req.app_config().host());
+        format!("{scheme}://{host}/a2a/{name}")
+    };
     HttpResponse::Ok().insert_header(("cache-control", "private, no-store")).json(json!({
         "name":name,"description":agent.description.as_deref().unwrap_or(name),"version":env!("CARGO_PKG_VERSION"),
         "supportedInterfaces":[{"url":endpoint,"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],
@@ -469,6 +497,18 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         return error(StatusCode::OK, id, -32004, "Agent capability is disabled");
     }
     let params = &value["params"];
+    let return_immediately = match params.pointer("/configuration/returnImmediately") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                id,
+                -32602,
+                "Invalid returnImmediately",
+            );
+        }
+    };
     if !params.is_object()
         || params.get("tenant").is_some()
         || params
@@ -852,7 +892,15 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 && identifier(result.get("id")).ok().flatten().is_some()
                 && result.get("status").is_some_and(Value::is_object)
         };
-        if !valid {
+        let premature = send
+            && !return_immediately
+            && result.get("task").is_some_and(|task| {
+                matches!(
+                    task.pointer("/status/state").and_then(Value::as_str),
+                    Some("TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING")
+                )
+            });
+        if !valid || premature {
             return error(
                 StatusCode::BAD_GATEWAY,
                 id,

@@ -36,6 +36,7 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             ));
     }
     if let Some(result) = body.pointer("/params/metadata/test_result") {
+        calls.lock().unwrap().push(body.clone());
         return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":result}));
     }
     if body.pointer("/params/metadata/test_bad_envelope") == Some(&Value::Bool(true)) {
@@ -267,7 +268,7 @@ fn request(method: &str, params: Value, user: &User) -> actix_http::Request {
     req
 }
 fn message() -> Value {
-    json!({"message":{"role":"ROLE_USER","messageId":"m1","parts":[{"text":"hello"},{"url":"https://example.test/file.pdf","mediaType":"application/pdf"}]}})
+    json!({"configuration":{"returnImmediately":true},"message":{"role":"ROLE_USER","messageId":"m1","parts":[{"text":"hello"},{"url":"https://example.test/file.pdf","mediaType":"application/pdf"}]}})
 }
 #[actix_web::test]
 async fn messages_tasks_cancellation_and_cards_reach_gateway() {
@@ -1135,6 +1136,16 @@ async fn client_cannot_impersonate_agent_role() {
 
 #[actix_web::test]
 async fn credentials_require_encrypted_upstream_transport() {
+    for scheme in ["http", "https"] {
+        for api_key in [None, Some("another-test-key")] {
+            let mut agent =
+                AgentConfig::new("test", format!("{scheme}://user:sentinel@example.com/rpc"));
+            agent.api_key = api_key.map(str::to_owned);
+            let error = agent.validate_http_gateway("test").unwrap_err();
+            assert!(error.contains("userinfo"));
+            assert!(!error.contains("sentinel"));
+        }
+    }
     for headers in [false, true] {
         let mut agent = AgentConfig::new("test", "http://example.com/rpc");
         if headers {
@@ -1328,5 +1339,161 @@ async fn successful_finite_response_requires_json_media_type() {
         let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn blocking_send_rejects_active_tasks_and_accepts_interrupted_or_terminal_tasks() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for immediate in [None, Some(false), Some(true)] {
+        for state in [
+            "TASK_STATE_SUBMITTED",
+            "TASK_STATE_WORKING",
+            "TASK_STATE_COMPLETED",
+            "TASK_STATE_INPUT_REQUIRED",
+            "TASK_STATE_AUTH_REQUIRED",
+        ] {
+            let mut params = message();
+            params.as_object_mut().unwrap().remove("configuration");
+            if let Some(value) = immediate {
+                params["configuration"] = json!({"returnImmediately":value});
+            }
+            params["metadata"] =
+                json!({"test_result":{"task":{"id":"task-1","status":{"state":state}}}});
+            let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+            let expected = if immediate != Some(true)
+                && matches!(state, "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING")
+            {
+                StatusCode::BAD_GATEWAY
+            } else {
+                StatusCode::OK
+            };
+            assert_eq!(
+                response.status(),
+                expected,
+                "{state} immediate {immediate:?}"
+            );
+        }
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn card_ignores_forwarded_origin_from_untrusted_peers() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let req = test::TestRequest::get()
+        .uri("/a2a/test/.well-known/agent-card.json")
+        .insert_header(("a2a-version", "1.0"))
+        .insert_header(("host", "gateway.example.test"))
+        .insert_header(("forwarded", "host=attacker.example.test;proto=https"))
+        .insert_header(("x-forwarded-host", "attacker.example.test"))
+        .insert_header(("x-forwarded-proto", "https"))
+        .peer_addr("192.0.2.10:1234".parse().unwrap())
+        .to_request();
+    req.extensions_mut().insert(user());
+    let response = test::call_service(&app, req).await;
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(
+        value["supportedInterfaces"][0]["url"],
+        "http://gateway.example.test/a2a/test"
+    );
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn retained_context_ownership_is_renewed_with_its_task() {
+    let owners = TaskOwners::default();
+    let binding = b"binding";
+    owners.observe(binding, "owner", &json!({"result":{"task":{"id":"t","contextId":"c","status":{"state":"TASK_STATE_WORKING"}}}}), None, None, None).unwrap();
+    let old_expiry = Instant::now() + Duration::from_secs(5);
+    owners
+        .entries
+        .lock()
+        .unwrap()
+        .get_mut(&(binding.to_vec(), "context".into(), "c".into()))
+        .unwrap()
+        .expires = old_expiry;
+    owners
+        .observe(
+            binding,
+            "owner",
+            &json!({"result":{"id":"t","status":{"state":"TASK_STATE_WORKING"}}}),
+            Some("t"),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(
+        owners.entries.lock().unwrap()[&(binding.to_vec(), "context".into(), "c".into())].expires
+            > old_expiry + Duration::from_secs(3000)
+    );
+}
+
+#[actix_web::test]
+async fn private_agent_requires_named_key_permission() {
+    use crate::core::models::user::types::UserStatus;
+    let (state, calls, handle) = fixture().await;
+    let mut owner = user();
+    owner.status = UserStatus::Active;
+    let owner = state.storage.db().create_user(&owner).await.unwrap();
+    let mut keys = Vec::new();
+    for permissions in [
+        vec![],
+        vec!["api.chat".into()],
+        vec!["a2a.other".into()],
+        vec!["a2a.test".into()],
+        vec!["system.admin".into()],
+    ] {
+        let allowed = permissions
+            .iter()
+            .any(|p| p == "a2a.test" || p == "system.admin");
+        let (_, raw) = state
+            .auth
+            .create_api_key(owner.id(), "agent-permission".into(), permissions)
+            .await
+            .unwrap();
+        keys.push((raw, allowed));
+    }
+    let app = test::init_service(crate::server::http::HttpServer::create_app(state)).await;
+    for (index, (raw, allowed)) in keys.into_iter().enumerate() {
+        let mut params = message();
+        params["metadata"] = json!({"test_result":{"task":{"id":format!("task-{index}"),"status":{"state":"TASK_STATE_COMPLETED"}}}});
+        for path in ["/a2a/test", "/a2a/test/.well-known/agent-card.json"] {
+            let mut req = if path.ends_with("json") {
+                test::TestRequest::get()
+            } else {
+                test::TestRequest::post().set_json(
+                    json!({"jsonrpc":"2.0","id":1,"method":"SendMessage","params":params}),
+                )
+            };
+            req = req
+                .uri(path)
+                .insert_header(("a2a-version", "1.0"))
+                .insert_header(("x-agent-key", raw.as_str()));
+            let response = test::call_service(&app, req.to_request()).await;
+            assert_eq!(
+                response.status(),
+                if allowed {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+        }
+    }
+    assert_eq!(calls.lock().unwrap().len(), 2);
     handle.stop(false).await;
 }
