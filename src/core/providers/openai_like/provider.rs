@@ -323,6 +323,14 @@ impl OpenAILikeProvider {
         &self,
         mut request: EmbeddingRequest,
     ) -> Result<EmbeddingResponse, OpenAILikeError> {
+        if self.provider_name == "siliconflow"
+            && request.encoding_format.as_deref() == Some("base64")
+        {
+            return Err(ProviderError::invalid_request(
+                "siliconflow",
+                "SiliconFlow embeddings support only float output in this gateway",
+            ));
+        }
         request.model = self.rewrite_request_model(&request.model);
         let url = format!("{}/embeddings", self.config.get_api_base());
         let headers = self.get_request_headers();
