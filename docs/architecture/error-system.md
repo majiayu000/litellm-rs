@@ -556,3 +556,30 @@ The error system migration has been **successfully completed** with the followin
 **Status**: ✅ **IMPLEMENTATION COMPLETED**  
 **Architecture**: Production-ready unified error system  
 **Coverage**: All 100+ AI providers supported
+
+## Removal of expired retry compatibility APIs
+
+Issue #1402 removes the six helpers deprecated in 0.6 for the 0.7 follow-up:
+`ProviderError::is_retryable`, `ContextualError::is_retryable`,
+`ProviderErrorTrait::is_retryable`, `SDKError::is_retryable`,
+`router::execution::is_retryable_error`, and `ErrorUtils::should_retry`.
+Use `RetryPolicy::decide` with the actual operation, attempt and stream/idempotency
+context for routing decisions. `ProviderFailureFacts` remains the error-fact view;
+HTTP status and provider retry-after hints are unchanged. `retry_delay`,
+`extract_retry_after`, `ErrorCode::is_retryable` and the canonical error presentation
+are retained. The serialized `retryable` field still uses its existing coarse
+facts, including its historical distinction from the policy's handling of HTTP 408.
+
+`SDKError::ProviderError(String)` is removed. Provider/gateway unavailable errors
+now produce `SDKError::Unavailable(String)`; its display prefix is
+`Provider unavailable:`. Other typed conversion categories and redaction remain.
+The unsupported SDK adapter branch uses the existing `NotSupported` category.
+Consumers matching the removed variant or calling a removed helper must update;
+there is no compatibility alias. This is a breaking API removal, not a claim that
+all F16 interfaces have been audited.
+
+Evidence: the existing production retry-call guard now exempts only canonical
+`ErrorCode` presentation, while the SDK AST guard rejects the retired variant's
+definition, constructors, aliases and macro uses with no grandfathered call sites.
+The old compatibility fixture is removed; typed policy, modeled Bedrock retry,
+canonical serialization, retry-after and SDK conversion/redaction regressions remain.

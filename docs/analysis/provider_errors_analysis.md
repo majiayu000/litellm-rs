@@ -484,7 +484,7 @@ mod tests {
         let mapper = AimlErrorMapper;
         let error = mapper.map_http_error(429, "Rate limit exceeded");
 
-        assert!(error.is_retryable());
+        assert!(crate::utils::error::CanonicalError::canonical_retryable(&error));
         assert_eq!(error.http_status(), 429);
     }
 
@@ -508,7 +508,7 @@ mod tests {
 
         for status in [500, 502, 503, 504] {
             let error = mapper.map_http_error(status, "Server error");
-            assert!(error.is_retryable(), "Status {} should be retryable", status);
+            assert!(crate::utils::error::CanonicalError::canonical_retryable(&error), "Status {} should be retryable", status);
         }
     }
 }

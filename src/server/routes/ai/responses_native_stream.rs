@@ -1,0 +1,291 @@
+use actix_web::HttpResponse;
+use bytes::Bytes;
+use futures::StreamExt;
+use serde_json::Value;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+
+use super::{
+    AppState, MAX_RESPONSE_BYTES, NativeCall, ProviderError, RequestContext, response_usage, settle,
+};
+use crate::server::guardrails::{GuardrailDecisionSink, native_responses_projection};
+use crate::server::routes::ai::execution::StreamingDeploymentLease;
+use crate::server::routes::ai::stream_output_guardrail::StreamOutputGuardrail;
+
+pub(super) fn response(
+    state: AppState,
+    context: RequestContext,
+    call: NativeCall,
+    lease: StreamingDeploymentLease,
+) -> HttpResponse {
+    let (tx, rx) = mpsc::channel::<Bytes>(8);
+    let facts = crate::core::request_ledger::current_facts();
+    tokio::spawn(async move {
+        let NativeCall {
+            callback,
+            response,
+            provider,
+            model,
+            deployment,
+            pricing,
+            reservation,
+            key_reservation,
+        } = call;
+        let mut upstream = response.bytes_stream();
+        let mut frames = Frames::default();
+        let mut usage = None;
+        let mut terminal = false;
+        let mut upstream_failed = false;
+        let mut failure = None;
+        let sink = GuardrailDecisionSink::from_state(
+            &state,
+            Some(&model),
+            Some(&provider),
+            Some(&deployment),
+        );
+        let mut guard = StreamOutputGuardrail::new(state.guardrails()).with_decision_sink(sink);
+        let idle_seconds = state.config().gateway.server.stream_idle_timeout;
+        'upstream: loop {
+            let chunk = tokio::select! {
+                biased;
+                _ = tx.closed() => break,
+                chunk = async {
+                    if idle_seconds == 0 { Ok(upstream.next().await) }
+                    else { tokio::time::timeout(std::time::Duration::from_secs(idle_seconds), upstream.next()).await }
+                } => match chunk {
+                    Ok(chunk) => chunk,
+                    Err(_) => { failure = Some(ProviderError::timeout("responses", "Responses stream idle timeout")); break; }
+                },
+            };
+            match chunk {
+                Some(Ok(chunk)) => {
+                    if let Err(error) = frames.push(&chunk) {
+                        failure = Some(error);
+                        break;
+                    }
+                    while let Some(frame) = frames.next() {
+                        let value = match event_value(&frame) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                failure = Some(error);
+                                break 'upstream;
+                            }
+                        };
+                        let mut surfaces = Vec::new();
+                        if let Some(value) = value {
+                            let event = value
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            if matches!(
+                                event,
+                                "response.completed" | "response.incomplete" | "response.failed"
+                            ) {
+                                terminal = true;
+                                upstream_failed = event == "response.failed";
+                                usage = value.get("response").and_then(response_usage);
+                            } else if event == "error" {
+                                terminal = true;
+                                upstream_failed = true;
+                            }
+                            // Keep each output's delta sequence contiguous for split-token checks.
+                            if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                                let index = value
+                                    .get("output_index")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
+                                let Ok(index) = u32::try_from(index) else {
+                                    failure = Some(invalid("Invalid output index"));
+                                    break 'upstream;
+                                };
+                                surfaces.push((index, delta.to_string()));
+                            }
+                            // Inspect all native and future fields too; raw event bytes are retained.
+                            surfaces.push((u32::MAX, native_responses_projection(&value)));
+                        }
+                        match guard.push_many_until_closed(&tx, surfaces, frame).await {
+                            Ok(Some(events)) => {
+                                for event in events {
+                                    if tx.send(event).await.is_err() {
+                                        break 'upstream;
+                                    }
+                                }
+                            }
+                            Ok(None) => break 'upstream,
+                            Err(error) => {
+                                failure = Some(ProviderError::api_error(
+                                    "guardrail",
+                                    403,
+                                    error.message(),
+                                ));
+                                break 'upstream;
+                            }
+                        }
+                        if terminal {
+                            break 'upstream;
+                        }
+                    }
+                }
+                Some(Err(_)) => {
+                    failure = Some(ProviderError::network(
+                        "responses",
+                        "Responses stream interrupted",
+                    ));
+                    break;
+                }
+                None => {
+                    if !terminal {
+                        failure = Some(invalid("Responses stream ended before a terminal event"));
+                    }
+                    break;
+                }
+            }
+        }
+        if failure.is_none() && terminal {
+            match guard.finish_until_closed(&tx).await {
+                Ok(Some(events)) => {
+                    for event in events {
+                        if tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    failure = Some(ProviderError::api_error("guardrail", 403, error.message()));
+                }
+            }
+        }
+        // A disconnect or malformed usage never releases a possibly consumed reservation.
+        settle(
+            &state,
+            &context,
+            &provider,
+            &model,
+            pricing,
+            usage.as_ref(),
+            reservation,
+            key_reservation,
+            facts,
+        )
+        .await;
+        if let Some(error) = failure {
+            callback.fail(error.to_string(), "stream_error");
+            lease.finish_failure(&error);
+            let code = if provider_error_is_guardrail(&error) {
+                "guardrail_violation"
+            } else {
+                "upstream_stream_error"
+            };
+            let event =
+                serde_json::json!({"type":"error", "code":code, "message":error.to_string()});
+            let _ = tx
+                .send(Bytes::from(format!("event: error\ndata: {event}\n\n")))
+                .await;
+        } else if upstream_failed {
+            callback.fail("Upstream response failed", "provider_error");
+            lease.finish_failure(&ProviderError::api_error(
+                "responses",
+                502,
+                "Upstream response failed",
+            ));
+        } else if terminal {
+            callback.complete_usage(usage.as_ref(), "success");
+            lease.finish_success(
+                usage
+                    .as_ref()
+                    .map_or(0, |usage| u64::from(usage.total_tokens)),
+            );
+        } else {
+            callback.fail("Client disconnected", "client_disconnect");
+        }
+    });
+    HttpResponse::Ok()
+        .insert_header(("content-type", "text/event-stream"))
+        .insert_header(("cache-control", "no-cache"))
+        .streaming(ReceiverStream::new(rx).map(Ok::<_, actix_web::Error>))
+}
+
+fn provider_error_is_guardrail(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::ApiError {
+            provider: "guardrail",
+            ..
+        }
+    )
+}
+
+fn invalid(message: &str) -> ProviderError {
+    ProviderError::response_parsing("responses", message)
+}
+
+#[derive(Default)]
+struct Frames {
+    pending: Vec<u8>,
+}
+
+impl Frames {
+    fn push(&mut self, bytes: &[u8]) -> Result<(), ProviderError> {
+        if self.pending.len().saturating_add(bytes.len()) > MAX_RESPONSE_BYTES {
+            return Err(invalid("Responses SSE buffer exceeds size limit"));
+        }
+        self.pending.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn next(&mut self) -> Option<Bytes> {
+        let lf = self
+            .pending
+            .windows(2)
+            .position(|part| part == b"\n\n")
+            .map(|position| position + 2);
+        let crlf = self
+            .pending
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .map(|position| position + 4);
+        let end = lf.into_iter().chain(crlf).min()?;
+        Some(Bytes::from(self.pending.drain(..end).collect::<Vec<_>>()))
+    }
+}
+
+fn event_value(frame: &[u8]) -> Result<Option<Value>, ProviderError> {
+    let text = std::str::from_utf8(frame).map_err(|_| invalid("Invalid Responses SSE UTF-8"))?;
+    let data = text
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("data:")
+                .map(|data| data.strip_prefix(' ').unwrap_or(data))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(None);
+    }
+    serde_json::from_str(&data)
+        .map(Some)
+        .map_err(|_| invalid("Invalid Responses SSE JSON"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn frames_preserve_utf8_event_names_and_multiline_data() {
+        let wire = "event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\r\ndata: \"delta\":\"你好\"}\r\n\r\n";
+        let mut frames = Frames::default();
+        for byte in wire.as_bytes() {
+            frames.push(&[*byte]).unwrap();
+        }
+        let frame = frames.next().unwrap();
+        assert_eq!(frame.as_ref(), wire.as_bytes());
+        assert_eq!(event_value(&frame).unwrap().unwrap()["delta"], "你好");
+        assert!(frames.next().is_none());
+    }
+    #[test]
+    fn malformed_frames_are_not_silently_dropped() {
+        assert!(event_value(b"data: not json\n\n").is_err());
+        assert!(event_value(b"data: \xff\n\n").is_err());
+        assert!(event_value(b": heartbeat\n\n").unwrap().is_none());
+    }
+}

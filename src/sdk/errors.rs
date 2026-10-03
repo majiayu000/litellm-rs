@@ -15,13 +15,9 @@ pub enum SDKError {
     #[error("No default provider configured")]
     NoDefaultProvider,
 
-    /// Error
-    #[error("Provider error: {0}")]
-    #[deprecated(
-        since = "0.6.0",
-        note = "use the existing typed SDK categories returned by ProviderError conversion"
-    )]
-    ProviderError(String),
+    /// The provider or upstream service is temporarily unavailable.
+    #[error("Provider unavailable: {0}")]
+    Unavailable(String),
 
     /// Configuration
     #[error("Configuration error: {0}")]
@@ -90,10 +86,8 @@ impl From<crate::utils::error::gateway_error::GatewayError> for SDKError {
             crate::utils::error::gateway_error::GatewayError::RateLimit { message, .. } => {
                 SDKError::RateLimitError(message)
             }
-            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-            #[allow(deprecated)]
             crate::utils::error::gateway_error::GatewayError::Unavailable(msg) => {
-                SDKError::ProviderError(msg)
+                SDKError::Unavailable(msg)
             }
             crate::utils::error::gateway_error::GatewayError::Internal(msg) => {
                 SDKError::Internal(msg)
@@ -122,9 +116,7 @@ impl From<crate::core::providers::ProviderError> for SDKError {
             ErrorCode::InvalidRequest | ErrorCode::Conflict => SDKError::InvalidRequest(message),
             ErrorCode::NotFound => SDKError::ModelNotFound(message),
             ErrorCode::Timeout | ErrorCode::Network => SDKError::NetworkError(message),
-            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-            #[allow(deprecated)]
-            ErrorCode::Unavailable => SDKError::ProviderError(message),
+            ErrorCode::Unavailable => SDKError::Unavailable(message),
             ErrorCode::Configuration => SDKError::ConfigError(message),
             ErrorCode::Parsing => SDKError::ParseError(message),
             ErrorCode::NotImplemented => SDKError::NotSupported(message),
@@ -137,20 +129,6 @@ impl From<crate::core::providers::ProviderError> for SDKError {
 pub type Result<T> = std::result::Result<T, SDKError>;
 
 impl SDKError {
-    /// Error
-    #[deprecated(
-        since = "0.6.0",
-        note = "use RetryPolicy::decide with ProviderFailureFacts for provider routing/retry; removal tracked in 0.7.0 follow-up (SP965-T010)"
-    )]
-    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-    #[allow(deprecated)]
-    pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            SDKError::NetworkError(_) | SDKError::RateLimitError(_) | SDKError::ProviderError(_)
-        )
-    }
-
     /// Error
     pub fn is_auth_error(&self) -> bool {
         matches!(self, SDKError::AuthError(_))
@@ -166,19 +144,16 @@ impl SDKError {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::core::providers::ProviderError;
     use crate::utils::error::gateway_error::GatewayError;
 
-    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-    #[allow(deprecated)]
     fn sdk_variant(error: &SDKError) -> &'static str {
         match error {
             SDKError::ProviderNotFound(_) => "provider_not_found",
             SDKError::NoDefaultProvider => "no_default_provider",
-            SDKError::ProviderError(_) => "provider_error",
+            SDKError::Unavailable(_) => "unavailable",
             SDKError::ConfigError(_) => "config_error",
             SDKError::NetworkError(_) => "network_error",
             SDKError::AuthError(_) => "auth_error",
@@ -209,12 +184,10 @@ mod tests {
         assert_eq!(error.to_string(), "No default provider configured");
     }
 
-    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-    #[allow(deprecated)]
     #[test]
-    fn test_sdk_error_provider_error() {
-        let error = SDKError::ProviderError("API unavailable".to_string());
-        assert_eq!(error.to_string(), "Provider error: API unavailable");
+    fn test_sdk_error_unavailable() {
+        let error = SDKError::Unavailable("API unavailable".to_string());
+        assert_eq!(error.to_string(), "Provider unavailable: API unavailable");
     }
 
     #[test]
@@ -338,7 +311,7 @@ mod tests {
             (ProviderError::network("openai", "network"), "network_error"),
             (
                 ProviderError::provider_unavailable("openai", "down"),
-                "provider_error",
+                "unavailable",
             ),
             (
                 ProviderError::configuration("openai", "bad config"),
@@ -376,7 +349,7 @@ mod tests {
             ),
         ));
 
-        assert_eq!(sdk_variant(&sdk_error), "provider_error");
+        assert_eq!(sdk_variant(&sdk_error), "unavailable");
         let display = sdk_error.to_string();
         let debug = format!("{sdk_error:?}");
         for raw in [raw_key, raw_signature, "password"] {
@@ -384,52 +357,6 @@ mod tests {
             assert!(!debug.contains(raw), "Debug leaked {raw}: {debug}");
         }
         assert!(display.contains("[REDACTED]") || debug.contains("[REDACTED]"));
-    }
-
-    // ==================== SDKError is_retryable Tests ====================
-
-    #[test]
-    fn test_is_retryable_network_error() {
-        let error = SDKError::NetworkError("timeout".to_string());
-        assert!(error.is_retryable());
-    }
-
-    #[test]
-    fn test_is_retryable_rate_limit_error() {
-        let error = SDKError::RateLimitError("limit exceeded".to_string());
-        assert!(error.is_retryable());
-    }
-
-    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-    #[allow(deprecated)]
-    #[test]
-    fn test_is_retryable_provider_error() {
-        let error = SDKError::ProviderError("unavailable".to_string());
-        assert!(error.is_retryable());
-    }
-
-    #[test]
-    fn test_is_not_retryable_auth_error() {
-        let error = SDKError::AuthError("invalid key".to_string());
-        assert!(!error.is_retryable());
-    }
-
-    #[test]
-    fn test_is_not_retryable_config_error() {
-        let error = SDKError::ConfigError("bad config".to_string());
-        assert!(!error.is_retryable());
-    }
-
-    #[test]
-    fn test_is_not_retryable_invalid_request() {
-        let error = SDKError::InvalidRequest("bad request".to_string());
-        assert!(!error.is_retryable());
-    }
-
-    #[test]
-    fn test_is_not_retryable_internal() {
-        let error = SDKError::Internal("bug".to_string());
-        assert!(!error.is_retryable());
     }
 
     // ==================== SDKError is_auth_error Tests ====================
@@ -521,16 +448,13 @@ mod tests {
         };
         let sdk_error: SDKError = gateway_error.into();
         assert!(matches!(sdk_error, SDKError::RateLimitError(_)));
-        assert!(sdk_error.is_retryable());
     }
 
-    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-    #[allow(deprecated)]
     #[test]
     fn test_from_gateway_error_provider_unavailable() {
         let gateway_error = GatewayError::Unavailable("OpenAI down".to_string());
         let sdk_error: SDKError = gateway_error.into();
-        assert!(matches!(sdk_error, SDKError::ProviderError(_)));
+        assert!(matches!(sdk_error, SDKError::Unavailable(message) if message == "OpenAI down"));
     }
 
     #[test]
@@ -545,7 +469,6 @@ mod tests {
         let gateway_error = GatewayError::Network("Connection refused".to_string());
         let sdk_error: SDKError = gateway_error.into();
         assert!(matches!(sdk_error, SDKError::NetworkError(_)));
-        assert!(sdk_error.is_retryable());
     }
 
     #[test]
@@ -579,12 +502,10 @@ mod tests {
 
     // ==================== SDKError Edge Cases ====================
 
-    // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-    #[allow(deprecated)]
     #[test]
     fn test_sdk_error_empty_message() {
-        let error = SDKError::ProviderError("".to_string());
-        assert_eq!(error.to_string(), "Provider error: ");
+        let error = SDKError::Unavailable("".to_string());
+        assert_eq!(error.to_string(), "Provider unavailable: ");
     }
 
     #[test]
