@@ -1,6 +1,6 @@
 # LiteLLM 差距补齐清单
 
-更新日期：2026-10-03 14:02（北京时间）。起点：`e9cf6a4b`（模型更新 PR #1360 已合并）。当前已整合的 main 为 `680e70cd`（包含 #1385 和 #1399）。
+更新日期：2026-10-03 14:49（北京时间）。起点：`e9cf6a4b`（模型更新 PR #1360 已合并）。当前已整合的 main 为 `e6677a0b`（包含 #1385、#1399、#1401 和 #1404）。
 
 本文件是继续执行 F01–F18 的唯一台账。已完成 F01–F04、F12、F17；其余工作按下方复选清单推进。功能验收、合并和发布分别记录；当前发行仍为 v0.7.0，尚不包含本轮新增成果。
 
@@ -15,19 +15,19 @@
 | F03 | P1 | Cloudflare 现代聊天协议与流式 | 使用官方兼容接口；文本、工具、多模态、用量、流式及中途错误按支持能力正确传递；文档和能力声明一致 | 完成 | [#1368](https://github.com/majiayu000/litellm-rs/issues/1368)；[PR #1369](https://github.com/majiayu000/litellm-rs/pull/1369)；聊天/流式本地 HTTP 测试、默认全量测试/check/clippy 通过；审查后的 88 项 provider 测试与 clippy 通过；全部 CI 通过，review 已解决；已合并 `4b4a4dd4` |
 | F04 | P1 | Bedrock 逐模型能力与计费 | 审核 generic_converse 全部条目；修正上下文、输出、视觉、推理、profile 与价格；消除通用虚假默认值和重复价格源 | 完成 | [#1370](https://github.com/majiayu000/litellm-rs/issues/1370)；逐项核对 39 张 AWS 模型卡及官网定价；修正通用参数、移除 Sonic 聊天声明、统一计费来源；382 项 Bedrock 测试通过；[PR #1371](https://github.com/majiayu000/litellm-rs/pull/1371)；默认全量测试/check/clippy 及全部 CI 已通过，无未解决 review；已合并 `e77391fe` |
 | F05 | P1 | 原生 Responses 请求通路 | 支持该协议的供应商真正调用原生 endpoint；保留工具、推理、原生事件、用量及错误；经过现有鉴权、路由、预算和记录链路 | 进行中 | [#1372](https://github.com/majiayu000/litellm-rs/issues/1372)；OpenAI 原生传输、预算、内容检查和回调通路已接入；10 项集成测试与 4 项单测通过，现有 Responses 8 项回归通过；默认全量 test/check/clippy 和 gateway/sqlite clippy 通过；[草稿 PR #1374](https://github.com/majiayu000/litellm-rs/pull/1374)；原生存储在后续草稿 #1379 接入；后台生命周期、其他供应商矩阵及工具/文件计费未完成，不可合并 |
-| F06 | P1 | Responses 模型与供应商路由 | OpenAI、Copilot、Bedrock 原生协议分别按官方 endpoint/model 支持矩阵路由；Responses-only 模型和工具不被送往 chat/completions | 进行中 | [#1375](https://github.com/majiayu000/litellm-rs/issues/1375)；[草稿 PR #1377](https://github.com/majiayu000/litellm-rs/pull/1377)；111 个 OpenAI 模型/快照的官方端点已进入现有目录与路由，Responses-only/非聊天模型不再误走聊天；158 项 OpenAI 测试、12 项原生路由测试、51 项 Python 测试和默认全量 test/check/clippy 通过；Copilot/Bedrock 尚待接入 |
-| F07 | P1 | Responses 跨副本持久状态 | 两个网关实例可读/删同一授权响应；重启后可恢复记录；租户隔离、TTL、后台状态及取消语义有测试 | 进行中 | [#1378](https://github.com/majiayu000/litellm-rs/issues/1378)；已将聊天适配路径的生命周期接入 SQL，10 项生命周期测试（包含双网关及重启）、3 项数据库竞争/清理测试、9 项路由回归（包括跨网关取消执行中请求）通过，[草稿 PR #1379](https://github.com/majiayu000/litellm-rs/pull/1379)；原生同步/流式存储、查询、输入列表、删除已接入租户/部署/账户绑定，19 项原生路由测试通过，含部署固定、上下文预算和策略变更拦截；72 项预算测试串行通过（并行时一项日志捕获断言失败，未声称已修复并发日志测试）；原生后台单次结算、跨网关取消及带游标的流式恢复已实现；19 项原生路由、9 项适配路由及默认全量 test/check/clippy、gateway/sqlite clippy 通过；store=false 只留十分钟临时元数据；仍缺进程重启后的后台费用恢复，九分钟内无最终用量按现有预留金额规则结算；全项保持进行中 |
-| F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 进行中 | [#1380](https://github.com/majiayu000/litellm-rs/issues/1380)；原生 JSON/SSE、鉴权与密钥令牌限制、原生 HTTP/流式错误、内容检查和累计用量已接入；[草稿 PR #1381](https://github.com/majiayu000/litellm-rs/pull/1381)；13 项路由测试、5 项 OpenAPI 契约测试、缓存 TTL/搜索费用测试，以及默认全量 test/check/clippy、gateway/sqlite clippy 通过；新增原生 count_tokens 预估图片/文档/工具输入，并按最贵请求 TTL 预留冷缓存写入费；15 项 Messages 路由测试通过；托管工具非令牌费用、工具循环新增输入及特殊费率仍未全部覆盖，暂不标为完成 |
+| F06 | P1 | Responses 模型与供应商路由 | OpenAI、Copilot、Bedrock 原生协议分别按官方 endpoint/model 支持矩阵路由；Responses-only 模型和工具不被送往 chat/completions | 进行中 | [#1375](https://github.com/majiayu000/litellm-rs/issues/1375) / [草稿 #1377](https://github.com/majiayu000/litellm-rs/pull/1377)，`822f5eb6`：OpenAI 111 个模型/快照官方端点、Copilot 账户动态 supported_endpoints、Bedrock Runtime/Mantle 的原生地址、签名及价格身份均已接入；Responses-only 不回退聊天。158 项 OpenAI、42 项 Copilot、400 项 Bedrock/价格、12 项原生路由和默认完整检查通过。剩余为堆叠集成、完整 CI 与审查；Copilot/Bedrock 生命周期不在首批支持范围。 |
+| F07 | P1 | Responses 跨副本持久状态 | 两个网关实例可读/删同一授权响应；重启后可恢复记录；租户隔离、TTL、后台状态及取消语义有测试 | 进行中 | [#1378](https://github.com/majiayu000/litellm-rs/issues/1378) / [草稿 #1379](https://github.com/majiayu000/litellm-rs/pull/1379)，`aa1dedb6`：共享 SQL 响应记录与独立结算记录已接入；POST 前持久化责任，恢复不重发生成请求，终态用量先冻结再结算。315 项 Responses 单测、3 项数据库测试、21 项原生及 9 项适配路由、165 项预算测试通过（含隔离真实 Redis 的租约过期/重启/重复结算）；默认完整测试 7269 通过/1 忽略及 fmt/check/默认和 gateway/sqlite clippy 通过。SQL 用量与收据同事务，Redis 预算按收据去重；未知用量保持 reserved_unknown，不伪报实际账单。后台 provider/model 预算需要共享 Redis，不支持进程内 API-key 预算；账务记录不随内容 TTL/删除清除，崩溃后外部回调不重放。等待整链 CI/审查。 |
+| F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 进行中 | [#1380](https://github.com/majiayu000/litellm-rs/issues/1380) / [草稿 #1381](https://github.com/majiayu000/litellm-rs/pull/1381)，`95602f01`：原生 JSON/SSE、api.chat 鉴权、count_tokens、冷缓存 TTL 与有界直接 web search/fetch 预算已接入；不支持的执行工具、自动工具循环、显式 premium speed/非 global geo 在生成前拒绝。18 项定向测试（13 项路由、5 项共享夹具）、默认完整 fmt/check/test/clippy 及 gateway/sqlite clippy 通过。未指定 inference_geo 时仍可能继承工作区 US 溢价，计费尚未覆盖，保持草稿不可合并；详见当前 PR 文档。 |
 | F09 | P2 | Responses compact 与 Gemini 文档覆盖 | 接通 /v1/responses/compact；Gemini 已有 generateContent/streamGenerateContent 路由，补 OpenAPI 覆盖并复核现有鉴权/流式/用量测试 | 待验收 | [#1382](https://github.com/majiayu000/litellm-rs/issues/1382)；compact 已复用原生传输、鉴权、费用与 previous_response_id 部署/账户绑定；4 项压缩定向测试通过；Gemini OpenAPI 的 8 个路径均已实际请求通过；23 项原生 Responses、29 项 Gemini 路由和 5 项 OpenAPI 契约测试通过；默认全量 test/check/clippy 及 gateway/sqlite clippy 通过；[草稿 PR #1383](https://github.com/majiayu000/litellm-rs/pull/1383)；依赖 #1379，等待 CI 与审查 |
 | F10 | P1 | 模型退役与目录一致性 | 去除已退役模型的可调用声明；优先修 Cloudflare；复核全部现有静态供应商目录、示例、价格和能力来源 | 进行中 | [#1373](https://github.com/majiayu000/litellm-rs/issues/1373)；首批 OpenAI/Azure、Cloudflare、Copilot、Bedrock 已合并 [#1376](https://github.com/majiayu000/litellm-rs/pull/1376)（`42ba2b2a`）。Mistral 批次 [#1396](https://github.com/majiayu000/litellm-rs/pull/1396) 已合并（`ea7d9414`）：修正六个 Ministral 3 视觉条目和 3B 上下文，保留五个日期快照；74 项 Mistral 测试、默认完整检查和扩展特性 clippy 通过。[PR #1385](https://github.com/majiayu000/litellm-rs/pull/1385) 清理 Anthropic/Gemini 退役或未核实型号及别名，保留历史价格；修正 Gemini 缓存价格、区域/全球健康探测与受限网络策略。Anthropic 校验和能力直接使用现行目录，SDK 保留 thinking 块后的全部文本。默认完整 test/check/clippy（7260 项库测试）、234 项 Vertex、128 项 Gemini 及扩展 clippy 已通过；最新 124 项模型工具、244 项 SDK 测试和默认 all-target clippy 通过。本轮补齐 Gemini helper/原生 JSON/SSE 型号拒绝及 Claude 5 SDK 参数校验；默认全量检查通过（7266 项库测试、1 忽略），扩展 Gemini 226 项、Vertex 254 项及特性 clippy 通过。提交 `b745bb9d` 的 15 项 CI 全绿、review 清零，已合并 `680e70cd`；其余静态目录仍需逐项复核；基线见 [逐条目录基线](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/audit/model-catalog-2026-10-01.entries.json)。 |
-| F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 进行中 | 复核更正：通用 `openai_compatible` 已有 embeddings/images/audio 实现；30 项定向单测以及 embeddings、图片编辑/变体 HTTP 测试通过；`support_matrix.rs` 是旧适配器矩阵，不代表当前运行时。[#1386](https://github.com/majiayu000/litellm-rs/issues/1386)；Together/DeepInfra/Fireworks 已按官方矩阵扩展既有能力声明，11 项 HTTP/路由测试、12 项 catalog 和 85 项 provider 测试通过；默认完整 test/check/clippy 与 gateway/sqlite clippy 通过；[PR #1389](https://github.com/majiayu000/litellm-rs/pull/1389) 已合并（`c5bf4c19`），CI 全绿且 review 已解决；其余具名供应商尚待核验，范围见 [已合并范围文档](https://github.com/majiayu000/litellm-rs/blob/d6ab3e723e047254d8208cbfdc2800a7016db1ed/docs/providers/compatible-nonchat.md)。  第二批 [#1398](https://github.com/majiayu000/litellm-rs/issues/1398) / [PR #1399](https://github.com/majiayu000/litellm-rs/pull/1399) 补 Groq 语音合成/转写/翻译、WAV 默认值和十秒最低计费；12 项协议路由与 3 项计费测试、默认完整 test/check/clippy 和 gateway/sqlite all-target clippy 通过；其余具名供应商继续核验。 Groq 审查补具体音频模型路由及翻译真实时长结算；13 项协议/路由测试、13 项音频网关测试（含时长缺失/无效回退和十秒下限）与 gateway/sqlite all-target clippy 通过，提交 `05585aec` 的 15 项 CI 全部通过、review 已解决；已合并 [#1399](https://github.com/majiayu000/litellm-rs/pull/1399)（`d6ab3e72`）。其余供应商待核验。 |
+| F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 进行中 | 复核更正：通用 `openai_compatible` 已有 embeddings/images/audio 实现；30 项定向单测以及 embeddings、图片编辑/变体 HTTP 测试通过；`support_matrix.rs` 是旧适配器矩阵，不代表当前运行时。[#1386](https://github.com/majiayu000/litellm-rs/issues/1386)；Together/DeepInfra/Fireworks 已按官方矩阵扩展既有能力声明，11 项 HTTP/路由测试、12 项 catalog 和 85 项 provider 测试通过；默认完整 test/check/clippy 与 gateway/sqlite clippy 通过；[PR #1389](https://github.com/majiayu000/litellm-rs/pull/1389) 已合并（`c5bf4c19`），CI 全绿且 review 已解决；其余具名供应商尚待核验，范围见 [已合并范围文档](https://github.com/majiayu000/litellm-rs/blob/d6ab3e723e047254d8208cbfdc2800a7016db1ed/docs/providers/compatible-nonchat.md)。  第二批 [#1398](https://github.com/majiayu000/litellm-rs/issues/1398) / [PR #1399](https://github.com/majiayu000/litellm-rs/pull/1399) 补 Groq 语音合成/转写/翻译、WAV 默认值和十秒最低计费；12 项协议路由与 3 项计费测试、默认完整 test/check/clippy 和 gateway/sqlite all-target clippy 通过；其余具名供应商继续核验。 Groq 审查补具体音频模型路由及翻译真实时长结算；13 项协议/路由测试、13 项音频网关测试（含时长缺失/无效回退和十秒下限）与 gateway/sqlite all-target clippy 通过，提交 `05585aec` 的 15 项 CI 全部通过、review 已解决；已合并 [#1399](https://github.com/majiayu000/litellm-rs/pull/1399)（`d6ab3e72`）。第三批 [#1400](https://github.com/majiayu000/litellm-rs/issues/1400) / [#1401](https://github.com/majiayu000/litellm-rs/pull/1401) 已合并 `fc6a437c`：OpenRouter/Nebius/NVIDIA NIM/LM Studio embeddings，14 项定向测试（含 5 项共享夹具）、默认完整检查及 gateway/sqlite clippy 通过，合并前 15 项 CI 全绿且 review 清零。已列出全部 62 个兼容选择器，剩余核验范围有明确记录；Nebius images 字段不兼容，不声明支持。 |
 | F12 | P2 | 自定义供应商注册 | 外部实现可通过公开 API 注册并被路由，无须修改内部 Provider 枚举；覆盖构造、能力、错误和流式测试 | 完成 | [#1384](https://github.com/majiayu000/litellm-rs/issues/1384)；外部接口已接入现有 Provider/Deployment/Router，all-features 编译通过；4 项外部集成测试通过（注册/路由、模型能力、流式错误、未实现能力/缺价）；默认完整测试/check/clippy、gateway/sqlite/扩展 provider clippy 均通过（默认库 7,217 项通过、1 项忽略）；已提交 [PR #1387](https://github.com/majiayu000/litellm-rs/pull/1387)；审查补充健康检查回调路由回归；全部 CI 通过、review 已解决，已合并 `f24aa58f` |
-| F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 待验收 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)；已按 MCP 2026-07-28 改为无状态 POST，删除旧初始化/会话与后台回收器。逐请求版本/方法/名称校验、Base64 名称、MRTR/订阅 SSE、原生字段与高精度数值、服务器/端点权限、Origin/凭据隔离、HTTPS/受限出站及断流测试通过。15 项最新路由测试、gateway/sqlite/mcp 完整测试（9710 项库测试通过、1 忽略，集成/doc 通过）及最新特性 all-target clippy 通过；此前默认完整检查通过。补齐每调用者 128/全局 4096 并发限制、有限响应体绝对超时与 URL 内嵌凭据拒绝，断流/超时释放配额均通过测试。提交 `ef9fd55f` 的 15 项 CI 全绿且原 7 条 review 已解决。后续 `63a6c466` 补静态/认证请求头大小写去重并清理过时 session affinity 声明；19 项路由与新增配置回归、默认完整检查、gateway/sqlite/mcp 全量测试及 clippy 通过；2 条后续 review 已解决，等待最新 CI；不包含旧协议、OAuth 获取、多服务器聚合或外部工具费用，详见 [当前 PR 范围文档](https://github.com/majiayu000/litellm-rs/blob/63a6c466/docs/gateway/mcp.md)。 当前提交 `63a6c466`。 |
-| F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 待验收 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)；A2A 1.0 JSON-RPC 五方法、卡片、权限/归属、容量及 SSE 已接通。最新审查补 Task/Message 变体身份与必填字段、活动任务提前 EOF 拒绝、ROLE_USER 校验、带凭据上游强制 HTTPS；取消任务不再受旧库专有开关限制。28 项路由测试及 gateway/sqlite/a2a all-target clippy 通过，此前 132 项 core 和默认完整检查通过；后续 `c3bd992f` 修复 task/context 关联、状态枚举、错误分类、卡片版本协商与公开权限创建；32 项路由、默认完整检查、gateway/sqlite/a2a 完整测试和 clippy 通过，原 6 条 review 已解决。当前又有卡片版本、body timeout 和受限发现审查，正在修复/核验，尚未合并。进程内归属需实例亲和，不含 push/list/扩展卡片或代理费用计量，详见 [当前 PR 范围文档](https://github.com/majiayu000/litellm-rs/blob/36c4426145177cb8fc7327f9cee81d7359fee2af/docs/gateway/a2a.md)。 补齐 Task/Message 可选 contextId、后续事件 context 固定、跨帧 SSE BOM 及有限响应 JSON 类型；28 项路由测试与特性 clippy 通过。 已推送提交 `c3bd992f`；原文档链接保留为历史范围参考。 |
-| F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 进行中 | [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) 已立项。此前台账记录了 OpenAI WebSocket 传输的 3 项测试、3 项分项用量测试、51 项价格同步测试及特性 clippy；但尚无实现 PR 或不可变提交链接，本次不能独立核验这些记录。先找回实现及日志，再补公开路由、鉴权、预算、双向事件和完整验证；main 尚无公开 Realtime 网关路由。 |
-| F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 待开始 | 依赖对应功能完成；尚无本项专属 issue/PR。执行前搜索现有工作并补建 issue；逐项核对 README、subsystem_registry、feature 和发布特性，不作无关架构重写。 |
+| F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 待验收 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)，`a1f718bb`：MCP 2026-07-28 无状态 POST、工具/资源/提示词、MRTR/SSE、命名权限、Origin/出站限制、并发/超时和断流已接通。新增前缀同名路由、配置导出脱敏、空/旧通用权限拒绝及 Tasks taskId 路由头回归；最新 22 项路由测试、fmt 和特性 all-target clippy 通过。前一提交 bf8434ab 默认完整检查（7219 通过/1 忽略）及 gateway/sqlite/mcp 完整测试/clippy 通过；最新 CI 仍需验收，当前 review 已处理。无旧协议、OAuth 获取、聚合或外部工具计费；无网关会话亲和要求。范围见 [文档](https://github.com/majiayu000/litellm-rs/blob/a1f718bb771f5974d212450c813ac4c87bd85b9d/docs/gateway/mcp.md)。 |
+| F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 待验收 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)，`7ec0b7d8`：A2A 1.0 五方法、私有卡片、任务/context 归属、原生 JSON/SSE、取消与命名权限已接通。阻塞调用拒绝未完成状态、可信代理控制卡片 origin、续期保留 context、满容量下已有任务续接通过；最新 37 项路由、fmt/特性 clippy 通过。a0b82e68 默认完整检查通过；f3b19306 特性完整测试 9749 通过/1 忽略及集成/doc/clippy 通过。最新 CI 待验收，当前 review 已处理。进程内归属需实例亲和且重启后拒绝旧归属；无 push/list/扩展卡片/代理计费。见 [文档](https://github.com/majiayu000/litellm-rs/blob/7ec0b7d8c5c1064c2b315f4f88c9b77df4ba38fb/docs/gateway/a2a.md)。 |
+| F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 进行中 | [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) / [PR #1405](https://github.com/majiayu000/litellm-rs/pull/1405)，`7b037dd8`：首批 OpenAI WebSocket 手动 response.create，文本/音频/函数事件与预算、鉴权、受限出站已接入。默认完整检查 7219 通过/1 忽略，gateway/sqlite/websockets 完整测试 9608 通过/1 忽略（含 10 项 Realtime）及 clippy 通过。一次既有 moderation 超时后定向及完整复测通过，未声称修复偶发超时。新审查发现 TPM/RPM、错误关闭、模型映射、缺价、事件关联及用量写入失败问题，正在原分支修复；未验收。首批拒绝自动 VAD、转写、图片、托管 MCP、模型切换及启用内容检查的会话；崩溃结算有限制，见 PR 文档。 |
+| F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 进行中 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / [首批 PR #1404](https://github.com/majiayu000/litellm-rs/pull/1404)，`6b9b4580`：删除过期且未使用的 BatchProcessor、重复 VirtualKeyManager、UserManager 和 user-management feature，保留实际网关/鉴权/用户数据通路；README 与登记表记录未发布的源码破坏性变更。默认完整检查 7266 通过/1 忽略、all-features check、gateway/sqlite 9631 项库测试/1 忽略及 clippy 通过，15 项 CI 全绿且无未解决 review，已合并 `e6677a0b`。analytics、semantic_cache、旧 retry/observability/realtime 接口及最终网关声明仍需核对，不关闭总项。 |
 | F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 完成 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395) 已于 2026-10-03 合并（`cb76a186`）。同机、同上游、4 workers、并发 64 的三轮对照及直连基线共 9 个样本零请求错误；原始数据/环境/限制随报告提交。12 项运行器行为测试、14 项现有 benchmark 契约测试、默认完整 Rust 检查及全部 CI 通过，审查线程已解决。结果仅适用于报告中的本地模拟负载，不宣称通用倍数，见 [已合并报告](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison.md)及[原始证据包](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison-20261003.json.gz)。 |
-| F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 待开始 | [GitHub 最新发行 v0.7.0](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0) 对应 `3341e54a`，不含 #1360 及本轮工作；[crates.io](https://crates.io/crates/litellm-rs/versions) 最新也是 0.7.0。尚无本项专属 issue/PR；执行前搜索并补建。需核查二进制、crate、容器和安装步骤，当前产物内容尚未验收。 |
+| F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 进行中 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403) 已建立，当前仅完成发行配置盘点；尚无实现 PR 或已验证候选包。[最新发行 v0.7.0](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0) 于 2026-09-30 发布，提交 3341e54a，不含本轮工作。现行 shipped feature 列表未包含 a2a；后续须在已验收候选提交验证 crate、二进制、容器和安装说明。没有发布新版本。 |
 
 ## 执行与验收记录
 
@@ -47,22 +47,25 @@ Responses 的现有分支依赖为 `#1374 → #1377 → #1379 → #1383`。先�
 
 ## 当前提交与 CI 基线
 
-这是 2026-10-03 14:02 的远端快照；未推送工作区修改不包含在 head 中。每次验收重新读取当前提交、CI 和 review。
+这是 2026-10-03 14:52 的远端快照；未推送工作区修改不包含在 head 中。每次验收重新读取当前提交、CI 和 review。#1390 行刻意记录本次文档修订前的已推送提交，避免把新修订宣称为已经过 CI。
 
 | PR | 远端 head | 此提交检查 | 剩余阻断 / 合并结果 |
 | --- | --- | --- | --- |
-| #1374 | `c7a47ba5` | 15 项通过 | 草稿；工具计费与生命周期整链验收未完成 |
-| #1377 | `822f5eb6` | 尚无成功检查（其余未完成或未触发，非全绿） | 草稿；Copilot/Bedrock 路由已实现并通过本地全量检查，等待整链 CI/验收 |
-| #1379 | `e3cf2a53` | 1 项通过（其余未完成或未触发，非全绿） | 草稿；正在原分支实现重启后持久结算，工作区新代码尚未验证 |
-| #1381 | `bb84357b` | 13 项通过（其余未完成或未触发，非全绿） | 草稿；17 项路由及本地完整检查通过，托管工具/特殊费率仍未全部覆盖 |
-| #1383 | `f65674f3` | 1 项通过（其余未完成或未触发，非全绿） | 草稿；依赖 #1379，整链集成待完成 |
-| #1385 | `b745bb9d` | 15 项通过 | 已合并 `680e70cd` |
-| #1390 | `e92c6371` | 2 项通过（其余未完成或未触发，非全绿） | 1 条基线过时 review，由本次台账更新处理 |
-| #1391 | `63a6c466` | 15 项通过 | 2 条新 review：路由遮挡、OAuth token URL 导出；本地修复中 |
-| #1393 | `deb52620` | 15 项通过 | 5 条新 review：URL 凭据、阻塞任务、空权限 key、context 续期、可信 origin；本地修复中 |
-| #1399 | `05585aec` | 15 项通过 | 已合并 `d6ab3e72` |
+| #1374 | `c7a47ba5` | 15/15 项成功 | 草稿；工具计费与整链验收待完成 |
+| #1377 | `822f5eb6` | 1/1 项成功（仅 convergence，非完整 CI） | 草稿；三供应商路由已实现，整链 CI/审查待完成 |
+| #1379 | `aa1dedb6` | 0/1 项成功，1 项未完成（仅 convergence，非完整 CI） | 草稿；持久结算已推送，本地恢复验证通过，整链待验收 |
+| #1381 | `95602f01` | 8/15 项成功，7 项未完成 | 草稿；工作区默认 geo 溢价等计费缺口未关闭 |
+| #1383 | `f65674f3` | 1/1 项成功（仅 convergence，非完整 CI） | 草稿；正在原分支整合最新 #1379 |
+| #1385 | `b745bb9d` | 15/15 项成功 | 已合并 `680e70cd` |
+| #1390 | `5987e84d` | 3/3 项成功 | 此行记录本次台账修订前 head；本次修订处理三条过时证据 review |
+| #1391 | `a1f718bb` | 11/15 项成功，4 项未完成 | 当前审查已修复，等最新完整 CI |
+| #1393 | `7ec0b7d8` | 8/15 项成功，7 项未完成 | 当前审查已修复，等最新完整 CI |
+| #1399 | `05585aec` | 15/15 项成功 | 已合并 `d6ab3e72` |
+| #1401 | `7e24a14f` | 15/15 项成功 | 已合并 `fc6a437c` |
+| #1404 | `6b9b4580` | 15/15 项成功 | 已合并 `e6677a0b`（14:54 核验，15 项全绿、无未解决 review） |
+| #1405 | `7b037dd8` | 14/15 项成功，1 项未完成 | 七条有效性审查正在原分支查证修复，尚不可合并 |
 
-main 已整合到 `680e70cd`。此前 `cb76a186` 的 CI Main Full Test 被取消是历史结果，不代表当前 main 的检查结论。#1385 和 #1399 各自合并前均有 15 项 CI 成功及零未解决线程；main 合并后检查和最终发行提交仍需分别验证。堆叠 PR 仅有 convergence 不足以声称完整 GitHub CI 通过。
+main 已整合到 `e6677a0b`。#1385、#1399、#1401、#1404 合并前均有 15 项成功检查及零未解决线程；main 合并后检查与最终发行候选仍单独验证。堆叠 PR 仅有 convergence 不足以声称完整 GitHub CI 通过，取消和排队也不计成功。
 
 ## 台账与现有 PR 收口
 
@@ -115,9 +118,9 @@ main 已整合到 `680e70cd`。此前 `cb76a186` 的 CI Main Full Test 被取消
 
 - [ ] F05：保留原生 JSON/SSE、工具、推理、未知扩展字段及原生错误；复核鉴权、路由、内容检查、预算、回调和记录链路没有因后续生命周期改动被绕过。
 - [ ] F05：完成已声明支持的托管工具/文件费用维度的预留与结算，缺少可计费依据的请求返回明确错误；测试包含中途错误和缺失终态用量，不能默认为免费。
-- [ ] F06：完成 Copilot、Bedrock 的官方 endpoint/model 支持核验与原生分发；保留每项官方依据。Responses-only 模型和原生工具不得回退到 chat/completions。
-- [ ] F06：覆盖 OpenAI/Copilot/Bedrock 的实际 HTTP 路由、模型权限、端点不支持、流式及错误；111 个 OpenAI 模型的证据不能替代其他供应商验收。
-- [ ] F07：让后台结算责任在创建进程退出后仍可恢复，优先复用现有 SQL 和预算机制；响应句柄恢复与费用恢复分别验收，不引入额外通用任务平台。
+- [x] F06：完成 Copilot、Bedrock 的官方 endpoint/model 支持核验与原生分发；保留每项官方依据。Responses-only 模型和原生工具不得回退到 chat/completions。
+- [x] F06：覆盖 OpenAI/Copilot/Bedrock 的实际 HTTP 路由、模型权限、端点不支持、流式及错误；111 个 OpenAI 模型的证据不能替代其他供应商验收。
+- [x] F07：让后台结算责任在创建进程退出后仍可恢复，优先复用现有 SQL 和预算机制；响应句柄恢复与费用恢复分别验收，不引入额外通用任务平台。
 - [ ] F07：以两个网关和共享数据库验证“创建 → 终态前关闭创建实例 → 另一实例/重启接管 → 最终只结算一次”，同时证明不会重放可能计费的生成请求。
 - [ ] F07：补接管竞争、取消/删除竞争、过期、租约续期失败和无终态用量回归；记录保守结算的边界，防止重复扣费或预留释放后漏记。
 - [ ] F07：复核 owner、deployment、account 绑定及 TTL；store=false 的临时元数据不能保存输入输出内容，独立 SQLite 回退不能宣称跨副本持久化。
@@ -145,7 +148,7 @@ main 已整合到 `680e70cd`。此前 `cb76a186` 的 CI Main Full Test 被取消
 
 首批 #1386 / #1389 已完成；Groq #1398 / #1399 已合并（`d6ab3e72`）。剩余供应商在开始下一批时先搜索 issue/PR，按实际缺口建立有边界的 issue。
 
-- [ ] 将具名 registry 选择器逐项列入现有 compatible-nonchat 文档，记录已验证能力、官方协议路径及尚未核验范围，不能用聊天兼容性推断其他端点。
+- [x] 将具名 registry 选择器逐项列入现有 compatible-nonchat 文档，记录已验证能力、官方协议路径及尚未核验范围，不能用聊天兼容性推断其他端点。
 - [ ] 核对剩余 embeddings/images/audio 能力；仅同协议、同 base 的能力复用现有通路，原生专用路径单独判断是否属于本项必要实现。
 - [ ] 每批覆盖 factory → Router → 实际 HTTP，以及模型级能力、JSON/二进制/multipart、状态/Retry-After、用量和预算；不支持能力须明确拒绝。
 - [x] 保留 Groq 具体音频模型路由、WAV 默认、真实时长结算及十秒下限回归；缺价不视为免费。
@@ -153,18 +156,18 @@ main 已整合到 `680e70cd`。此前 `cb76a186` 的 CI Main Full Test 被取消
 
 ## F15 Realtime
 
-关联 #1397；首批范围仅 OpenAI WebSocket。
+关联 #1397 / #1405；首批范围仅 OpenAI WebSocket，具体限制见上表。
 
-- [ ] 找回已有传输、计费改动及其测试日志，提供不可变提交或草稿 PR；无法找到时将历史局部测试保留为未核验记录，不能据此跳过实现或验收。
-- [ ] 复用现有供应商配置、受限出站连接、鉴权和模型权限挂载公开 WebSocket 路由。
-- [ ] 完成双向文本/音频/工具事件、背压、握手失败、原生错误、关闭码与客户端断线清理测试。
-- [ ] 按供应商报告用量处理文本、音频、图像及缓存费用；明确预留、会话预算耗尽、断线和缺失用量时的行为，验证后才启用可计费会话。
-- [ ] 完成 gateway/sqlite/websockets 特性测试、文档及 OpenAPI 可表达的握手契约；明确未包含 Azure/Gemini/Bedrock、WebRTC、SIP。
-- [ ] 完成默认全量检查、特性检查和 CI/review，关联 #1397 的实现 PR 后验收。
+- [x] 原始实现、路由、费用与验证已形成可查证提交 7b037dd8 和 PR #1405。
+- [x] 接入现有供应商配置、受限出站、鉴权、模型权限与公开 WebSocket 路由；完成默认和 gateway/sqlite/websockets 全量检查。
+- [ ] 修复审查发现的逐响应 API-key RPM、已完成 token 的失败后 TPM 计数、上游错误关闭健康统计和握手模型映射。
+- [ ] 修复 pre-creation 错误事件与预留的关联、用量记录失败时终态事件传递，并核对 gpt-realtime-2 缓存音频价格依据。
+- [ ] 保持文本/音频/缓存预算和断线边界回归；未知费用不得当成免费，仍不支持的能力明确拒绝。
+- [ ] 最新 CI/review 通过后验收，F18 单独验证发行包；不包含 WebRTC、SIP 或其他供应商。
 
 ## F16 声明和废弃接口
 
-在执行前搜索并建立本项 issue；随对应功能合并更新声明，最终集中复核。
+已建立 #1402；首批 #1404 已合并 e6677a0b。随对应功能合并更新声明，最终集中复核。
 
 - [ ] 逐项核对 subsystem_registry、README、Cargo feature、网关挂载和发行特性，区分库类型、默认启用、可选路由和已发布能力。
 - [ ] 处理写明 0.7 移除但仍存在的废弃接口；根据已落地替代入口做最小清理，不扩展成架构重写或新增兼容层。
@@ -173,7 +176,7 @@ main 已整合到 `680e70cd`。此前 `cb76a186` 的 CI Main Full Test 被取消
 
 ## F18 发布和安装验收
 
-在执行前搜索并建立本项 issue；先准备版本变更及可审阅产物。是否已经发布必须以实际发行记录为准。
+已建立 #1403；先准备版本变更及可审阅产物。是否已经发布必须以实际发行记录为准。
 
 - [ ] 确定待发布版本和不可变候选提交，逐项列出纳入的已验收能力、合并提交及仍不支持的范围。
 - [ ] 确认候选提交的默认完整测试、clippy、发行特性测试和跨平台构建成功；当前 main 的取消记录不能作为成功证据。
@@ -204,8 +207,10 @@ main 已整合到 `680e70cd`。此前 `cb76a186` 的 CI Main Full Test 被取消
 
 - 2026-10-03 13:10：#1385 最新提交 `b745bb9d` 的 15 项 CI 全绿且 review 已解决，已合并 `680e70cd`。F10 其余目录继续进行；三路下一轮推进 F06、F15 及网关收尾。MCP 新增两条 review 正在处理，A2A 本地验证仍在进行，未将二者标为完成。
 
-- 2026-10-03：MCP 补充修复 `63a6c466` 已推送，最新 CI 待验收；A2A `c3bd992f` 完整检查通过后已推送，继续处理新审查。Messages 补 web 工具预算及现有 api.chat 权限复用，17 项 HTTP 测试通过，完整检查进行中。F06 Copilot/Bedrock 原生路由与 F15 WebSocket 实现由另外两路推进，未提前标完成。
+- 2026-10-03：MCP 补充修复 `63a6c466` 已推送，最新 CI 待验收；A2A `c3bd992f` 完整检查通过后已推送，继续处理新审查。Messages 补 web 工具预算及现有 api.chat 权限复用，17 项定向测试（含 5 项共享夹具）通过，当时完整检查进行中。F06 Copilot/Bedrock 原生路由与 F15 WebSocket 实现由另外两路推进，未提前标完成。
 
 - 2026-10-03 14:02 继续执行：F06 原 PR #1377 已推送 `822f5eb6`，OpenAI 111 模型证据、Copilot 动态端点和 Bedrock Runtime/Mantle 原生路由与价格来源已接入；158 项 OpenAI、42 项 Copilot、400 项 Bedrock/价格、12 项原生路由及默认完整检查通过。生命周期能力仍由 F07 单独验收。
-- F08 原 PR #1381 已推送 `bb84357b`：公开 `api.chat` 权限贯通 Messages 中间件和 handler；web search/fetch 强制显式 max_uses 并为新增上下文保守预留。17 项本地 HTTP 测试、默认 fmt/check/test/clippy 及 gateway/sqlite clippy 通过；运行时工具和特殊费率尚未全部支持，保持草稿。
-- F11 第三批 [#1400](https://github.com/majiayu000/litellm-rs/issues/1400) / [PR #1401](https://github.com/majiayu000/litellm-rs/pull/1401)，提交 `7e24a14f`：接通 OpenRouter、Nebius、NVIDIA NIM、LM Studio 的已核验 embeddings 路由，记录全部 62 个兼容目录选择器的审核范围。14 项 HTTP/路由、默认完整检查（7266 项库测试通过、1 忽略）、gateway/sqlite clippy 通过。Nebius 图片协议字段不同，仍未声明支持；其余目录保持未核验，F11 总项不关闭。
+- F08 原 PR #1381 已推送 `bb84357b`：公开 `api.chat` 权限贯通 Messages 中间件和 handler；web search/fetch 强制显式 max_uses 并为新增上下文保守预留。17 项定向测试（12 项路由与 5 项共享夹具）、默认 fmt/check/test/clippy 及 gateway/sqlite clippy 通过；运行时工具和特殊费率尚未全部支持，保持草稿。
+- F11 第三批 [#1400](https://github.com/majiayu000/litellm-rs/issues/1400) / [PR #1401](https://github.com/majiayu000/litellm-rs/pull/1401)，提交 `7e24a14f`：接通 OpenRouter、Nebius、NVIDIA NIM、LM Studio 的已核验 embeddings 路由，记录全部 62 个兼容目录选择器的审核范围。14 项定向测试（含 5 项共享夹具）、默认完整检查（7266 项库测试通过、1 忽略）、gateway/sqlite clippy 通过。Nebius 图片协议字段不同，仍未声明支持；其余目录保持未核验，F11 总项不关闭。
+
+- 2026-10-03 14:49：逐行对齐 F06/F07/F08/F11/F13–F16/F18 最新已推送证据，补 #1401 合并结果及 #1404/#1405。历史记录仅代表当时状态；当前阻断以上表和当前 head 为准。清单修改只做文档校验，不重复运行 Rust 构建。
