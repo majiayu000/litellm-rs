@@ -80,6 +80,9 @@ async fn upstream(
                     calls.lock().unwrap().push(value.clone());
                     match value["type"].as_str().unwrap() {
                         "session.update" => {
+                            if value["session"]["instructions"] == "delay-session-ack" {
+                                tokio::time::sleep(Duration::from_millis(150)).await;
+                            }
                             if value["session"]["audio"]["output"]["voice"] == "reject-voice" {
                                 let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":value["event_id"],"message":"mock invalid voice"}}).to_string()).await;
                                 continue;
@@ -114,11 +117,20 @@ async fn upstream(
                                 if session.text(json!({"type":"response.created","response":{"id":"response-1"}}).to_string()).await.is_err() { break; }
                                 continue;
                             }
+                            let terminal_usage = match value["response"]["metadata"]["usage"]
+                                .as_str()
+                            {
+                                Some("absent") => Value::Null,
+                                Some("no-details") => {
+                                    json!({"total_tokens":60,"input_tokens":40,"output_tokens":20})
+                                }
+                                _ => usage(),
+                            };
                             for event in [
                                 json!({"type":"response.created","response":{"id":"response-1"}}),
                                 json!({"type":"response.output_audio.delta","delta":"aGVsbG8="}),
                                 json!({"type":"response.function_call_arguments.done","arguments":"{}","call_id":"call-1"}),
-                                json!({"type":"response.done","response":{"id":"response-1","status":value["response"]["metadata"]["status"].as_str().unwrap_or("completed"),"status_details":{"error":{"type":"server_error","message":"mock failure"}},"usage":usage()}}),
+                                json!({"type":"response.done","response":{"id":"response-1","status":value["response"]["metadata"]["status"].as_str().unwrap_or("completed"),"status_details":{"error":{"type":"server_error","message":"mock failure"}},"usage":terminal_usage}}),
                             ] {
                                 if session.text(event.to_string()).await.is_err() {
                                     break;
@@ -1818,5 +1830,151 @@ async fn configured_realtime_provider_budgets_reject_and_settle_to_the_same_iden
     drop(client);
     for handle in handles {
         handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn creates_wait_for_pending_session_acknowledgment() {
+    let (_, url, raw, calls, handles) = fixture().await;
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client.send(Message::Text(json!({"type":"session.update","session":{"max_output_tokens":128,"instructions":"delay-session-ack"}}).to_string().into())).await.unwrap();
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","event_id":"early-create"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let error = next_json(&mut client).await;
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["event_id"], "early-create");
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|v| v["type"] != "response.create")
+    );
+    assert_eq!(next_json(&mut client).await["type"], "session.updated");
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|v| v["type"] == "response.create")
+            .unwrap()["response"]["max_output_tokens"],
+        128
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn provider_rejected_creates_consume_local_rpm_without_health_penalty() {
+    let (state, url, raw, calls, handles) =
+        fixture_with_config(|config| config.gateway.providers[0].rpm = 1).await;
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"reject":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "invalid_request_error"
+    );
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "rate_limit_error"
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|v| v["type"] == "response.create")
+            .count(),
+        1
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn cancellations_without_modality_usage_keep_native_terminal_and_neutral_health() {
+    for status in ["cancelled", "incomplete"] {
+        for usage in ["absent", "no-details"] {
+            let (state, url, raw, _, handles) = fixture().await;
+            let mut client = client(&url, &raw).await;
+            next_json(&mut client).await;
+            next_json(&mut client).await;
+            client.send(Message::Text(json!({"type":"response.create","response":{"metadata":{"status":status,"usage":usage}}}).to_string().into())).await.unwrap();
+            for _ in 0..3 {
+                next_json(&mut client).await;
+            }
+            let terminal = next_json(&mut client).await;
+            assert_eq!(terminal["type"], "response.done");
+            assert_eq!(terminal["response"]["status"], status);
+            let router = state.pin_runtime().unified_router.clone();
+            let deployment = router
+                .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+                .unwrap();
+            use std::sync::atomic::Ordering;
+            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+            assert!(
+                deployment.state.tpm_current.load(Ordering::Relaxed) >= rates().max_input as u64
+            );
+            assert!(!deployment.is_in_cooldown());
+            client
+                .send(Message::Text(
+                    json!({"type":"response.create"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            for _ in 0..3 {
+                next_json(&mut client).await;
+            }
+            assert_eq!(next_json(&mut client).await["type"], "response.done");
+            drop(client);
+            for handle in handles {
+                handle.stop(false).await;
+            }
+        }
     }
 }

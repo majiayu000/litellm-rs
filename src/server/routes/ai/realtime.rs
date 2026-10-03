@@ -502,6 +502,7 @@ async fn relay(
     let mut failure = false;
     let mut error_type = "server_error";
     let mut session_output_limit = rates.max_output;
+    let mut pending_session_update: Option<String> = None;
     lease.cancel_response();
     let outcome: Result<(), String> = async {
         loop {
@@ -510,6 +511,10 @@ async fn relay(
                 event = input.next() => match event {
                     Some(Ok(actix_ws::AggregatedMessage::Text(text))) => {
                         let mut value: Value = serde_json::from_str(&text).map_err(|_| { error_type = "invalid_request_error"; "Invalid Realtime JSON" })?;
+                        if pending_session_update.is_some() && matches!(value["type"].as_str(), Some("response.create" | "session.update")) {
+                            send_client(&mut downstream, json!({"type":"error","error":{"type":"invalid_request_error","message":"Wait for session.updated before creating a response or updating the session","event_id":value.get("event_id")}}).to_string(), timeout).await?;
+                            continue;
+                        }
                         let unbounded_output = value["response"]["max_output_tokens"] == "inf";
                         let creates = match prepare_event(&mut value, &rates, pending.is_some(), &public_model, &wire_model) {
                             Ok(creates) => creates,
@@ -570,6 +575,11 @@ async fn relay(
                                 Err(message) => { lease.cancel_response(); send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
                             }
                         }
+                        if value["type"] == "session.update" {
+                            let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                            value["event_id"] = json!(event_id);
+                            pending_session_update = Some(event_id);
+                        }
                         tokio::time::timeout(timeout, upstream.send(Message::Text(value.to_string().into()))).await.map_err(|_| { failure = true; "Realtime upstream write timeout" })?.map_err(|_| { failure = true; "Realtime upstream write failed" })?;
                     }
                     Some(Ok(actix_ws::AggregatedMessage::Ping(bytes))) => { tokio::time::timeout(timeout, downstream.pong(&bytes)).await.map_err(|_| "Realtime pong timeout")?.map_err(|_| "Client disconnected")?; }
@@ -586,7 +596,11 @@ async fn relay(
                 event = upstream.next() => match event {
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).map_err(|_| { failure = true; "Malformed upstream Realtime event" })?;
+                        if value["type"] == "error" && pending_session_update.as_deref().is_some_and(|id| Some(id) == value["error"]["event_id"].as_str()) {
+                            pending_session_update = None;
+                        }
                         if value["type"] == "session.updated" {
+                            pending_session_update = None;
                             if let Some(limit) = value["session"]["max_output_tokens"].as_u64().and_then(|limit| u32::try_from(limit).ok()) {
                                 session_output_limit = limit.min(rates.max_output);
                             }
@@ -595,18 +609,30 @@ async fn relay(
                             response_id = Some(value["response"]["id"].as_str().ok_or_else(|| { failure = true; "Missing Realtime response ID" })?.to_owned());
                         } else if value["type"] == "response.done" {
                             if response_id.as_deref() != value["response"]["id"].as_str() || response_id.is_none() { failure = true; return Err("Mismatched Realtime response ID".into()); }
-                            let usage = rates.cost(&value["response"]["usage"]).inspect_err(|_| { failure = true; })?;
+                            let usage = rates.cost(&value["response"]["usage"]);
                             let reservation = pending.take().ok_or("Missing Realtime reservation")?;
-                            tokens = usage.1;
-                            if let Err(error) = reservation.settle(&state, context.api_key_id(), Some(usage)).await {
-                                tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = usage.0, "Realtime completed response budget settlement failed");
-                            }
-                            let provider_failed = value["response"]["status"] == "failed"
-                                && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
-                            if provider_failed {
-                                lease.complete_response(tokens, Some(&ProviderError::api_error("openai", 500, value["response"]["status_details"]["error"].to_string())));
-                            } else {
-                                lease.complete_response(tokens, None);
+                            match usage {
+                                Ok(usage) => {
+                                    tokens = usage.1;
+                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), Some(usage)).await {
+                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = usage.0, "Realtime completed response budget settlement failed");
+                                    }
+                                    let provider_failed = value["response"]["status"] == "failed"
+                                        && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
+                                    if provider_failed {
+                                        lease.complete_response(tokens, Some(&ProviderError::api_error("openai", 500, value["response"]["status_details"]["error"].to_string())));
+                                    } else {
+                                        lease.complete_response(tokens, None);
+                                    }
+                                }
+                                Err(error) if matches!(value["response"]["status"].as_str(), Some("cancelled" | "incomplete")) => {
+                                    tracing::warn!(%error, %provider, %model, "Realtime terminal response has no trustworthy modality usage; retaining conservative reservation");
+                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), None).await {
+                                        tracing::error!(%error, %provider, %model, "Realtime terminal fallback settlement failed");
+                                    }
+                                    lease.finish_interrupted(tokens, None);
+                                }
+                                Err(error) => { failure = true; return Err(error); }
                             }
                             tokens = 0;
                             response_id = None;
@@ -616,7 +642,7 @@ async fn relay(
                             // No trusted usage accompanies this error; retain the documented reservation fallback.
                             if let Some(reservation) = pending.take() { reservation.settle(&state, context.api_key_id(), None).await?; }
                             if value["error"]["type"] == "invalid_request_error" {
-                                lease.finish_neutral(0);
+                                lease.finish_interrupted(0, None);
                             } else {
                                 let status = match value["error"]["type"].as_str() {
                                     Some("rate_limit_error") => 429,

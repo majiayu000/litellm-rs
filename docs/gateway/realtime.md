@@ -119,3 +119,5 @@ and [output limit](https://developers.openai.com/api/reference/cli/resources/rea
 Provider budget reservations and settlement use the configured deployment provider
 name; canonical OpenAI identity remains the source for pricing. For example, an
 OpenAI deployment named `prod-openai` charges its `prod-openai` budget.
+
+Session updates are serialized: clients must wait for session.updated (or the correlated rejection) before another update or response.create. Early creates receive a local invalid_request_error and are not forwarded. Cancelled/incomplete terminal responses lacking trustworthy modality usage remain visible; conservative reservation/admission is retained without marking a healthy provider failed. Provider-rejected creates still count toward deployment RPM.
