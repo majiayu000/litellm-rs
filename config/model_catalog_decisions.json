@@ -724,6 +724,13 @@
       "location": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
       "reviewed_on": "2026-10-03",
       "revision": "retirement-audit-1373"
+    },
+    "azure-foundry-retirement-20261003": {
+      "kind": "official_model_retirement",
+      "location": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
+      "reviewed_on": "2026-10-03",
+      "revision": "azure-voyage-static-audit-20261003",
+      "sha256": "d13715ef814d1f166712ebfcd61ba17ca6f08cccd28e8afac5135723797528a0"
     }
   },
   "provider_aliases": {
@@ -5757,18 +5764,20 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/cohere-rerank-v3-english",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-004"
-      ]
+        "azure-foundry-retirement-20261003"
+      ],
+      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/cohere-rerank-v3-multilingual",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-004"
-      ]
+        "azure-foundry-retirement-20261003"
+      ],
+      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
@@ -6190,10 +6199,11 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/jamba-instruct",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-004"
-      ]
+        "azure-foundry-retirement-20261003"
+      ],
+      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
@@ -6241,18 +6251,20 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/mistral-large",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-004"
-      ]
+        "azure-foundry-retirement-20261003"
+      ],
+      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/mistral-large-2407",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-004"
-      ]
+        "azure-foundry-retirement-20261003"
+      ],
+      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
@@ -6265,12 +6277,11 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/mistral-large-latest",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-002"
+        "azure-foundry-retirement-20261003"
       ],
-      "catalog_model_id": "mistral-large-latest",
-      "aliases": []
+      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
