@@ -284,6 +284,10 @@ pub struct GatewayConfig {
     /// IP access policy. Empty/default rules preserve allow-all behavior.
     #[serde(default)]
     pub ip_access: IpAccessConfig,
+    /// Named MCP servers exposed through Streamable HTTP.
+    #[cfg(feature = "mcp")]
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, crate::core::mcp::config::McpServerConfig>,
     /// Enterprise features configuration
     #[serde(default)]
     pub enterprise: EnterpriseConfig,
@@ -311,6 +315,8 @@ impl Default for GatewayConfig {
             rate_limit: RateLimitConfig::default(),
             guardrails: default_gateway_guardrails(),
             ip_access: IpAccessConfig::default(),
+            #[cfg(feature = "mcp")]
+            mcp_servers: HashMap::new(),
             enterprise: EnterpriseConfig::default(),
             pricing: GatewayPricingConfig::default(),
         }
@@ -353,6 +359,8 @@ impl GatewayConfig {
         self.rate_limit = self.rate_limit.merge(other.rate_limit);
         self.guardrails = other.guardrails;
         self.ip_access = other.ip_access;
+        #[cfg(feature = "mcp")]
+        self.mcp_servers.extend(other.mcp_servers);
         self.enterprise = self.enterprise.merge(other.enterprise);
         self.pricing = self.pricing.merge(other.pricing);
 

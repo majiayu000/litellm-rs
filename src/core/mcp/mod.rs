@@ -1,18 +1,12 @@
-//! MCP (Model Context Protocol) Gateway
+//! MCP configuration, library client and optional HTTP gateway.
 //!
-//! This module implements MCP support for litellm-rs, providing a unified gateway
-//! for connecting MCP servers (tools) to any LLM provider.
+//! With `gateway,mcp`, configured servers are exposed through authenticated
+//! Streamable HTTP routes, including tools, resources, prompts and JSON/SSE.
+//! See `docs/gateway/mcp.md` for the HTTP contract and process-local sessions.
 //!
-//! # Overview
-//!
-//! MCP (Model Context Protocol) is a standard for connecting external tools and
-//! data sources to LLMs. This implementation supports:
-//!
-//! - Multiple transport protocols (HTTP, SSE, stdio)
-//! - OAuth 2.0 and API key authentication
-//! - Permission control by Key, Team, and Organization
-//! - Dynamic tool discovery and registration
-//! - Cost tracking for tool invocations
+//! The separate library client below implements the older 2024-11-05 JSON
+//! request/response protocol. Its SSE selector currently uses JSON POST;
+//! stdio, WebSocket, OAuth acquisition and tool cost tracking are not implemented.
 //!
 //! # Usage
 //!

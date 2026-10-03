@@ -59,7 +59,13 @@ fn validate_create_key_input(name: &str, permissions: &[String]) -> Result<()> {
 
     // Validate permissions against known set
     for perm in permissions {
-        if !VALID_PERMISSIONS.contains(&perm.as_str()) {
+        let mcp_permission = perm.strip_prefix("mcp.").is_some_and(|server| {
+            !server.is_empty()
+                && server
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        });
+        if !VALID_PERMISSIONS.contains(&perm.as_str()) && !mcp_permission {
             return Err(GatewayError::Validation(format!(
                 "Unknown permission: '{}'. Valid permissions: {}",
                 perm,
@@ -477,6 +483,22 @@ mod tests {
         let perms: Vec<String> = VALID_PERMISSIONS.iter().map(|p| p.to_string()).collect();
         let result = validate_create_key_input("My Key", &perms);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn mcp_permissions_match_gateway_route_names() {
+        for permission in ["mcp.docs", "mcp.docs-2_internal"] {
+            assert!(validate_create_key_input("scoped", &[permission.into()]).is_ok());
+        }
+        for permission in [
+            "mcp.",
+            "mcp.*",
+            "mcp.docs/read",
+            "mcp.docs.other",
+            "mcp. bad",
+        ] {
+            assert!(validate_create_key_input("scoped", &[permission.into()]).is_err());
+        }
     }
 
     #[test]

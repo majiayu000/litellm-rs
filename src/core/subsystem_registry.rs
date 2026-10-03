@@ -154,7 +154,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "mcp",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: mcp"),
-        note: "MCP library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
+        note: "Opt-in authenticated stateless Streamable HTTP proxy for configured servers; requests can move between instances.",
     },
     CoreSubsystem {
         name: "models",
