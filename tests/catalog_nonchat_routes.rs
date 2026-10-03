@@ -1243,6 +1243,65 @@ async fn multimodal_aggregator_embeddings_normalize_authoritative_usage() {
 }
 
 #[tokio::test]
+async fn aiml_embeddings_reject_missing_or_invalid_authoritative_usage() {
+    for selector in ["aiml", "aiml_api"] {
+        for usage in [
+            None,
+            Some(Value::Null),
+            Some(json!({})),
+            Some(json!({"total_tokens":"2"})),
+            Some(json!({"total_tokens":-1})),
+        ] {
+            let mut response = json!({
+                "object":"list", "model":"test-model",
+                "data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}]
+            });
+            if let Some(usage) = usage {
+                response["usage"] = usage;
+            }
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = HttpServer::new(move || {
+                App::new().app_data(web::Data::new(response.clone())).route(
+                    "/v1/embeddings",
+                    web::post().to(|body: web::Data<Value>| async move {
+                        HttpResponse::Ok().json(body.get_ref())
+                    }),
+                )
+            })
+            .workers(1)
+            .listen(listener)
+            .unwrap()
+            .run();
+            let handle = server.handle();
+            tokio::spawn(server);
+            let provider = create_provider(provider_fixtures::mock_provider_config(
+                selector,
+                selector,
+                "test-key",
+                &format!("http://{address}/v1"),
+                vec!["test-model".into()],
+            ))
+            .await
+            .unwrap();
+            let router = UnifiedRouter::default();
+            router.add_deployment(Deployment::new(
+                "test-model".into(),
+                provider,
+                "test-model".into(),
+                "public".into(),
+            ));
+            let error = selected(&router, ProviderCapability::Embeddings)
+                .create_embeddings(embedding_request(), RequestContext::default())
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ProviderError::ResponseParsing { .. }));
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn aiml_embeddings_require_prices_and_obey_gateway_budgets() {
     use actix_web::test;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};

@@ -2,7 +2,7 @@
 
 Issue #1429, F11 bounded batch. Baseline `ed1e83ed51757a5a8f9672b8c41b46cda49a8d21`. Covers aiml_api/aiml, comet_api, bytez and poe. No paid calls or live model/account verification; no price-derived callable models.
 
-Decision: adapt the existing embeddings transport and correct confirmed default endpoints. AIML's published embedding schema contains total token usage but no prompt token field; since embeddings have no generated output tokens, normalize an authoritative numeric total to prompt usage. Never invent a total from input length. Existing generic JSON transport, factory/Router, budgets and errors are reused. Native model-run, asynchronous jobs or bot-chat media need separate adaptations, not a new universal framework.
+Decision: adapt the existing embeddings transport and correct confirmed default endpoints. AIML's published embedding schema contains total token usage but no prompt token field; since embeddings have no generated output tokens, normalize an authoritative numeric total to prompt usage. Both AIML selectors require a usage object with an unsigned numeric total; absent, null or invalid usage returns the existing response-parsing error. Never invent a total from input length. Existing generic JSON transport, factory/Router, budgets and errors are reused. Native model-run, asynchronous jobs or bot-chat media need separate adaptations, not a new universal framework.
 
 | Selector | Official protocol evidence | Result and remaining limits |
 | --- | --- | --- |
