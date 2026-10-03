@@ -756,7 +756,17 @@ async fn error_bodies_obey_size_and_time_bounds() {
         )
         .await
         .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let timeout = field == "test_slow_error";
+        assert_eq!(
+            response.status(),
+            if timeout {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        );
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["code"], if timeout { -32603 } else { -32006 });
         assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     }
     handle.stop(false).await;
@@ -860,10 +870,14 @@ async fn finite_response_uses_one_deadline_and_root_card_discovers_single_agent(
     assert_eq!(response.status(), StatusCode::OK);
     let card: Value = test::read_body_json(response).await;
     assert_eq!(card["name"], "test");
+    assert_eq!(card["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(card["supportedInterfaces"][0]["protocolVersion"], "1.0");
     let mut params = message();
     params["metadata"] = json!({"test_split_timeout":true});
     let response = test::call_service(&app, request("SendMessage", params, &user())).await;
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["code"], -32603);
     assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     handle.stop(false).await;
 }

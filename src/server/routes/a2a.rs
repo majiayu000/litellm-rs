@@ -367,7 +367,7 @@ async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
     let connection = req.connection_info();
     let endpoint = format!("{}://{}/a2a/{name}", connection.scheme(), connection.host());
     HttpResponse::Ok().insert_header(("cache-control", "private, no-store")).json(json!({
-        "name":name,"description":agent.description.as_deref().unwrap_or(name),"version":"1.0",
+        "name":name,"description":agent.description.as_deref().unwrap_or(name),"version":env!("CARGO_PKG_VERSION"),
         "supportedInterfaces":[{"url":endpoint,"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],
         "capabilities":{"streaming":agent.capabilities.streaming,"pushNotifications":false,"extendedAgentCard":false},
         "securitySchemes":schemes,
@@ -774,17 +774,31 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     }
     let read = async {
         let mut bytes = Vec::new();
-        while let Some(chunk) = upstream.chunk().await.map_err(|_| ())? {
+        while let Some(chunk) = upstream.chunk().await.map_err(|error| {
+            if error.is_timeout() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        })? {
             if bytes.len().saturating_add(chunk.len()) > limit {
-                return Err(());
+                return Err(StatusCode::BAD_GATEWAY);
             }
             bytes.extend_from_slice(&chunk);
         }
-        Ok::<_, ()>(bytes)
+        Ok::<_, StatusCode>(bytes)
     };
     let bytes = match tokio::time::timeout_at(deadline, read).await {
         Ok(Ok(b)) => b,
-        _ => {
+        Err(_) | Ok(Err(StatusCode::GATEWAY_TIMEOUT)) => {
+            return error(
+                StatusCode::GATEWAY_TIMEOUT,
+                id,
+                -32603,
+                "A2A upstream body timed out",
+            );
+        }
+        Ok(Err(_)) => {
             return error(
                 StatusCode::BAD_GATEWAY,
                 id,
