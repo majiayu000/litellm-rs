@@ -443,8 +443,21 @@ impl SeaOrmDatabase {
 
         let txn = self.db.begin().await.map_err(GatewayError::from)?;
 
+        Self::add_api_key_usage(&txn, key_id, requests, tokens, cost, unpriced).await?;
+        txn.commit().await.map_err(GatewayError::from)?;
+        Ok(())
+    }
+
+    pub(super) async fn add_api_key_usage(
+        txn: &DatabaseTransaction,
+        key_id: uuid::Uuid,
+        requests: u64,
+        tokens: u64,
+        cost: f64,
+        unpriced: bool,
+    ) -> Result<()> {
         let model = entities::ApiKey::find_by_id(key_id)
-            .one(&txn)
+            .one(txn)
             .await
             .map_err(GatewayError::from)?
             .ok_or_else(|| GatewayError::NotFound("API key not found".to_string()))?;
@@ -491,18 +504,16 @@ impl SeaOrmDatabase {
             .col_expr(api_key::Column::Version, Expr::value(next_version))
             .filter(api_key::Column::Id.eq(key_id))
             .filter(api_key::Column::Version.eq(current_version))
-            .exec(&txn)
+            .exec(txn)
             .await
             .map_err(GatewayError::from)?;
 
         if result.rows_affected == 0 {
-            txn.rollback().await.map_err(GatewayError::from)?;
             return Err(GatewayError::Conflict(
                 "API key was modified concurrently".to_string(),
             ));
         }
 
-        txn.commit().await.map_err(GatewayError::from)?;
         Ok(())
     }
 

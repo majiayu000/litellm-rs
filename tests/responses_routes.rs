@@ -27,6 +27,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum MockScenario {
         NonStreaming,
+        NonStreamingHeld,
         Streaming,
         StreamingIdle,
     }
@@ -89,11 +90,15 @@ mod tests {
     struct MockServerState {
         scenario: MockScenario,
         captured_requests: Arc<Mutex<Vec<Value>>>,
+        release: Arc<tokio::sync::Notify>,
+        started: Arc<tokio::sync::Notify>,
     }
 
     struct MockOpenAiServer {
         base_url: String,
         captured_requests: Arc<Mutex<Vec<Value>>>,
+        release: Arc<tokio::sync::Notify>,
+        started: Arc<tokio::sync::Notify>,
         handle: actix_web::dev::ServerHandle,
         task: tokio::task::JoinHandle<std::io::Result<()>>,
     }
@@ -101,9 +106,13 @@ mod tests {
     impl MockOpenAiServer {
         async fn start(scenario: MockScenario) -> Self {
             let captured_requests = Arc::new(Mutex::new(Vec::new()));
+            let release = Arc::new(tokio::sync::Notify::new());
+            let started = Arc::new(tokio::sync::Notify::new());
             let state = MockServerState {
                 scenario,
                 captured_requests: Arc::clone(&captured_requests),
+                release: Arc::clone(&release),
+                started: Arc::clone(&started),
             };
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
@@ -125,6 +134,8 @@ mod tests {
             Self {
                 base_url: format!("http://{address}"),
                 captured_requests,
+                release,
+                started,
                 handle,
                 task,
             }
@@ -158,26 +169,32 @@ mod tests {
             .unwrap()
             .push(payload.into_inner());
 
+        state.started.notify_one();
         match state.scenario {
-            MockScenario::NonStreaming => HttpResponse::Ok().json(json!({
-                "id": "chatcmpl-response-route",
-                "object": "chat.completion",
-                "created": 4_102_444_800_i64,
-                "model": "gpt-4o-mini",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "mocked response"
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 4,
-                    "completion_tokens": 3,
-                    "total_tokens": 7
+            MockScenario::NonStreaming | MockScenario::NonStreamingHeld => {
+                if matches!(state.scenario, MockScenario::NonStreamingHeld) {
+                    state.release.notified().await;
                 }
-            })),
+                HttpResponse::Ok().json(json!({
+                    "id": "chatcmpl-response-route",
+                    "object": "chat.completion",
+                    "created": 4_102_444_800_i64,
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "mocked response"
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 4,
+                        "completion_tokens": 3,
+                        "total_tokens": 7
+                    }
+                }))
+            }
             MockScenario::Streaming => {
                 let chunk_1 = r#"data: {"id":"chatcmpl-response-stream","object":"chat.completion.chunk","created":1707000001,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}"#;
                 let chunk_2 = r#"data: {"id":"chatcmpl-response-stream","object":"chat.completion.chunk","created":1707000001,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}"#;
@@ -358,7 +375,7 @@ mod tests {
         assert_eq!(delete_resp.status(), StatusCode::OK);
         let deleted: Value = test::read_body_json(delete_resp).await;
         assert_eq!(deleted["id"], response_id);
-        assert_eq!(deleted["object"], "response");
+        assert_eq!(deleted["object"], "response.deleted");
         assert_eq!(deleted["deleted"], true);
 
         assert_eq!(mock.requests().len(), 1);
@@ -601,5 +618,84 @@ mod tests {
             }
         }
         panic!("response.completed event not found");
+    }
+    #[tokio::test]
+    async fn another_gateway_cancels_an_executing_background_response() {
+        use std::sync::atomic::Ordering;
+        let mock = MockOpenAiServer::start(MockScenario::NonStreamingHeld).await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.gateway.storage.database.enabled = true;
+        config.gateway.storage.database.auto_migrate = true;
+        config.gateway.storage.database.url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("background.db").display()
+        );
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.providers = vec![provider_config(&mock.base_url)];
+        let first = GatewayHttpServer::new(&config).await.unwrap();
+        let second = GatewayHttpServer::new(&config).await.unwrap();
+        let router = first.state().unified_router();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-4o-mini")[0])
+            .unwrap();
+        let first_app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(first.state().clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let second_app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(second.state().clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let mut body = response_request(None);
+        body["background"] = json!(true);
+        let req = with_user!(
+            test::TestRequest::post()
+                .uri("/v1/responses")
+                .set_json(body)
+                .to_request(),
+            "owner-a"
+        );
+        let response = test::call_service(&first_app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = test::read_body_json(response).await;
+        let id = value["id"].as_str().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), mock.started.notified())
+            .await
+            .unwrap();
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+        let req = with_user!(
+            test::TestRequest::post()
+                .uri(&format!("/v1/responses/{id}/cancel"))
+                .to_request(),
+            "owner-a"
+        );
+        let response = test::call_service(&second_app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["status"], "cancelled");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("cross-replica cancellation must release the executing request");
+        mock.release.notify_one();
+        let req = with_user!(
+            test::TestRequest::get()
+                .uri(&format!("/v1/responses/{id}"))
+                .to_request(),
+            "owner-a"
+        );
+        let response = test::call_service(&first_app, req).await;
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["status"], "cancelled");
+        assert_eq!(mock.requests().len(), 1);
+        mock.abort().await;
     }
 }

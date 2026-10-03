@@ -464,6 +464,35 @@ impl GlobalPoolManager {
         }
     }
 
+    /// Native Responses reconnects use GET with the same streaming endpoint policy.
+    #[cfg(any(feature = "gateway", test))]
+    pub(crate) async fn execute_streaming_get_preserving_endpoint_policy(
+        &self,
+        url: &str,
+        headers: Vec<HeaderPair>,
+        legacy_provider: &'static str,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let Some(policy) = &self.policy else {
+            return send_streaming_request(
+                apply_headers(streaming_unbounded_client().get(url), headers),
+                legacy_provider,
+            )
+            .await;
+        };
+        let request = policy
+            .streaming
+            .request_preserving_endpoint_policy(reqwest::Method::GET, url)?;
+        let request = apply_provider_headers(request, headers);
+        match tokio::time::timeout(policy.streaming_header_timeout, request.send()).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => Err(policy.streaming.map_preserved_request_error(error)),
+            Err(_) => Err(ProviderError::timeout(
+                policy.provider,
+                "Provider response header timeout",
+            )),
+        }
+    }
+
     /// Get the underlying client for direct use
     pub fn client(&self) -> &Client {
         self.pool.client()
@@ -677,6 +706,49 @@ mod tests {
         let body = response.text().await?;
 
         assert_eq!(body, "hello");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_streaming_get_preserves_endpoint_policy_and_header_only_timeout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = delayed_response_url(Duration::ZERO, Duration::from_millis(100)).await?;
+        let mut manager = GlobalPoolManager::new_for_provider(
+            "test",
+            BaseConfig {
+                api_base: Some(url.clone()),
+                endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+                ..Default::default()
+            },
+        )?;
+        manager.policy.as_mut().unwrap().streaming_header_timeout = Duration::from_millis(25);
+        let response = manager
+            .execute_streaming_get_preserving_endpoint_policy(&url, Vec::new(), "test")
+            .await?;
+        assert_eq!(response.text().await?, "hello");
+        let foreign = delayed_response_url(Duration::ZERO, Duration::ZERO).await?;
+        assert!(
+            manager
+                .execute_streaming_get_preserving_endpoint_policy(&foreign, Vec::new(), "test")
+                .await
+                .is_err()
+        );
+        let url = delayed_response_url(Duration::from_millis(100), Duration::ZERO).await?;
+        let mut manager = GlobalPoolManager::new_for_provider(
+            "test",
+            BaseConfig {
+                api_base: Some(url.clone()),
+                endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+                ..Default::default()
+            },
+        )?;
+        manager.policy.as_mut().unwrap().streaming_header_timeout = Duration::from_millis(25);
+        assert!(matches!(
+            manager
+                .execute_streaming_get_preserving_endpoint_policy(&url, Vec::new(), "test")
+                .await,
+            Err(ProviderError::Timeout { .. })
+        ));
         Ok(())
     }
 
