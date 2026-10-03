@@ -207,6 +207,12 @@ impl HttpServer {
         });
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
+        #[cfg(feature = "mcp")]
+        let cors = if cfg.gateway.auth.enable_api_key {
+            cors.allowed_header(cfg.gateway.auth.api_key_header.as_str())
+        } else {
+            cors
+        };
         let max_body_size = cfg.gateway.server.max_body_size;
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));
@@ -246,6 +252,12 @@ impl HttpServer {
                 audit
             }))
             .wrap(RequestIdMiddleware)
+            .configure(|cfg| {
+                #[cfg(feature = "mcp")]
+                routes::mcp::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "mcp"))]
+                let _ = cfg;
+            })
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -295,6 +307,19 @@ impl HttpServer {
             .collect();
         if !headers.is_empty() {
             cors = cors.allowed_headers(headers);
+        }
+
+        #[cfg(feature = "mcp")]
+        {
+            for name in [
+                "x-api-key",
+                "mcp-method",
+                "mcp-protocol-version",
+                "mcp-name",
+            ] {
+                cors = cors.allowed_header(name);
+            }
+            cors = cors.expose_headers(["mcp-protocol-version", "retry-after"]);
         }
 
         cors = cors.max_age(cors_config.max_age as usize);

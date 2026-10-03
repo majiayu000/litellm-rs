@@ -1,8 +1,10 @@
 # MCP Gateway
 
-> Deprecated 0.6 library-only surface scheduled for 0.7 removal. Compile with Cargo feature `mcp`. The
-> gateway binary does not construct this module or mount an MCP HTTP route;
-> enabling the feature alone does not make MCP a runtime capability.
+> This page describes the deprecated 0.6 library orchestration API, scheduled
+> for 0.7 removal. The new authenticated Streamable HTTP gateway uses feature
+> `mcp`; see [MCP HTTP gateway](../gateway/mcp.md) for configuration, supported
+> transport and runtime limitations. The library examples below do not describe
+> the HTTP gateway's transport or authentication support.
 
 Model Context Protocol (MCP) Gateway enables LiteLLM-RS to connect with external tools and services, allowing LLMs to interact with databases, APIs, file systems, and more.
 
