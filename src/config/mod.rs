@@ -373,6 +373,8 @@ impl Config {
                 let _ = url.set_username("");
                 let _ = url.set_password(None);
                 agent.url = url.to_string();
+            } else {
+                redact_string(&mut agent.url);
             }
         }
         #[cfg(feature = "mcp")]

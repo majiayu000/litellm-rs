@@ -141,7 +141,7 @@ impl TaskOwners {
             .map_err(|_| "Invalid A2A task identifier")?;
         let context =
             identifier(object.get("contextId")).map_err(|_| "Invalid A2A context identifier")?;
-        if (matches!(kind, "statusUpdate" | "artifactUpdate") && context.is_none())
+        if (matches!(kind, "message" | "statusUpdate" | "artifactUpdate") && context.is_none())
             || (kind != "message" && task.is_none())
         {
             return Err("Missing A2A task/context identifiers");
@@ -218,6 +218,20 @@ impl TaskOwners {
             });
             let check_message = |message: &Value| -> Result<(), &'static str> {
                 if !message.is_object()
+                    || identifier(message.get("messageId"))
+                        .ok()
+                        .flatten()
+                        .is_none()
+                    || !matches!(
+                        message.get("role").and_then(Value::as_str),
+                        Some("ROLE_AGENT" | "ROLE_USER")
+                    )
+                    || !valid_parts(message.get("parts"))
+                    || (message.get("role").and_then(Value::as_str) == Some("ROLE_AGENT")
+                        && identifier(message.get("contextId"))
+                            .ok()
+                            .flatten()
+                            .is_none())
                     || identifier(message.get("taskId"))
                         .map_err(|_| "Invalid embedded A2A message task")?
                         .is_some_and(|id| Some(id) != task)
@@ -754,6 +768,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 "Unexpected A2A event stream",
             );
         }
+        response.insert_header(("x-accel-buffering", "no"));
         let events = async_stream::try_stream! {
             let mut buffer = Vec::new();
             let mut scan_from = 0;
@@ -798,6 +813,9 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                                     .and_then(|task| task.pointer("/status/state"))
                                     .and_then(Value::as_str)
                                     .is_some_and(|state| matches!(state, "TASK_STATE_COMPLETED" | "TASK_STATE_FAILED" | "TASK_STATE_CANCELED" | "TASK_STATE_REJECTED"));
+                            if subscribe && !task_seen && terminal {
+                                Err(actix_web::error::ErrorBadGateway("Cannot subscribe to a terminal A2A task"))?;
+                            }
                             task_seen = true;
                         }
                         if let Some(initial) = value.pointer("/result/task") {
@@ -970,13 +988,8 @@ fn valid_parts(value: Option<&Value>) -> bool {
                         .count()
                         == 1
                     && variants.iter().all(|key| {
-                        part.get(*key).is_none_or(|value| {
-                            if *key == "data" {
-                                value.is_object()
-                            } else {
-                                value.is_string()
-                            }
-                        })
+                        part.get(*key)
+                            .is_none_or(|value| *key == "data" || value.is_string())
                     })
             })
     })

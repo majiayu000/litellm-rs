@@ -569,8 +569,15 @@ async fn config_validation_and_export_do_not_expose_agent_credentials() {
         .gateway
         .a2a_agents
         .insert("test".into(), agent.clone());
-    let exported = config.to_json().unwrap();
-    assert!(!exported.contains("sentinel"));
+    for url in [
+        "https://agent.example/rpc?token=sentinel-url",
+        "https//user:sentinel-url@host",
+    ] {
+        config.gateway.a2a_agents.get_mut("test").unwrap().url = url.into();
+        for exported in [config.to_json().unwrap(), config.to_yaml().unwrap()] {
+            assert!(!exported.contains("sentinel"));
+        }
+    }
     agent.capabilities.input_types = vec!["text".into()];
     assert!(agent.validate_http_gateway("test").is_err());
     agent.capabilities = crate::core::a2a::config::AgentCapabilities::minimal();
@@ -1181,14 +1188,37 @@ async fn optional_task_context_and_split_sse_bom_are_supported() {
     )
     .await;
     let owner = user();
-    let mut params = message();
-    params["metadata"] = json!({"test_contract":"message-no-context"});
-    assert_eq!(
-        test::call_service(&app, request("SendMessage", params, &owner))
-            .await
-            .status(),
-        StatusCode::OK
-    );
+    let missing_context = json!({"message":{"messageId":"no-context","role":"ROLE_AGENT","parts":[{"text":"must not escape"}]}});
+    for stream in [false, true] {
+        let mut params = message();
+        params["metadata"] = if stream {
+            json!({"test_result_stream":missing_context})
+        } else {
+            json!({"test_result":missing_context})
+        };
+        let response = test::call_service(
+            &app,
+            request(
+                if stream {
+                    "SendStreamingMessage"
+                } else {
+                    "SendMessage"
+                },
+                params,
+                &owner,
+            ),
+        )
+        .await;
+        if stream {
+            assert!(
+                actix_web::body::to_bytes(response.into_body())
+                    .await
+                    .is_err()
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        }
+    }
     for method in ["SendMessage", "GetTask", "CancelTask"] {
         let task = json!({"id":"task-1","status":{"state":"TASK_STATE_WORKING"}});
         let mut params = if method == "SendMessage" {
@@ -1568,7 +1598,6 @@ async fn client_parts_require_one_typed_content_variant_before_dispatch() {
         json!({"text":12}),
         json!({"raw":null}),
         json!({"url":false}),
-        json!({"data":"bad"}),
     ] {
         let mut params = message();
         params["message"]["parts"] = json!([part]);
@@ -1581,7 +1610,8 @@ async fn client_parts_require_one_typed_content_variant_before_dispatch() {
     let mut params = message();
     params["message"]["parts"] = json!([
         {"text":"hello"}, {"raw":"aGk=","mediaType":"text/plain"},
-        {"url":"https://example.test/input.txt"}, {"data":{"keep":true},"future":1}
+        {"url":"https://example.test/input.txt"}, {"data":{"keep":true},"future":1},
+        {"data":[1,true]}, {"data":"text"}, {"data":12}, {"data":false}, {"data":null}
     ]);
     let response = test::call_service(&app, request("SendMessage", params.clone(), &user())).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1692,5 +1722,85 @@ async fn new_contextless_task_retains_authorized_request_context_for_continuatio
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(calls.lock().unwrap().len(), 3);
     assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn subscribe_rejects_terminal_initial_task_and_streaming_disables_proxy_buffering() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    assert_eq!(
+        test::call_service(&app, request("SendMessage", message(), &owner))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    for terminal in [
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_FAILED",
+        "TASK_STATE_CANCELED",
+        "TASK_STATE_REJECTED",
+    ] {
+        let params = json!({"id":"task-1","metadata":{"test_result_stream":{"task":{"id":"task-1","contextId":"context-1","status":{"state":terminal}}}}});
+        let response = test::call_service(&app, request("SubscribeToTask", params, &owner)).await;
+        assert_eq!(response.headers().get("x-accel-buffering").unwrap(), "no");
+        assert!(
+            actix_web::body::to_bytes(response.into_body())
+                .await
+                .is_err()
+        );
+    }
+    for data in [
+        json!({"key":true}),
+        json!([1, false]),
+        json!("string"),
+        json!(3.5),
+        json!(true),
+        Value::Null,
+    ] {
+        for stream in [false, true] {
+            let result = json!({"message":{"messageId":"reply","contextId":"context-1","role":"ROLE_AGENT","parts":[{"data":data}]}});
+            let mut params = message();
+            params["metadata"] = if stream {
+                json!({"test_result_stream":result})
+            } else {
+                json!({"test_result":result})
+            };
+            let response = test::call_service(
+                &app,
+                request(
+                    if stream {
+                        "SendStreamingMessage"
+                    } else {
+                        "SendMessage"
+                    },
+                    params,
+                    &owner,
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            if stream {
+                assert_eq!(response.headers().get("x-accel-buffering").unwrap(), "no");
+            }
+            let bytes = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            let value: Value = serde_json::from_str(if stream {
+                text.trim().strip_prefix("data: ").unwrap()
+            } else {
+                text
+            })
+            .unwrap();
+            assert_eq!(value["result"]["message"]["parts"][0]["data"], data);
+        }
+    }
     handle.stop(false).await;
 }

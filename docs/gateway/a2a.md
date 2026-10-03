@@ -43,3 +43,9 @@ Agent Cards and RPC calls both negotiate `A2A-Version` through the header or cas
 Discovery is restricted to authenticated callers with the named agent permission. Operators provision gateway credentials out of band; anonymous discovery is outside this first scope. The [official discovery guidance](https://a2a-protocol.org/dev/topics/agent-discovery/#securing-agent-cards) permits endpoint access controls. The generated card version identifies the gateway release; protocolVersion separately identifies A2A 1.0.
 
 Review boundaries: API keys need an explicit `a2a.<agent>` or administrator grant; empty permissions and `use:api` do not grant private-agent access. JWT user access follows existing user authorization. URL userinfo is rejected; query credentials require HTTPS. Agent Cards honor forwarded origin headers only from configured `server.trusted_proxies`; directly connected requests use their Host header and connection scheme. Non-immediate SendMessage rejects an upstream task still submitted/working. Retained context ownership renews together with its task.
+
+Protocol details follow the [A2A 1.0 Message/Part definitions](https://a2a-protocol.org/v1.0.0/specification/#414-message):
+Task contextId may be omitted; server Messages require a contextId. Part.data
+accepts any JSON value, including null, while exactly one content variant is
+required. SubscribeToTask rejects an initial terminal Task. SSE responses set
+X-Accel-Buffering: no so a reverse proxy can forward events promptly.
