@@ -1168,3 +1168,61 @@ async fn canonical_forwarding_preserves_large_and_fractional_numbers() {
     );
     handle.stop(false).await;
 }
+
+#[actix_web::test]
+async fn mcp_stream_idle_timeout_and_authentication_configuration_are_enforced() {
+    use actix_web::body::MessageBody;
+    for seconds in [1, 0] {
+        let (state, _, handle) = fixture(false).await;
+        let mut revision = state.pin_runtime().as_ref().clone();
+        let mut config = revision.config.as_ref().clone();
+        config.gateway.server.stream_idle_timeout = seconds;
+        revision.config = Arc::new(config);
+        state.runtime.store(revision);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .configure(|c| configure_routes(c, 4096)),
+        )
+        .await;
+        let req = test::TestRequest::post().uri("/docs/mcp")
+            .insert_header(("accept", "application/json, text/event-stream"))
+            .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"test_contract":"open-sse"}})).to_request();
+        req.extensions_mut().insert(user());
+        let response = test::call_service(&app, req).await;
+        let mut body = Box::pin(response.into_body());
+        futures::future::poll_fn(|cx| body.as_mut().poll_next(cx))
+            .await
+            .unwrap()
+            .unwrap();
+        let next = tokio::time::timeout(
+            Duration::from_secs(2),
+            futures::future::poll_fn(|cx| body.as_mut().poll_next(cx)),
+        )
+        .await;
+        if seconds == 0 {
+            assert!(next.is_err());
+        } else {
+            assert!(next.unwrap().unwrap().is_err());
+        }
+        drop(body);
+        handle.stop(false).await;
+    }
+    let mut config = crate::server::valid_test_config();
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.mcp_servers.insert(
+        "test".into(),
+        McpServerConfig::new("test", "https://tools.example/mcp"),
+    );
+    assert!(
+        config
+            .gateway
+            .validate()
+            .unwrap_err()
+            .contains("require API key or JWT")
+    );
+    config.gateway.mcp_servers.get_mut("test").unwrap().enabled = false;
+    config.gateway.validate().unwrap();
+}

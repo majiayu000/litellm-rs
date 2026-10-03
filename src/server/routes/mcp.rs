@@ -606,23 +606,25 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             response.insert_header(("mcp-session-id", token));
         }
     }
-    if let Some(bytes) = initialized_body {
-        if !event_stream {
-            return response.body(bytes);
-        }
-        let prefix =
-            futures::stream::once(
-                async move { Ok::<_, actix_web::Error>(web::Bytes::from(bytes)) },
-            );
-        return response.streaming(prefix.chain(upstream.bytes_stream().map(|chunk| {
-            chunk.map_err(|_| actix_web::error::ErrorBadGateway("MCP upstream stream interrupted"))
-        })));
+    if !event_stream && let Some(bytes) = initialized_body.take() {
+        return response.body(bytes);
     }
-    // The response stream owns reqwest's body. Dropping the downstream stream
-    // closes the upstream body without buffering SSE or rewriting RPC errors.
-    response.streaming(upstream.bytes_stream().map(|chunk| {
-        chunk.map_err(|_| actix_web::error::ErrorBadGateway("MCP upstream stream interrupted"))
-    }))
+    let idle_timeout_secs = config.server.stream_idle_timeout;
+    // Own the upstream body so downstream disconnects close its connection.
+    let stream = async_stream::try_stream! {
+        if let Some(bytes) = initialized_body { yield web::Bytes::from(bytes); }
+        loop {
+            let next = if !event_stream || idle_timeout_secs == 0 {
+                upstream.chunk().await
+            } else {
+                tokio::time::timeout(Duration::from_secs(idle_timeout_secs), upstream.chunk()).await
+                    .map_err(|_| actix_web::error::ErrorGatewayTimeout("MCP stream idle timeout"))?
+            };
+            let Some(chunk) = next.map_err(|_| actix_web::error::ErrorBadGateway("MCP upstream stream interrupted"))? else { break; };
+            yield chunk;
+        }
+    };
+    response.streaming::<_, actix_web::Error>(stream)
 }
 
 // Outer None: no matching response in this complete SSE frame. Inner None: RPC error.

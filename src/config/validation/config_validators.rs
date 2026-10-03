@@ -101,6 +101,9 @@ impl Validate for GatewayConfig {
 
         #[cfg(feature = "mcp")]
         for (name, server) in &self.mcp_servers {
+            if server.enabled && !self.auth.enable_api_key && !self.auth.enable_jwt {
+                return Err("Enabled MCP servers require API key or JWT authentication".into());
+            }
             server.validate_http_gateway(name)?;
             if server.enabled
                 && self.auth.enable_api_key
