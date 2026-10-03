@@ -16,7 +16,7 @@ No callable models or prices are inferred from a price table. Existing explicit 
 
 ## Validation
 
-Local HTTP tests cover actual factory/Router at `/api/v3/embeddings`, array/string input, model identity, vectors/token usage, 400/429 contracts and unsupported modes. Gateway budget regression covers missing prices, rejection before dispatch and actual usage settlement. Passed: 26 HTTP/gateway tests; fmt/check; default complete tests (7,141 library passed, 1 ignored, plus integration/doc suites); default and gateway/sqlite all-target clippy; gateway/sqlite complete tests (9,514 library passed, 1 ignored, plus integration/doc suites). Full tests used `--test-threads=2`. These are local protocol simulations, not cloud or SambaStack calls.
+Local HTTP tests cover actual factory/Router at `/api/v3/embeddings`, array/string input, model identity, vectors/token usage, 400/429 contracts and unsupported modes. Gateway budget regression covers missing prices, rejection before dispatch and actual usage settlement. Passed: 26 HTTP/gateway tests; fmt/check; default complete tests (7,132 library passed, 1 ignored, plus integration/doc suites); default and gateway/sqlite all-target clippy; gateway/sqlite complete tests (9,426 library passed, 1 ignored, plus integration/doc suites). Full tests used `--test-threads=2`. These are local protocol simulations, not cloud or SambaStack calls.
 
 ## Source evidence
 
