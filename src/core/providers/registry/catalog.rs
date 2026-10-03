@@ -37,6 +37,13 @@ const DEEPINFRA_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
 ];
+const NSCALE_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+];
 
 const XINFERENCE_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
@@ -416,12 +423,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "NEBIUS_API_KEY",
             )
         },
-        def_chat(
-            "nscale",
-            "Nscale",
-            "https://inference.api.nscale.ai/v1",
-            "NSCALE_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: NSCALE_CAPABILITIES,
+            ..def_chat(
+                "nscale",
+                "Nscale",
+                "https://inference.api.nscale.com/v1",
+                "NSCALE_API_KEY",
+            )
+        },
         def_chat(
             "hyperbolic",
             "Hyperbolic",
@@ -452,12 +462,16 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.sambanova.ai/v1",
             "SAMBANOVA_API_KEY",
         ),
-        def_chat(
-            "heroku",
-            "Heroku",
-            "https://us.inference.heroku.com/v1",
-            "HEROKU_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            alternate_auth_env_vars: &["INFERENCE_KEY", "EMBEDDING_KEY"],
+            ..def_chat(
+                "heroku",
+                "Heroku",
+                "https://us.inference.heroku.com/v1",
+                "HEROKU_API_KEY",
+            )
+        },
         def_chat(
             "friendliai",
             "FriendliAI",
@@ -693,12 +707,16 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.lambdalabs.com/v1",
             "LAMBDA_API_KEY",
         ),
-        def_chat(
-            "ovhcloud",
-            "OVHcloud",
-            "https://api.ai.cloud.ovh.net/v1",
-            "OVHCLOUD_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            alternate_auth_env_vars: &["OVH_AI_ENDPOINTS_ACCESS_TOKEN"],
+            ..def_chat(
+                "ovhcloud",
+                "OVHcloud",
+                "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+                "OVHCLOUD_API_KEY",
+            )
+        },
     ];
 
     let mut map = HashMap::with_capacity(defs.len());
