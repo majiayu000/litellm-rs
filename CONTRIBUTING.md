@@ -118,7 +118,7 @@ make test-full
 cargo test test_name --no-default-features --features "lite"
 
 # Run with logging (standard profile example)
-RUST_LOG=debug cargo test --lib --tests --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUST_LOG=debug cargo test --lib --tests --features "postgres sqlite redis s3 metrics tracing websockets"
 ```
 
 ## Adding a New Provider

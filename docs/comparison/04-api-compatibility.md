@@ -718,6 +718,16 @@ Both implementations provide strong OpenAI API compatibility for core functional
 - Full OpenAI API surface area is needed
 - Python ecosystem integration is preferred
 
+### Native Anthropic Messages (F08, unreleased)
+
+`POST /v1/messages` accepts native Anthropic request JSON and forwards it to configured Anthropic deployments through the existing model router, authentication, token policy, budgets, callbacks and content checks. The gateway consumes its own `x-api-key` credential and uses the selected provider's configured key upstream. `anthropic-version` and `anthropic-beta` are protocol headers. Native content, tools, thinking/signatures, cache controls and extension fields remain in the Anthropic schema; they are not converted into Chat Completions output.
+
+Native SSE preserves event names and JSON fields, including thinking/signature deltas and fragmented UTF-8. Cumulative output usage replaces prior counts instead of being added repeatedly. Five-minute and one-hour cache writes and server-side web searches have separate pricing dimensions. Unknown/malformed terminal usage uses the existing conservative reservation fallback. The OpenAPI document includes native request, response, stream and error contracts. The first implementation targets the existing Anthropic provider; it does not yet adapt OpenAI/Gemini requests into Anthropic protocol or add Bedrock Messages transport.
+
+Budget reservations use the native `/v1/messages/count_tokens` result, maximum output tokens, cold-cache TTL premiums, bounded direct web-tool `max_uses`, and the maximum supported inference geography rate. Mutable remote media and separately billed execution, advisor, fallback, compaction, container and premium-speed requests are rejected before generation. Reported terminal usage determines settlement; missing usage retains the conservative commitment but is recorded as unpriced, never as an actual invoice. Real provider invoices have not been verified.
+
+This work is in progress. Local integration tests, full checks and review must pass before F08 is marked complete; no real Anthropic account access is implied by local mock verification. Sources: [Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create), [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), and [LiteLLM's Anthropic endpoint](https://github.com/BerriAI/litellm/blob/2c9a9711712895a7e08ba27fca357291f4b86290/litellm/proxy/anthropic_endpoints/endpoints.py).
+
 ### Unreleased native Responses work
 
 The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.

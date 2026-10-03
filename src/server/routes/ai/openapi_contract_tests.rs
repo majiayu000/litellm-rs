@@ -194,7 +194,11 @@ fn stable_inference_openapi_contract_has_typed_fallback_errors() {
         let operation = &contract["paths"][route.path][route.method.openapi_key()];
         assert_eq!(
             operation["responses"]["default"]["$ref"],
-            "#/components/responses/OpenAIError",
+            if route.path == "/v1/messages" {
+                "#/components/responses/AnthropicError"
+            } else {
+                "#/components/responses/OpenAIError"
+            },
             "missing typed fallback error for {} {}",
             route.method.openapi_key(),
             route.path

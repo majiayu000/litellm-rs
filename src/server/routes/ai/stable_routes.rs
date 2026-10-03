@@ -39,6 +39,7 @@ enum StableInferenceOperation {
     AudioTranslation,
     CancelResponse,
     ChatCompletion,
+    NativeMessage,
     CreateResponse,
     CompactResponse,
     DeleteResponse,
@@ -62,6 +63,11 @@ pub(super) struct StableInferenceRoute {
 }
 
 const STABLE_INFERENCE_ROUTES: &[StableInferenceRoute] = &[
+    StableInferenceRoute {
+        path: "/v1/messages",
+        method: StableInferenceMethod::Post,
+        operation: StableInferenceOperation::NativeMessage,
+    },
     StableInferenceRoute {
         path: "/v1/chat/completions",
         method: StableInferenceMethod::Post,
@@ -176,6 +182,15 @@ pub(super) fn configure(cfg: &mut web::ServiceConfig) {
             }
             StableInferenceOperation::CancelResponse => {
                 cfg.route(path, route.method.actix_route().to(cancel_response));
+            }
+            StableInferenceOperation::NativeMessage => {
+                cfg.route(
+                    path,
+                    route
+                        .method
+                        .actix_route()
+                        .to(super::messages::create_message),
+                );
             }
             StableInferenceOperation::ChatCompletion => {
                 cfg.route(path, route.method.actix_route().to(chat_completions));
