@@ -162,6 +162,12 @@ impl AuthConfig {
             );
         }
 
+        if self.enable_api_key
+            && http::header::HeaderName::from_bytes(self.api_key_header.as_bytes()).is_err()
+        {
+            return Err("API key header name must be a valid HTTP header name".to_string());
+        }
+
         Ok(())
     }
 
@@ -529,6 +535,17 @@ mod tests {
             rbac: RbacConfig::default(),
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_auth_config_rejects_invalid_header_names() {
+        for header in ["X Agent Key", "X-Key\r\nInjected", "X-Key:Value"] {
+            let config = AuthConfig {
+                api_key_header: header.into(),
+                ..AuthConfig::default()
+            };
+            assert!(config.validate().unwrap_err().contains("valid HTTP header"));
+        }
     }
 
     #[test]

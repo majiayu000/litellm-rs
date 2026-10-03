@@ -16,16 +16,6 @@ pub enum SubsystemDecision {
     /// Shared support code used below wired modules rather than exposed as its
     /// own gateway subsystem.
     InternalDependency,
-    /// Deprecated 0.6 source-compatibility variant. No active registry entry
-    /// uses it; removal is scheduled for 0.7.
-    #[cfg_attr(
-        not(test),
-        deprecated(
-            since = "0.6.0",
-            note = "temporary exemptions are resolved; this variant is removed in 0.7.0"
-        )
-    )]
-    TemporaryExemption,
     /// Module is hidden from the default build behind a default-off feature.
     FeatureGated,
     /// Parsed configuration exists but validation rejects enabling it until the
@@ -40,29 +30,6 @@ impl CoreSubsystem {
         self.decision != SubsystemDecision::Wired
     }
 }
-
-/// Deprecated issue number retained for 0.6 source compatibility.
-#[deprecated(
-    since = "0.6.0",
-    note = "GH838 is resolved; this compatibility constant is removed in 0.7.0"
-)]
-pub const GH838_TEMPORARY_EXEMPTION_ISSUE: u32 = 838;
-
-/// Deprecated exemption names retained for 0.6 source compatibility only.
-#[deprecated(
-    since = "0.6.0",
-    note = "GH838 has explicit final dispositions; this compatibility constant is removed in 0.7.0"
-)]
-pub const GH838_TEMPORARY_EXEMPTIONS: &[&str] = &[
-    "a2a",
-    "batch",
-    "integrations",
-    "mcp",
-    "observability",
-    "user_management",
-    "virtual_keys",
-    "webhooks",
-];
 
 /// Explicit runtime status for one exported `core` module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +46,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "a2a",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: a2a"),
-        note: "A2A library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
+        note: "Opt-in A2A 1.0 JSON-RPC HTTP gateway with caller-bound tasks and Streamable events; ownership is process-local.",
     },
     CoreSubsystem {
         name: "analytics",
@@ -103,7 +70,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "batch",
         decision: SubsystemDecision::LibraryOnly,
         runtime_path: None,
-        note: "The HTTP /v1/batches surface is a provider proxy; the legacy BatchProcessor is deprecated for 0.6 and scheduled for 0.7 removal.",
+        note: "The HTTP /v1/batches surface is a provider proxy; batch domain records and async batch execution remain library APIs.",
     },
     CoreSubsystem {
         name: "budget",
@@ -187,7 +154,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "mcp",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: mcp"),
-        note: "MCP library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
+        note: "Opt-in authenticated stateless Streamable HTTP proxy for configured servers; requests can move between instances.",
     },
     CoreSubsystem {
         name: "models",
@@ -307,19 +274,13 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "user_management",
         decision: SubsystemDecision::InternalDependency,
         runtime_path: None,
-        note: "Compatibility user/team records back current auth and storage paths; the optional UserManager implementation is default-off behind user-management.",
+        note: "User/team domain records back current auth and storage paths; the unused legacy manager has been removed.",
     },
     CoreSubsystem {
         name: "virtual_keys",
         decision: SubsystemDecision::Wired,
         runtime_path: Some("AppState canonical RuntimeVirtualKeyManager"),
-        note: "The virtual-keys runtime facade resolves to the canonical KeyManager used by auth and /v1/keys; the duplicate legacy manager is deprecated.",
-    },
-    CoreSubsystem {
-        name: "webhooks",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: webhooks"),
-        note: "Webhook library types are excluded from the default build and are not advertised as a gateway runtime capability.",
+        note: "The virtual-keys runtime facade resolves to the canonical KeyManager used by auth and /v1/keys; storage record types remain in use.",
     },
 ];
 

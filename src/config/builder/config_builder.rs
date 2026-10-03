@@ -71,12 +71,16 @@ impl GatewayConfigBuilder {
             storage: self.storage.unwrap_or_default(),
             providers: self.providers,
             model_aliases: HashMap::new(),
+            #[cfg(feature = "a2a")]
+            a2a_agents: Default::default(),
             router: crate::config::models::router::GatewayRouterConfig::default(),
             monitoring: crate::config::models::monitoring::MonitoringConfig::default(),
             cache: crate::config::models::cache::CacheConfig::default(),
             rate_limit: crate::config::models::rate_limit::RateLimitConfig::default(),
             guardrails: GatewayConfig::default().guardrails,
             ip_access: crate::core::ip_access::IpAccessConfig::default(),
+            #[cfg(feature = "mcp")]
+            mcp_servers: HashMap::new(),
             enterprise: crate::config::models::enterprise::EnterpriseConfig::default(),
             pricing: crate::config::models::gateway::GatewayPricingConfig::default(),
         };

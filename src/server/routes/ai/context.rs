@@ -107,6 +107,11 @@ pub fn check_permission(user: Option<&User>, api_key: Option<&ApiKey>, operation
         return true;
     }
 
+    // Named private integrations require an explicit grant on API keys.
+    if api_key.is_some() && (operation.starts_with("a2a.") || operation.starts_with("mcp.")) {
+        return false;
+    }
+
     if api_key
         .map(api_key_has_explicit_operation_permissions)
         .unwrap_or(false)
@@ -195,7 +200,10 @@ fn is_management_operation(operation: &str) -> bool {
 fn permission_matches_operation(permission: &str, operation: &str) -> bool {
     permission == operation
         || permission.strip_prefix("api.") == Some(operation)
-        || (permission == "use:api" && !is_management_operation(operation))
+        || (permission == "use:api"
+            && !is_management_operation(operation)
+            && !operation.starts_with("a2a.")
+            && !operation.starts_with("mcp."))
 }
 
 fn pattern_list_allows(patterns: &[String], value: &str) -> bool {
@@ -406,6 +414,32 @@ mod tests {
             }),
         );
         key
+    }
+
+    #[test]
+    fn named_integrations_require_explicit_key_grants() {
+        for operation in ["a2a.research", "mcp.docs"] {
+            for permission in [
+                None,
+                Some("use:api"),
+                Some("api.chat"),
+                Some("a2a.other"),
+                Some("mcp.other"),
+                Some(operation),
+                Some("system.admin"),
+                Some("*"),
+            ] {
+                let mut key = create_test_api_key();
+                key.permissions = permission.map(|p| vec![p.into()]).unwrap_or_default();
+                let expected = matches!(permission, Some("system.admin" | "*"))
+                    || permission == Some(operation);
+                assert_eq!(
+                    check_permission(None, Some(&key), operation),
+                    expected,
+                    "{operation}: {permission:?}"
+                );
+            }
+        }
     }
 
     // ==================== check_permission Tests ====================

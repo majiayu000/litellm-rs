@@ -445,7 +445,7 @@ fn parse_ip(value: &str) -> Option<IpAddr> {
         .map(|ip| ip.to_canonical())
 }
 
-fn is_trusted_proxy(ip: IpAddr, trusted_proxies: &[String]) -> bool {
+pub(crate) fn is_trusted_proxy(ip: IpAddr, trusted_proxies: &[String]) -> bool {
     trusted_proxies
         .iter()
         .filter_map(|proxy| parse_ip(proxy))

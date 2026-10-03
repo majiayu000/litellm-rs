@@ -9,7 +9,8 @@ use super::transport::Transport;
 use crate::core::net::validate_outbound_url_str_without_resolution;
 
 /// MCP Server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpServerConfig {
     /// Server name/alias (used as identifier)
     pub name: String,
@@ -86,6 +87,110 @@ impl Default for McpServerConfig {
 }
 
 impl McpServerConfig {
+    /// Validate the subset exposed by the public Streamable HTTP gateway.
+    pub fn validate_http_gateway(&self, route_name: &str) -> Result<(), String> {
+        self.validate()
+            .map_err(|_| "Invalid MCP server configuration")?;
+        if route_name != self.name
+            || route_name.is_empty()
+            || !route_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(
+                "MCP route name must match the server name and use letters, digits, - or _".into(),
+            );
+        }
+        if self.transport != Transport::Http {
+            return Err("MCP gateway supports Streamable HTTP only (transport: http)".into());
+        }
+        if self.timeout_ms == 0
+            || self.rate_limit_rpm.is_some()
+            || self.spec_path.is_some()
+            || !self.forward_headers.is_empty()
+        {
+            return Err("MCP gateway requires a positive timeout; per-server rate limits, OpenAPI generation and client header forwarding are not supported".into());
+        }
+        let url = reqwest::Url::parse(&self.url).map_err(|_| "Invalid MCP upstream URL")?;
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(
+                "Configure MCP credentials in auth or static_headers, not URL userinfo".into(),
+            );
+        }
+        if url.scheme() != "https"
+            && (self
+                .auth
+                .as_ref()
+                .is_some_and(|auth| auth.auth_type != McpAuthType::None)
+                || !self.static_headers.is_empty()
+                || url.query().is_some())
+        {
+            return Err(
+                "MCP credentials, static headers and URL queries require an HTTPS upstream".into(),
+            );
+        }
+        if let Some(auth) = &self.auth
+            && auth.auth_type == McpAuthType::OAuth2
+        {
+            return Err("MCP gateway requires a configured upstream credential; OAuth acquisition is not supported".into());
+        }
+        if let Some(auth) = &self.auth
+            && matches!(
+                auth.auth_type,
+                McpAuthType::ApiKey | McpAuthType::BearerToken | McpAuthType::Basic
+            )
+            && auth
+                .value
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err("MCP upstream authentication requires a nonempty credential".into());
+        }
+        let mut header_names = std::collections::HashSet::new();
+        for (name, value) in self
+            .static_headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .chain(
+                self.auth
+                    .iter()
+                    .filter_map(|a| a.get_header_value().map(|_| (a.get_header_name(), ""))),
+            )
+        {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| "Invalid MCP header name")?;
+            if !header_names.insert(name.clone()) {
+                return Err("Configure each MCP upstream header only once".into());
+            }
+            if matches!(
+                name.as_str(),
+                "host"
+                    | "content-length"
+                    | "transfer-encoding"
+                    | "connection"
+                    | "content-type"
+                    | "accept"
+                    | "accept-encoding"
+                    | "origin"
+                    | "mcp-session-id"
+                    | "mcp-protocol-version"
+                    | "mcp-method"
+                    | "mcp-name"
+                    | "last-event-id"
+            ) || name.as_str().starts_with("mcp-param-")
+            {
+                return Err("MCP upstream headers cannot override transport headers".into());
+            }
+            reqwest::header::HeaderValue::from_str(value)
+                .map_err(|_| "Invalid MCP header value")?;
+        }
+        if let Some(value) = self.auth.as_ref().and_then(|a| a.get_header_value()) {
+            reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|_| "Invalid MCP auth header value")?;
+        }
+        Ok(())
+    }
+
     /// Create a new MCP server config with name and URL
     pub fn new(name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
@@ -171,7 +276,8 @@ impl McpServerConfig {
 }
 
 /// Authentication configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     /// Authentication type
     #[serde(rename = "type")]
@@ -429,6 +535,23 @@ impl McpGatewayConfig {
     }
 }
 
+impl std::fmt::Debug for McpServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerConfig")
+            .field("name", &self.name)
+            .field("transport", &self.transport)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("auth_type", &self.auth_type)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +576,35 @@ mod tests {
         assert!(config.auth.is_some());
         assert_eq!(config.timeout_ms, 5000);
         assert_eq!(config.description.as_deref(), Some("GitHub MCP Server"));
+    }
+
+    #[test]
+    fn gateway_rejects_case_insensitive_duplicate_headers() {
+        let mut config =
+            McpServerConfig::new("test", "https://1.1.1.1/mcp").with_transport(Transport::Http);
+        config
+            .static_headers
+            .insert("X-Api-Key".into(), "first".into());
+        config
+            .static_headers
+            .insert("x-api-key".into(), "second".into());
+        assert!(
+            config
+                .validate_http_gateway("test")
+                .unwrap_err()
+                .contains("only once")
+        );
+        config.static_headers.remove("X-Api-Key");
+        assert!(config.validate_http_gateway("test").is_ok());
+        let mut auth = AuthConfig::api_key("third");
+        auth.header_name = Some("X-API-KEY".into());
+        config.auth = Some(auth);
+        assert!(
+            config
+                .validate_http_gateway("test")
+                .unwrap_err()
+                .contains("only once")
+        );
     }
 
     #[test]

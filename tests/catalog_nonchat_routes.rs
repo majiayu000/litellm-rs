@@ -20,11 +20,14 @@ type RecordedCalls = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 struct Upstream {
     seen: RecordedCalls,
     status: StatusCode,
+    auth: bool,
 }
 async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>) -> HttpResponse {
     assert_eq!(
-        req.headers().get("authorization").unwrap(),
-        "Bearer test-key"
+        req.headers()
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        state.auth.then_some("Bearer test-key")
     );
     state
         .seen
@@ -56,6 +59,7 @@ async fn fixture(
     let seen = Upstream {
         seen: Arc::default(),
         status,
+        auth: selector != "lm_studio",
     };
     let server_data = seen.clone();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -74,7 +78,11 @@ async fn fixture(
     let provider = create_provider(provider_fixtures::mock_provider_config(
         selector,
         selector,
-        "test-key",
+        if selector == "lm_studio" {
+            ""
+        } else {
+            "test-key"
+        },
         &format!("http://{address}/v1"),
         vec!["test-model".into()],
     ))
@@ -114,11 +122,21 @@ async fn named_catalog_embeddings_reach_the_verified_endpoint() {
         "fireworks",
         "fireworks_ai",
         "deepinfra",
+        "openrouter",
+        "nebius",
+        "nvidia_nim",
+        "lm_studio",
     ] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
         let provider = selected(&router, ProviderCapability::Embeddings);
         let mut request = embedding_request();
-        request.task_type = Some("query".into());
+        if !matches!(selector, "nebius" | "lm_studio") {
+            request.task_type = Some("query".into());
+        }
+        if selector == "nvidia_nim" {
+            request.truncation = Some(true);
+            request.dimensions = None;
+        }
         let response = provider
             .create_embeddings(request, RequestContext::default())
             .await
@@ -129,10 +147,21 @@ async fn named_catalog_embeddings_reach_the_verified_endpoint() {
         let (path, body) = upstream.seen.lock().unwrap()[0].clone();
         assert_eq!(path, "/v1/embeddings");
         let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["dimensions"], 2);
-        if matches!(selector, "fireworks" | "fireworks_ai") {
+        if selector == "nvidia_nim" {
+            assert!(body.get("dimensions").is_none());
+        } else {
+            assert_eq!(body["dimensions"], 2);
+        }
+        if matches!(
+            selector,
+            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim"
+        ) {
             assert_eq!(body["input_type"], "query");
             assert!(body.get("task_type").is_none());
+        }
+        if selector == "nvidia_nim" {
+            assert_eq!(body["truncate"], "END");
+            assert!(body.get("truncation").is_none());
         }
         assert_eq!(body["model"], "test-model");
         handle.stop(false).await;
@@ -422,4 +451,33 @@ async fn groq_routing_checks_each_concrete_audio_model() {
     }
     assert!(upstream.seen.lock().unwrap().is_empty());
     handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn verified_embedding_profiles_preserve_errors_and_reject_unverified_operations() {
+    for selector in ["openrouter", "nebius", "nvidia_nim", "lm_studio"] {
+        let (router, _, handle) = fixture(selector, StatusCode::TOO_MANY_REQUESTS).await;
+        let error = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(embedding_request(), RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProviderError::RateLimit {
+                retry_after: Some(7),
+                ..
+            }
+        ));
+        for capability in [
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        handle.stop(false).await;
+    }
 }

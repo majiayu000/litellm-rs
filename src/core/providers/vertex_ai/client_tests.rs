@@ -74,8 +74,8 @@ async fn vertex_model_metadata_uses_per_1k_units() {
     let pro = provider
         .models()
         .iter()
-        .find(|model| model.id == "gemini-1.5-pro")
-        .expect("Gemini 1.5 Pro metadata should exist");
+        .find(|model| model.id == "gemini-2.5-pro")
+        .expect("Gemini 2.5 Pro metadata should exist");
 
     let input = pro
         .input_cost_per_1k_tokens
@@ -83,8 +83,8 @@ async fn vertex_model_metadata_uses_per_1k_units() {
     let output = pro
         .output_cost_per_1k_tokens
         .expect("output pricing should be present");
-    assert!((input - 0.0035).abs() < 1e-12);
-    assert!((output - 0.0105).abs() < 1e-12);
+    assert!((input - 0.00125).abs() < 1e-12);
+    assert!((output - 0.010).abs() < 1e-12);
 }
 
 #[test]
@@ -443,7 +443,7 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
     experimental_config.enable_experimental = true;
     let experimental_provider = VertexAIProvider::new(experimental_config).await.unwrap();
     assert!(
-        experimental_provider
+        !experimental_provider
             .models()
             .iter()
             .any(|model| model.id == "gemini-2.0-flash-exp")
@@ -460,7 +460,7 @@ async fn test_vertex_models_are_gemini_registry_surface_overlay() {
         serde_json::json!("bearer_token")
     );
 
-    for model_id in ["gemini-1.5-flash", "gemini-3-flash-preview"] {
+    for model_id in ["gemini-2.5-flash", "gemini-3-flash-preview"] {
         let advertised = provider
             .models()
             .iter()
@@ -575,65 +575,34 @@ async fn vertex_gemini_37_count_tokens_uses_the_google_publisher_endpoint() {
 }
 
 #[tokio::test]
-async fn exact_legacy_vertex_gemini_ids_keep_the_gemini_transformer() {
+async fn retired_vertex_gemini_ids_fail_before_transport() {
     let provider = VertexAIProvider::new(test_vertex_provider_config())
         .await
         .unwrap();
-
     for model in [
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
         "gemini-1.5-pro-002",
         "gemini-1.5-flash-002",
     ] {
+        assert!(matches!(
+            provider.count_tokens(model, &[]).await,
+            Err(ProviderError::ModelNotFound { .. })
+        ));
         let request = ChatRequest {
-            model: model.to_string(),
-            messages: vec![crate::core::types::chat::ChatMessage {
-                role: crate::core::types::message::MessageRole::User,
-                content: Some(crate::core::types::message::MessageContent::Text(
-                    "hello".to_string(),
-                )),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let transformed = provider
-            .transform_request(request, RequestContext::default())
-            .await
-            .unwrap_or_else(|error| panic!("{model} should use the Gemini transformer: {error}"));
-        assert_eq!(transformed["contents"][0]["role"], "user");
-
-        let response = serde_json::json!({
-            "candidates": [{
-                "index": 0,
-                "content": {"parts": [{"text": "ok"}]},
-                "finishReason": "STOP"
-            }]
-        });
-        let parsed = provider
-            .transform_response(
-                serde_json::to_vec(&response).unwrap().as_slice(),
-                model,
-                "request-id",
-            )
-            .await
-            .unwrap_or_else(|error| panic!("{model} response should use Gemini: {error}"));
-        assert_eq!(parsed.choices.len(), 1);
-    }
-
-    for model in [
-        "prefix-gemini-2.0-flash-lite",
-        "gemini-2.0-flash-lite-suffix",
-        "GEMINI-1.5-PRO-002",
-    ] {
-        let request = ChatRequest {
-            model: model.to_string(),
+            model: model.into(),
             messages: vec![],
             ..Default::default()
         };
         assert!(matches!(
             provider
-                .transform_request(request, RequestContext::default())
+                .transform_request(request.clone(), RequestContext::default())
+                .await,
+            Err(ProviderError::ModelNotFound { .. })
+        ));
+        assert!(matches!(
+            provider
+                .chat_completion_internal(request, RequestContext::default())
                 .await,
             Err(ProviderError::ModelNotFound { .. })
         ));
@@ -674,7 +643,7 @@ async fn test_vertex_shared_catalog_new_model_request_contract() {
         )
     );
     assert!(
-        crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
+        !crate::core::providers::vertex_ai::is_vertex_gemini_catalog_model(
             "gemini-2.0-flash-exp",
             true
         )
@@ -936,4 +905,34 @@ fn test_vertex_ai_error_api_error() {
     } else {
         panic!("Expected ApiError variant");
     }
+}
+
+#[tokio::test]
+async fn custom_gemini_named_endpoint_remains_callable_for_token_counting() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = vec![0; 4096];
+        let len = socket.read(&mut bytes).await.unwrap();
+        let request = String::from_utf8_lossy(&bytes[..len]);
+        assert!(request.starts_with("POST /gemini-3.7-flash-preview:countTokens "));
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"totalTokens\":7}").await.unwrap();
+    });
+    let provider = VertexAIProvider::new(VertexAIProviderConfig {
+        api_base: Some(format!("http://{address}")),
+        endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+        ..test_vertex_provider_config()
+    })
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        provider.count_tokens("gemini-3.7-flash-preview", &[]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap(), 7);
+    server.await.unwrap();
 }

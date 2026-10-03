@@ -80,8 +80,8 @@ published crate versions. GitHub main may contain unreleased changes; check
 - [Anthropic implementation](../src/core/providers/anthropic/) - Claude request and response handling
 - [Adding Providers](./architecture/provider-implementation.md) - Step-by-step provider implementation
 
-### Experimental protocol libraries
-- [MCP library](./protocols/mcp.md) - Default-off `mcp` feature; no HTTP gateway route
+### Protocol gateways and libraries
+- [MCP HTTP gateway](./gateway/mcp.md) - Authenticated Streamable HTTP proxy (`mcp` feature); [legacy library API](./protocols/mcp.md)
 - [A2A library](./protocols/a2a.md) - Default-off `a2a` feature; no HTTP gateway route
 
 ### Examples & Tutorials
@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Intelligent Routing**: Smart load balancing and failover
 - **Gateway Controls**: Authentication, monitoring, and cost tracking
 - **Type Safety**: Compile-time guarantees and zero-cost abstractions
-- **Experimental MCP library**: Default-off protocol types and client orchestration; no mounted gateway route
+- **MCP gateway**: Feature-gated, authenticated Streamable HTTP routes; see [runtime scope](./gateway/mcp.md)
 - **Experimental A2A library**: Default-off agent protocol types; no mounted gateway route
 
 ## Pricing Configuration

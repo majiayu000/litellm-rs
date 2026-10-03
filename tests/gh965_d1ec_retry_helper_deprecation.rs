@@ -1,113 +1,5 @@
-//! GH965 D1E-c (SP965-T017): deprecation coverage for the six legacy retry helpers.
-//!
-//! Three concerns live here:
-//! 1. A compatibility fixture locking the 0.6 return behavior of the six deprecated
-//!    helpers (`#[cfg(not(clippy))]` so CI's `-D warnings` clippy skips the deprecated
-//!    lanes while `cargo test` still runs them — same pattern as `public_api_compat.rs`).
-//! 2. A production source guard asserting the provider routing/retry path no longer
-//!    calls the six helpers outside their definition/grandfathered sites.
-//! 3. Focused `RetryPolicy::decide` tests locking the batches/fine-tuning route retry
-//!    decisions now that those routes delegate to the typed-facts policy.
-
-// -------------------------------------------------------------------------------------
-// 1. Compatibility fixture — locks the six helpers' 0.6 return values.
-// -------------------------------------------------------------------------------------
-
-#[cfg(not(clippy))]
-mod compat_fixture {
-    use litellm_rs::core::providers::ProviderError;
-    use litellm_rs::core::providers::contextual_error::ContextualError;
-    use litellm_rs::core::router::execution::is_retryable_error;
-    use litellm_rs::core::types::errors::ProviderErrorTrait;
-    use litellm_rs::sdk::errors::SDKError;
-    use litellm_rs::utils::error::ErrorUtils;
-
-    #[test]
-    fn provider_error_is_retryable_locks_0_6_behavior() {
-        // Retryable coarse facts.
-        assert!(ProviderError::rate_limit("p", None).is_retryable());
-        assert!(ProviderError::network("p", "m").is_retryable());
-        assert!(ProviderError::timeout("p", "m").is_retryable());
-        assert!(ProviderError::provider_unavailable("p", "m").is_retryable());
-        // Non-retryable coarse facts.
-        assert!(!ProviderError::authentication("p", "m").is_retryable());
-        assert!(!ProviderError::invalid_request("p", "m").is_retryable());
-        assert!(!ProviderError::model_not_found("p", "m").is_retryable());
-        assert!(!ProviderError::quota_exceeded("p", "m").is_retryable());
-        // 0.6 legacy coarse fact: a plain 408 api error is NOT legacy-retryable even
-        // though the typed-facts RetryPolicy treats 408 as a retry candidate.
-        assert!(!ProviderError::api_error("p", 408, "m").is_retryable());
-    }
-
-    #[test]
-    fn contextual_error_is_retryable_locks_0_6_behavior() {
-        let retryable =
-            ContextualError::new(ProviderError::rate_limit("p", None), "req-1", Some("m"));
-        assert!(retryable.is_retryable());
-        let non_retryable =
-            ContextualError::new(ProviderError::authentication("p", "m"), "req-2", Some("m"));
-        assert!(!non_retryable.is_retryable());
-    }
-
-    #[test]
-    fn provider_error_trait_is_retryable_locks_0_6_behavior() {
-        fn trait_retryable(error: &impl ProviderErrorTrait) -> bool {
-            error.is_retryable()
-        }
-        assert!(trait_retryable(&ProviderError::network("p", "m")));
-        assert!(trait_retryable(&ProviderError::rate_limit("p", None)));
-        assert!(!trait_retryable(&ProviderError::authentication("p", "m")));
-    }
-
-    #[test]
-    fn sdk_error_is_retryable_locks_0_6_behavior() {
-        // SDKError::is_retryable is true for NetworkError | RateLimitError | ProviderError.
-        // The deprecated ProviderError-variant lane is locked by
-        // sdk::errors::tests::test_is_retryable_provider_error; constructing
-        // SDKError::ProviderError here is intentionally avoided so the SP965-T010
-        // removal-follow-up allowlist guard is not perturbed.
-        assert!(SDKError::NetworkError("net".to_string()).is_retryable());
-        assert!(SDKError::RateLimitError("rl".to_string()).is_retryable());
-        assert!(!SDKError::AuthError("auth".to_string()).is_retryable());
-        assert!(!SDKError::InvalidRequest("bad".to_string()).is_retryable());
-        assert!(!SDKError::ModelNotFound("missing".to_string()).is_retryable());
-    }
-
-    #[test]
-    fn router_is_retryable_error_locks_0_6_behavior() {
-        assert!(is_retryable_error(&ProviderError::rate_limit("p", None)));
-        assert!(is_retryable_error(&ProviderError::network("p", "m")));
-        assert!(is_retryable_error(&ProviderError::timeout("p", "m")));
-        assert!(!is_retryable_error(&ProviderError::authentication(
-            "p", "m"
-        )));
-        assert!(!is_retryable_error(&ProviderError::model_not_found(
-            "p", "m"
-        )));
-        assert!(!is_retryable_error(&ProviderError::invalid_request(
-            "p", "m"
-        )));
-    }
-
-    #[test]
-    fn error_utils_should_retry_locks_0_6_behavior() {
-        assert!(ErrorUtils::should_retry(&ProviderError::network("p", "m")));
-        assert!(ErrorUtils::should_retry(&ProviderError::rate_limit(
-            "p", None
-        )));
-        assert!(ErrorUtils::should_retry(&ProviderError::timeout("p", "m")));
-        assert!(!ErrorUtils::should_retry(&ProviderError::authentication(
-            "p", "m"
-        )));
-        assert!(!ErrorUtils::should_retry(&ProviderError::invalid_request(
-            "p", "m"
-        )));
-    }
-}
-
-// -------------------------------------------------------------------------------------
-// 2. Production source guard — zero six-helper call sites outside the allowlist.
-// -------------------------------------------------------------------------------------
+//! Expired retry helpers are removed. Production retry decisions stay on typed facts.
+//! The source guard and route policy regressions remain; 0.6 compatibility fixtures do not.
 
 mod source_guard {
     use std::fs;
@@ -115,20 +7,8 @@ mod source_guard {
     use syn::ext::IdentExt;
     use syn::visit::Visit;
 
-    /// Production files permitted to reference the six deprecated retry helpers: their
-    /// definition sites plus the grandfathered canonical presentation layer. A2A/MCP and
-    /// response serialization consume `canonical_retryable` (not the six helpers directly)
-    /// and therefore need no entry here — the guard verifies they stay clean.
-    const ALLOWED_FILES: &[&str] = &[
-        "src/core/providers/unified_provider_methods.rs", // ProviderError::is_retryable
-        "src/core/providers/contextual_error.rs", // ContextualError::is_retryable + serialization
-        "src/core/providers/provider_error_conversions.rs", // ProviderErrorTrait impl
-        "src/core/types/errors/traits.rs",        // ProviderErrorTrait::is_retryable
-        "src/sdk/errors.rs",                      // SDKError::is_retryable
-        "src/core/router/execution.rs",           // is_retryable_error
-        "src/utils/error/utils/retry.rs",         // ErrorUtils::should_retry
-        "src/utils/error/canonical.rs",           // grandfathered canonical_retryable
-    ];
+    // ErrorCode::is_retryable is the canonical presentation classification, not a removed helper.
+    const ALLOWED_FILES: &[&str] = &["src/utils/error/canonical.rs"];
 
     fn has_test_cfg(attrs: &[syn::Attribute]) -> bool {
         attrs.iter().any(|attr| {
