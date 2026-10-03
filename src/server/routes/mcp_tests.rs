@@ -1066,3 +1066,44 @@ async fn private_mcp_requires_named_key_permission() {
     assert_eq!(calls.lock().unwrap().len(), 2);
     handle.stop(false).await;
 }
+
+#[actix_web::test]
+async fn task_extension_headers_match_task_identity_before_upstream() {
+    let (state, client, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+        for name in [None, Some("different-task"), Some("task-1")] {
+            let mut body = message(method);
+            body["params"]["taskId"] = json!("task-1");
+            body["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"]["extensions"] =
+                json!({"io.modelcontextprotocol/tasks":{}});
+            let mut req = test::TestRequest::post()
+                .uri("/docs/mcp")
+                .insert_header(("accept", "application/json, text/event-stream"))
+                .insert_header(("mcp-protocol-version", PROTOCOL_VERSION))
+                .insert_header(("mcp-method", method))
+                .set_json(body);
+            if let Some(name) = name {
+                req = req.insert_header(("mcp-name", name));
+            }
+            let req = req.to_request();
+            req.extensions_mut().insert(user());
+            let response = test::call_service(&app, req).await;
+            if name == Some("task-1") {
+                assert_eq!(response.status(), StatusCode::OK);
+            } else {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let body: Value = test::read_body_json(response).await;
+                assert_eq!(body["error"]["code"], -32020);
+            }
+        }
+    }
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    handle.stop(false).await;
+}

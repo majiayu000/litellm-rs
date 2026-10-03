@@ -191,6 +191,7 @@ fn validate_request(req: &HttpRequest, message: &Value) -> Option<HttpResponse> 
     let field = match message["method"].as_str() {
         Some("tools/call" | "prompts/get") => Some("name"),
         Some("resources/read") => Some("uri"),
+        Some("tasks/get" | "tasks/update" | "tasks/cancel") => Some("taskId"),
         _ => None,
     };
     if let Some(field) = field {
