@@ -25,7 +25,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ["cargo", "build", "--locked", "--release", "--bin", "gateway", "--no-default-features", "--features", "sqlite,redis,metrics,tracing"]
-REQUEST = json.dumps({"model": "benchmark-model", "messages": [{"role": "user", "content": "ping"}], "stream": False}, separators=(",", ":"))
+REQUEST = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "ping"}], "stream": False}, separators=(",", ":"))
 VERSIONS = {"litellm": "1.103.2", "psutil": "7.2.2", "PyYAML": "6.0.3"}
 
 
@@ -174,10 +174,11 @@ def run(args: argparse.Namespace) -> None:
     mock_port, rust_port, python_port = free_ports(args.first_port)
     rust_config = yaml.safe_load((ROOT / "scripts/bench/gateway-overhead.yaml").read_text())
     rust_config["server"].update(port=rust_port, workers=4)
+    rust_config["providers"][0].update(provider_type="openai", name="benchmark-openai", models=["gpt-4"], api_key="sk-local-mock-only-not-a-real-key")
     rust_config["providers"][0]["base_url"] = f"http://127.0.0.1:{mock_port}/v1"
     (output / "rust.yaml").write_text(yaml.safe_dump(rust_config))
     python_config = {
-        "model_list": [{"model_name": "benchmark-model", "litellm_params": {"model": "openai/benchmark-model", "api_base": f"http://127.0.0.1:{mock_port}/v1", "api_key": "local-mock-only", "max_retries": 0, "timeout": 10}}],
+        "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_base": f"http://127.0.0.1:{mock_port}/v1", "api_key": "local-mock-only", "max_retries": 0, "timeout": 10}}],
         "litellm_settings": {"cache": False, "num_retries": 0, "telemetry": False},
         "general_settings": {"disable_spend_logs": True, "background_health_checks": False},
         "router_settings": {"num_retries": 0},
