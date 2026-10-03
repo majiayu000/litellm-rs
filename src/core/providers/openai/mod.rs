@@ -9,7 +9,7 @@
 mod api_methods;
 pub(crate) use api_methods::{
     execute_audio_transcription, execute_audio_translation, execute_image_edit,
-    execute_text_to_speech,
+    execute_text_to_speech, execute_xai_transcription,
 };
 pub mod client;
 mod client_convenience;

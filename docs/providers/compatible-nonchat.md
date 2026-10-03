@@ -100,7 +100,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `v0` | 待核验；本批未扩展非聊天声明 |
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
 | `github` | 待核验；本批未扩展非聊天声明 |
-| `xai` | 待核验；本批未扩展非聊天声明 |
+| `xai` | 原生 `/stt` 转写 grok-voice-transcribe-2.0；图片与 TTS 尚待原生适配，见下方 |
 | `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
 | `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |
 | `lm_studio` | 文本 embeddings；当前官方端点清单未确认图片生成/独立音频协议，不扩展声明 |
@@ -137,3 +137,13 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
 选择器别名沿用 `canonical_catalog_name`，例如 hugging_face、aimlapi、ai21_chat 等不另建重复审核项。
+
+## xAI 原生转录
+
+2026-10-04，issue #1437。[官方 STT 合同](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text)当前模型为 `grok-voice-transcribe-2.0`；1.0 已于 2026-10-02 结束生命周期并转向 2.0，本次只开放当前 2.0。不是从价格表推导模型可调用性。
+
+网关 `/v1/audio/transcriptions` 通过 `xai` 选择器调用原生 `/v1/stt`，保留既有自定义 base、Bearer、受限 transport 和预算链路；没有新配置或 SDK。支持上传文件、language、JSON/verbose_json 和 word 时间戳。原生 words[].text 转为网关 words[].word，保留 language/duration；缺失 text/language/duration 或无效时长不变成空成功。prompt、temperature、segment 时间戳和原始字幕格式明确拒绝。没有暴露 URL 下载、diarization、multichannel、WebSocket 或 TTS。
+
+具体转录模型不会作为 Chat、翻译或 TTS 候选。沿用现有每秒价格来源与显式覆盖；缺价仍拒绝。预算预留继续采用既有文件大小时长估算，最终按供应商返回的有效 duration 结算。本地测试用人工测试费率证明单位和结算，不将测试费率写成官方价格；没有运行付费实调。
+
+决策：adapt [BerriAI/litellm 固定版本的 xAI STT 转换](https://github.com/BerriAI/litellm/blob/4ece6c9fb8186e8a70df2c3cd5807d246b55a415/litellm/llms/xai/audio_transcription/transformation.py)的端点/词字段映射，复用 Rust 已有 multipart 执行器。没有引入其适配器层；本实现保持必需响应字段的严格解析，不沿用缺失文本默认为空的行为。HTTP 测试覆盖 factory/Router、文件顺序、词映射、401/429/5xx、畸形成功、缺价、预算不足和实际时长结算。

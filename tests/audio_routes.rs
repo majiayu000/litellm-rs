@@ -64,6 +64,7 @@ mod tests {
                         web::post().to(mock_audio_translations),
                     )
                     .route("/audio/speech", web::post().to(mock_audio_speech))
+                    .route("/stt", web::post().to(mock_xai_transcriptions))
             })
             .listen(listener)
             .expect("mock server should listen")
@@ -110,6 +111,15 @@ mod tests {
     ) -> HttpResponse {
         capture_request(&state, &request, body);
         HttpResponse::Ok().json(json!({ "text": "mock transcript" }))
+    }
+
+    async fn mock_xai_transcriptions(
+        state: web::Data<MockAudioState>,
+        request: HttpRequest,
+        body: Bytes,
+    ) -> HttpResponse {
+        capture_request(&state, &request, body);
+        HttpResponse::Ok().json(json!({"text":"mock transcript", "language":"en", "duration":state.duration, "words":[{"text":"mock", "start":0.0, "end":0.5}]}))
     }
 
     async fn mock_audio_translations(
@@ -446,6 +456,72 @@ mod tests {
             "successful time-priced translation must record spend"
         );
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn xai_transcription_reserves_and_settles_native_duration() {
+        for (duration, limit, priced, expected_status) in [
+            (3.0, 1.0, true, StatusCode::OK),
+            (75.0, 1.0, true, StatusCode::OK),
+            (3.0, 0.001, true, StatusCode::PAYMENT_REQUIRED),
+            (3.0, 1.0, false, StatusCode::BAD_REQUEST),
+        ] {
+            let mock = MockAudioServer::start_with_duration(Some(duration)).await;
+            let model = "grok-voice-transcribe-2.0";
+            let state =
+                build_audio_state_for_provider(&mock.base_url, vec![model.into()], "xai").await;
+            state.pricing.add_custom_model(model.into(), serde_json::from_value(json!({
+                "litellm_provider":"xai", "mode":"audio_transcription", "input_cost_per_second":priced.then_some(0.001)
+            })).unwrap());
+            state
+                .budget_limits
+                .providers
+                .set_provider_limit("xai", ProviderLimitConfig::new(limit, ResetPeriod::Monthly));
+            let budgets = state.budget_limits.clone();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let boundary = "xai-duration";
+            let request = test::TestRequest::post()
+                .uri("/v1/audio/transcriptions")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(audio_multipart_body(
+                    boundary,
+                    model,
+                    "sample.mp3",
+                    &vec![b'a'; 32_000],
+                ))
+                .to_request();
+            let response = test::call_service(&app, request).await;
+            assert_eq!(
+                response.status(),
+                expected_status,
+                "duration={duration}, limit={limit}, priced={priced}"
+            );
+            if expected_status == StatusCode::OK {
+                let body: Value = test::read_body_json(response).await;
+                assert_eq!(body["duration"], duration);
+                let spent = budgets
+                    .providers
+                    .get_provider_usage("xai")
+                    .unwrap()
+                    .current_spend;
+                assert!((spent - duration * 0.001).abs() < 1e-10);
+                let requests = mock.requests();
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].path, "/stt");
+                assert!(!String::from_utf8_lossy(&requests[0].body).contains("response_format"));
+            } else {
+                assert!(mock.requests().is_empty());
+            }
+            mock.shutdown().await;
+        }
     }
 
     #[tokio::test]
