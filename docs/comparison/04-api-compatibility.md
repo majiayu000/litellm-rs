@@ -722,7 +722,7 @@ Both implementations provide strong OpenAI API compatibility for core functional
 
 The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.
 
-This implementation is not ready for release: native background requests and stream resumption are implemented, but background cost recovery after process termination still needs completion. Authenticated native JSON and streaming creation now support stored response IDs bound to their owner and deployment (F07 below). The OpenAI endpoint matrix is verified per model; Copilot and Bedrock integration remains pending in F06. Token reservation includes serialized request text and image overhead; provider-hosted tools and file contents need additional accounting coverage.
+This stack remains unreleased pending full review. Native OpenAI storage/background/continuation now use the owner-scoped F07 lifecycle and durable settlement described below. The first billing-safe scope is client function/custom tools and standard-tier token-priced output. Inline images/PDFs and uploaded file IDs use OpenAI’s processed-input token-count endpoint before reservation; generation retains the original native inputs. Hosted tools, mutable remote image/file URLs, prompt/conversation handles and nondefault service tiers are rejected before generation. See [native Responses billing boundaries](../providers/native-responses-billing.md) for evidence and limits.
 
 ### Native OpenAI endpoint matrix (F06, unreleased)
 
@@ -737,9 +737,9 @@ models do not acquire chat support from a `gpt-` prefix. An OpenAI model without
 Responses support is rejected instead of silently entering the chat adapter.
 Other providers' compatibility adapters retain their documented behavior.
 
-This implements the OpenAI portion of F06. Copilot and Bedrock require their own
-endpoint/authentication contracts and are still pending; F07 lifecycle restrictions
-also remain. It does not establish account access or claim paid upstream validation.
+Copilot authenticated model metadata and the verified Bedrock Runtime/Mantle
+endpoint/authentication matrix are implemented separately; see
+[native Responses routing](../providers/native-responses-routing.md). OpenAI lifecycle support is described below; non-OpenAI lifecycle forwarding remains unsupported. It does not establish account access or claim paid upstream validation.
 
 ### Responses storage work in progress (F07, unreleased)
 
@@ -753,8 +753,8 @@ Native continuation verifies the previous handle's owner and expiration, pins ro
 
 Expired rows are pruned at most once per hour per database connection pool during insertion; expiration is always enforced on reads. Background adapter execution continues through transient lease-renewal errors only until its last confirmed lease deadline. A slow renewal query does not stop polling the upstream request.
 
-Native background JSON/SSE requests keep a single settlement owner in the creating process. It retains the original budget reservations and pricing snapshot, polls the bound upstream for terminal usage, and settles once. Repeated GET, cancel and reconnect requests do not create new generation or settlement tasks. An SSE disconnect after `response.created` transfers the same reservations to that poller. Background responses created with `stream=true` can resume via GET with `stream=true&starting_after=...`; the gateway preserves upstream event IDs, sequence numbers and native fields, and applies output guardrails to replayed events.
+Native background JSON/SSE requests persist a settlement intent before generation. The creating process polls first; after its lease expires, a bounded startup recovery worker can claim the same SQL obligation. It retains the original budget reservations and pricing snapshot, polls the bound upstream for terminal usage, and settles once. Repeated GET, cancel and reconnect requests do not create new generation or settlement tasks. An SSE disconnect after `response.created` transfers the same reservations to that poller. Background responses created with `stream=true` can resume via GET with `stream=true&starting_after=...`; the gateway preserves upstream event IDs, sequence numbers and native fields, and applies output guardrails to replayed events.
 
 When `background=true, store=false`, the gateway stores only owner/deployment/account binding, ID/status and the stream flag for ten minutes; it does not persist input/output content. Such handles cannot supply previous-response context. Normal stored responses retain the existing 24-hour gateway TTL.
 
-Remaining accounting limitations: polling stops nine minutes after dispatch, before the current distributed budget lease expires. If terminal usage remains unavailable (including deletion upstream), the existing conservative reservation settlement applies; later GET requests do not rebill. There is no restart recovery of the in-process settlement owner yet, and the initial HTTP request ledger is not a durable background billing job. Persisted handles remain readable from another replica/restarted gateway, but this does not prove crash-safe cost accounting. F07 remains incomplete and unreleased until that gap is addressed. All current verification uses mock upstreams, not paid-provider calls.
+Background durability requires an enabled shared SQL database; provider/model budget limits require the existing Redis backend, and process-local API-key budget scopes are rejected before background dispatch. Recovery never replays generation POST. Unknown outcomes preserve budget protection but are not recorded as actual supplier charges. Deleted/expired content does not remove settlement obligations. See [durable settlement limits](../providers/native-responses-routing.md) for idempotency evidence, retained receipts and unsupported combinations. All current verification uses mock upstreams, not paid-provider calls.

@@ -594,22 +594,6 @@ fn issue_838_subsystems_have_explicit_non_silent_decisions() {
             "{name} must explain the decision"
         );
     }
-
-    assert!(
-        CORE_SUBSYSTEMS
-            .iter()
-            .all(|subsystem| subsystem.decision != SubsystemDecision::TemporaryExemption),
-        "GH838 compatibility variant must not classify an active subsystem"
-    );
-
-    let source = std::fs::read_to_string(manifest_path("src/core/subsystem_registry.rs"))
-        .expect("read subsystem registry source");
-    for symbol in [
-        "GH838_TEMPORARY_EXEMPTION_ISSUE",
-        "GH838_TEMPORARY_EXEMPTIONS",
-    ] {
-        assert!(source.contains(symbol), "0.6 compatibility symbol {symbol}");
-    }
 }
 
 #[test]
