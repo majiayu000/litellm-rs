@@ -304,18 +304,23 @@ impl ReplicateModelRegistry {
 
     /// Get model specification
     pub fn get_model_spec(&self, model_id: &str) -> Option<&ReplicateModelSpec> {
-        self.models.get(model_id)
+        let canonical = if super::config::ReplicateConfig::extract_version_hash(model_id).is_some()
+        {
+            model_id.split_once(':').map_or(model_id, |(name, _)| name)
+        } else {
+            model_id
+        };
+        self.models.get(canonical)
     }
 
     /// Check if model exists
     pub fn has_model(&self, model_id: &str) -> bool {
-        self.models.contains_key(model_id)
+        self.get_model_spec(model_id).is_some()
     }
 
     /// Get model type
     pub fn get_model_type(&self, model_id: &str) -> Option<ReplicateModelType> {
-        self.models
-            .get(model_id)
+        self.get_model_spec(model_id)
             .map(|spec| spec.model_type.clone())
     }
 
@@ -324,7 +329,8 @@ impl ReplicateModelRegistry {
         &self,
         model_id: &str,
     ) -> Option<&HashMap<String, serde_json::Value>> {
-        self.models.get(model_id).map(|spec| &spec.default_params)
+        self.get_model_spec(model_id)
+            .map(|spec| &spec.default_params)
     }
 
     /// Get LLM models (for chat completion)

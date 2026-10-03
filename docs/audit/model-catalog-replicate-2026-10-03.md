@@ -40,7 +40,10 @@ Replicate's [HTTP reference](https://replicate.com/docs/reference/http) separate
 `POST /predictions` with a concrete version for community models. Existing
 configuration/request structures now use the audited community version metadata
 and correct endpoint. Explicit version syntax also selects the version endpoint;
-this does not grant an unknown version or deployment model routing capabilities.
+model metadata is resolved by the known owner/model identity, while the explicitly
+requested version is preserved in the upstream body. Unknown owner/model and
+private deployment identities do not inherit chat capabilities. Supplier
+validation of user-supplied versions remains upstream; no entitlement is inferred.
 
 The four pinned community versions are recorded below. They are evidence for
 these specific catalog entries, not a new dynamic discovery or version-management
@@ -49,7 +52,7 @@ system. Updating a model version requires reviewing its protocol again.
 Image/chat routing now consults the concrete model capability list, and direct
 calls reject unknown models rather than assuming every unknown string is a chat
 model. The image path also rejects text models. Private deployments and arbitrary
-user model/version identities are not verified by this static audit.
+unknown owner/model identities are not verified by this static audit.
 
 Image requests preserve the documented single-image versus 1–4 batch boundary.
 FLUX Pro and FLUX.2 Pro set `aspect_ratio=custom` when pixel sizes are supplied;

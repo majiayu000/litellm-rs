@@ -168,7 +168,11 @@ impl ReplicateClient {
         model: &str,
     ) -> Result<Value, ProviderError> {
         let registry = get_replicate_registry();
-        let default_params = registry.get_default_params(model);
+        let spec = registry
+            .get_model_spec(model)
+            .ok_or_else(|| ProviderError::model_not_found("replicate", model))?;
+        let model = spec.model_info.id.as_str();
+        let default_params = Some(&spec.default_params);
 
         let mut input = json!({
             "prompt": request.prompt

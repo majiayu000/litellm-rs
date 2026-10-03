@@ -318,6 +318,10 @@ impl LLMProvider for ReplicateProvider {
         &self.supported_models
     }
 
+    fn supports_model(&self, model: &str) -> bool {
+        super::models::get_replicate_registry().has_model(model)
+    }
+
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
         ReplicateClient::supported_openai_params()
     }
@@ -631,8 +635,13 @@ mod tests {
                 ));
             }
         }
+        let versioned = format!("meta/llama-2-70b-chat:{}", "a".repeat(64));
+        assert!(provider.supports_model(&versioned));
+        assert!(
+            wrapped.supports_capability_for_model(&versioned, &ProviderCapability::ChatCompletion)
+        );
         let cost = provider
-            .calculate_cost("meta/llama-2-70b-chat", 1000, 1000)
+            .calculate_cost(&versioned, 1000, 1000)
             .await
             .unwrap();
         assert!((cost - 0.0034).abs() < 1e-12);
@@ -657,7 +666,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let mut posts = Vec::new();
-            for _ in 0..4 {
+            for _ in 0..6 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = Vec::new();
                 let mut chunk = [0; 4096];
@@ -698,7 +707,12 @@ mod tests {
         config.base.api_base = Some(format!("http://{address}/v1"));
         config.polling_delay_seconds = 1;
         let provider = ReplicateProvider::new(config).unwrap();
-        for model in ["stability-ai/sdxl", "black-forest-labs/flux-2-pro"] {
+        let explicit_version = format!("black-forest-labs/flux-2-pro:{}", "b".repeat(64));
+        for model in [
+            "stability-ai/sdxl",
+            "black-forest-labs/flux-2-pro",
+            explicit_version.as_str(),
+        ] {
             let mut request = image_request(model);
             request.size = Some("1024x768".into());
             let response = provider
@@ -721,6 +735,10 @@ mod tests {
         assert_eq!(posts[1].1["input"]["aspect_ratio"], "custom");
         assert_eq!(posts[1].1["input"]["width"], 1024);
         assert!(posts[1].1["input"].get("num_outputs").is_none());
+        assert_eq!(posts[2].0, "POST /v1/predictions HTTP/1.1");
+        assert_eq!(posts[2].1["version"], "b".repeat(64));
+        assert_eq!(posts[2].1["input"]["aspect_ratio"], "custom");
+        assert!(posts[2].1["input"].get("num_outputs").is_none());
     }
 
     #[test]
