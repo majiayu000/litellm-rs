@@ -145,11 +145,13 @@ async fn named_catalog_embeddings_reach_the_verified_endpoint() {
         "nebius",
         "nvidia_nim",
         "lm_studio",
+        "nscale",
+        "ovhcloud",
     ] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
         let provider = selected(&router, ProviderCapability::Embeddings);
         let mut request = embedding_request();
-        if !matches!(selector, "nebius" | "lm_studio") {
+        if !matches!(selector, "nebius" | "lm_studio" | "nscale" | "ovhcloud") {
             request.task_type = Some("query".into());
         }
         if selector == "nvidia_nim" {
@@ -502,6 +504,148 @@ async fn verified_embedding_profiles_preserve_errors_and_reject_unverified_opera
 }
 
 #[tokio::test]
+async fn heroku_embeddings_map_float_and_task_type_on_real_dispatch() {
+    let (router, upstream, handle) = fixture("heroku", StatusCode::OK).await;
+    let request = serde_json::from_value(json!({"model":"test-model","input":"hello","encoding_format":"float","task_type":"search_query"})).unwrap();
+    let response = selected(&router, ProviderCapability::Embeddings)
+        .create_embeddings(request, RequestContext::default())
+        .await
+        .unwrap();
+    assert_eq!(response.usage.unwrap().total_tokens, 2);
+    let body: Value = serde_json::from_slice(&upstream.seen.lock().unwrap()[0].1).unwrap();
+    assert_eq!(body["encoding_format"], "raw");
+    assert_eq!(body["input_type"], "search_query");
+    assert!(body.get("task_type").is_none());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn newly_verified_cloud_providers_preserve_errors_and_scope() {
+    for selector in ["nscale", "ovhcloud", "heroku"] {
+        for status in [StatusCode::BAD_REQUEST, StatusCode::TOO_MANY_REQUESTS] {
+            let (router, upstream, handle) = fixture(selector, status).await;
+            let error = selected(&router, ProviderCapability::Embeddings)
+                .create_embeddings(embedding_request(), RequestContext::default())
+                .await
+                .unwrap_err();
+            if status == StatusCode::BAD_REQUEST {
+                assert!(matches!(
+                    error,
+                    ProviderError::InvalidRequest { .. }
+                        | ProviderError::ApiError { status: 400, .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    ProviderError::RateLimit {
+                        retry_after: Some(7),
+                        ..
+                    }
+                ));
+            }
+            assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+            for capability in [
+                ProviderCapability::AudioTranscription,
+                ProviderCapability::AudioTranslation,
+                ProviderCapability::TextToSpeech,
+                ProviderCapability::ImageEdit,
+            ] {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability("public", &capability)
+                        .is_err()
+                );
+            }
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn cloud_embeddings_require_prices_and_obey_gateway_budgets() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("nscale", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("catalog provider")
+    };
+    let mut config = litellm_rs::Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+        "prod-nscale",
+        "nscale",
+        "test-key",
+        &provider.config().get_api_base(),
+        vec!["test-model".into()],
+    )];
+    let state = litellm_rs::server::HttpServer::new(&config)
+        .await
+        .unwrap()
+        .state()
+        .clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::post()
+            .uri("/v1/embeddings")
+            .set_json(json!({"model":"test-model","input":"hello"}))
+            .to_request()
+    };
+    let response = test::call_service(&app, request()).await;
+    assert!(!response.status().is_success());
+    let error: Value = test::read_body_json(response).await;
+    assert!(
+        error.to_string().to_lowercase().contains("pricing"),
+        "{error}"
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let (_, mut price) = state
+        .pricing
+        .get_model_info_for_provider("openai", "text-embedding-3-small")
+        .unwrap();
+    price.litellm_provider = "nscale".into();
+    price.input_cost_per_token = Some(0.1);
+    state.pricing.add_custom_model("test-model".into(), price);
+    state.budget_limits.providers.set_provider_limit(
+        "prod-nscale",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    assert_eq!(
+        test::call_service(&app, request()).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    state.budget_limits.providers.set_provider_limit(
+        "prod-nscale",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let response = test::call_service(&app, request()).await;
+    let status = response.status();
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("prod-nscale")
+        .unwrap()
+        .current_spend;
+    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
 async fn self_hosted_embeddings_reach_their_native_base_paths() {
     for selector in [
         "vllm",
@@ -784,6 +928,17 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
 }
 
 #[tokio::test]
+async fn nscale_images_are_withheld_until_pixel_pricing_is_supported() {
+    let (router, upstream, handle) = fixture("nscale", StatusCode::OK).await;
+    assert!(
+        router
+            .select_deployment_lease_for_capability("public", &ProviderCapability::ImageGeneration)
+            .is_err()
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+#[tokio::test]
 async fn aggregator_embeddings_follow_each_official_base() {
     for selector in ["novita", "nanogpt", "galadriel", "featherless"] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
@@ -1004,4 +1159,55 @@ async fn aggregator_errors_and_unverified_operations_fail_closed() {
         assert!(upstream.seen.lock().unwrap().is_empty());
         handle.stop(false).await;
     }
+}
+
+#[tokio::test]
+async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
+    let definition = litellm_rs::core::providers::registry::get_definition("wandb").unwrap();
+    assert_eq!(definition.base_url, "https://api.inference.wandb.ai/v1");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpServer::new(|| App::new().route("/v1/chat/completions", web::post().to(|req: HttpRequest| async move {
+        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer test-key");
+        assert_eq!(req.headers().get("openai-project").unwrap(), "test-team/test-project");
+        HttpResponse::Ok().json(json!({"id":"chat-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}))
+    }))).workers(1).listen(listener).unwrap().run();
+    let handle = server.handle();
+    tokio::spawn(server);
+    let mut config = provider_fixtures::mock_provider_config(
+        "wandb",
+        "wandb",
+        "test-key",
+        &format!("http://{address}/v1"),
+        vec!["test-model".into()],
+    );
+    config.settings.insert(
+        "custom_headers".into(),
+        json!({"OpenAI-Project":"test-team/test-project"}),
+    );
+    let provider = create_provider(config).await.unwrap();
+    let router = UnifiedRouter::default();
+    router.add_deployment(Deployment::new(
+        "wandb-test".into(),
+        provider,
+        "test-model".into(),
+        "public".into(),
+    ));
+    assert!(
+        router
+            .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
+            .is_err()
+    );
+    let response = selected(&router, ProviderCapability::ChatCompletion)
+        .chat_completion(
+            serde_json::from_value(
+                json!({"model":"test-model","messages":[{"role":"user","content":"hello"}]}),
+            )
+            .unwrap(),
+            RequestContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.usage.unwrap().total_tokens, 2);
+    handle.stop(true).await;
 }

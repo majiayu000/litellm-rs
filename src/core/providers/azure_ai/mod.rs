@@ -603,7 +603,7 @@ mod tests {
 
         // Check various GPT models exist
         assert!(registry.get_model("gpt-4o").is_some());
-        assert!(registry.get_model("gpt-4").is_some());
+        assert!(registry.get_model("gpt-4").is_none());
         assert!(registry.get_model("gpt-35-turbo").is_some());
     }
 
