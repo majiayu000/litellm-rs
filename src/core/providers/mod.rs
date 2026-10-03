@@ -585,6 +585,20 @@ impl Provider {
         }
     }
 
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response_input_tokens(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<u32, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => provider.native_response_input_tokens(body).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses input token counting",
+            )),
+        }
+    }
+
     /// Get provider name
     pub fn name(&self) -> &str {
         match self {

@@ -482,6 +482,8 @@ mod tests {
         for path in ["core/providers/openai_like/provider.rs", "core/providers/responses_native.rs"] {
             for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy"] { expected.push((std::path::PathBuf::from(path), method)); }
         }
+        // Native Responses input_tokens uses the same explicit endpoint policy as generation.
+        expected.push((std::path::PathBuf::from("core/providers/openai/client.rs"), "execute_request_preserving_endpoint_policy"));
         expected.sort(); assert_eq!(callers, expected);
     }
 

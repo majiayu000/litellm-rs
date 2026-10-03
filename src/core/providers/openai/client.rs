@@ -65,6 +65,8 @@ impl OpenAIProvider {
             .unwrap_or(model)
             .to_string();
         body["model"] = Value::String(wire_model);
+        // Project defaults may select a paid priority tier; this path reserves standard rates.
+        body["service_tier"] = Value::String("default".into());
         super::super::responses_native::send(
             &self.pool_manager,
             &self.config.get_api_base(),
@@ -74,6 +76,81 @@ impl OpenAIProvider {
             "openai",
         )
         .await
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response_input_tokens(
+        &self,
+        mut body: Value,
+    ) -> Result<u32, ProviderError> {
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ProviderError::invalid_request("openai", "model must be a string"))?;
+        body["model"] = self
+            .model_identity
+            .as_ref()
+            .map(|binding| binding.identity().wire_model())
+            .or_else(|| self.config.model_mappings.get(model).map(String::as_str))
+            .unwrap_or(model)
+            .to_string()
+            .into();
+        let url = format!(
+            "{}/responses/input_tokens",
+            self.config.get_api_base().trim_end_matches('/')
+        );
+        let response = self
+            .pool_manager
+            .execute_request_preserving_endpoint_policy(
+                &url,
+                HttpMethod::POST,
+                self.get_request_headers(),
+                Some(body),
+            )
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok());
+            let message = read_streaming_error_body(response)
+                .await
+                .unwrap_or_else(|_| "Failed to read Responses token count error".into());
+            if status.as_u16() == 429 {
+                return Err(ProviderError::rate_limit_with_retry(
+                    "openai",
+                    message,
+                    retry_after,
+                ));
+            }
+            return Err(super::super::unified_provider::default_http_error_mapper(
+                "openai",
+                status.as_u16(),
+                &message,
+            ));
+        }
+        // Token count responses are tiny; use the existing bounded body reader.
+        let text = read_streaming_error_body(response)
+            .await
+            .map_err(|error| error.into_provider_error("openai"))?;
+        let value: Value = serde_json::from_str(&text).map_err(|_| {
+            ProviderError::response_parsing("openai", "Invalid Responses token count JSON")
+        })?;
+        if value.get("object").and_then(Value::as_str) != Some("response.input_tokens") {
+            return Err(ProviderError::response_parsing(
+                "openai",
+                "Invalid Responses token count object",
+            ));
+        }
+        value
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                ProviderError::response_parsing("openai", "Invalid Responses input token count")
+            })
     }
 
     /// Generate headers for OpenAI API requests
