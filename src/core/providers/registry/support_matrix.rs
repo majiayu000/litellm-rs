@@ -107,6 +107,11 @@ pub static LEGACY_ADAPTER_MATRIX: &[ProviderLegacyAdapterSupport] = &[
         "Sonar Chat Completions retired; Agent API has no runtime adapter yet.",
     ),
     row(
+        "github",
+        [U, U, U, U, U, U, U, U, U],
+        "GitHub Models inference service retired on 2026-07-30; Copilot is separate.",
+    ),
+    row(
         "openai",
         [S, S, S, S, S, S, S, S, S],
         "Reference provider across HTTP, SDK, and completion().",

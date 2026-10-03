@@ -318,8 +318,8 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::GitHub,
         "github",
         &["github-models"],
-        ProviderDispatchKind::CatalogOpenAiLike,
-        true,
+        ProviderDispatchKind::UnsupportedEnum,
+        false,
     ),
     entry(
         ProviderType::GitHubCopilot,
@@ -668,7 +668,6 @@ mod tests {
             ProviderType::MetaLlama,
             ProviderType::V0,
             ProviderType::AmazonNova,
-            ProviderType::GitHub,
         ] {
             assert_eq!(
                 dispatch_kind_for(&provider_type),

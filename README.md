@@ -205,6 +205,10 @@ the replacement Agent API requires a native protocol adapter. Historical prices
 remain available and do not establish callable models. See the
 [retirement audit](docs/audit/perplexity-sonar-retirement-2026-10-03.md).
 
+GitHub Models (`github` / `github-models`) retired on 2026-07-30 and is no longer
+a callable selector. GitHub Copilot remains a separate native provider.
+See the [retirement audit](docs/audit/github-models-retirement-2026-10-03.md).
+
 Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLAUDE.md#provider-tiers) for the engineering definition).
 
 - **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The runtime supports chat and streaming plus explicitly verified embeddings, images and audio capabilities for selected providers; see [compatible non-chat support](docs/providers/compatible-nonchat.md). Capability declarations do not imply that every model supports every endpoint.
@@ -279,7 +283,6 @@ a gateway video route.
 | Black Forest Labs (`black_forest_labs`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native asynchronous submit/poll image generation and Kontext editing. |
 | Replicate (`replicate`) | native factory (`providers-extended`) | ✅ | ✅ | – | ✅ | – | Uses native Replicate prediction lifecycle handling for chat, streaming, and image generation; explicitly unsupported without `providers-extended`. |
 | Ollama (`ollama`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native `/api/chat` NDJSON streaming, `/api/embed`, and model tags/show endpoints. Localhost defaults to private-network endpoint policy; explicit endpoints keep their configured policy. |
-| GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
 | GitHub Copilot (`github_copilot`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native GitHub Copilot auth and model access when `providers-extended` is enabled; otherwise explicitly unsupported. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | passthrough | passthrough | passthrough | For self-hosted / unlisted OpenAI-compatible chat, embeddings, image, and audio endpoints. |
 

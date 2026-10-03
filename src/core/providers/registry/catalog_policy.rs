@@ -263,7 +263,6 @@ fn catalog_model_info_from_entry(model: &CatalogModel) -> ModelInfo {
 pub(crate) fn catalog_model_infos(provider: &str) -> Option<&'static [ModelInfo]> {
     match provider {
         "amazon_nova" => Some(super::catalog::amazon_nova_catalog_model_infos()),
-        "github" => Some(super::github_policy::github_catalog_model_infos()),
         "meta_llama" => Some(&META_LLAMA_MODEL_INFOS),
         "v0" => Some(&V0_MODEL_INFOS),
         _ => None,
@@ -273,7 +272,6 @@ pub(crate) fn catalog_model_infos(provider: &str) -> Option<&'static [ModelInfo]
 pub(crate) fn catalog_model_info(provider: &str, model_id: &str) -> Option<ModelInfo> {
     match provider {
         "amazon_nova" => super::catalog::amazon_nova_catalog_model_info(model_id),
-        "github" => super::github_policy::github_catalog_model_info(model_id),
         "meta_llama" => {
             find_catalog_model(META_LLAMA_MODELS, model_id).map(catalog_model_info_from_entry)
         }

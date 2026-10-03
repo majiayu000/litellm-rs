@@ -117,7 +117,7 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `meta_llama` | 待核验；本批未扩展非聊天声明 |
 | `v0` | 待核验；本批未扩展非聊天声明 |
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
-| `github` | 待核验；本批未扩展非聊天声明 |
+| `github`（已移出目录） | GitHub Models 服务已整体退役，具名选择器构造即拒绝；[官方证据与范围](../audit/github-models-retirement-2026-10-03.md)。Copilot 单独核验 |
 | `xai` | 原生 `/stt` 转写 grok-voice-transcribe-2.0；图片与 TTS 尚待原生适配，见下方 |
 | `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
 | `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |

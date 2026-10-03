@@ -66,8 +66,10 @@ records and callback integrations remain wired and supported.
 ## Expired duplicate provider modules
 
 F16 removes the unused native modules `amazon_nova`, `github`, `meta_llama`,
-`v0`, and `custom_api` from unreleased source. The first four keep their existing
-catalog selectors and `OpenAILikeProvider` factory paths. Custom servers use
+`v0`, and `custom_api` from unreleased source. Nova, Meta Llama and v0 keep their
+catalog selectors and `OpenAILikeProvider` factory paths. F10 subsequently removes
+the GitHub Models selector because the service retired on 2026-07-30; see the
+[retirement audit](../audit/github-models-retirement-2026-10-03.md). Custom servers use
 `openai_compatible` when compatible, or the public `ExternalProvider` registration
 API for custom protocols. GitHub Copilot is a separate retained native provider.
 Only legacy construction/equivalence tests are removed; current catalog routing,
