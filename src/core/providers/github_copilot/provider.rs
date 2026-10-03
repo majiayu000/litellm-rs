@@ -38,6 +38,8 @@ const GITHUB_COPILOT_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::ToolCalling,
+    #[cfg(feature = "gateway")]
+    ProviderCapability::Responses,
 ];
 
 /// GitHub Copilot provider implementation
@@ -74,10 +76,9 @@ impl GitHubCopilotProvider {
             .iter()
             .filter_map(|id| get_model_info(id))
             .map(|info| {
-                let mut capabilities = vec![
-                    ProviderCapability::ChatCompletion,
-                    ProviderCapability::ChatCompletionStream,
-                ];
+                // Endpoint support is account-specific and checked against
+                // /models before inference; static IDs do not imply chat support.
+                let mut capabilities = Vec::new();
                 if info.supports_tools {
                     capabilities.push(ProviderCapability::ToolCalling);
                 }
@@ -97,7 +98,10 @@ impl GitHubCopilotProvider {
                     capabilities,
                     created_at: None,
                     updated_at: None,
-                    metadata: HashMap::new(),
+                    metadata: HashMap::from([(
+                        "endpoint_authority".into(),
+                        serde_json::json!("account /models supported_endpoints"),
+                    )]),
                 }
             })
             .collect();
@@ -109,6 +113,144 @@ impl GitHubCopilotProvider {
             cached_api_key: Arc::new(RwLock::new(None)),
             cached_api_base: Arc::new(RwLock::new(None)),
         })
+    }
+
+    /// The account model catalog, not the model name or price table, decides
+    /// whether a request may use a particular Copilot endpoint.
+    async fn require_endpoint(
+        &self,
+        model: &str,
+        endpoint: &str,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Result<(), ProviderError> {
+        let url = format!("{}/models", self.get_api_base().await.trim_end_matches('/'));
+        let response = crate::core::http::outbound::default_outbound_client()
+            .get(url)
+            .headers(headers.clone())
+            .timeout(std::time::Duration::from_secs(self.config.timeout))
+            .send()
+            .await
+            .map_err(|error| ProviderError::network("github_copilot", error.to_string()))?;
+        let response = self.check_native_status(response).await?;
+        let catalog: serde_json::Value = response.json().await.map_err(|_| {
+            ProviderError::response_parsing("github_copilot", "Invalid account model catalog")
+        })?;
+        let models = catalog
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                ProviderError::response_parsing(
+                    "github_copilot",
+                    "Account model catalog has no data array",
+                )
+            })?;
+        let model_info = models
+            .iter()
+            .find(|entry| entry.get("id").and_then(serde_json::Value::as_str) == Some(model))
+            .ok_or_else(|| ProviderError::model_not_found("github_copilot", model))?;
+        if !model_info
+            .get("supported_endpoints")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|endpoints| {
+                endpoints
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(endpoint))
+            })
+        {
+            return Err(ProviderError::not_supported(
+                "github_copilot",
+                format!("Model {model} does not advertise {endpoint}"),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn check_native_status(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+        if status.as_u16() == 401 {
+            self.clear_cache().await;
+        }
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok());
+        let body = crate::core::providers::base::read_streaming_error_body(response)
+            .await
+            .unwrap_or_else(|_| "Could not read Copilot error response".into());
+        if status.as_u16() == 429 {
+            return Err(ProviderError::rate_limit_with_retry(
+                "github_copilot",
+                body,
+                retry_after,
+            ));
+        }
+        Err(HttpErrorMapper::map_status_code(
+            "github_copilot",
+            status.as_u16(),
+            &body,
+        ))
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        use serde_json::Value;
+        let model = body.get("model").and_then(Value::as_str).ok_or_else(|| {
+            ProviderError::invalid_request("github_copilot", "model must be a string")
+        })?;
+        let mut headers = self.build_headers(&[]).await?;
+        self.require_endpoint(model, "/responses", &headers).await?;
+        let items = body.get("input").and_then(Value::as_array);
+        let agent = items.is_some_and(|items| {
+            items.iter().any(|item| {
+                !matches!(
+                    item.get("role").and_then(Value::as_str),
+                    Some("user" | "system" | "developer")
+                )
+            })
+        });
+        headers.insert(
+            "x-initiator",
+            reqwest::header::HeaderValue::from_static(if agent { "agent" } else { "user" }),
+        );
+        if items.is_some_and(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("content").and_then(Value::as_array))
+                .flatten()
+                .any(|part| part.get("type").and_then(Value::as_str) == Some("input_image"))
+        }) {
+            headers.insert(
+                "copilot-vision-request",
+                reqwest::header::HeaderValue::from_static("true"),
+            );
+        }
+        let url = format!(
+            "{}/responses",
+            self.get_api_base().await.trim_end_matches('/')
+        );
+        let client = if body.get("stream") == Some(&Value::Bool(true)) {
+            crate::core::http::outbound::streaming_outbound_client()
+        } else {
+            crate::core::http::outbound::default_outbound_client()
+        };
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(self.config.timeout),
+            client.post(url).headers(headers).json(&body).send(),
+        )
+        .await
+        .map_err(|_| ProviderError::timeout("github_copilot", "Responses upstream timed out"))?
+        .map_err(|error| ProviderError::network("github_copilot", error.to_string()))?;
+        self.check_native_status(response).await
     }
 
     /// Get the API key, using cache or refreshing if needed
@@ -398,6 +540,8 @@ impl LLMProvider for GitHubCopilotProvider {
 
         // Build headers
         let headers = self.build_headers(&request.messages).await?;
+        self.require_endpoint(&request.model, "/chat/completions", &headers)
+            .await?;
 
         // Build URL
         let api_base = self.get_api_base().await;
@@ -465,6 +609,8 @@ impl LLMProvider for GitHubCopilotProvider {
 
         // Build headers
         let headers = self.build_headers(&request.messages).await?;
+        self.require_endpoint(&request.model, "/chat/completions", &headers)
+            .await?;
 
         // Build URL
         let api_base = self.get_api_base().await;
@@ -795,3 +941,7 @@ mod tests {
         assert_eq!(cost.expect("cost should be available"), 0.0);
     }
 }
+
+#[cfg(all(test, feature = "gateway"))]
+#[path = "native_tests.rs"]
+mod native_tests;

@@ -40,6 +40,8 @@ pub(super) const BEDROCK_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::FunctionCalling,
     ProviderCapability::Embeddings,
+    #[cfg(feature = "gateway")]
+    ProviderCapability::Responses,
 ];
 
 fn streaming_operation_for_api_type(api_type: &BedrockApiType) -> &'static str {
@@ -108,6 +110,19 @@ impl BedrockProvider {
         }
 
         Ok(Self { client, models })
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn supports_responses_model(&self, model: &str) -> bool {
+        self.client.supports_responses_model(model)
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response(
+        &self,
+        body: Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.client.native_response(body).await
     }
 
     /// Generate images using Bedrock image models

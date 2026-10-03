@@ -137,6 +137,10 @@ impl Provider {
             {
                 openai_like_provider_supports_gemini(provider.name())
             }
+            #[cfg(feature = "gateway")]
+            Provider::Bedrock(provider) if capability == &ProviderCapability::Responses => {
+                provider.supports_responses_model(model)
+            }
             Provider::Voyage(provider) => provider.supports_capability_for_model(model, capability),
             _ => self.supports_capability(capability),
         }
