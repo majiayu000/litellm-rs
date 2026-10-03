@@ -193,8 +193,13 @@ async fn rejects_unsupported_gateway_configuration() {
 #[actix_web::test]
 async fn exported_mcp_configuration_redacts_credentials() {
     let mut config = crate::server::valid_test_config();
+    let mut auth = AuthConfig::bearer("mcp-token-sentinel");
+    auth.token_url = Some(
+        "https://user:mcp-oauth-password-sentinel@example.test/token?key=mcp-oauth-query-sentinel"
+            .into(),
+    );
     let server = McpServerConfig::new("docs", "https://1.1.1.1/mcp?secret=mcp-query-sentinel")
-        .with_auth(AuthConfig::bearer("mcp-token-sentinel"))
+        .with_auth(auth)
         .with_header("x-api-key", "mcp-header-sentinel");
     config.gateway.mcp_servers.insert("docs".into(), server);
     config.gateway.mcp_servers.insert(
@@ -207,6 +212,8 @@ async fn exported_mcp_configuration_redacts_credentials() {
         format!("{:?}", config),
     ] {
         for secret in [
+            "mcp-oauth-password-sentinel",
+            "mcp-oauth-query-sentinel",
             "mcp-malformed-sentinel",
             "mcp-query-sentinel",
             "mcp-token-sentinel",
@@ -964,5 +971,98 @@ async fn request_body_size_limit_still_returns_payload_too_large() {
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert!(state.mcp_inflight.owners.lock().unwrap().is_empty());
     assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn named_mcp_routes_are_not_shadowed_by_gateway_scopes() {
+    use crate::core::models::user::types::UserStatus;
+    let (state, client, calls, handle) = fixture(true).await;
+    let names = ["v1", "v1beta", "auth", "health"];
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    let template = config.gateway.mcp_servers["docs"].clone();
+    for name in names {
+        let mut server = template.clone();
+        server.name = name.into();
+        config.gateway.mcp_servers.insert(name.into(), server);
+    }
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let mut owner = user();
+    owner.status = UserStatus::Active;
+    let owner = state.storage.db().create_user(&owner).await.unwrap();
+    let (_, raw) = state
+        .auth
+        .create_api_key(
+            owner.id(),
+            "scope-names".into(),
+            names.iter().map(|name| format!("mcp.{name}")).collect(),
+        )
+        .await
+        .unwrap();
+    let app =
+        test::init_service(crate::server::http::HttpServer::create_app(state).app_data(client))
+            .await;
+    for name in names {
+        let req = builder("tools/list")
+            .uri(&format!("/{name}/mcp"))
+            .insert_header(("x-mcp-key", raw.as_str()))
+            .to_request();
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK, "server {name}");
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["id"], 1);
+    }
+    assert_eq!(calls.lock().unwrap().len(), names.len());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn private_mcp_requires_named_key_permission() {
+    use crate::core::models::user::types::UserStatus;
+    let (state, client, calls, handle) = fixture(true).await;
+    let mut owner = user();
+    owner.status = UserStatus::Active;
+    let owner = state.storage.db().create_user(&owner).await.unwrap();
+    let mut keys = Vec::new();
+    for permissions in [
+        vec![],
+        vec!["api.chat".into()],
+        vec!["mcp.other".into()],
+        vec!["mcp.docs".into()],
+        vec!["system.admin".into()],
+    ] {
+        let allowed = permissions
+            .iter()
+            .any(|p| p == "mcp.docs" || p == "system.admin");
+        let (_, raw) = state
+            .auth
+            .create_api_key(owner.id(), "mcp-permission".into(), permissions)
+            .await
+            .unwrap();
+        keys.push((raw, allowed));
+    }
+    let app =
+        test::init_service(crate::server::http::HttpServer::create_app(state).app_data(client))
+            .await;
+    for (raw, allowed) in keys {
+        let response = test::call_service(
+            &app,
+            builder("tools/list")
+                .insert_header(("x-mcp-key", raw))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            if allowed {
+                StatusCode::OK
+            } else {
+                StatusCode::FORBIDDEN
+            }
+        );
+    }
+    assert_eq!(calls.lock().unwrap().len(), 2);
     handle.stop(false).await;
 }

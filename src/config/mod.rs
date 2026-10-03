@@ -378,6 +378,7 @@ impl Config {
             if let Some(auth) = &mut server.auth {
                 redact_optional_string(&mut auth.value);
                 redact_optional_string(&mut auth.client_secret);
+                redact_optional_string(&mut auth.token_url);
             }
         }
         redact_string(&mut gateway.auth.jwt_secret);
