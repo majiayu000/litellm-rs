@@ -118,6 +118,12 @@ async fn upstream(
                                 session_state["audio"]["input"]["transcription"] =
                                     json!({"model":"whisper-1"});
                             }
+                            if value["session"]["instructions"] == "ignore-output-cap" {
+                                session_state["max_output_tokens"] = json!(128);
+                            }
+                            if value["session"]["instructions"] == "invalid-output-cap" {
+                                session_state["max_output_tokens"] = Value::Null;
+                            }
                             if session
                                 .text(
                                     json!({"type":"session.updated","session":session_state})
@@ -164,7 +170,7 @@ async fn upstream(
                                 json!({"type":"response.created","response":{"id":"response-1"}}),
                                 json!({"type":"response.output_audio.delta","delta":"aGVsbG8="}),
                                 json!({"type":"response.function_call_arguments.done","arguments":"{}","call_id":"call-1"}),
-                                json!({"type":"response.done","response":{"id":"response-1","status":value["response"]["metadata"]["status"].as_str().unwrap_or("completed"),"status_details":{"error":{"type":"server_error","message":"mock failure"}},"usage":terminal_usage}}),
+                                json!({"type":"response.done","response":{"id":"response-1","status":value["response"]["metadata"]["status"].as_str().unwrap_or("completed"),"status_details":{"error":{"type":value["response"]["metadata"]["error_type"].as_str().unwrap_or("server_error"),"message":"mock failure"}},"usage":terminal_usage}}),
                             ] {
                                 if session.text(event.to_string()).await.is_err() {
                                     break;
@@ -2881,6 +2887,85 @@ async fn admission_cooldown_is_an_outage_not_a_customer_rate_limit() {
     drop(socket);
     for handle in handles {
         handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn session_acknowledgments_must_enforce_the_requested_output_cap() {
+    for instructions in ["ignore-output-cap", "invalid-output-cap"] {
+        let (_, url, raw, calls, handles) = fixture().await;
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        next_json(&mut socket).await;
+        socket.send(Message::Text(json!({"type":"session.update","session":{"max_output_tokens":16,"instructions":instructions}}).to_string().into())).await.unwrap();
+        let error = next_json(&mut socket).await;
+        assert_eq!(error["error"]["type"], "server_error", "{error}");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("requested Realtime session configuration")
+        );
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|event| event["type"] != "response.create")
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn terminal_provider_errors_keep_auth_and_rate_limit_cooldown() {
+    for kind in [
+        "authentication_error",
+        "permission_error",
+        "rate_limit_error",
+        "invalid_request_error",
+    ] {
+        let (state, url, raw, _, handles) = fixture().await;
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        next_json(&mut socket).await;
+        socket.send(Message::Text(json!({"type":"response.create","response":{"metadata":{"status":"failed","error_type":kind}}}).to_string().into())).await.unwrap();
+        for expected in [
+            "response.created",
+            "response.output_audio.delta",
+            "response.function_call_arguments.done",
+        ] {
+            assert_eq!(next_json(&mut socket).await["type"], expected);
+        }
+        let terminal = next_json(&mut socket).await;
+        assert_eq!(terminal["type"], "response.done");
+        assert_eq!(
+            terminal["response"]["status_details"]["error"]["type"],
+            kind
+        );
+        let router = state.unified_router();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        assert_eq!(
+            deployment.is_in_cooldown(),
+            kind != "invalid_request_error",
+            "{kind}"
+        );
+        assert_eq!(
+            deployment
+                .state
+                .active_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
     }
 }
 

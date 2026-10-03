@@ -183,15 +183,15 @@ pub(super) async fn connect(
     Ok(response)
 }
 
-fn upstream_event_error(value: &Value) -> ProviderError {
-    let status = match value["error"]["type"].as_str() {
+fn upstream_event_error(error: &Value) -> ProviderError {
+    let status = match error["type"].as_str() {
         Some("rate_limit_error") => 429,
         Some("authentication_error") => 401,
         Some("permission_error") => 403,
         Some("invalid_request_error") => 400,
         _ => 500,
     };
-    ProviderError::api_error("openai", status, value["error"].to_string())
+    ProviderError::api_error("openai", status, error.to_string())
 }
 
 fn manual_session(value: &Value) -> bool {
@@ -220,7 +220,7 @@ async fn initialize_upstream(
                         ProviderError::network("openai", "Malformed Realtime initialization")
                     })?;
                     if value["type"] == "error" {
-                        return Err(upstream_event_error(&value));
+                        return Err(upstream_event_error(&value["error"]));
                     }
                     if matches!(
                         value["type"].as_str(),
@@ -557,7 +557,7 @@ async fn relay(
     let mut failure = false;
     let mut error_type = "server_error";
     let mut session_output_limit = rates.max_output;
-    let mut pending_session_update: Option<String> = None;
+    let mut pending_session_update: Option<(String, Value)> = None;
     lease.cancel_response();
     let outcome: Result<(), String> = async {
         loop {
@@ -647,7 +647,9 @@ async fn relay(
                         if value["type"] == "session.update" {
                             let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                             value["event_id"] = json!(event_id);
-                            pending_session_update = Some(event_id);
+                            let expected_output = value["session"].get("max_output_tokens").cloned()
+                                .unwrap_or(rates.wire_output_limit(session_output_limit).map_err(str::to_owned)?);
+                            pending_session_update = Some((event_id, expected_output));
                         }
                         tokio::time::timeout(timeout, upstream.send(Message::Text(value.to_string().into()))).await.map_err(|_| { failure = true; "Realtime upstream write timeout" })?.map_err(|_| { failure = true; "Realtime upstream write failed" })?;
                     }
@@ -665,17 +667,19 @@ async fn relay(
                 event = upstream.next() => match event {
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).map_err(|_| { failure = true; "Malformed upstream Realtime event" })?;
-                        if value["type"] == "error" && pending_session_update.as_deref().is_some_and(|id| Some(id) == value["error"]["event_id"].as_str()) {
+                        if value["type"] == "error" && pending_session_update.as_ref().is_some_and(|(id, _)| Some(id.as_str()) == value["error"]["event_id"].as_str()) {
                             pending_session_update = None;
                             if value["error"]["type"] != "invalid_request_error" {
 
-                                lease.record_provider_event_failure(&upstream_event_error(&value));
+                                lease.record_provider_event_failure(&upstream_event_error(&value["error"]));
                             }
                         }
                         if value["type"] == "session.updated" {
-                            if !manual_session(&value) {
+                            let expected_output = pending_session_update.as_ref().map(|(_, limit)| limit.clone())
+                                .unwrap_or(rates.wire_output_limit(session_output_limit).map_err(str::to_owned)?);
+                            if !manual_session(&value) || value["session"]["max_output_tokens"] != expected_output {
                                 failure = true;
-                                return Err("Upstream did not enforce manual Realtime configuration".into());
+                                return Err("Upstream did not enforce the requested Realtime session configuration".into());
                             }
                             pending_session_update = None;
                             if let Some(limit) = value["session"]["max_output_tokens"].as_u64().and_then(|limit| u32::try_from(limit).ok()) {
@@ -700,7 +704,7 @@ async fn relay(
                                     let provider_failed = status == Some("failed")
                                         && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
                                     if provider_failed {
-                                        lease.finish_interrupted(tokens, Some(&ProviderError::api_error("openai", 500, value["response"]["status_details"]["error"].to_string())));
+                                        lease.finish_interrupted(tokens, Some(&upstream_event_error(&value["response"]["status_details"]["error"])));
                                     } else if matches!(status, Some("cancelled" | "incomplete" | "failed")) {
                                         lease.finish_interrupted(tokens, None);
                                     } else {
@@ -724,7 +728,7 @@ async fn relay(
                                 lease.finish_interrupted(0, None);
                             } else {
 
-                                lease.finish_interrupted(0, Some(&upstream_event_error(&value)));
+                                lease.finish_interrupted(0, Some(&upstream_event_error(&value["error"])));
                             }
                             response_event_id = None;
                             tokens = 0;

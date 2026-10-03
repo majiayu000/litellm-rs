@@ -141,3 +141,9 @@ transcription. Image checks inspect protocol input content only, not arbitrary
 metadata or function schemas. Initialization errors retain upstream status and
 cooldown classification; admission backend/health outages report server errors,
 while actual RPM/TPM/parallel denials report rate limits.
+
+Later session acknowledgments must also match the normalized output cap requested
+by that update, or retain the last agreed cap when no change was requested.
+Ignored, malformed or unexpectedly raised caps close the socket before generation.
+Failed terminal responses retain authentication, permission and rate-limit error
+classification for immediate deployment cooldown; invalid client requests remain neutral.
