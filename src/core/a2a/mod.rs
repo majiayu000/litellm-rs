@@ -3,24 +3,14 @@
 //! This module implements A2A protocol support for litellm-rs, enabling
 //! invocation and management of AI agents across multiple platforms.
 //!
-//! # Overview
+//! # Runtime entrypoints
 //!
-//! A2A (Agent-to-Agent) Protocol enables communication between AI agents
-//! using JSON-RPC 2.0 specification. This implementation supports:
+//! With `gateway,a2a`, configured A2A 1.0 JSON-RPC agents are exposed through
+//! authenticated HTTP routes. The gateway supports messages, tasks and SSE with
+//! caller-bound task/context ownership. See `docs/gateway/a2a.md` for limits.
 //!
-//! - Multiple agent platforms (LangGraph, Vertex AI, Azure AI Foundry, etc.)
-//! - Agent discovery and registration
-//! - Request/response logging
-//! - Access controls and load balancing
-//! - Cost tracking for agent invocations
-//!
-//! # Supported Platforms
-//!
-//! - **LangGraph**: LangChain-based agent workflows
-//! - **Vertex AI Agent Engine**: Google Cloud agents
-//! - **Azure AI Foundry**: Microsoft AI agents
-//! - **Bedrock AgentCore**: AWS agent runtime
-//! - **Pydantic AI**: Python-based agents
+//! The library client below retains its older protocol contract. Its provider
+//! enum is not evidence that every platform has a working native adapter.
 //!
 //! # Usage
 //!

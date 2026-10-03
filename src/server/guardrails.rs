@@ -13,9 +13,11 @@ mod image_url;
 mod input_scan;
 mod output_scan;
 mod responses_mask;
+mod responses_native;
 mod responses_scan;
 pub(crate) use decision::GuardrailDecisionSink;
 pub(crate) use responses_mask::apply_responses_input;
+pub(crate) use responses_native::{apply_native_responses, native_responses_projection};
 
 pub(crate) const OUTPUT_BLOCK_MESSAGE: &str = "Response blocked by output guardrails";
 

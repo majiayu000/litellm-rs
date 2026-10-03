@@ -31,6 +31,15 @@ spec.loader.exec_module(sync)
 
 
 class SyncPricingTests(unittest.TestCase):
+    def test_deepseek_pro_qualified_and_bare_limits_match_official_contract(self) -> None:
+        catalog = json.loads(CATALOG_PATH.read_text())
+        for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
+            row = catalog[key]
+            self.assertEqual(row["max_input_tokens"], 1_048_576)
+            self.assertEqual(row["max_output_tokens"], 393_216)
+            self.assertFalse(row["supports_vision"])
+            self.assertEqual(sync.OFFICIAL_OVERRIDE_PATCHES[key]["max_output_tokens"], 393_216)
+
     def test_rejects_mutable_or_mismatched_source_identity(self) -> None:
         with self.assertRaisesRegex(SystemExit, "immutable raw GitHub URL"):
             sync.validate_source_identity(

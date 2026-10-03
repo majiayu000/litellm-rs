@@ -815,3 +815,104 @@ async fn xai_identity_is_automatic_only_for_native_or_explicitly_mapped_publishe
         );
     }
 }
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn cohere_catalog_modes_select_only_implemented_endpoints() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::types::model::ProviderCapability;
+    let config = ProviderConfig {
+        name: "cohere".into(),
+        provider_type: "cohere".into(),
+        api_key: "test-key".into(),
+        models: vec![
+            "command-a-03-2025".into(),
+            "command-r".into(),
+            "command-a-vision-07-2025".into(),
+            "embed-v4.0".into(),
+            "rerank-v4.0-pro".into(),
+            "cohere-transcribe-03-2026".into(),
+        ],
+        ..Default::default()
+    };
+    let router = Router::from_gateway_config(&[config], None).await.unwrap();
+    for (model, allowed) in [
+        ("command-a-03-2025", ProviderCapability::ChatCompletion),
+        ("command-r", ProviderCapability::ChatCompletion),
+        ("embed-v4.0", ProviderCapability::Embeddings),
+        ("rerank-v4.0-pro", ProviderCapability::Rerank),
+    ] {
+        assert!(
+            router
+                .select_deployment_lease_for_capability(model, &allowed)
+                .is_ok(),
+            "{model}"
+        );
+    }
+    for model in ["embed-v4.0", "rerank-v4.0-pro", "cohere-transcribe-03-2026"] {
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::ToolCalling,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability(model, &capability)
+                    .is_err(),
+                "{model}: {capability:?}"
+            );
+        }
+    }
+    assert!(
+        router
+            .select_deployment_lease_for_capability(
+                "cohere-transcribe-03-2026",
+                &ProviderCapability::AudioTranscription
+            )
+            .is_err()
+    );
+    assert!(
+        router
+            .select_deployment_lease_for_capability(
+                "command-a-vision-07-2025",
+                &ProviderCapability::ToolCalling
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn xai_multi_agent_is_not_a_chat_deployment() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::types::model::ProviderCapability;
+    let config = ProviderConfig {
+        name: "xai".into(),
+        provider_type: "xai".into(),
+        api_key: "test-key".into(),
+        models: vec![
+            "grok-4.20-multi-agent-0309".into(),
+            "grok-4.20-0309-reasoning".into(),
+        ],
+        ..Default::default()
+    };
+    let router = Router::from_gateway_config(&[config], None).await.unwrap();
+    assert!(
+        router
+            .select_deployment_lease_for_capability(
+                "grok-4.20-0309-reasoning",
+                &ProviderCapability::ChatCompletion
+            )
+            .is_ok()
+    );
+    for capability in [
+        ProviderCapability::ChatCompletion,
+        ProviderCapability::ChatCompletionStream,
+        ProviderCapability::ToolCalling,
+    ] {
+        assert!(
+            router
+                .select_deployment_lease_for_capability("grok-4.20-multi-agent-0309", &capability)
+                .is_err()
+        );
+    }
+}

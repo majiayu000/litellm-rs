@@ -92,7 +92,7 @@ impl std::str::FromStr for AgentProvider {
 }
 
 /// Agent configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// Agent name/identifier
     pub name: String,
@@ -173,7 +173,96 @@ impl Default for AgentConfig {
     }
 }
 
+impl std::fmt::Debug for AgentConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentConfig")
+            .field("name", &self.name)
+            .field("provider", &self.provider)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AgentConfig {
+    /// Validate the subset implemented by the A2A 1.0 HTTP proxy.
+    pub fn validate_http_gateway(&self, name: &str) -> Result<(), String> {
+        // Keep credentials and endpoint details out of validation errors.
+        self.validate()
+            .map_err(|_| "Invalid A2A agent configuration")?;
+        if name != self.name
+            || name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(
+                "A2A route name must match the agent name and use letters, digits, - or _".into(),
+            );
+        }
+        if self.provider != AgentProvider::A2A
+            || self.timeout_ms == 0
+            || self.rate_limit_rpm.is_some()
+            || self.cost_per_request.is_some()
+            || !self.provider_config.is_empty()
+            || self.capabilities.push_notifications
+            || self.capabilities.max_input_length.is_some()
+        {
+            return Err("A2A HTTP gateway requires an A2A agent and positive timeout; provider adapters, agent billing/limits and push notifications are not supported".into());
+        }
+        let url = url::Url::parse(&self.url).map_err(|_| "Invalid A2A upstream URL")?;
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(
+                "A2A URL userinfo is not supported; configure credentials separately".into(),
+            );
+        }
+        if url.scheme() != "https"
+            && (self.api_key.is_some() || !self.headers.is_empty() || url.query().is_some())
+        {
+            return Err("A2A credentials and static headers require an HTTPS upstream".into());
+        }
+        for media in self
+            .capabilities
+            .input_types
+            .iter()
+            .chain(&self.capabilities.output_types)
+        {
+            media
+                .parse::<mime::Mime>()
+                .map_err(|_| "A2A input/output modes must be valid media types")?;
+        }
+        for (name, value) in &self.headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| "Invalid A2A header name")?;
+            if matches!(
+                name.as_str(),
+                "host"
+                    | "content-length"
+                    | "transfer-encoding"
+                    | "connection"
+                    | "content-type"
+                    | "accept"
+                    | "a2a-version"
+                    | "a2a-extensions"
+            ) {
+                return Err("A2A static headers cannot override transport headers".into());
+            }
+            reqwest::header::HeaderValue::from_str(value)
+                .map_err(|_| "Invalid A2A header value")?;
+        }
+        if let Some(key) = &self.api_key {
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                .map_err(|_| "Invalid A2A credential")?;
+            if self
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("authorization"))
+            {
+                return Err("Configure one A2A Authorization credential".into());
+            }
+        }
+        Ok(())
+    }
+
     /// Create a new agent config
     pub fn new(name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
@@ -281,8 +370,16 @@ impl AgentCapabilities {
             multi_turn: true,
             file_attachments: true,
             max_input_length: None,
-            input_types: vec!["text".to_string(), "image".to_string()],
-            output_types: vec!["text".to_string(), "image".to_string()],
+            input_types: vec![
+                "text/plain".to_string(),
+                "image/png".to_string(),
+                "image/jpeg".to_string(),
+            ],
+            output_types: vec![
+                "text/plain".to_string(),
+                "image/png".to_string(),
+                "image/jpeg".to_string(),
+            ],
         }
     }
 
@@ -295,8 +392,8 @@ impl AgentCapabilities {
             multi_turn: false,
             file_attachments: false,
             max_input_length: None,
-            input_types: vec!["text".to_string()],
-            output_types: vec!["text".to_string()],
+            input_types: vec!["text/plain".to_string()],
+            output_types: vec!["text/plain".to_string()],
         }
     }
 }

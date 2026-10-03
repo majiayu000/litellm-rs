@@ -85,7 +85,7 @@ fn normalize_url(url: &mut String) {
     *url = super::image_url::projected(url).into_owned();
 }
 
-fn collect_json_projection(value: &serde_json::Value, fragments: &mut Vec<String>) {
+pub(super) fn collect_json_projection(value: &serde_json::Value, fragments: &mut Vec<String>) {
     match value {
         serde_json::Value::String(text) => {
             push(fragments, text);
