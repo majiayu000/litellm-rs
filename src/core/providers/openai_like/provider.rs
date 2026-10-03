@@ -148,7 +148,7 @@ impl OpenAILikeProvider {
         config: OpenAILikeConfig,
         capabilities: &'static [ProviderCapability],
     ) -> Result<Self, OpenAILikeError> {
-        Self::new_with_profile(config, capabilities, OPENAI_LIKE_CATALOG_CAPABILITIES).await
+        Self::new_with_profile(config, capabilities, OPENAI_COMPATIBLE_PROXY_CAPABILITIES).await
     }
     pub(crate) async fn new_for_catalog_no_redirect(
         config: OpenAILikeConfig,
@@ -326,10 +326,15 @@ impl OpenAILikeProvider {
         request.model = self.rewrite_request_model(&request.model);
         let url = format!("{}/embeddings", self.config.get_api_base());
         let headers = self.get_request_headers();
-        let body = Some(
-            serde_json::to_value(&request)
-                .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?,
-        );
+        let mut body = serde_json::to_value(&request)
+            .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        if matches!(self.provider_name.as_str(), "fireworks" | "fireworks_ai")
+            && let Some(fields) = body.as_object_mut()
+            && let Some(task_type) = fields.remove("task_type")
+        {
+            fields.insert("input_type".into(), task_type);
+        }
+        let body = Some(body);
 
         let response = self
             .pool_manager
@@ -338,13 +343,20 @@ impl OpenAILikeProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.map_err(|error| {
-                self.map_error_response(
-                    status.as_u16(),
-                    &format!("failed to read upstream error body: {error}"),
-                )
-            })?;
-            return Err(self.map_error_response(status.as_u16(), &body));
+            let header_retry = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|error| format!("failed to read upstream error body: {error}"));
+            let mut error = self.map_error_response(status.as_u16(), &body);
+            if let ProviderError::RateLimit { retry_after, .. } = &mut error {
+                *retry_after = header_retry.or(*retry_after);
+            }
+            return Err(error);
         }
 
         let response_bytes = response
@@ -352,7 +364,14 @@ impl OpenAILikeProvider {
             .await
             .map_err(|e| OpenAILikeError::network(PROVIDER_NAME, e.to_string()))?;
 
-        serde_json::from_slice(&response_bytes)
+        // Embeddings report prompt/total usage and generate no completion tokens.
+        // Normalize this wire shape only at the embedding boundary.
+        let mut value: Value = serde_json::from_slice(&response_bytes)
+            .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
+        if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
+            usage.entry("completion_tokens").or_insert(Value::from(0));
+        }
+        serde_json::from_value(value)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))
     }
 
@@ -381,13 +400,20 @@ impl OpenAILikeProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.map_err(|error| {
-                self.map_error_response(
-                    status.as_u16(),
-                    &format!("failed to read upstream error body: {error}"),
-                )
-            })?;
-            return Err(self.map_error_response(status.as_u16(), &body));
+            let header_retry = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|error| format!("failed to read upstream error body: {error}"));
+            let mut error = self.map_error_response(status.as_u16(), &body);
+            if let ProviderError::RateLimit { retry_after, .. } = &mut error {
+                *retry_after = header_retry.or(*retry_after);
+            }
+            return Err(error);
         }
 
         let response_bytes = response
@@ -864,14 +890,23 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        crate::core::providers::openai::execute_text_to_speech(
+        let together_pcm = matches!(self.provider_name.as_str(), "together" | "together_ai")
+            && request.response_format.as_deref() == Some("pcm");
+        if together_pcm {
+            request.response_format = Some("raw".into());
+        }
+        let mut response = crate::core::providers::openai::execute_text_to_speech(
             self.config.base.clone(),
             &self.config.get_api_base(),
             self.get_request_headers(),
             request,
             PROVIDER_NAME,
         )
-        .await
+        .await?;
+        if together_pcm {
+            response.content_type = "audio/pcm".into();
+        }
+        Ok(response)
     }
     async fn health_check(&self) -> HealthStatus {
         let url = format!("{}/models", self.config.get_api_base());

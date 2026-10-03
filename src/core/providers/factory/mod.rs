@@ -605,7 +605,7 @@ mod tests {
     async fn issue_760_create_provider_from_litellm_alias_selectors() {
         let cases = [
             ("zai", "https://api.z.ai/api/paas/v4"),
-            ("together_ai", "https://api.together.xyz/v1"),
+            ("together_ai", "https://api.together.ai/v1"),
             ("fireworks_ai", "https://api.fireworks.ai/inference/v1"),
             ("aiml", "https://api.aimlapi.com/v1"),
         ];
