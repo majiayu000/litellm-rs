@@ -1,6 +1,6 @@
 # Multi-stage build for LiteLLM-RS
-FROM rust:1.92-bookworm AS builder
-ARG RELEASE_FEATURES="postgres sqlite redis s3 metrics tracing websockets"
+FROM rust:1.96.1-bookworm AS builder
+ARG RELEASE_FEATURES="postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -24,27 +24,15 @@ WORKDIR /app
 # Copy dependency files and build configuration
 COPY Cargo.toml Cargo.lock build.rs ./
 
-# Create dummy source files to cache dependencies
-RUN mkdir -p src/bin && \
-    mkdir -p benches && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "#![allow(dead_code)] pub fn dummy() {}" > src/lib.rs && \
-    echo "fn main() {}" > src/bin/pricing-tool.rs && \
-    echo "fn main() {}" > benches/performance_benchmarks.rs && \
-    echo "fn main() {}" > benches/e2e_benchmarks.rs
-
-# Build dependencies (this layer will be cached)
-RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
-RUN rm -rf src/*
-
-# Copy source code and necessary files
+# Cargo validates all declared target paths, including examples and benches.
 COPY src ./src
+COPY examples ./examples
+COPY benches ./benches
 COPY config ./config
 COPY docs/openapi/admin.json docs/openapi/inference.json ./docs/openapi/
 
-# Build the application
-RUN cargo clean --release -p litellm-rs
-RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES"
+# Build the gateway with the same feature profile as release archives.
+RUN cargo build --release --locked --no-default-features --features "$RELEASE_FEATURES" --bin gateway
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -88,7 +76,6 @@ CMD ["gateway"]
 # Labels
 LABEL org.opencontainers.image.title="LiteLLM-RS"
 LABEL org.opencontainers.image.description="A high-performance AI Gateway written in Rust"
-LABEL org.opencontainers.image.version="0.1.0"
 LABEL org.opencontainers.image.authors="LiteLLM-RS Contributors"
 LABEL org.opencontainers.image.url="https://github.com/majiayu000/litellm-rs"
 LABEL org.opencontainers.image.source="https://github.com/majiayu000/litellm-rs"

@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -171,6 +172,7 @@ jobs:
         cd target/${{ matrix.target }}/release
         tar czf ../../../rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz gateway
         cd ../../..
+        shasum -a 256 rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz > rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz.sha256
 
     - name: Create archive (Windows)
       if: matrix.os == 'windows-latest'
@@ -178,20 +180,22 @@ jobs:
         cd target/${{ matrix.target }}/release
         7z a ../../../rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip gateway.exe
         cd ../../..
+        $asset = "rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip"
+        ((Get-FileHash $asset -Algorithm SHA256).Hash.ToLower() + "  " + $asset) | Set-Content "$asset.sha256" -Encoding ascii
 
     - name: Upload Release Asset (Unix)
       if: matrix.os != 'windows-latest' && needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz" --clobber
+        gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz.sha256" --clobber
 
     - name: Upload Release Asset (Windows)
       if: matrix.os == 'windows-latest' && needs.create-release.outputs.is_draft == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip" --clobber
+        gh release upload "${{ needs.create-release.outputs.version }}" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip" "./rust-litellm-gateway-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip.sha256" --clobber
 
   # Build and push Docker image
   docker-release:
@@ -213,19 +217,19 @@ jobs:
           echo "available=true" >> "$GITHUB_OUTPUT"
         else
           echo "available=false" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Docker publish skipped::Set DOCKER_USERNAME and DOCKER_PASSWORD to publish Docker images during releases."
+          echo "::notice title=Docker Hub publish skipped::Docker Hub credentials are absent; GHCR publication still runs with GITHUB_TOKEN."
         fi
 
     - name: Checkout code
-      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true'
       uses: actions/checkout@v4
 
     - name: Set up QEMU
-      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true'
       uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
-      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true'
       uses: docker/setup-buildx-action@v3
 
     - name: Login to Docker Hub
@@ -236,7 +240,7 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Login to GitHub Container Registry
-      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -244,13 +248,13 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract metadata
-      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      if: needs.create-release.outputs.is_draft == 'true'
       id: meta
       uses: docker/metadata-action@v5
       with:
         images: |
-          majiayu000/litellm-rs
           ghcr.io/${{ github.repository }}
+          ${{ steps.docker_credentials.outputs.available == 'true' && 'majiayu000/litellm-rs' || '' }}
         tags: |
           type=ref,event=tag
           type=semver,pattern={{version}}
@@ -258,7 +262,8 @@ jobs:
           type=semver,pattern={{major}}
 
     - name: Build and push Docker image
-      if: needs.create-release.outputs.is_draft == 'true' && steps.docker_credentials.outputs.available == 'true'
+      id: image
+      if: needs.create-release.outputs.is_draft == 'true'
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -271,6 +276,16 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Verify published container manifest
+      if: needs.create-release.outputs.is_draft == 'true'
+      env:
+        IMAGE: ghcr.io/${{ github.repository }}
+        DIGEST: ${{ steps.image.outputs.digest }}
+      run: |
+        set -euo pipefail
+        docker buildx imagetools inspect "$IMAGE@$DIGEST"
+        printf 'Container: `%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
   # Publish to crates.io
   publish-crate:
@@ -478,28 +493,3 @@ jobs:
           git -C homebrew-tap commit -m "rust-litellm-gateway ${version}"
           git -C homebrew-tap push origin HEAD:main
         fi
-
-  # Deploy to staging environment
-  deploy-staging:
-    name: Deploy to Staging
-    needs: [create-release, docker-release]
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-    - name: Deploy to staging
-      run: |
-        echo "Deploying version ${{ needs.create-release.outputs.version }} to staging"
-        # Add your staging deployment commands here
-        # For example, update Kubernetes deployment, trigger ArgoCD sync, etc.
-
-  # Deploy to production (manual approval required)
-  deploy-production:
-    name: Deploy to Production
-    needs: [create-release, docker-release, deploy-staging]
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-    - name: Deploy to production
-      run: |
-        echo "Deploying version ${{ needs.create-release.outputs.version }} to production"
-        # Add your production deployment commands here

@@ -32,17 +32,18 @@ cargo run --bin gateway --features sqlite
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --bin gateway --features sqlite
+cargo install litellm-rs --version 0.7.0 --locked --bin gateway --features sqlite
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.7.0/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
 The development config starts without provider credentials or auth secrets and
 uses the local `vllm` catalog provider. Use
 `config/gateway.yaml.example` for production-style deployments with real
-provider keys and auth enabled. Default features include SQLite storage, which
-satisfies the gateway binary's `storage` requirement.
+provider keys and auth enabled. The explicit `sqlite` feature enables the storage needed by the gateway binary.
+The registry install above intentionally uses the matching published 0.7.0 config;
+new parity routes remain unreleased until their artifact verification is recorded.
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
