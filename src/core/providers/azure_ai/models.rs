@@ -67,6 +67,11 @@ impl AzureAIModelRegistry {
 
     /// Default
     fn register_default_models(&mut self) {
+        // Reviewed against Microsoft's model and retirement tables, 2026-10-03.
+        // Only exact current Foundry identities belong here; a provider's own
+        // aliases are not Azure model IDs. See docs/audit/model-catalog-azure-voyage-2026-10-03.md.
+        // Deployment/region pricing comes from the existing pricing authority,
+        // not a second hardcoded per-token price in this capability registry.
         // Chat models
         // Microsoft lists Phi-4 as an Azure AI Foundry chat-completion model
         // with 16,384-token input/output limits and no tool calling:
@@ -100,26 +105,8 @@ impl AzureAIModelRegistry {
             supports_streaming: true,
             supports_function_calling: true,
             supports_multimodal: true,
-            input_price_per_1k: Some(0.005),
-            output_price_per_1k: Some(0.015),
-        });
-
-        self.register_model(AzureAIModelSpec {
-            id: "gpt-4".to_string(),
-            name: "GPT-4".to_string(),
-            provider: "openai".to_string(),
-            model_type: AzureAIModelType::Chat,
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-            ],
-            max_input_tokens: 8192,
-            max_output_tokens: 4096,
-            supports_streaming: true,
-            supports_function_calling: true,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.03),
-            output_price_per_1k: Some(0.06),
+            input_price_per_1k: None,
+            output_price_per_1k: None,
         });
 
         self.register_model(AzureAIModelSpec {
@@ -131,88 +118,13 @@ impl AzureAIModelRegistry {
                 ProviderCapability::ChatCompletion,
                 ProviderCapability::ChatCompletionStream,
             ],
-            max_input_tokens: 4096,
+            max_input_tokens: 16_385,
             max_output_tokens: 4096,
             supports_streaming: true,
             supports_function_calling: true,
             supports_multimodal: false,
-            input_price_per_1k: Some(0.0005),
-            output_price_per_1k: Some(0.0015),
-        });
-
-        // Cohere models
-        self.register_model(AzureAIModelSpec {
-            id: "command-r-plus".to_string(),
-            name: "Cohere Command R Plus".to_string(),
-            provider: "cohere".to_string(),
-            model_type: AzureAIModelType::Chat,
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-            ],
-            max_input_tokens: 128000,
-            max_output_tokens: 4096,
-            supports_streaming: true,
-            supports_function_calling: true,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.003),
-            output_price_per_1k: Some(0.015),
-        });
-
-        self.register_model(AzureAIModelSpec {
-            id: "command-r".to_string(),
-            name: "Cohere Command R".to_string(),
-            provider: "cohere".to_string(),
-            model_type: AzureAIModelType::Chat,
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-            ],
-            max_input_tokens: 128000,
-            max_output_tokens: 4096,
-            supports_streaming: true,
-            supports_function_calling: true,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.0015),
-            output_price_per_1k: Some(0.015),
-        });
-
-        // Mistral models
-        self.register_model(AzureAIModelSpec {
-            id: "mistral-large-latest".to_string(),
-            name: "Mistral Large".to_string(),
-            provider: "mistral".to_string(),
-            model_type: AzureAIModelType::Chat,
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-            ],
-            max_input_tokens: 32000,
-            max_output_tokens: 4096,
-            supports_streaming: true,
-            supports_function_calling: true,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.004),
-            output_price_per_1k: Some(0.012),
-        });
-
-        // AI21 Jamba models
-        self.register_model(AzureAIModelSpec {
-            id: "ai21-jamba-instruct".to_string(),
-            name: "AI21 Jamba Instruct".to_string(),
-            provider: "ai21".to_string(),
-            model_type: AzureAIModelType::Chat,
-            capabilities: vec![
-                ProviderCapability::ChatCompletion,
-                ProviderCapability::ChatCompletionStream,
-            ],
-            max_input_tokens: 70000,
-            max_output_tokens: 4096,
-            supports_streaming: true,
-            supports_function_calling: false,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.0005),
-            output_price_per_1k: Some(0.0007),
+            input_price_per_1k: None,
+            output_price_per_1k: None,
         });
 
         // Embedding models
@@ -227,7 +139,7 @@ impl AzureAIModelRegistry {
             supports_streaming: false,
             supports_function_calling: false,
             supports_multimodal: false,
-            input_price_per_1k: Some(0.00013),
+            input_price_per_1k: None,
             output_price_per_1k: None,
         });
 
@@ -242,68 +154,54 @@ impl AzureAIModelRegistry {
             supports_streaming: false,
             supports_function_calling: false,
             supports_multimodal: false,
-            input_price_per_1k: Some(0.00002),
+            input_price_per_1k: None,
             output_price_per_1k: None,
         });
 
         self.register_model(AzureAIModelSpec {
-            id: "cohere-embed-v3-multilingual".to_string(),
+            id: "Cohere-embed-v3-multilingual".to_string(),
             name: "Cohere Embed V3 Multilingual".to_string(),
             provider: "cohere".to_string(),
-            model_type: AzureAIModelType::MultimodalEmbedding,
+            model_type: AzureAIModelType::Embedding,
             capabilities: vec![ProviderCapability::Embeddings],
             max_input_tokens: 512,
             max_output_tokens: 0,
             supports_streaming: false,
             supports_function_calling: false,
-            supports_multimodal: true,
-            input_price_per_1k: Some(0.0001),
+            supports_multimodal: false,
+            input_price_per_1k: None,
             output_price_per_1k: None,
         });
 
         // Image generation models
-        self.register_model(AzureAIModelSpec {
-            id: "dall-e-3".to_string(),
-            name: "DALL-E 3".to_string(),
-            provider: "openai".to_string(),
-            model_type: AzureAIModelType::ImageGeneration,
-            capabilities: vec![ProviderCapability::ImageGeneration],
-            max_input_tokens: 4000,
-            max_output_tokens: 0,
-            supports_streaming: false,
-            supports_function_calling: false,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.04), // Price per image
-            output_price_per_1k: None,
-        });
 
         self.register_model(AzureAIModelSpec {
-            id: "flux-1.1-pro".to_string(),
+            id: "FLUX-1.1-pro".to_string(),
             name: "FLUX 1.1 Pro".to_string(),
             provider: "flux".to_string(),
             model_type: AzureAIModelType::ImageGeneration,
             capabilities: vec![ProviderCapability::ImageGeneration],
-            max_input_tokens: 4000,
+            max_input_tokens: 5_000,
             max_output_tokens: 0,
             supports_streaming: false,
             supports_function_calling: false,
             supports_multimodal: false,
-            input_price_per_1k: Some(0.04), // Price per image
+            input_price_per_1k: None,
             output_price_per_1k: None,
         });
 
         self.register_model(AzureAIModelSpec {
-            id: "flux.1-kontext-pro".to_string(),
+            id: "FLUX.1-Kontext-pro".to_string(),
             name: "FLUX.1 Kontext Pro".to_string(),
             provider: "flux".to_string(),
             model_type: AzureAIModelType::ImageGeneration,
             capabilities: vec![ProviderCapability::ImageGeneration],
-            max_input_tokens: 4000,
+            max_input_tokens: 5_000,
             max_output_tokens: 0,
             supports_streaming: false,
             supports_function_calling: false,
             supports_multimodal: false,
-            input_price_per_1k: Some(0.055), // Higher pricing for Kontext
+            input_price_per_1k: None,
             output_price_per_1k: None,
         });
 
@@ -328,37 +226,6 @@ impl AzureAIModelRegistry {
                 output_price_per_1k: None,
             });
         }
-
-        // Rerank models
-        self.register_model(AzureAIModelSpec {
-            id: "cohere-rerank-v3".to_string(),
-            name: "Cohere Rerank V3".to_string(),
-            provider: "cohere".to_string(),
-            model_type: AzureAIModelType::Rerank,
-            capabilities: vec![],
-            max_input_tokens: 4096,
-            max_output_tokens: 0,
-            supports_streaming: false,
-            supports_function_calling: false,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.002),
-            output_price_per_1k: None,
-        });
-
-        self.register_model(AzureAIModelSpec {
-            id: "cohere-rerank-v3.5".to_string(),
-            name: "Cohere Rerank V3.5".to_string(),
-            provider: "cohere".to_string(),
-            model_type: AzureAIModelType::Rerank,
-            capabilities: vec![],
-            max_input_tokens: 4096,
-            max_output_tokens: 0,
-            supports_streaming: false,
-            supports_function_calling: false,
-            supports_multimodal: false,
-            input_price_per_1k: Some(0.002),
-            output_price_per_1k: None,
-        });
     }
 
     /// Model
@@ -424,10 +291,7 @@ impl AzureAIModelRegistry {
                 max_output_length: Some(spec.max_output_tokens),
                 supports_streaming: spec.supports_streaming,
                 supports_tools: spec.supports_function_calling,
-                supports_multimodal: matches!(
-                    spec.model_type,
-                    AzureAIModelType::MultimodalEmbedding
-                ),
+                supports_multimodal: spec.supports_multimodal,
                 input_cost_per_1k_tokens: spec.input_price_per_1k,
                 output_cost_per_1k_tokens: spec.output_price_per_1k,
                 currency: "USD".to_string(),
@@ -457,6 +321,64 @@ pub fn get_azure_ai_registry() -> &'static AzureAIModelRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_omits_retired_and_unverified_supplier_aliases() {
+        let registry = AzureAIModelRegistry::new();
+        for model in [
+            "gpt-4",
+            "command-r",
+            "command-r-plus",
+            "mistral-large-latest",
+            "ai21-jamba-instruct",
+            "dall-e-3",
+            "cohere-rerank-v3",
+            "cohere-rerank-v3.5",
+            "flux-1.1-pro",
+            "flux.1-kontext-pro",
+            "cohere-embed-v3-multilingual",
+        ] {
+            assert!(
+                registry.get_model(model).is_none(),
+                "unexpected catalog identity {model}"
+            );
+            assert!(!registry.supports_capability(model, &ProviderCapability::ChatCompletion));
+        }
+    }
+
+    #[test]
+    fn current_foundry_ids_preserve_modalities_without_image_token_prices() {
+        let registry = AzureAIModelRegistry::new();
+        let models = registry.to_model_infos();
+        let cohere = models
+            .iter()
+            .find(|m| m.id == "Cohere-embed-v3-multilingual")
+            .unwrap();
+        assert_eq!(cohere.capabilities, vec![ProviderCapability::Embeddings]);
+        assert!(!cohere.supports_multimodal);
+        assert_eq!(cohere.max_context_length, 512);
+        assert!(
+            models
+                .iter()
+                .find(|m| m.id == "gpt-4o")
+                .unwrap()
+                .supports_multimodal
+        );
+        assert_eq!(
+            registry.get_model("gpt-35-turbo").unwrap().max_input_tokens,
+            16_385
+        );
+        for id in ["FLUX-1.1-pro", "FLUX.1-Kontext-pro"] {
+            let model = registry.get_model(id).unwrap();
+            assert_eq!(model.max_input_tokens, 5_000);
+            assert_eq!(
+                model.capabilities,
+                vec![ProviderCapability::ImageGeneration]
+            );
+            assert_eq!(model.input_price_per_1k, None);
+            assert_eq!(model.output_price_per_1k, None);
+        }
+    }
 
     #[test]
     fn test_model_registry_creation() {

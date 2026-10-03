@@ -257,9 +257,29 @@ mod tests {
             &ProviderCapability::Embeddings,
         ));
         assert!(
-            provider
-                .supports_capability_for_model("dall-e-3", &ProviderCapability::ImageGeneration,)
+            provider.supports_capability_for_model(
+                "FLUX-1.1-pro",
+                &ProviderCapability::ImageGeneration,
+            )
         );
+        for model in [
+            "dall-e-3",
+            "gpt-4",
+            "command-r",
+            "command-r-plus",
+            "ai21-jamba-instruct",
+            "mistral-large-latest",
+        ] {
+            for capability in [
+                ProviderCapability::ChatCompletion,
+                ProviderCapability::ImageGeneration,
+            ] {
+                assert!(
+                    !provider.supports_capability_for_model(model, &capability),
+                    "retired/unverified model {model} advertised {capability:?}"
+                );
+            }
+        }
         for capability in [
             ProviderCapability::ChatCompletion,
             ProviderCapability::ChatCompletionStream,
