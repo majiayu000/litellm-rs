@@ -78,9 +78,17 @@ impl GeminiClient {
         &self,
         request: ChatRequest,
     ) -> Result<ChatResponse, ProviderError> {
-        let mut probe = self.clone();
-        if probe.config.use_vertex_ai {
-            let location = probe.config.location.as_deref().unwrap_or_default();
+        if !self.config.use_vertex_ai {
+            return self.chat(request).await;
+        }
+        self.health_probe_client()?.chat(request).await
+    }
+
+    // Rebuild both HTTP clients so their pinned endpoint policy matches the probe URL.
+    fn health_probe_client(&self) -> Result<Self, ProviderError> {
+        let mut config = self.config.clone();
+        if config.use_vertex_ai {
+            let location = config.location.as_deref().unwrap_or_default();
             let regional = format!("https://{location}-aiplatform.googleapis.com");
             let multiregion = format!("https://aiplatform.{location}.rep.googleapis.com");
             if [
@@ -88,13 +96,13 @@ impl GeminiClient {
                 multiregion.as_str(),
                 "https://aiplatform.googleapis.com",
             ]
-            .contains(&probe.config.base_url.trim_end_matches('/'))
+            .contains(&config.base_url.trim_end_matches('/'))
             {
-                probe.config.base_url = "https://aiplatform.googleapis.com".into();
+                config.base_url = "https://aiplatform.googleapis.com".into();
             }
-            probe.config.location = Some("global".into());
+            config.location = Some("global".into());
         }
-        probe.chat(request).await
+        Self::new(config)
     }
 
     /// Create

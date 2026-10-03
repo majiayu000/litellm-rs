@@ -449,3 +449,30 @@ fn test_gemini_usage_fails_closed_and_saturates_after_raw_total() {
     vertex_usage["totalTokenCount"] = json!(4);
     assert!(transform(&vertex, vertex_usage).is_none());
 }
+
+#[test]
+fn vertex_health_probe_rebinds_private_network_policy_to_global_host() {
+    let mut config = GeminiConfig::new_vertex_ai("project", "us-central1");
+    config.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+    let client = GeminiClient::new(config).unwrap();
+    let probe = client.health_probe_client().unwrap();
+    let global = "https://aiplatform.googleapis.com/v1/projects/project/locations/global/publishers/google/models/gemini-3.7-flash:generateContent";
+    let regional = "https://us-central1-aiplatform.googleapis.com/v1/projects/project/locations/us-central1/publishers/google/models/gemini-3.7-flash:generateContent";
+    for http in [&probe.http_client, &probe.streaming_client] {
+        assert!(http.request(reqwest::Method::POST, global).is_ok());
+        assert!(http.request(reqwest::Method::POST, regional).is_err());
+    }
+    assert!(
+        client
+            .http_client
+            .request(reqwest::Method::POST, regional)
+            .is_ok()
+    );
+    assert!(
+        client
+            .http_client
+            .request(reqwest::Method::POST, global)
+            .is_err()
+    );
+    assert_eq!(client.config.location.as_deref(), Some("us-central1"));
+}
