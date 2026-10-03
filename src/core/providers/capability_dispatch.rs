@@ -154,6 +154,12 @@ impl Provider {
                     && LLMProvider::supports_capability(provider, capability)
             }
             #[cfg(feature = "providers-extended")]
+            Provider::Replicate(_) => {
+                crate::core::providers::replicate::models::get_replicate_registry()
+                    .get_model_spec(model)
+                    .is_some_and(|spec| spec.model_info.capabilities.contains(capability))
+            }
+            #[cfg(feature = "providers-extended")]
             Provider::FalAI(provider) => LLMProvider::models(provider)
                 .iter()
                 .any(|info| info.id == model && info.capabilities.contains(capability)),
