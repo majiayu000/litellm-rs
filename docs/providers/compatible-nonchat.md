@@ -47,7 +47,7 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | `together_ai` | 同 together |
 | `fireworks` | embeddings；图片原生路径待适配 |
 | `fireworks_ai` | 同 fireworks |
-| `perplexity` | 待核验；本批未扩展非聊天声明 |
+| `perplexity`（已移出目录） | Sonar 聊天端点已退役，具名选择器在构造阶段拒绝；[F10 审核证据](../audit/perplexity-sonar-retirement-2026-10-03.md)。Agent/Responses、搜索与 embeddings 不因此自动获得支持，仍待各自核验/适配 |
 | `cerebras` | 待核验；本批未扩展非聊天声明 |
 | `openrouter` | embeddings；其他待核验 |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
