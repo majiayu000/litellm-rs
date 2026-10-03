@@ -662,7 +662,7 @@ async fn web_tool_budget_includes_repeated_context_and_search_fees() {
         )
         .await;
         let mut body = request(false);
-        body["tools"] = json!([{ "type": kind, "name": if kind.starts_with("web_search") {"web_search"} else {"web_fetch"}, "max_uses": 2 }]);
+        body["tools"] = json!([{ "type": kind, "name": if kind.starts_with("web_search") {"web_search"} else {"web_fetch"}, "max_uses": 2, "allowed_callers": ["direct"] }]);
         let response = test::call_service(
             &app,
             test::TestRequest::post()
@@ -687,7 +687,7 @@ async fn web_tools_require_bounds_and_preserve_bounded_wire_requests() {
     )
     .await;
     let mut body = request(false);
-    body["tools"] = json!([{ "type": "web_search_20260209", "name": "web_search" }]);
+    body["tools"] = json!([{ "type": "web_search_20260209", "name": "web_search", "allowed_callers": ["direct"] }]);
     let response = test::call_service(
         &app,
         test::TestRequest::post()
@@ -709,5 +709,46 @@ async fn web_tools_require_bounds_and_preserve_bounded_wire_requests() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(upstream.seen.lock().unwrap()[0].0["tools"], body["tools"]);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn unsupported_native_billing_modes_fail_before_any_upstream_call() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let cases = [
+        json!({"speed":"fast"}),
+        json!({"inference_geo":"us"}),
+        json!({"mcp_servers":[{"type":"url","url":"https://mcp.example.test","name":"remote"}]}),
+        json!({"tools":[{"type":"code_execution_20260120","name":"code_execution"}]}),
+        json!({"tools":[{"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}]}),
+        json!({"tools":[{"type":"web_search_20260209","name":"web_search","max_uses":1}]}),
+        json!({"tools":[{"type":"web_fetch_20260318","name":"web_fetch","max_uses":1}]}),
+        json!({"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1,"allowed_callers":["code_execution_20260120"]}]}),
+    ];
+    for fields in cases {
+        let mut body = request(false);
+        body.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/messages")
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+    }
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    assert!(upstream.counted.lock().unwrap().is_empty());
     handle.stop(false).await;
 }

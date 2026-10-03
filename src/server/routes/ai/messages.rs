@@ -113,6 +113,7 @@ async fn create(
     let sink = GuardrailDecisionSink::from_state(state, Some(&requested_model), None, None);
     body =
         guardrails::apply_native_messages(state.guardrails().as_ref(), body, false, &sink).await?;
+    validate_billing_scope(&body)?;
     let model = state.unified_router().resolve_model_name(&requested_model);
     let callback = CallbackLifecycle::new(
         &state.callbacks,
@@ -313,6 +314,54 @@ fn token_count_body(body: &Value) -> Value {
         }
     }
     Value::Object(count)
+}
+
+// Native fields remain unchanged, but unsupported billing modes must fail before
+// contacting either the token-count or generation endpoint.
+fn validate_billing_scope(body: &Value) -> Result<(), GatewayError> {
+    for (field, supported) in [("speed", "standard"), ("inference_geo", "global")] {
+        if body
+            .get(field)
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some(supported))
+        {
+            return Err(GatewayError::validation(format!(
+                "Native Messages {field} supports only {supported} until premium pricing is implemented"
+            )));
+        }
+    }
+    if body.get("mcp_servers").is_some_and(|value| {
+        !value.is_null() && value.as_array().is_none_or(|servers| !servers.is_empty())
+    }) {
+        return Err(GatewayError::validation(
+            "Native Messages hosted MCP billing is not supported",
+        ));
+    }
+    for tool in body
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let kind = tool.get("type").and_then(Value::as_str).unwrap_or_default();
+        if kind.starts_with("code_execution_")
+            || kind.starts_with("tool_search_")
+            || kind.starts_with("mcp_")
+        {
+            return Err(GatewayError::validation(
+                "Native Messages runtime/hosted tool billing is not supported",
+            ));
+        }
+        let callers = tool.get("allowed_callers");
+        let direct = callers.is_some_and(|value| value == &json!(["direct"]));
+        let web = kind.starts_with("web_search_") || kind.starts_with("web_fetch_");
+        let basic_web = matches!(kind, "web_search_20250305" | "web_fetch_20250910");
+        if (callers.is_some() && !direct) || (web && !basic_web && !direct) {
+            return Err(GatewayError::validation(
+                "Native Messages tools require allowed_callers [direct]; dynamic filtering and programmatic execution billing are not supported",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn reservation_usage(
