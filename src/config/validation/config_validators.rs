@@ -102,6 +102,14 @@ impl Validate for GatewayConfig {
         #[cfg(feature = "a2a")]
         for (name, agent) in &self.a2a_agents {
             agent.validate_http_gateway(name)?;
+            if agent.enabled
+                && self.auth.enable_api_key
+                && ["accept", "content-type", "a2a-version", "a2a-extensions"]
+                    .iter()
+                    .any(|name| self.auth.api_key_header.eq_ignore_ascii_case(name))
+            {
+                return Err("A2A API key header conflicts with a protocol header".into());
+            }
         }
         Self::validate_model_alias_map(&self.model_aliases)?;
         Validate::validate(&self.router)?;

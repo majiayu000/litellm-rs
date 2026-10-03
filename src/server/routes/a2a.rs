@@ -115,14 +115,10 @@ impl TaskOwners {
                 id.map(|id| (binding.to_vec(), kind.to_owned(), id.to_owned()))
             })
             .collect();
-        if ids.is_empty()
-            && result.get("message").is_some_and(|m| {
-                m.get("messageId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !id.is_empty())
-            })
+        if result.get("message").is_some()
+            && (identifier(object.get("messageId")).ok().flatten().is_none() || context.is_none())
         {
-            return Ok(());
+            return Err("Invalid A2A message identifiers");
         }
         if ids.is_empty()
             || ids
@@ -382,6 +378,9 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         || params
             .pointer("/configuration/taskPushNotificationConfig")
             .is_some()
+        || params
+            .pointer("/configuration/pushNotificationConfig")
+            .is_some()
     {
         return error(
             StatusCode::BAD_REQUEST,
@@ -572,6 +571,8 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             let mut buffer = Vec::new();
             let mut scan_from = 0;
             let mut task_seen = false;
+            let mut expected_task = task.clone();
+            let mut expected_context = context.clone();
             'events: while let Some(chunk) = upstream.chunk().await.map_err(|_| actix_web::error::ErrorBadGateway("A2A stream interrupted"))? {
                 buffer.extend_from_slice(&chunk);
                 while let Some(end) = event_boundary(&buffer, scan_from) {
@@ -601,7 +602,17 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                                     .is_some_and(|state| matches!(state, "TASK_STATE_COMPLETED" | "TASK_STATE_FAILED" | "TASK_STATE_CANCELED" | "TASK_STATE_REJECTED"));
                             task_seen = true;
                         }
-                        owners.observe(&binding, &principal, &value, task.as_deref(), context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
+                        if let Some(initial) = value.pointer("/result/task") {
+                            let initial_task = identifier(initial.get("id")).ok().flatten().ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A task identifier"))?;
+                            let initial_context = identifier(initial.get("contextId")).ok().flatten().ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A context identifier"))?;
+                            if expected_task.as_deref().is_some_and(|id| id != initial_task)
+                                || expected_context.as_deref().is_some_and(|id| id != initial_context) {
+                                Err(actix_web::error::ErrorBadGateway("A2A response changed task/context"))?;
+                            }
+                            expected_task = Some(initial_task.to_owned());
+                            expected_context = Some(initial_context.to_owned());
+                        }
+                        owners.observe(&binding, &principal, &value, expected_task.as_deref(), expected_context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
                         if terminal {
                             buffer.clear();
                             yield web::Bytes::from(frame);
@@ -659,6 +670,14 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             id,
             -32006,
             "A2A response ID mismatch",
+        );
+    }
+    if stream && value.get("result").is_some() {
+        return error(
+            StatusCode::BAD_GATEWAY,
+            id,
+            -32006,
+            "A2A streaming method requires an event stream",
         );
     }
     if let Err(message) = owners.observe(

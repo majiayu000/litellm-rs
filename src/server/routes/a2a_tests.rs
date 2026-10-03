@@ -15,6 +15,32 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
     if body.pointer("/params/metadata/test_bad_envelope") == Some(&Value::Bool(true)) {
         return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"error":null,"result":{"task":{"id":"orphan","contextId":"orphan-context"}}}));
     }
+    if let Some(case) = body
+        .pointer("/params/metadata/test_contract")
+        .and_then(Value::as_str)
+    {
+        let initial = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}});
+        if case == "json-result" {
+            return HttpResponse::Ok().json(initial);
+        }
+        if case == "message-no-context" {
+            return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":{"message":{"messageId":"reply","role":"ROLE_AGENT","parts":[{"text":"done"}]}}}));
+        }
+        let task = if case == "changed-task" {
+            "unowned-task"
+        } else {
+            "task-1"
+        };
+        let context = if case == "changed-context" {
+            "unowned-context"
+        } else {
+            "context-1"
+        };
+        let update = json!({"jsonrpc":"2.0","id":body["id"],"result":{"artifactUpdate":{"taskId":task,"contextId":context,"artifact":{"artifactId":"secret","parts":[{"text":"must not escape"}]}}}});
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "text/event-stream"))
+            .body(format!("data: {initial}\n\ndata: {update}\n\n"));
+    }
     if body.pointer("/params/metadata/test_bad_stream") == Some(&Value::Bool(true)) {
         let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"statusUpdate":{"taskId":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}});
         return HttpResponse::Ok()
@@ -22,7 +48,7 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             .body(format!("data: {event}\n\n"));
     }
     if body.pointer("/params/metadata/test_direct_message") == Some(&Value::Bool(true)) {
-        let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"message":{"messageId":"direct-reply","role":"ROLE_AGENT","parts":[{"text":"done"}]}}});
+        let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"message":{"messageId":"direct-reply","contextId":"direct-context","role":"ROLE_AGENT","parts":[{"text":"done"}]}}});
         return HttpResponse::Ok()
             .insert_header(("content-type", "text/event-stream"))
             .body(format!(
@@ -502,7 +528,7 @@ async fn config_validation_and_export_do_not_expose_agent_credentials() {
         .observe(
             b"account",
             "alice",
-            &json!({"result":{"message":{"messageId":"reply","parts":[{"text":"done"}]}}}),
+            &json!({"result":{"message":{"messageId":"reply","contextId":"reply-context","parts":[{"text":"done"}]}}}),
             None,
             None,
             None,
@@ -519,11 +545,12 @@ async fn rejects_inline_push_notification_before_upstream() {
             .configure(|c| configure_routes(c, 4096)),
     )
     .await;
-    let mut params = message();
-    params["configuration"] =
-        json!({"taskPushNotificationConfig":{"url":"https://callback.example/task"}});
-    let response = test::call_service(&app, request("SendMessage", params, &user())).await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    for field in ["pushNotificationConfig", "taskPushNotificationConfig"] {
+        let mut params = message();
+        params["configuration"] = json!({field:{"url":"https://callback.example/task"}});
+        let response = test::call_service(&app, request("SendMessage", params, &user())).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
     assert!(calls.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
@@ -788,4 +815,85 @@ async fn finite_response_uses_one_deadline_and_root_card_discovers_single_agent(
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn stream_identity_and_finite_response_contracts_fail_closed() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for case in ["changed-task", "changed-context"] {
+        let mut params = message();
+        params["metadata"] = json!({"test_contract":case});
+        let response =
+            test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+        assert!(
+            actix_web::body::to_bytes(response.into_body())
+                .await
+                .is_err()
+        );
+        assert!(
+            !state
+                .a2a_tasks
+                .entries
+                .lock()
+                .unwrap()
+                .keys()
+                .any(|(_, _, id)| id.starts_with("unowned-"))
+        );
+        assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    }
+    for (method, case) in [
+        ("SendStreamingMessage", "json-result"),
+        ("SubscribeToTask", "json-result"),
+        ("SendMessage", "message-no-context"),
+    ] {
+        let mut params = if method == "SubscribeToTask" {
+            json!({"id":"task-1"})
+        } else {
+            message()
+        };
+        params["metadata"] = json!({"test_contract":case});
+        let response = test::call_service(&app, request(method, params, &owner)).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["code"], -32006);
+    }
+    let mut params = message();
+    params["metadata"] = json!({"test_rpc_error":true});
+    let response = test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["code"], -32002);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn api_key_header_cannot_replace_a2a_protocol_headers() {
+    let mut config = crate::server::valid_test_config();
+    config.gateway.auth.enable_api_key = true;
+    config.gateway.a2a_agents.insert(
+        "test".into(),
+        AgentConfig::new("test", "https://agent.example/rpc"),
+    );
+    for header in ["Accept", "Content-Type", "A2A-Version", "A2A-Extensions"] {
+        config.gateway.auth.api_key_header = header.into();
+        assert!(
+            config
+                .gateway
+                .validate()
+                .unwrap_err()
+                .contains("protocol header")
+        );
+    }
+    config.gateway.auth.api_key_header = "x-agent-key".into();
+    config.gateway.validate().unwrap();
+    config.gateway.a2a_agents.get_mut("test").unwrap().enabled = false;
+    config.gateway.auth.api_key_header = "content-type".into();
+    config.gateway.validate().unwrap();
 }
