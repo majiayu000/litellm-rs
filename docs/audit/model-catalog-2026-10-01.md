@@ -286,3 +286,12 @@ Cloudflare 本次逐型号核验：
 - `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`：通过；4,437 条上游记录 + 207 条覆盖记录，合并后 4,555 条。并集 4,813 个精确 key 的字段差异与 authority/decision 生成结果独立核验一致。
 
 忽略项未视为已执行。测试不包含真实厂商付费 API 冒烟；官网只核验公开型号及选定字段，不能证明账号、区域或私有部署实际可调用。
+
+
+## 2026-10-03 Mistral 能力与固定快照复核
+
+Ministral 3 的 3B/8B/14B 都支持视觉；3B 的上下文上限应为 262,144，而非现有的 128,000/131,072。已修正三个 latest 与三个 2512 条目。价格单位核对后仍为每百万输入/输出分别 0.10、0.15、0.20 美元，不作无依据改价。
+
+三个 Ministral 2512 及两个 Magistral 2509 的固定 ID 不应在发请求时改写成 latest，现保留调用者选择的日期快照。Pixtral Large、Pixtral 12B、Mistral Nemo、Devstral 2、Magistral Medium 1.2 和 Mistral Small 3.2 的官方卡片当前标注 deprecated，并非 retired；未据此删除仍可用的目录记录。
+
+依据：[Ministral 3B](https://docs.mistral.ai/models/ministral-3-3b-25-12)、[8B](https://docs.mistral.ai/models/ministral-3-8b-25-12)、[14B](https://docs.mistral.ai/models/ministral-3-14b-25-12)、[官方参数中的精确上下文长度](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512/blob/cfcb068fa7c44114cf77a462357c6cdcd2c304b4/params.json)、[Magistral Medium 1.2](https://docs.mistral.ai/models/magistral-medium-1-2-25-09)、[生命周期规则](https://docs.mistral.ai/inference/model-lifecycle)。测试仅使用本地请求转换，不代表供应商账户实调。
