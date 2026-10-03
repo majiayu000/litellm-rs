@@ -1,8 +1,8 @@
-# ARM-specific Dockerfile with enhanced dependencies
+# Native target-platform build; select ARM with docker buildx --platform.
 FROM rust:1.96.1-bookworm AS builder
 ARG RELEASE_FEATURES="postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a"
 
-# Install comprehensive system dependencies for ARM cross-compilation
+# Install build dependencies inside the selected target-platform image
 RUN apt-get update && apt-get install -y \
     # Basic build tools
     pkg-config \
@@ -17,23 +17,15 @@ RUN apt-get update && apt-get install -y \
     # Compilation tools
     clang \
     llvm \
-    # Cross-compilation tools for ARM
-    gcc-arm-linux-gnueabihf \
-    libc6-dev-armhf-cross \
     # Additional tools
     musl-tools \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for AWS LC and cross-compilation
+# Set compiler variables for the native target-platform toolchain
 ENV CMAKE=cmake
 ENV CC=clang
 ENV CXX=clang++
-ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
-ENV PKG_CONFIG_ALLOW_CROSS=1
-
-# Add Rust targets for cross-compilation
-RUN rustup target add armv7-unknown-linux-gnueabihf
 
 # Create app user
 RUN useradd -m -u 1001 appuser
@@ -91,7 +83,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Default command
-CMD ["gateway", "--config", "config/gateway.yaml"]
+CMD ["gateway"]
 
 # Labels
 LABEL org.opencontainers.image.title="LiteLLM-RS"

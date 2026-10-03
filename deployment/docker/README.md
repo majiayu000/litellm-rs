@@ -34,14 +34,12 @@ The following environment variables are set for proper compilation:
 CMAKE=cmake
 CC=clang
 CXX=clang++
-CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
-PKG_CONFIG_ALLOW_CROSS=1
 ```
 
 ### Files
 
 - `Dockerfile` - Main multi-stage Dockerfile for all architectures
-- `Dockerfile.arm` - ARM-specific Dockerfile with enhanced dependencies
+- `Dockerfile.arm` - Alternative native ARM build with additional compiler tools
 - `build.sh` - Build script with error handling and cleanup
 - `.dockerignore` - Files to exclude from Docker context
 
@@ -54,8 +52,8 @@ PKG_CONFIG_ALLOW_CROSS=1
 # Build with custom tag
 ./deployment/docker/build.sh -t v1.0.0
 
-# Use ARM-specific Dockerfile
-docker build -f deployment/docker/Dockerfile.arm -t litellm-rs:arm .
+# Select ARM64 explicitly; both build and runtime stages use that platform
+docker buildx build --platform linux/arm64 --load -f deployment/docker/Dockerfile.arm -t litellm-rs:arm .
 ```
 
 ### Dependency Chain
@@ -70,16 +68,15 @@ This is a common pattern in Rust applications that use TLS/SSL functionality.
 
 ### Troubleshooting
 
-1. **Build fails on ARM platforms**: Use `Dockerfile.arm` which includes additional ARM cross-compilation tools
+1. **Build fails on ARM platforms**: Select the intended target with `--platform`. `Dockerfile.arm` builds natively inside that platform image; QEMU is needed when the host differs. It does not cross-link a host binary into an ARM runtime.
 2. **Permission errors**: Ensure Docker has proper permissions and the daemon is running
 3. **Out of space**: The build process can be large, ensure sufficient disk space (2GB+ recommended)
 4. **Network issues**: Some dependencies are downloaded during build, ensure internet connectivity
 
 ### GitHub Actions
 
-The CI/CD pipeline automatically builds for multiple architectures including:
-- `linux/amd64`
-- `linux/arm64`
-- `linux/arm/v7`
+The tagged release workflow publishes `linux/amd64` and `linux/arm64` images.
+The separate manually dispatched Docker workflow also lists `linux/arm/v7`;
+that matrix declaration is not evidence of a tested or published ARMv7 release.
 
 The enhanced Dockerfile should resolve cmake-related build failures across all platforms.

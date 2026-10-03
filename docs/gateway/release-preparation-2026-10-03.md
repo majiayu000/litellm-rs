@@ -13,6 +13,9 @@ Package version remains 0.7.0; no tag or registry upload was made.
 - The Docker dependency-dummy layer failed Cargo manifest validation because
   declared examples were absent. Both files now copy the actual declared targets
   and required embedded config/OpenAPI files, then build the gateway directly.
+- The alternative ARM Dockerfile also uses a native target-platform build selected
+  with `--platform`, without unused host cross-linker settings or a missing default
+  configuration file.
 - GHCR publication uses the existing GITHUB_TOKEN independently of optional
   Docker Hub credentials. Published manifests are inspected by immutable digest.
 - Binary archives include SHA-256 sidecars. Empty staging/production echo jobs
@@ -50,8 +53,22 @@ Preverification crate SHA-256:
 `b214178427ed9b5fe1dbd2b4ca6d1f9a130e90d6ed5225bec7e7cab068b11af2`.
 These identify local dirty-tree preflight artifacts, not the existing published
 0.7.0 artifact or a future candidate. Repackaging the committed candidate will
-produce its own evidence. The ARM-specific alternative Dockerfile has not been
-built separately. No paid provider calls were run.
+produce its own evidence. No paid provider calls were run.
+
+The alternative Dockerfile was then built separately with:
+
+```sh
+docker buildx build --platform linux/arm64 --load --progress=plain -f deployment/docker/Dockerfile.arm -t litellm-parity-arm-preflight:20261003 .
+docker run --rm litellm-parity-arm-preflight:20261003 gateway --version
+docker run --rm litellm-parity-arm-preflight:20261003 gateway --config config/gateway.dev.yaml.example validate-config
+```
+
+Its image ID is `sha256:03715b9885adda3f560efd26bb2c7ffdad004f8a2575066743156f41713f3187`;
+Docker reports `arm64` and `appuser`. Version/config validation passed, and startup
+with the packaged development config returned `/health=200` on local port 18090.
+The task container was stopped and removed. ARMv7 was not built or published.
+Source changes rebuild the Cargo layer; this deliberately trades build caching
+for a direct build of the real declared targets without a second dummy source tree.
 
 ## Final acceptance still required
 
