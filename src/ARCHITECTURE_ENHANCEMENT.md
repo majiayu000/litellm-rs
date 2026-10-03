@@ -125,10 +125,19 @@ let mapped = provider.map_openai_params(params, "model").await?;
 统一的错误映射确保一致的错误处理体验：
 
 ```rust
+use litellm_rs::core::router::retry_policy::RetryPolicy;
+
+// retry_context 包含本次调用的幂等性、流式阶段、尝试次数、预算和截止时间。
 match provider.chat_completion(request, context).await {
     Ok(response) => { /* 处理成功响应 */ }
-    Err(e) if e.is_retryable() => { /* 自动重试逻辑 */ }
-    Err(e) => { /* 处理不可重试错误 */ }
+    Err(error) => {
+        let decision = RetryPolicy.decide(&router_config, &error, retry_context);
+        if decision.should_retry {
+            // 按 decision.delay 调度下一次尝试，并更新 retry_context。
+        } else {
+            return Err(error);
+        }
+    }
 }
 ```
 

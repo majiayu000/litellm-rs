@@ -59,13 +59,16 @@ fn validate_create_key_input(name: &str, permissions: &[String]) -> Result<()> {
 
     // Validate permissions against known set
     for perm in permissions {
-        let mcp_permission = perm.strip_prefix("mcp.").is_some_and(|server| {
-            !server.is_empty()
-                && server
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        });
-        if !VALID_PERMISSIONS.contains(&perm.as_str()) && !mcp_permission {
+        let scoped_permission = perm
+            .strip_prefix("mcp.")
+            .or_else(|| perm.strip_prefix("a2a."))
+            .is_some_and(|server| {
+                !server.is_empty()
+                    && server
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            });
+        if !VALID_PERMISSIONS.contains(&perm.as_str()) && !scoped_permission {
             return Err(GatewayError::Validation(format!(
                 "Unknown permission: '{}'. Valid permissions: {}",
                 perm,
@@ -483,6 +486,16 @@ mod tests {
         let perms: Vec<String> = VALID_PERMISSIONS.iter().map(|p| p.to_string()).collect();
         let result = validate_create_key_input("My Key", &perms);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn agent_permissions_match_named_gateway_routes() {
+        for permission in ["a2a.research", "a2a.team-1", "a2a.team_2"] {
+            assert!(validate_create_key_input("agent", &[permission.into()]).is_ok());
+        }
+        for permission in ["a2a.", "a2a.*", "a2a.other/path", "a2a.\n"] {
+            assert!(validate_create_key_input("agent", &[permission.into()]).is_err());
+        }
     }
 
     #[test]

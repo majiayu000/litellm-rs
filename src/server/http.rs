@@ -207,7 +207,7 @@ impl HttpServer {
         });
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
-        #[cfg(feature = "mcp")]
+        #[cfg(any(feature = "a2a", feature = "mcp"))]
         let cors = if cfg.gateway.auth.enable_api_key {
             cors.allowed_header(cfg.gateway.auth.api_key_header.as_str())
         } else {
@@ -267,6 +267,12 @@ impl HttpServer {
             .configure(routes::admin_dashboard::configure_routes)
             .configure(|cfg| routes::ai::configure_routes_with_body_limit(cfg, max_body_size))
             .configure(routes::pricing::configure_pricing_routes)
+            .configure(|cfg| {
+                #[cfg(feature = "a2a")]
+                routes::a2a::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "a2a"))]
+                let _ = cfg;
+            })
     }
 
     fn validate_cors_config(cors_config: &CorsConfig) -> Result<()> {
@@ -309,6 +315,14 @@ impl HttpServer {
             cors = cors.allowed_headers(headers);
         }
 
+        #[cfg(feature = "a2a")]
+        {
+            cors = cors
+                .allowed_header("x-api-key")
+                .allowed_header("a2a-version")
+                .allowed_header("a2a-extensions")
+                .expose_headers(["a2a-version", "a2a-extensions", "retry-after"]);
+        }
         #[cfg(feature = "mcp")]
         {
             for name in [
