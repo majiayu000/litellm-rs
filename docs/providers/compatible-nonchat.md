@@ -73,6 +73,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
 
+第十批（#1429，核验 2026-10-03）接入 `aiml_api`/`aiml` 与 `comet_api` 文本 embeddings。AIML 官方响应只给 `usage.total_tokens` 时，按向量无输出 tokens 的语义填入 `prompt_tokens`，不从文本长度推估；已有 `task_type` 映射为其 `input_type`。缺失/无效 usage 仍遵循解析错误合同。CometAPI 默认主机修正为 `https://api.cometapi.com/v1`，Bytez 修正为 `https://api.bytez.com/models/v2/openai/v1`。
+
+AIML 图片响应 schema 不保证当前成功类型必需的 `created`，TTS/STT 使用原生 URL/异步任务；CometAPI 标准图片/音频接口存在，但本批尚未确认其模型计费单位与当前网关字符/秒/图片估算结算相符，保持待适配状态。Bytez 非聊天使用原生 model-run；Poe 多模态 bots 使用聊天内容。逐项证据与限制见 [多模态聚合供应商审计](../audit/multimodal-compatible-nonchat-2026-10-03.md)。
+
 第九批（#1427，核验 2026-10-03）接入火山方舟文本 embeddings：使用现有 `/api/v3` base，按官方协议把单字符串输入规范为单元素数组，保留批量文本与浮点响应。模型或 Endpoint ID 由已有配置指定；多模态 `/embeddings/multimodal` 仍是独立协议。MiniMax 的 OpenAI 默认地址修正为 `https://api.minimax.io/v1`；它的原生图片/语音协议没有因此自动获得支持。
 
 SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 SambaStack，默认 SambaCloud 选择器不扩展能力。Hyperbolic 当前文档站转向 GPU 租用，托管推理非聊天协议仍未确认；这不是已退役的证据。详细官方来源和剩余差异见 [原生协议边界审计](../audit/native-compatible-nonchat-2026-10-03.md)。
@@ -134,15 +138,15 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `zai` | 同步 images/generations；GLM-ASR token计费未接，未从国内zhipu推断embedding/TTS |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
 | `linkup` | 当前官方为 Search/Fetch/Research/Tasks/Extract；无兼容非聊天证据，旧 chat 声明待 F10 复核；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
-| `poe` | 待核验；本批未扩展非聊天声明 |
+| `poe` | 图片/音频 bots 经 chat/completions 返回内容；未确认标准 embeddings/images/audio 路由，不能互相替代 |
 | `wandb` | 已核验当前 CoreWeave Serverless：修正 inference 默认地址；仅 Chat/Models 合同，独立非聊天未确认；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `nanogpt` | embeddings、images/generations、同步 speech/transcriptions；图片 /v1，其他 /api/v1；异步/克隆未接 |
-| `aiml_api` | 待核验；本批未扩展非聊天声明 |
-| `aiml` | 待核验；本批未扩展非聊天声明 |
+| `aiml_api` | 文本 embeddings；total-only usage 规范为输入tokens；图片created缺项、原生/异步语音待适配 |
+| `aiml` | 同 aiml_api（独立选择器共享已验证协议） |
 | `aleph_alpha` | 官方 SDK 有兼容 embeddings；默认 host/部署模型未确认，尚未启用；旧 semantic_embed 不等同兼容协议；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `anyscale` | 当前官方是部署型 Ray Serve/vLLM；旧共享 endpoint 与非聊天能力未确认，不推断退役；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
-| `bytez` | 待核验；本批未扩展非聊天声明 |
-| `comet_api` | 待核验；本批未扩展非聊天声明 |
+| `bytez` | 修正 OpenAI base /models/v2/openai/v1；非聊天原生 model-run 协议及运行时计费待适配 |
+| `comet_api` | 文本 embeddings；修正主机 api.cometapi.com；图片/音频协议存在但计费/usage差异尚待收口 |
 | `compactifai` | Whisper 转写；一分钟最低计费同时用于预留/结算，其他模型不因此获得音频能力；见下方 |
 | `maritalk` | 官方明确无自身 embeddings，推荐第三方 DeepInfra；图片/音频协议未确认 |
 | `siliconflow` | 文本 embeddings；图片 images/timings 与当前通用response不同，音频计费待核验，不先声明 |
