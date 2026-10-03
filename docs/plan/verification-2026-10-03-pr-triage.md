@@ -1,4 +1,4 @@
-# 2026-10-03 issues / PR 本地验证记录
+# 2026-10-03–04 issues / PR 本地验证记录
 
 这些记录来自本轮独立 worktree 的实际命令输出，保留命令、源码提交、退出码和结果片段。结果仅适用于列出的提交及特性；远端 CI、实际供应商调用和发布单独验收。
 
@@ -1885,6 +1885,1613 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 34.05s
 ```
 
+## Realtime session acknowledgment/取消终态最新完整检查 / PR #1405
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：2.6 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `cargo test --lib --features gateway,sqlite,websockets,a2a,mcp server::routes::ai::realtime::tests:: -- --test-threads=2`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：106.6 秒。
+原始日志 SHA-256：`1e3d7e559bd5128721f153d976c0a2d8461f8ea38dfeaf8c57444793a14502e9`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 9804 filtered out; finished in 33.75s
+```
+
+### `cargo test --lib --features gateway,sqlite,websockets,a2a,mcp cancelled_realtime_admission_restores_shared_rpm`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：39.3 秒。
+原始日志 SHA-256：`49a55a29e7a07c041d54b8278f5a4d7868c4d2f4c1d8b62456e4d186433c8a52`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.07s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9836 filtered out; finished in 0.33s
+```
+
+执行环境：Isolated session Redis 7, 127.0.0.1:32776。
+
+### `cargo check`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：7.3 秒。
+原始日志 SHA-256：`35dcd49cd135fec910f94aedd4be276aa3272d0e3ace480a3c7ed4c4deeaae71`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.26s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：185.5 秒。
+原始日志 SHA-256：`f4b1add1c1cac8fc9f37d6be80d76bf89be9cd9fabd2672da51ee030a8e1b613`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.96s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 110.38s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.61s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：21.0 秒。
+原始日志 SHA-256：`af41db395978230bae171f859a0f757b49828f46238ea86d442e0cf2506e933e`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 20.90s
+```
+
+### `cargo test --features gateway,sqlite,websockets,a2a,mcp -- --test-threads=2`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：704.4 秒。
+原始日志 SHA-256：`bb3ca125799e208458c48b4c1cac3e8da50e261899666d11ea2ea0bfb496653c`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 28s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 9836 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 198.29s
+     Running unittests src/main.rs (target/debug/deps/gateway-3ccd1c60996b7023)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/pricing-tool.rs (target/debug/deps/pricing_tool-6d9e2c0c20ac2a18)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-6f4989045fcffa64)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.34s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-925ddb304d69a0bb)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.13s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-aa6c4994f4eb7ce5)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.77s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-db19240643568ad3)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.33s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-e27ed0cccc978ace)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-6494bf0b8f5d0424)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-457ccee089d7e935)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-c17f21fd78a78024)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-b886a397056b2606)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-af2cd426dabc2a86)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.65s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-8da60ec68f918266)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-ae03036d7cdd3d70)
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.17s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-8002aa1d8b952e17)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.68s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-af0b829d4d4424ee)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.49s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-0c5e1ed93acfbf66)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.37s
+     Running tests/lib.rs (target/debug/deps/lib-9987c2ce9120c0b9)
+test result: ok. 253 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 93.76s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-ec1e9bc8ed28a584)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-13d014b274326a3d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-a1809d793decc1f6)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-c8be3720abf10b94)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.53s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-735a74510a495074)
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.09s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-790f150b44d8e364)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.79s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-90f0845d1e22c8f8)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-ea2f799e88b6e2ba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-b7ffdf5b322ecb2f)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.66s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-716e2fc1be8fe553)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.78s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-941ab22d516f2963)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-b3e5e2b4fc2046f2)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.70s
+   Doc-tests litellm_rs
+test result: ok. 33 passed; 0 failed; 31 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+```
+
+执行环境：Isolated session Redis 7, 127.0.0.1:32776。
+
+### `cargo clippy --all-targets --features gateway,sqlite,websockets,a2a,mcp -- -D warnings`
+
+源码提交：`eef1c94970784f9d4fb4f70b890fec4ec37509af`；退出码：`0`；耗时：34.1 秒。
+原始日志 SHA-256：`ce0653354def9b6ce81b2296d0456f73d34387c16b0185fc491825825eba119d`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.99s
+```
+
+## 中文供应商取消 CI 的精确特性定向复核
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo test --test lib --locked --no-default-features --features postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation test_responses_runtime_policy_errors_use_openai_shape -- --test-threads=1`
+
+源码提交：`cfbf58bf27460edb5e581903e64ae0ddb1f04ee9`；退出码：`0`；耗时：80.4 秒。
+原始日志 SHA-256：`0afc62536e48fb90174782b28279cd13767b822bdb891d84e019cf2792d7aa39`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 17s
+     Running tests/lib.rs (target/debug/deps/lib-8ec59626415bf71f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 269 filtered out; finished in 0.93s
+```
+
+执行环境：Local isolated worktree, exact cancelled-CI release feature flags, actual integration target lib; not a complete CI replacement。
+
+## Realtime 00873e07 backend/cap 错误修复
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `cargo test --lib --features gateway,sqlite,websockets,a2a,mcp server::routes::ai::realtime::tests:: -- --test-threads=2`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：97.2 秒。
+原始日志 SHA-256：`c108a25e1483f72e7bcf1b2c08c306154a5eed063eac034d85505fee4ea21de9`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 9804 filtered out; finished in 32.32s
+```
+
+### `cargo test --lib --features gateway,sqlite,websockets,a2a,mcp cancelled_realtime_admission_restores_shared_rpm`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：33.5 秒。
+原始日志 SHA-256：`d79976b71e6a9db7d5cd506b82d405a952ac844505630740002b8804b48e0b95`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.35s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9838 filtered out; finished in 0.32s
+```
+
+执行环境：Isolated session Redis 7, 127.0.0.1:32777。
+
+### `cargo check`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：5.3 秒。
+原始日志 SHA-256：`84abef7b414d5f10e92eff685576668c5bcf74ca6a17fa52c56a5eeaea4fe26a`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.17s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：150.9 秒。
+原始日志 SHA-256：`77101fc62b529c50dba48d9da44249fa00cd2f91f2ff575786258e51d4663fa1`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 103.54s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.28s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：17.0 秒。
+原始日志 SHA-256：`6b99260b6ebbd2d9fbe3514340dcffb6bd7b138920f2f9d5eb02123fbfa3ebd0`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.84s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite,websockets,a2a,mcp -- -D warnings`
+
+源码提交：`00873e078f996aaa074413ee5e254bcc7ebaa3c1`；退出码：`0`；耗时：32.1 秒。
+原始日志 SHA-256：`8ebb341ef3e2ebbcdd8d75ffaa700e8409edc8319bf9c7bbe4253a2a38513230`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.98s
+```
+
+## 中文/云兼容6aa3a043整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`6aa3a043dfc7e188e4407e2c6b00c1a7ac2f912e`；退出码：`0`；耗时：2.4 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`6aa3a043dfc7e188e4407e2c6b00c1a7ac2f912e`；退出码：`0`；耗时：3.2 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite,providers-extended,mcp,a2a --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`6aa3a043dfc7e188e4407e2c6b00c1a7ac2f912e`；退出码：`0`；耗时：34.4 秒。
+原始日志 SHA-256：`c58ee446404418241945752118760ca1fcdbad6c9268610106dd2c4fa20b26f1`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.54s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-ecdfd0d64b1b6abd)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite,providers-extended,mcp,a2a -- -D warnings`
+
+源码提交：`6aa3a043dfc7e188e4407e2c6b00c1a7ac2f912e`；退出码：`0`；耗时：32.1 秒。
+原始日志 SHA-256：`8123fa9cdeb4a6f8b4a77787625a57074ff008d62fed577b72e1960ed20a586a`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 32.02s
+```
+
+## 百川两个原生协议审查最新验证
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：3.0 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：192.5 秒。
+原始日志 SHA-256：`e1444eac52a310d8bfbcb36bfd87430093c2ad3450c2d5a0ef13aecd07e38018`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.48s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.34s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：29.3 秒。
+原始日志 SHA-256：`367aad1a6799c020ec6b249d9e171098abcf251aba61c491ad42bb282b025222`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.19s
+```
+
+### `cargo check`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：5.2 秒。
+原始日志 SHA-256：`529722695a5a78dc54c51e02f6b6bbb984d58156b4cd40721aba1fc55efed52c`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.15s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：174.0 秒。
+原始日志 SHA-256：`0bd5b25ab9ae48e7f3caafdc0fb29a2558bd19dbd9c8d44cfc95874085faaca0`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.27s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 118.41s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：19.9 秒。
+原始日志 SHA-256：`c7afdcaccfd791f2b4274f269c75330b8be113bc340772deffad210f925bcae7`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.74s
+```
+
+### `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：1.0 秒。
+原始日志 SHA-256：`823b60abf0b796efb34b2b8e9c7af1cfc32f6a830ca1e66a4376a14d109970a8`。
+
+```text
+validated 4570 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+validated 4570 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+Ran 53 tests in 0.824s
+OK
+```
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`bb85cf446f197838c23d74ba101e1f6ee94b0159`；退出码：`0`；耗时：2.2 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+## Ark未知价格最新验证
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：2.6 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `cargo check`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：577.2 秒。
+原始日志 SHA-256：`c618f899cd4a3b3c170d52b9e58291a57ec7382d0c0a08d0285c873896d81d68`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.92s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：345.2 秒。
+原始日志 SHA-256：`7db3f15aa8263aa596055a8e4b057adb92f0829197f832aabdc12ef8b4624f09`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.29s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 106.31s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.28s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：18.0 秒。
+原始日志 SHA-256：`3a4cb29b4a5749e1a7ae616595a11f71a4a79f8cb5d57c0fd74477405cffb1cb`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.87s
+```
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：357.8 秒。
+原始日志 SHA-256：`1d3c4f5c6a4e449047b8f3943c41cffb27ba14077f727336b63431e6dd9549da`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.30s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.78s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：41.3 秒。
+原始日志 SHA-256：`f9cd6973deffb9bf64edde6ee014e694a868f2909b45a45d81a2aa709b11942a`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.18s
+```
+
+### `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：1.3 秒。
+原始日志 SHA-256：`2ba965cc1192a9d3248ac3535e8be2040d6856ad1cb45dd5216ac90e90dbfc4b`。
+
+```text
+validated 4570 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+validated 4570 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+Ran 54 tests in 1.072s
+OK
+```
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`f7870fb26b6430fb476f705f6d3e4583a670ece1`；退出码：`0`；耗时：5.8 秒。
+原始日志 SHA-256：`71a8dbaeaded626c9ac4bd7ebed1bf7f480edbb56e7fc3d2aa4b8cc256f42fd9`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+## AIML/Comet/云兼容主线整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`1d8ea74a3e78922258aca6b0a0b3a40cf3977f0c`；退出码：`0`；耗时：2.7 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`1d8ea74a3e78922258aca6b0a0b3a40cf3977f0c`；退出码：`0`；耗时：3.4 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`1d8ea74a3e78922258aca6b0a0b3a40cf3977f0c`；退出码：`0`；耗时：119.2 秒。
+原始日志 SHA-256：`071d31f234ea4af0b991293950d9bb8918f37cb8e7b5ce526dbc86a957db54d3`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 53s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`1d8ea74a3e78922258aca6b0a0b3a40cf3977f0c`；退出码：`0`；耗时：96.6 秒。
+原始日志 SHA-256：`9d826b2e370254697aff3b2f458f90a87c67fb9557eb2854332c30d1259ce10c`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 36s
+```
+
+## 中文/W&B最新整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`360bf9ce3242d7b03894a7c957035acebcd2977f`；退出码：`0`；耗时：2.7 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`360bf9ce3242d7b03894a7c957035acebcd2977f`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite,providers-extended,mcp,a2a --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`360bf9ce3242d7b03894a7c957035acebcd2977f`；退出码：`0`；耗时：35.0 秒。
+原始日志 SHA-256：`457ca9188e488a682bb3b233b0b31f1e75c70834b9cb167afeee5110a327f65d`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.62s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-ecdfd0d64b1b6abd)
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.88s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite,providers-extended,mcp,a2a -- -D warnings`
+
+源码提交：`360bf9ce3242d7b03894a7c957035acebcd2977f`；退出码：`0`；耗时：46.2 秒。
+原始日志 SHA-256：`19234107b02afb10bfd21606eeb4c795b7099a00986b839a7c0e9c142b0c0355`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.79s
+```
+
+## 多模态聚合/W&B最新整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`8a93bf2ee2c97505affed22c40e8a37f6cae1f77`；退出码：`0`；耗时：2.6 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`8a93bf2ee2c97505affed22c40e8a37f6cae1f77`；退出码：`0`；耗时：3.0 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`8a93bf2ee2c97505affed22c40e8a37f6cae1f77`；退出码：`0`；耗时：31.8 秒。
+原始日志 SHA-256：`6ba3a375796e52feca51666f5dc93d8040f6d4519d357226a716d4e581e69a28`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.25s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.86s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`8a93bf2ee2c97505affed22c40e8a37f6cae1f77`；退出码：`0`；耗时：38.0 秒。
+原始日志 SHA-256：`d6530088970621409fb33a1e9c7f59afe57a533d5016293a870b437682d233ad`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 37.79s
+```
+
+## Realtime六条审查及当前main完整验证
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：3.2 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：2.7 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite,websockets,a2a,mcp --lib server::routes::ai::realtime::tests -- --test-threads=2`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：117.3 秒。
+原始日志 SHA-256：`4f133bc185cab3f09e66129b4a89af0a27ae9e44176864f497812b8d74276ac0`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 9804 filtered out; finished in 39.66s
+```
+
+### `cargo check`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：5.9 秒。
+原始日志 SHA-256：`83a8619961bc6197026c6a18f01b0782e1da869bdb00a7f9011a655e1099965f`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.83s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：162.0 秒。
+原始日志 SHA-256：`7fce70a834b2daa195723dc636d8830370b15d66dcfca696c672f3ecff17d97e`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.70s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 104.96s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：17.5 秒。
+原始日志 SHA-256：`6d3cd60482be4442bc904602e0c2d2a3d932cffb88b6b16b8a8e11bfb0beefb8`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.45s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite,websockets,a2a,mcp -- -D warnings`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：31.3 秒。
+原始日志 SHA-256：`69c9fbd7e7467324ec6b9673e5f85f8961e4c89737c74d09549437d037696d6c`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.19s
+```
+
+### `cargo test --features gateway,sqlite,websockets,a2a,mcp -- --test-threads=2`
+
+源码提交：`bdb466d6539c7eac388e42d44a02ab3549c18a54`；退出码：`0`；耗时：644.4 秒。
+原始日志 SHA-256：`f24ab0ee852fef01befcc2b197324ea4ecb3cbf6c71128ff2800978bcad36eef`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.45s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 9841 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 196.41s
+     Running unittests src/main.rs (target/debug/deps/gateway-3ccd1c60996b7023)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/pricing-tool.rs (target/debug/deps/pricing_tool-6d9e2c0c20ac2a18)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-6f4989045fcffa64)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.27s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-925ddb304d69a0bb)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.15s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-aa6c4994f4eb7ce5)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.10s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-db19240643568ad3)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.27s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-e27ed0cccc978ace)
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.48s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-6494bf0b8f5d0424)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-457ccee089d7e935)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-c17f21fd78a78024)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-b886a397056b2606)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.96s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-af2cd426dabc2a86)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.62s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-8da60ec68f918266)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.99s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-ae03036d7cdd3d70)
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.31s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-8002aa1d8b952e17)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-af0b829d4d4424ee)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-0c5e1ed93acfbf66)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.57s
+     Running tests/lib.rs (target/debug/deps/lib-9987c2ce9120c0b9)
+test result: ok. 253 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 88.73s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-ec1e9bc8ed28a584)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-13d014b274326a3d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-a1809d793decc1f6)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-c8be3720abf10b94)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.30s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-735a74510a495074)
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.28s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-790f150b44d8e364)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.96s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-90f0845d1e22c8f8)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-ea2f799e88b6e2ba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-b7ffdf5b322ecb2f)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-716e2fc1be8fe553)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.81s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-941ab22d516f2963)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-b3e5e2b4fc2046f2)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.69s
+   Doc-tests litellm_rs
+test result: ok. 33 passed; 0 failed; 31 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+```
+
+## F07首次取消CI的精确目标复核
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo test --workspace --locked --features postgres,sqlite,redis,s3,metrics,tracing,websockets --test audio_native_providers tests::elevenlabs_rejects_standard_tts_speed_before_upstream_io -- --exact --nocapture`
+
+源码提交：`c44b48d426bc59691c216fe91731d00b6c0873b6`；退出码：`0`；耗时：139.0 秒。
+原始日志 SHA-256：`e16eeaa471576cc910be9e93ef1368728288900e48787edf79d91a54f82e1aa8`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 16s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-4c061e1f76fb89d3)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.15s
+```
+
+## CompactifAI超预算实际费用审查完整验证
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `cargo test --features gateway,sqlite --test audio_routes -- --test-threads=2`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：148.0 秒。
+原始日志 SHA-256：`622af6807f0cf36c73db99557cb436f821d404ffde22099a9c8671de289cde48`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 47s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-fd5378a956d1fb05)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.71s
+```
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：25.1 秒。
+原始日志 SHA-256：`2b24a4450a3418073e8d8d70a4fbc937f2223a17519e7167da063d45840f70e5`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.93s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.78s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：98.0 秒。
+原始日志 SHA-256：`8ef1bddfdd6c16067bb762a97ac0bbe004454353ed7a7dde37e001c7f331568d`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 37s
+```
+
+### `cargo check`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：23.7 秒。
+原始日志 SHA-256：`43632fce273dc26abc80ab1598900b0f1ea79d60c12803456772eb80fab10ddd`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.64s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：204.3 秒。
+原始日志 SHA-256：`cb284a822334675ea6bbfc09619f39f20239e55ab10d63a47bb84a96532689d0`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 08s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 105.02s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.28s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：43.6 秒。
+原始日志 SHA-256：`8e59592a0cabe7be59746503aa013a911d940c4506855cf9a9f5b6a7382d4c32`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 43.46s
+```
+
+### `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：1.0 秒。
+原始日志 SHA-256：`24af6e41d967dcb6a5cdd3b1f4cd50d882dbc4025dc4d1cb28abfd8664a2d22a`。
+
+```text
+validated 4570 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+validated 4570 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+Ran 53 tests in 0.840s
+OK
+```
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`af0ccf56054055ac270a6b57e6c884d0b2aedf9e`；退出码：`0`；耗时：1.8 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+## Ark移除价格仍刷新非价格metadata
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`
+
+源码提交：`34af8d2c02de227a8ec75f1db49e5267de255239`；退出码：`0`；耗时：1.0 秒。
+原始日志 SHA-256：`7ff9e732cc7dc50f6fb58ea69e2d7270fdee1c35d6528ed082a1a6951e2ab6b5`。
+
+```text
+validated 4570 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+validated 4570 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+Ran 54 tests in 0.835s
+OK
+```
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`34af8d2c02de227a8ec75f1db49e5267de255239`；退出码：`0`；耗时：2.3 秒。
+原始日志 SHA-256：`71a8dbaeaded626c9ac4bd7ebed1bf7f480edbb56e7fc3d2aa4b8cc256f42fd9`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+## Ark当前整合head的Python/sync
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`
+
+源码提交：`c8c78d986606297f27d68a21725e8da2f8c66559`；退出码：`0`；耗时：1.0 秒。
+原始日志 SHA-256：`265f825ade244e46296ed0b76fc3bf896e5a5fedd473986f8e55d95848e734d6`。
+
+```text
+validated 4570 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+validated 4570 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+Ran 54 tests in 0.843s
+OK
+```
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`c8c78d986606297f27d68a21725e8da2f8c66559`；退出码：`0`；耗时：2.3 秒。
+原始日志 SHA-256：`71a8dbaeaded626c9ac4bd7ebed1bf7f480edbb56e7fc3d2aa4b8cc256f42fd9`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+## 中文供应商/百川主线整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`5afc65361099b89ceba520e66de4ec60c20d78ec`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`5afc65361099b89ceba520e66de4ec60c20d78ec`；退出码：`0`；耗时：1.8 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite,providers-extended,mcp,a2a --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`5afc65361099b89ceba520e66de4ec60c20d78ec`；退出码：`0`；耗时：46.0 秒。
+原始日志 SHA-256：`5c49872a63b09fd673ad879a361f257bebb3fcded2370a05306b551fc323bbfb`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.80s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-ecdfd0d64b1b6abd)
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.84s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite,providers-extended,mcp,a2a -- -D warnings`
+
+源码提交：`5afc65361099b89ceba520e66de4ec60c20d78ec`；退出码：`0`；耗时：33.5 秒。
+原始日志 SHA-256：`b54f0415f0abe5a0a11d8af77ebe4e69b2a83ff77ed297d5f2aaa7c7c8671afa`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.41s
+```
+
+## Ark/百川主线整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`c8c78d986606297f27d68a21725e8da2f8c66559`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`c8c78d986606297f27d68a21725e8da2f8c66559`；退出码：`0`；耗时：1.7 秒。
+原始日志 SHA-256：`71a8dbaeaded626c9ac4bd7ebed1bf7f480edbb56e7fc3d2aa4b8cc256f42fd9`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 220 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`c8c78d986606297f27d68a21725e8da2f8c66559`；退出码：`0`；耗时：42.4 秒。
+原始日志 SHA-256：`ea0fa9405aae8ce611be81a1961acef0c71aa45e586192329c2f86d519ca3247`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.09s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.82s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`c8c78d986606297f27d68a21725e8da2f8c66559`；退出码：`0`；耗时：29.8 秒。
+原始日志 SHA-256：`0de90a0e651e934f23c5efa8d5210eab8e5e9169237b9962b770467d92531a26`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 29.70s
+```
+
+## AIML缺失/无效usage拒绝完整验证
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：36.8 秒。
+原始日志 SHA-256：`90f34c0eb8138774bf5c52310eb21b3f1d9ab74426b2260c22333d02cf375639`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.52s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.80s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：28.5 秒。
+原始日志 SHA-256：`c99ac060616d4499b877b0547e0aee4d8be5e2dde25368dda534f01e260aa60a`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 28.33s
+```
+
+### `cargo check`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：23.2 秒。
+原始日志 SHA-256：`5dadf2aaf39def392745fb554eb3db30012b117056c5a51f470e0b41204073d2`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.20s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：203.2 秒。
+原始日志 SHA-256：`b8b5468e60a2764ff62843ed5c190675fb5ac3188deef84a3b4b5c78af059124`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 103.92s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.38s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：45.0 秒。
+原始日志 SHA-256：`dd4d9ed4fd52e2fd5887c1268125dfaae979509a326b700890d065d2539f56b2`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 44.95s
+```
+
+### `python3 -m unittest discover -s scripts/test -p test_sync_litellm_pricing.py`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：1.0 秒。
+原始日志 SHA-256：`7f54f980beef0da76edbf5b75802d1b73690aa917dfcb55b1a56cac892bf6b73`。
+
+```text
+validated 4570 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+validated 4570 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/dddddddddddddddddddddddddddddddddddddddd/model_prices_and_context_window.json; classified 4570 exact pricing rows
+Ran 53 tests in 0.831s
+OK
+```
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`5d6a9937e9fcf0a703b50fd3bc1a8b4373862933`；退出码：`0`；耗时：2.2 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+## AIML/百川主线整合
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`fc6d9282e741a733351f3c2090307a9e3c7f0930`；退出码：`0`；耗时：2.5 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`fc6d9282e741a733351f3c2090307a9e3c7f0930`；退出码：`0`；耗时：1.8 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite --test catalog_nonchat_routes -- --test-threads=2`
+
+源码提交：`fc6d9282e741a733351f3c2090307a9e3c7f0930`；退出码：`0`；耗时：38.9 秒。
+原始日志 SHA-256：`f7087734d60b101212c85d0b89ecef34aa2ddb81892aa8a4a1781d8666f6e0a4`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.72s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-3f3f94a3a101728c)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.81s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite -- -D warnings`
+
+源码提交：`fc6d9282e741a733351f3c2090307a9e3c7f0930`；退出码：`0`；耗时：30.6 秒。
+原始日志 SHA-256：`50466dff95ea51f316c385e5adb493ebb70376c968f3ffb928ba108fef281820`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 30.47s
+```
+
+## Realtime live-policy初轮已完成7项（完整扩展主动停止另列）
+
+默认源码提交：`按各命令记录`（更精确的每条命令提交见下方）。
+
+### `cargo fmt --check`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：2.4 秒。
+原始日志 SHA-256：`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。
+
+命令成功完成，无结果正文。
+
+### `python3 scripts/sync_litellm_pricing.py --source-catalog config/model_prices_extended.json --check`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：1.7 秒。
+原始日志 SHA-256：`5d7ab0771fbd1f91baf7d15ba487ec1f57d655b15b71a2f68f8fb467a0f6f15b`。
+
+```text
+validated 4451 upstream LiteLLM pricing entries and 215 local compatibility entries from https://raw.githubusercontent.com/BerriAI/litellm/a5fef4b4e68963640c3062d464509129ec8863c6/model_prices_and_context_window.json; classified 4569 exact pricing rows
+```
+
+### `cargo test --features gateway,sqlite,websockets,a2a,mcp --lib server::routes::ai::realtime::tests -- --test-threads=2`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：115.1 秒。
+原始日志 SHA-256：`5d5be54115aad0e6679071438adb88e716ace187d977b01bd2e73dc2dd44a07f`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 12s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-ef74d497d8b5c13d)
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 9804 filtered out; finished in 39.04s
+```
+
+### `cargo check`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：8.2 秒。
+原始日志 SHA-256：`ad4dc75d7cecd827186b9e0edd03867769eee558fa80862d94df366c75182b4b`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.13s
+```
+
+### `cargo test -- --test-threads=2`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：163.1 秒。
+原始日志 SHA-256：`047cf9cd3fa90cd4a08ef71ec79d0b00c912059db2b91ebf7cd541c0abf4faa1`。
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.17s
+     Running unittests src/lib.rs (target/debug/deps/litellm_rs-5f00bb94822156cc)
+test result: ok. 7132 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 104.53s
+     Running tests/api_key_budget_routes.rs (target/debug/deps/api_key_budget_routes-0c2486c0401784ce)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_native_providers.rs (target/debug/deps/audio_native_providers-47b7cad75e34e090)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/audio_routes.rs (target/debug/deps/audio_routes-adb7c7d30f5ad92a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/batches_routes.rs (target/debug/deps/batches_routes-968b1e045ee1c4b2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/catalog_nonchat_routes.rs (target/debug/deps/catalog_nonchat_routes-7dff907de8d676f3)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/conformance_chat_entries.rs (target/debug/deps/conformance_chat_entries-f4514f58964b7568)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/cost_compatibility.rs (target/debug/deps/cost_compatibility-49f1ed00e26a1d19)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+     Running tests/external_provider_registration.rs (target/debug/deps/external_provider_registration-0cb11b1a40549fa3)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/files_routes.rs (target/debug/deps/files_routes-674db1bc3cbf3724)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/fine_tuning_routes.rs (target/debug/deps/fine_tuning_routes-23a0e71e49990457)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_router_fallback_routes.rs (target/debug/deps/gemini_router_fallback_routes-d291096853550ff9)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gemini_sdk_routes.rs (target/debug/deps/gemini_sdk_routes-0d50d3f82f6607d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/gh965_d1ec_retry_helper_deprecation.rs (target/debug/deps/gh965_d1ec_retry_helper_deprecation-6d9a3f82743aa05a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.44s
+     Running tests/image_edit_variation_routes.rs (target/debug/deps/image_edit_variation_routes-f37efee5cd6b4f0c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/image_router_fallback_routes.rs (target/debug/deps/image_router_fallback_routes-c362ad8cbf74602d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/lib.rs (target/debug/deps/lib-d519f7ebc633b8bf)
+test result: ok. 117 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/live_bedrock.rs (target/debug/deps/live_bedrock-375a5d78a93cc723)
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/live_gemini_catalog.rs (target/debug/deps/live_gemini_catalog-c177f58b525a78e0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/media_native_providers.rs (target/debug/deps/media_native_providers-390cdb5bd708c67e)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/moderations_routes.rs (target/debug/deps/moderations_routes-e3efb2ddebf79672)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_messages_routes.rs (target/debug/deps/native_messages_routes-8a183910b16ccbd5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/native_responses_routes.rs (target/debug/deps/native_responses_routes-3eefe09c62a66c68)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openai_legacy_function_forwarding.rs (target/debug/deps/openai_legacy_function_forwarding-e8b8c53473c312a4)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/public_api_compat.rs (target/debug/deps/public_api_compat-402cd09306e5edba)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rerank_routes.rs (target/debug/deps/rerank_routes-0c4b1896f6bc3035)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/responses_routes.rs (target/debug/deps/responses_routes-eeb315bde38b5ed2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/test_connection_pool.rs (target/debug/deps/test_connection_pool-ff5276b994b0840c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/voyage_retrieval_routes.rs (target/debug/deps/voyage_retrieval_routes-59ffbccd00fad178)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests litellm_rs
+test result: ok. 30 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+```
+
+### `cargo clippy --all-targets -- -D warnings`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：18.8 秒。
+原始日志 SHA-256：`c9996bf37fcadc7971f47564b9689813535c1b5b2ed9d92a1ef277524a15f27b`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.70s
+```
+
+### `cargo clippy --all-targets --features gateway,sqlite,websockets,a2a,mcp -- -D warnings`
+
+源码提交：`cb14af2f9d1413c76d86ce9733e2b33cb3e872a7`；退出码：`0`；耗时：35.9 秒。
+原始日志 SHA-256：`76b450f0569ffce5d23e7c5a5917d40280917facd4b801678d93298d68817042`。
+
+```text
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.76s
+```
+
 ## 已取消的完整测试尝试（不计通过）
 
 Realtime `2ee7911b` 首次特性完整测试在库测试通过后，挂起于既有 Responses 集成测试，停止进程后退出码 143。完整原始日志及 SHA-256 在归档 cancelled/ 中。该目标独立运行的 8 项测试通过；相同提交完整两线程重跑通过，见上方 realtime-admission 记录。挂起根因尚未证明，不声称已修复，不增加任意 timeout 掩盖问题。
@@ -1897,4 +3504,18 @@ Realtime `2ee7911b` 首次特性完整测试在库测试通过后，挂起于既
 
 新提交的本地定向检查不等同最新完整 CI 通过。最终 GitHub 快照与合并结果见 [台账](litellm-parity-tracker.md)。没有实际供应商付费调用；发行准备编译不等同最终候选产物已发布。
 
-归档 github/ 同时保留本轮 14 个实际合并 head 的 15 项成功检查回执，以及当前 Responses 手动 CI 的精确 head/status/conclusion 快照。它们是时间点证据，不预测之后的新提交。
+## 中文供应商发行 CI 取消记录
+
+`cfbf58bf` 的 [发行特性检查](https://github.com/majiayu000/litellm-rs/actions/runs/37125747886)首次 attempt 在 Test release features 阶段取消；日志显示既有 test_responses_runtime_policy_errors_use_openai_shape 超过 60 秒仍未完成。原始 job 111210574865 日志及 SHA-256 在 github/cn-release-cancelled 中保留。本轮只请求一次未成功job重跑，该次随后cfbf58bf的15项检查成功；此结果不证明更新head通过。定向复核使用完全相同的 release feature flags，若通过也不能证明并发挂起根因已修。
+
+归档github/保留本轮17个实际合并head的成功CI回执及当前Responses手动CI精确head/status/conclusion。它们是时间点证据，不预测新提交。
+
+## 后续未通过/空筛选记录
+
+not-success/保存百川fixture/trait/锁scope错误、Realtime旧取消成功断言与空筛选0测试。它们全部不计实际测试通过；修正后的实际完整/定向检查在对应精确head组中。
+
+F07 c44b48d4首次Main Full取消：原始job111212951066日志/元数据在github/，既有ElevenLabs目标的精确复核单列。一项定向测试成功不能证明并发挂起根因已修；只请求一次未成功job重跑，最终结论见手动run快照。
+
+6aa3a043的CI Fast Test job111232671207首次取消，原始log/metadata在github/cn-6aa-unsuccessful中；它不证明后续360bf9ce检查成功，后续source/CI独立记录。
+
+Realtime live-policy初轮完整扩展检查因审查发现活动响应lease必须保留而主动停止，退出143、不计通过；最终修正后的完整验证单独绑定最终source。
