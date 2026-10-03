@@ -279,7 +279,13 @@ for model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-e
         OFFICIAL_OVERRIDE_REMOVALS[key] = ("off_peak_pricing",)
 
 for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
-    OFFICIAL_OVERRIDE_PATCHES.setdefault(key, {})["pricing_status"] = "official_off_peak_rate_checked_2026_10_01"
+    OFFICIAL_OVERRIDE_PATCHES.setdefault(key, {}).update({
+        "pricing_status": "official_off_peak_rate_checked_2026_10_01",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 393_216,
+        "max_tokens": 1_048_576,
+        "supports_vision": False,
+    })
 
 OFFICIAL_PRICING_CONTRACTS: dict[str, dict[str, Any]] = {
     "claude-fable-5": {

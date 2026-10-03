@@ -28,7 +28,6 @@ pub mod azure_ai;
 pub mod bedrock;
 // Catalog Tier 1: bytez, cerebras.
 pub mod cloudflare;
-#[cfg(feature = "providers-extended")]
 pub mod cohere;
 pub mod databricks;
 // Catalog Tier 1: comet_api, compactifai.

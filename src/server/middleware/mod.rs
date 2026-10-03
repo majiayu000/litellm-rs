@@ -35,6 +35,8 @@ pub use helpers::{
 pub(crate) use metrics::reset_unpriced_metrics_for_tests;
 pub use metrics::{MetricsMiddleware, MetricsMiddlewareService, MiddlewareRequestMetrics};
 pub(crate) use metrics::{record_unpriced_event, record_unpriced_spend, unpriced_model_bucket};
+#[cfg(feature = "a2a")]
+pub(crate) use rate_limit::is_trusted_proxy;
 pub(crate) use rate_limit::trusted_network_client_key;
 pub use rate_limit::{RateLimitMiddleware, RateLimitMiddlewareService};
 pub use request_id::{RequestIdMiddleware, RequestIdMiddlewareService};

@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use super::*;
 use crate::core::audio::types::{SpeechRequest, TranscriptionRequest, TranslationRequest};
 use crate::core::providers::unified_provider::ProviderError;
@@ -10,6 +8,7 @@ use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
 use crate::core::types::health::HealthStatus;
 use crate::core::types::image::ImageGenerationRequest;
 use crate::core::types::message::{MessageContent, MessageRole};
+use crate::utils::error::CanonicalError;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -694,7 +693,7 @@ fn test_error_mapping() {
     assert_eq!(err.provider(), provider_name);
 
     let err = OpenAILikeError::openai_like_rate_limit(Some(60));
-    assert!(err.is_retryable());
+    assert!(err.canonical_retryable());
     assert_eq!(err.retry_delay(), Some(60));
 }
 

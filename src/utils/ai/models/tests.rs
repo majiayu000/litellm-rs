@@ -143,3 +143,38 @@ fn gemini_model_helpers_reject_retired_and_unregistered_ids() {
         assert!(ModelUtils::validate_model_with_provider(&model, "google").is_ok());
     }
 }
+
+#[test]
+fn cohere_validation_tracks_callable_chat_registry() {
+    for model in ModelUtils::get_compatible_models_for_provider("cohere") {
+        assert!(
+            ModelUtils::validate_model_with_provider(&model, "cohere").is_ok(),
+            "{model}"
+        );
+        assert!(
+            ModelUtils::validate_model_with_provider(&format!("cohere/{model}"), "cohere").is_ok()
+        );
+    }
+    for model in [
+        "command-a-plus-05-2026",
+        "command-a-reasoning-08-2025",
+        "command-r7b-12-2024",
+        "command-r",
+    ] {
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "cohere").is_ok(),
+            "{model}"
+        );
+    }
+    for model in [
+        "command-r-invented",
+        "embed-v4.0",
+        "rerank-v4.0-pro",
+        "cohere-transcribe-03-2026",
+    ] {
+        assert!(
+            ModelUtils::validate_model_with_provider(model, "cohere").is_err(),
+            "{model}"
+        );
+    }
+}

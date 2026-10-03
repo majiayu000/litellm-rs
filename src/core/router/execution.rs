@@ -11,25 +11,6 @@ use crate::core::providers::unified_provider::ProviderError;
 use rand::Rng;
 use std::time::Duration;
 
-/// Check if an error is retryable
-///
-/// Determines whether a request should be retried based on the error type.
-#[deprecated(
-    since = "0.6.0",
-    note = "use RetryPolicy::decide with ProviderFailureFacts for provider routing/retry; removal tracked in 0.7.0 follow-up (SP965-T010)"
-)]
-pub fn is_retryable_error(error: &ProviderError) -> bool {
-    match error {
-        ProviderError::RateLimit { .. }
-        | ProviderError::Timeout { .. }
-        | ProviderError::ProviderUnavailable { .. }
-        | ProviderError::Network { .. } => true,
-        ProviderError::ApiError { .. } if error.is_bedrock_modeled_retry_error() => true,
-        ProviderError::QuotaExceeded { .. } => retryable_budget_scope(error).is_some(),
-        _ => false,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BudgetRetryScope {
     Provider,

@@ -2,15 +2,8 @@
 //!
 //! This module contains the core business logic and data structures.
 
-#[cfg_attr(
-    not(test),
-    deprecated(
-        since = "0.6.0",
-        note = "core::a2a is a default-off compatibility surface scheduled for removal in 0.7.0"
-    )
-)]
 #[cfg(feature = "a2a")]
-pub mod a2a; // Experimental module-only A2A gateway; see subsystem_registry.
+pub mod a2a; // Opt-in A2A gateway and library client.
 #[cfg_attr(
     not(test),
     deprecated(
