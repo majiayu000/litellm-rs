@@ -620,7 +620,8 @@ async fn client_disconnect_closes_upstream_and_records_reserved_fallback() {
     let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
         panic!("expected RPM rejection")
     };
-    assert_eq!(response.status().as_u16(), 429);
+    // Exhausted routing availability retains the gateway handshake error contract.
+    assert_eq!(response.status().as_u16(), 503);
     for handle in handles {
         handle.stop(false).await;
     }
