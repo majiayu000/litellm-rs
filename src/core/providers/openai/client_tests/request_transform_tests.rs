@@ -73,7 +73,7 @@ fn test_transform_chat_request_with_max_completion_tokens() {
     let provider = create_test_provider();
 
     let request = ChatRequest {
-        model: "o1-preview".to_string(),
+        model: "o1".to_string(),
         messages: vec![ChatMessage {
             role: MessageRole::User,
             content: Some(MessageContent::Text("Hello".to_string())),
@@ -244,4 +244,22 @@ async fn test_calculate_cost_zero_tokens() {
     let cost = provider.calculate_cost("gpt-4", 0, 0).await;
     assert!(cost.is_ok());
     assert!((cost.unwrap() - 0.0).abs() < 0.0001);
+}
+
+#[test]
+fn native_only_and_non_chat_models_are_rejected_before_chat_transmission() {
+    let provider = create_test_provider();
+    for model in [
+        "gpt-5.5-pro",
+        "gpt-5.3-codex",
+        "gpt-5.6-cyber",
+        "gpt-image-1.5",
+        "gpt-4o-mini-transcribe",
+    ] {
+        let result = provider.transform_chat_request(ChatRequest {
+            model: model.into(),
+            ..Default::default()
+        });
+        assert!(result.is_err(), "{model}");
+    }
 }
