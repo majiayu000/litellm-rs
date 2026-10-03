@@ -556,6 +556,9 @@ impl Provider {
     ) -> Result<reqwest::Response, ProviderError> {
         match self {
             Provider::OpenAI(provider) => provider.native_response(body).await,
+            Provider::Bedrock(provider) => provider.native_response(body).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(provider) => provider.native_response(body).await,
             _ => Err(ProviderError::not_supported(
                 "provider",
                 "Native Responses API",

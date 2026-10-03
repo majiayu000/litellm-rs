@@ -11,7 +11,8 @@ use super::builder::{US_GLOBAL, entry};
 
 pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
     // GPT-6 Converse support and limits from AWS model cards (2026-10-01).
-    // 6.1 Sol has only a US runtime profile, with AWS's 10% regional premium.
+    // Fresh 2026-10-03 AWS evidence includes US/global 6.1 Sol profiles;
+    // its static US price retains AWS's 10% regional premium.
     for (id, name, input, output, context, max_out, profiles) in [
         (
             "openai.gpt-6-astra",
@@ -47,7 +48,7 @@ pub(super) fn seed(out: &mut Vec<BedrockCatalogEntry>) {
             0.011,
             1_000_000,
             131_072,
-            &[InferenceProfileScope::UnitedStates][..],
+            US_GLOBAL,
         ),
     ] {
         out.push(entry(
