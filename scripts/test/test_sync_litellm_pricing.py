@@ -944,11 +944,11 @@ class CatalogAuthorityTests(unittest.TestCase):
         self.assertEqual(authority["_metadata"]["total_entry_count"], len(prices))
         # Scheduled imports may add pending rows, but cannot change reviewed ones.
         # Retirement review #1373 moved 20 entries to historical pricing only.
-        self.assertEqual(target_counts["callable"], 151)
-        self.assertEqual(target_counts["pricing_only"], 429)
-        self.assertGreaterEqual(target_counts["unreviewed"], 76)
-        # Importing prices must not invent endpoint/capability contracts. The
-        # reviewed ledger now carries the per-model native endpoint matrix.
+        # Azure moved one callable alias and five pending rows to pricing-only.
+        self.assertEqual(target_counts["callable"], 150)
+        self.assertEqual(target_counts["pricing_only"], 435)
+        self.assertGreaterEqual(target_counts["unreviewed"], 71)
+        # Preserve the reviewed Responses endpoint contracts after the merge.
         expected_contracts = sorted(
             (entry["provider"], entry["pricing_key"])
             for entry in decisions["entries"]

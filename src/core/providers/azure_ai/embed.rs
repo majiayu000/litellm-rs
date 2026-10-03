@@ -44,18 +44,13 @@ impl AzureAIEmbeddingHandler {
         let azure_request = AzureAIEmbeddingUtils::transform_request(&request)?;
 
         // Build URL
-        let url = if self.is_multimodal_embedding_model(&request.model) {
-            // Use image embeddings endpoint for multimodal models
-            self.client
-                .get_config()
-                .build_endpoint_url(AzureAIEndpointType::ImageEmbeddings.as_path())
-        } else {
-            // Use regular embeddings endpoint
-            self.client
-                .get_config()
-                .build_endpoint_url(AzureAIEndpointType::Embeddings.as_path())
-        }
-        .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
+        // EmbeddingRequest contains text. Even a model that also supports images
+        // must receive text through the text embeddings endpoint.
+        let url = self
+            .client
+            .get_config()
+            .build_endpoint_url(AzureAIEndpointType::Embeddings.as_path())
+            .map_err(|e| ProviderError::configuration("azure_ai", &e))?;
 
         // Execute request
         let response = self
@@ -86,11 +81,6 @@ impl AzureAIEmbeddingHandler {
 
         // Transform to standard format
         AzureAIEmbeddingUtils::transform_response(response_json, &request.model)
-    }
-
-    /// Check if model is multimodal embedding model
-    fn is_multimodal_embedding_model(&self, model: &str) -> bool {
-        model.contains("cohere-embed") || model.contains("multimodal")
     }
 }
 
@@ -213,7 +203,7 @@ impl AzureAIEmbeddingUtils {
         match model {
             m if m.contains("text-embedding-3-large") => Some(3072),
             m if m.contains("text-embedding-3-small") => Some(1536),
-            m if m.contains("cohere-embed") => Some(1024),
+            "Cohere-embed-v3-multilingual" => Some(1024),
             _ => None,
         }
     }
@@ -222,7 +212,7 @@ impl AzureAIEmbeddingUtils {
     pub fn get_max_input_length(model: &str) -> u32 {
         match model {
             m if m.contains("text-embedding-3") => 8192,
-            m if m.contains("cohere-embed") => 512,
+            "Cohere-embed-v3-multilingual" => 512,
             _ => 2048,
         }
     }
@@ -274,12 +264,12 @@ impl EmbeddingModelCapabilities {
                 supports_multimodal: false,
                 encoding_formats: vec!["float".to_string(), "base64".to_string()],
             },
-            m if m.contains("cohere-embed-v3-multilingual") => Self {
+            "Cohere-embed-v3-multilingual" => Self {
                 max_input_length: 512,
                 default_dimensions: Some(1024),
                 max_dimensions: 1024,
                 supports_batch: true,
-                supports_multimodal: true,
+                supports_multimodal: false,
                 encoding_formats: vec!["float".to_string()],
             },
             _ => Self {
@@ -297,7 +287,6 @@ impl EmbeddingModelCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::providers::azure_ai::config::AzureAIConfig;
 
     #[test]
     fn test_embedding_utils_validation() {
@@ -334,9 +323,17 @@ mod tests {
         assert!(caps.supports_batch);
         assert!(!caps.supports_multimodal);
 
-        let cohere_caps = EmbeddingModelCapabilities::for_model("cohere-embed-v3-multilingual");
+        let cohere_caps = EmbeddingModelCapabilities::for_model("Cohere-embed-v3-multilingual");
         assert_eq!(cohere_caps.max_input_length, 512);
-        assert!(cohere_caps.supports_multimodal);
+        assert!(!cohere_caps.supports_multimodal);
+        assert_eq!(
+            AzureAIEmbeddingUtils::get_default_dimensions("Cohere-embed-v3-multilingual"),
+            Some(1024)
+        );
+        assert_eq!(
+            AzureAIEmbeddingUtils::get_max_input_length("Cohere-embed-v3-multilingual"),
+            512
+        );
     }
 
     #[test]
@@ -369,15 +366,6 @@ mod tests {
         assert_eq!(azure_request["encoding_format"], "float");
         assert_eq!(azure_request["dimensions"], 1536);
         assert_eq!(azure_request["user"], "test-user");
-    }
-
-    #[test]
-    fn test_multimodal_detection() {
-        let config = AzureAIConfig::new("azure_ai");
-        if let Ok(handler) = AzureAIEmbeddingHandler::new(config) {
-            assert!(handler.is_multimodal_embedding_model("cohere-embed-v3-multilingual"));
-            assert!(!handler.is_multimodal_embedding_model("text-embedding-3-large"));
-        }
     }
 
     #[test]
