@@ -40,6 +40,6 @@
 | [siliconflow-audio-speech-post](https://docs.siliconflow.cn/docs/api/audio-speech-post) | `e51879dd1b78314f9c5a5188dac21ffb948f7a61ca6b98665398642f38ae4211` |
 | [siliconflow-audio-transcriptions-post](https://docs.siliconflow.cn/docs/api/audio-transcriptions-post) | `27f9012f6f6735ad740e1d33ec9f3dfdbbd96d7aa1fcc7b35f2a3a93e1e4cef5` |
 
-DashScope/Qwen embeddings 的官方兼容接口仅返回 `usage.total_tokens`；在 embeddings 响应边界将其映射为 prompt_tokens，completion_tokens 为 0，不伪造缺失总量。真实 HTTP fixture 使用该原生形状，同时断言 total/prompt/completion 为 2/2/0。来源：[阿里云兼容 embeddings 接口](https://help.aliyun.com/en/model-studio/embedding-interfaces-compatible-with-openai)。
+DashScope/Qwen embeddings 的官方兼容接口仅返回 `usage.total_tokens`；在 embeddings 响应边界将其映射为 prompt_tokens，completion_tokens 为 0，不伪造缺失总量。真实 HTTP fixture 使用该原生形状，同时断言 total/prompt/completion 为 2/2/0。来源：[阿里云兼容 embeddings 接口](https://help.aliyun.com/en/model-studio/embedding-interfaces-compatible-with-openai)。本批仅支持 float；DashScope、Qwen 和 SiliconFlow 的 base64 请求在 HTTP 前返回 InvalidRequest。阿里云新 workspace 网关可能按 encoding_format 返回 base64，旧网关返回 float，故不能依赖旧网关行为。[官方编码格式说明](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api/)。
 
 2026-10-04 核验：[国内 Zhipu 图片 API](https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%9B%BE%E5%83%8F%E7%94%9F%E6%88%90) 的 user_id 与国际 Z.AI 图片协议都要求 6–128 字符。两者已分别依据各自文档核对；标准 user 在既有图片序列化边界映射到 user_id，上游执行长度校验。真实 HTTP 回归观察两个选择器的 user_id 与 user 缺省。

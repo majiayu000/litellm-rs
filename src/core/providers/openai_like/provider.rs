@@ -323,12 +323,18 @@ impl OpenAILikeProvider {
         &self,
         mut request: EmbeddingRequest,
     ) -> Result<EmbeddingResponse, OpenAILikeError> {
-        if self.provider_name == "siliconflow"
-            && request.encoding_format.as_deref() == Some("base64")
+        if matches!(
+            self.provider_name.as_str(),
+            "siliconflow" | "dashscope" | "qwen"
+        ) && request.encoding_format.as_deref() == Some("base64")
         {
             return Err(ProviderError::invalid_request(
-                "siliconflow",
-                "SiliconFlow embeddings support only float output in this gateway",
+                match self.provider_name.as_str() {
+                    "siliconflow" => "siliconflow",
+                    "dashscope" => "dashscope",
+                    _ => "qwen",
+                },
+                "This gateway supports only float embeddings for this provider",
             ));
         }
         request.model = self.rewrite_request_model(&request.model);

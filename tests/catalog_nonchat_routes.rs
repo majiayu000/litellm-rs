@@ -977,19 +977,21 @@ async fn chinese_embeddings_preserve_native_bases_and_float_usage() {
 }
 
 #[tokio::test]
-async fn siliconflow_base64_embeddings_are_rejected_before_dispatch() {
-    let (router, upstream, handle) = fixture("siliconflow", StatusCode::OK).await;
-    let request = serde_json::from_value(
-        json!({"model":"test-model","input":"hello","encoding_format":"base64"}),
-    )
-    .unwrap();
-    let error = selected(&router, ProviderCapability::Embeddings)
-        .create_embeddings(request, RequestContext::default())
-        .await
-        .unwrap_err();
-    assert!(matches!(error, ProviderError::InvalidRequest { .. }));
-    assert!(upstream.seen.lock().unwrap().is_empty());
-    handle.stop(false).await;
+async fn chinese_base64_embeddings_are_rejected_before_dispatch() {
+    for selector in ["siliconflow", "dashscope", "qwen"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request = serde_json::from_value(
+            json!({"model":"test-model","input":"hello","encoding_format":"base64"}),
+        )
+        .unwrap();
+        let error = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        handle.stop(false).await;
+    }
 }
 
 #[tokio::test]
