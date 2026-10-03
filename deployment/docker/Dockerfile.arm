@@ -50,7 +50,7 @@ RUN mkdir -p src/bin && \
     echo "fn main() {}" > src/bin/pricing-tool.rs
 
 # Build dependencies (this layer will be cached)
-RUN cargo build --release --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --features "postgres sqlite redis s3 metrics tracing websockets"
 RUN rm -rf src/*
 
 # Copy source code and necessary files
@@ -59,7 +59,7 @@ COPY config ./config
 COPY .git ./.git
 
 # Build the application
-RUN cargo build --release --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+RUN cargo build --release --features "postgres sqlite redis s3 metrics tracing websockets"
 
 # Runtime stage
 FROM debian:bookworm-slim

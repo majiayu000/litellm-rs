@@ -161,7 +161,7 @@ impl Gateway {
     fn startup_summary(&self) -> String {
         let gateway = &self.config.gateway;
         format!(
-            "server={{host:{}, port:{}, workers:{:?}}}, providers={}, features={{jwt_auth:{}, api_key_auth:{}, metrics:{}, tracing:{}, caching:{}, semantic_cache:{}, rate_limiting:{}, enterprise:{}}}",
+            "server={{host:{}, port:{}, workers:{:?}}}, providers={}, features={{jwt_auth:{}, api_key_auth:{}, metrics:{}, tracing:{}, caching:{}, rate_limiting:{}, enterprise:{}}}",
             gateway.server.host,
             gateway.server.port,
             gateway.server.workers,
@@ -171,7 +171,6 @@ impl Gateway {
             gateway.monitoring.metrics.enabled,
             gateway.monitoring.tracing.enabled,
             gateway.cache.enabled,
-            gateway.cache.semantic_cache,
             gateway.rate_limit.enabled,
             gateway.enterprise.enabled,
         )

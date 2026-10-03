@@ -44,10 +44,6 @@ pub struct LLMCacheConfig {
     pub embedding_ttl: Duration,
     /// Enable user-specific caching
     pub user_specific: bool,
-    /// Enable semantic similarity caching (future feature)
-    pub semantic_cache_enabled: bool,
-    /// Similarity threshold for semantic cache
-    pub similarity_threshold: f64,
 }
 
 impl Default for LLMCacheConfig {
@@ -57,8 +53,6 @@ impl Default for LLMCacheConfig {
             chat_ttl: Duration::from_secs(3600),       // 1 hour
             embedding_ttl: Duration::from_secs(86400), // 24 hours (embeddings are deterministic)
             user_specific: false,
-            semantic_cache_enabled: false,
-            similarity_threshold: 0.95,
         }
     }
 }

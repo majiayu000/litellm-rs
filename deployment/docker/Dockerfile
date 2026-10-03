@@ -1,6 +1,6 @@
 # Multi-stage build for LiteLLM-RS
 FROM rust:1.92-bookworm AS builder
-ARG RELEASE_FEATURES="postgres sqlite redis s3 metrics tracing websockets analytics"
+ARG RELEASE_FEATURES="postgres sqlite redis s3 metrics tracing websockets"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

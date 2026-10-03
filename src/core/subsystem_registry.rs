@@ -49,12 +49,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         note: "A2A library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
     },
     CoreSubsystem {
-        name: "analytics",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: analytics"),
-        note: "Deprecated analytics types remain default-off for the 0.6 migration window and are scheduled for removal in 0.7.",
-    },
-    CoreSubsystem {
         name: "audio",
         decision: SubsystemDecision::Wired,
         runtime_path: Some("/v1/audio/* routes"),
@@ -233,12 +227,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         decision: SubsystemDecision::LibraryOnly,
         runtime_path: None,
         note: "Core security filters are library support; server security middleware is separate.",
-    },
-    CoreSubsystem {
-        name: "semantic_cache",
-        decision: SubsystemDecision::ConfigRejected,
-        runtime_path: None,
-        note: "Deprecated types remain available during the 0.6 compatibility window, while cache.semantic_cache stays rejected before 0.7 removal.",
     },
     CoreSubsystem {
         name: "streaming",

@@ -568,7 +568,6 @@ fn known_non_gateway_modules_are_positive_exemptions() {
 fn issue_838_subsystems_have_explicit_non_silent_decisions() {
     let expected = [
         ("a2a", SubsystemDecision::FeatureGated),
-        ("analytics", SubsystemDecision::FeatureGated),
         ("audit", SubsystemDecision::Wired),
         ("batch", SubsystemDecision::LibraryOnly),
         ("guardrails", SubsystemDecision::Wired),
@@ -577,7 +576,6 @@ fn issue_838_subsystems_have_explicit_non_silent_decisions() {
         ("mcp", SubsystemDecision::FeatureGated),
         ("observability", SubsystemDecision::Wired),
         ("realtime", SubsystemDecision::FeatureGated),
-        ("semantic_cache", SubsystemDecision::ConfigRejected),
         ("user_management", SubsystemDecision::InternalDependency),
         ("virtual_keys", SubsystemDecision::Wired),
         ("webhooks", SubsystemDecision::FeatureGated),
