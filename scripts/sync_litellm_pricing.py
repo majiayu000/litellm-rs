@@ -287,6 +287,35 @@ for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
         "supports_vision": False,
     })
 
+# First-party Claude >=4.6 inference geo pricing. These are pricing identities,
+# not additions to the callable model catalog. Preserve independent fast rates.
+# https://platform.claude.com/docs/en/manage-claude/data-residency
+ANTHROPIC_GEO_PRICING_MODELS = (
+    "claude-opus-4-6", "claude-opus-4-6-20260205",
+    "claude-opus-4-7", "claude-opus-4-7-20260416", "claude-opus-4-8",
+    "claude-sonnet-4-6", "claude-fable-5", "claude-fable-5-1",
+    "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-5-5",
+)
+
+# Canonical first-party cache/tool rates, verified against official pricing.
+# https://platform.claude.com/docs/en/about-claude/pricing
+for model, short_write, long_write in (
+    ("claude-haiku-4-5-20251001", 0.00000125, 0.000002),
+    ("claude-sonnet-4-6", 0.00000375, 0.000006),
+    ("claude-opus-4-6", 0.00000625, 0.000010),
+    ("claude-opus-4-7", 0.00000625, 0.000010),
+    ("claude-opus-4-8", 0.00000625, 0.000010),
+):
+    OFFICIAL_OVERRIDE_PATCHES.setdefault(model, {}).update({
+        "cache_creation_input_token_cost": short_write,
+        "cache_creation_input_token_cost_above_1hr": long_write,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
+    })
+
 OFFICIAL_PRICING_CONTRACTS: dict[str, dict[str, Any]] = {
     "claude-fable-5": {
         "input_cost_per_token": 0.000010,
@@ -653,6 +682,15 @@ def apply_official_overrides(
             entry.pop("pricing_valid_through", None)
         elif not promo_expired:
             entry.update(patch)
+        patched[model] = entry
+    for model in ANTHROPIC_GEO_PRICING_MODELS:
+        original = patched.get(model, source_entries.get(model))
+        if original is None:
+            continue
+        entry = dict(original)
+        entry["provider_specific_entry"] = {
+            **entry.get("provider_specific_entry", {}), "us": 1.1,
+        }
         patched[model] = entry
     return patched
 
