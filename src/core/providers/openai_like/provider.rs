@@ -914,8 +914,9 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<TranscriptionResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        // Groq's verbose JSON includes duration for settlement; plain JSON does not.
-        if self.provider_name == "groq"
+        // Verbose JSON includes duration for settlement. CompactifAI's plain JSON
+        // uses a usage.seconds envelope that the common response does not expose.
+        if matches!(self.provider_name.as_str(), "groq" | "compactifai")
             && matches!(request.response_format.as_deref(), None | Some("json"))
         {
             request.response_format = Some("verbose_json".into());
