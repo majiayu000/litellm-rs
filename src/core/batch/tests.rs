@@ -6,12 +6,6 @@ use super::types::*;
 use crate::utils::error::gateway_error::GatewayError;
 use std::time::Duration;
 
-#[tokio::test]
-async fn test_batch_creation() {
-    // NOTE: Requires mock database infrastructure for proper testing.
-    // Skipped: would create a BatchProcessor and test batch creation.
-}
-
 #[test]
 fn test_batch_status_transitions() {
     assert_eq!(BatchStatus::Validating, BatchStatus::Validating);

@@ -158,17 +158,17 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | --- | --- | --- |
 | `core/guardrails` | wire | Default-on prompt-injection checks run before provider execution and on non-streaming output; `guardrails.enabled: false` is the explicit opt-out. |
 | `core/ip_access` | wire | Configured allow/block rules run as an outer Actix middleware and short-circuit before downstream side effects; empty/default rules allow all. |
-| `core/mcp` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `mcp`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. Responses API MCP descriptors still pass through independently. |
+| `core/mcp` | feature-gated | `gateway,mcp` mounts authenticated Streamable HTTP at `/{server_name}/mcp` (`/mcp` for one enabled server). See [MCP gateway](docs/gateway/mcp.md) for configuration and stateless transport limits. Responses API MCP descriptors pass through independently. |
 | `core/a2a` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `a2a`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. |
 | `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
-| `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. The unreachable `BatchProcessor` is deprecated in 0.6 and scheduled for removal in 0.7. |
+| `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. Domain records and async batch helpers remain; the unreachable `BatchProcessor` has been removed. |
 | `core/webhooks` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `webhooks`; it is not a gateway runtime capability and is scheduled for 0.7 removal. |
 | `core/semantic_cache` | remove | Deprecated but retained with `storage` during the 0.6 compatibility window; `cache.semantic_cache=true` remains rejected before the planned 0.7 removal. |
 | `core/analytics` | remove | Deprecated and default-off behind `analytics`, with removal planned for 0.7. |
-| `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy `VirtualKeyManager` is deprecated for 0.7 removal. |
-| `core/user_management` | internal/gated | Compatibility records back current auth/storage paths; the deprecated `UserManager` implementation is default-off behind `user-management` and scheduled for 0.7 removal. |
+| `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy manager has been removed. Storage record types remain in use. |
+| `core/user_management` | internal | Domain records back current auth/storage paths. The unused `UserManager` and its `user-management` feature have been removed. |
 
 ## Installation
 
