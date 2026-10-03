@@ -796,3 +796,85 @@ impl UnifiedBudgetReservation {
         model.cancel();
     }
 }
+
+/// Detached background Responses leases. Only shared leases survive a gateway restart.
+#[cfg(feature = "gateway")]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ResponseBudgetLeases {
+    pub provider: Option<(String, i64)>,
+    pub model: Option<(String, i64)>,
+    pub reserved: f64,
+}
+
+#[cfg(feature = "gateway")]
+impl UnifiedBudgetReservation {
+    pub(crate) fn response_leases(&self) -> Result<ResponseBudgetLeases, BudgetReservationError> {
+        if (self.provider.tracked && self.provider.lease_id.is_none())
+            || (self.model.tracked && self.model.lease_id.is_none())
+        {
+            return Err(BudgetReservationError::BackendUnavailable);
+        }
+        Ok(ResponseBudgetLeases {
+            provider: self
+                .provider
+                .lease_id
+                .clone()
+                .map(|id| (id, self.provider.period_epoch)),
+            model: self
+                .model
+                .lease_id
+                .clone()
+                .map(|id| (id, self.model.period_epoch)),
+            reserved: self.reserved_amount(),
+        })
+    }
+
+    /// SQL has accepted ownership; dropping the request must no longer cancel leases.
+    pub(crate) fn detach_response(mut self) {
+        self.provider.settled = true;
+        self.model.settled = true;
+    }
+}
+
+#[cfg(feature = "gateway")]
+impl UnifiedBudgetLimits {
+    pub(crate) fn settle_response_leases(
+        &self,
+        provider: &str,
+        model: &str,
+        leases: &ResponseBudgetLeases,
+        cost: f64,
+    ) -> Result<(), BudgetReservationError> {
+        let reserved = BudgetAmount::from_f64(leases.reserved)?;
+        let actual = BudgetAmount::from_f64(cost)?;
+        if let Some((id, epoch)) = &leases.provider {
+            let (snapshot, applied) = self.providers.backend.settle_response(
+                BudgetLeaseScope::Provider,
+                provider,
+                id,
+                reserved,
+                actual,
+                *epoch,
+            )?;
+            self.providers.sync_lease_snapshot(provider, snapshot);
+            if applied {
+                self.providers.finish_distributed_settle(provider);
+            }
+        }
+        if let Some((id, epoch)) = &leases.model {
+            let (snapshot, applied) = self.models.backend.settle_response(
+                BudgetLeaseScope::Model,
+                model,
+                id,
+                reserved,
+                actual,
+                *epoch,
+            )?;
+            self.models.sync_lease_snapshot(model, snapshot);
+            if applied {
+                self.models.finish_distributed_settle(model);
+            }
+        }
+        Ok(())
+    }
+}

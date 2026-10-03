@@ -17,10 +17,15 @@ use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 
 use super::{budgeted, openai_errors, spend};
+#[path = "responses_native_background.rs"]
+pub(super) mod background;
+#[path = "responses_native_lifecycle.rs"]
+pub(super) mod lifecycle;
 #[path = "responses_native_request.rs"]
 mod request;
 #[path = "responses_native_stream.rs"]
 mod stream;
+use lifecycle::NativeResponseStorage;
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -67,6 +72,8 @@ struct NativeCall {
     pricing: spend::RequestPricing,
     reservation: Option<UnifiedBudgetReservation>,
     key_reservation: Option<BudgetReservation>,
+    storage: Option<NativeResponseStorage>,
+    started: tokio::time::Instant,
 }
 
 async fn create_native(
@@ -88,18 +95,35 @@ async fn create_native(
         return Err(GatewayError::Auth("Unauthorized".into()));
     }
     super::token_policy::attach_api_key_token_limit(req, &mut context)?;
-    // Native lifecycle handles must be bound to an authenticated owner and deployment
-    // before they can cross this gateway. F07 supplies that persistent binding.
-    if body.get("store") != Some(&Value::Bool(false))
-        || body.get("background") == Some(&Value::Bool(true))
-        || body
-            .get("previous_response_id")
-            .is_some_and(|value| !value.is_null())
-    {
+    let owner = super::responses::response_owner(&context);
+    let store = match body.get("store") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(GatewayError::validation("store must be a boolean")),
+    };
+    let background = match body.get("background") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(GatewayError::validation("background must be a boolean")),
+    };
+    if background && context.api_key_budget_id().is_some() {
         return Err(GatewayError::validation(
-            "Native Responses currently requires store=false, background=false and no previous_response_id; shared lifecycle support is pending",
+            "Background Responses cannot use an in-process API key budget; persistent key usage remains supported",
         ));
     }
+    if background && !state.config().gateway.storage.database.enabled {
+        return Err(GatewayError::validation(
+            "Background Responses require an enabled shared SQL database",
+        ));
+    }
+    if (store || background) && owner.is_none() {
+        return Err(GatewayError::validation(
+            "Stored or background Responses require authentication; anonymous requests must use store=false and background=false",
+        ));
+    }
+    let previous =
+        lifecycle::previous_response(&state.storage.database, &body, owner.as_ref()).await?;
+    let retained_prompt_tokens = previous.as_ref().map_or(0, |(_, tokens)| *tokens);
     let needs_input_count = request::validate(&body)?;
     let requested_model = body
         .get("model")
@@ -136,6 +160,13 @@ async fn create_native(
     let sink = GuardrailDecisionSink::from_state(state, Some(&requested_model), None, None);
     body =
         guardrails::apply_native_responses(state.guardrails().as_ref(), body, false, &sink).await?;
+    let retained_input = lifecycle::retained_input(
+        state,
+        &body,
+        previous.as_ref().map(|(record, _)| record),
+        &sink,
+    )
+    .await?;
     let model = state.unified_router().resolve_model_name(&requested_model);
     let callback = super::callbacks::CallbackLifecycle::new(
         &state.callbacks,
@@ -143,17 +174,26 @@ async fn create_native(
         &requested_model,
         &context,
     );
-    let (call, lease) = budgeted::run_stream(
+    let (mut call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::Responses,
+        |deployment| {
+            previous.as_ref().is_none_or(|(record, _)| {
+                record.deployment_id.as_deref() == Some(deployment.id.as_str())
+                    && deployment.provider.native_response_binding() == record.deployment_binding
+            })
+        },
         {
             let context = context.clone();
             let callback = callback.clone();
+            let owner = owner.clone();
             move |provider, model, deployment| {
                 let mut body = body.clone();
+                let retained_input = retained_input.clone();
                 let context = context.clone();
                 let callback = callback.clone();
+                let owner = owner.clone();
                 async move {
                     body["model"] = model.clone().into();
                     let provider_name = provider.name().to_string();
@@ -166,6 +206,25 @@ async fn create_native(
                     // This projection is only for the token reservation. The native wire body
                     // never passes through the chat transformer, including tools and reasoning.
                     let budget_request = budget_request(&body, &model);
+                    let mut storage = if store || background {
+                        let binding = provider.native_response_binding().ok_or_else(|| {
+                            ProviderError::not_supported("responses", "Stored native responses")
+                        })?;
+                        let owner = owner.as_ref().ok_or_else(|| {
+                            ProviderError::invalid_request(
+                                "responses",
+                                "Stored responses require an authenticated owner",
+                            )
+                        })?;
+                        Some(NativeResponseStorage::new(
+                            owner.0.clone(),
+                            &retained_input,
+                            deployment.clone(),
+                            binding,
+                        ))
+                    } else {
+                        None
+                    };
                     let counted_input = if needs_input_count {
                         Some(
                             provider
@@ -176,7 +235,8 @@ async fn create_native(
                         None
                     };
                     let limits = state.budgeted.budget_limits();
-                    let (response, reservations) = state
+                    let started = tokio::time::Instant::now();
+                    let (reservations, _) = state
                         .budgeted
                         .for_selected_with_api_key_budget(
                             provider_name.clone(),
@@ -184,40 +244,54 @@ async fn create_native(
                             context.api_key_budget_id(),
                             budgeted::ApiKeyBudgetPolicy::FromProviderReservation,
                         )
-                        .reserve_call(
-                            |_| {
-                                if let Some(input_tokens) = counted_input {
-                                    spend::reserve_completion_budget_with_counted_input(
-                                        &pricing,
-                                        &state.config().gateway.pricing,
-                                        &limits,
-                                        &provider_name,
-                                        &model,
-                                        input_tokens,
-                                        budget_request.max_tokens,
-                                    )
-                                } else {
-                                    spend::reserve_chat_completion_budget_with_request_pricing(
-                                        &pricing,
-                                        &state.config().gateway.pricing,
-                                        &limits,
-                                        &provider_name,
-                                        &model,
-                                        &budget_request,
-                                    )
-                                }
-                            },
-                            || {
-                                callback.begin_provider_execution_with_pricing(
+                        .reserve_for_call(|_| {
+                            if let Some(input_tokens) = counted_input {
+                                spend::reserve_completion_budget_with_counted_input(
+                                    &pricing,
+                                    &state.config().gateway.pricing,
+                                    &limits,
                                     &provider_name,
                                     &model,
-                                    pricing.clone(),
-                                );
-                                provider.native_response(body)
-                            },
+                                    input_tokens,
+                                    budget_request.max_tokens,
+                                )
+                            } else {
+                                spend::reserve_chat_completion_budget_with_request_pricing(
+                                    &pricing,
+                                    &state.config().gateway.pricing,
+                                    &limits,
+                                    &provider_name,
+                                    &model,
+                                    spend::ChatCompletionBudgetRequest::from(&budget_request)
+                                        .with_retained_prompt_tokens(retained_prompt_tokens),
+                                )
+                            }
+                        })?;
+                    let (mut reservation, key_reservation) = reservations.into_parts();
+                    if background {
+                        super::responses_settlement::prepare(
+                            state,
+                            &context,
+                            storage.as_mut().expect("background storage checked above"),
+                            &provider_name,
+                            &model,
+                            &pricing,
+                            reservation.as_ref(),
                         )
-                        .await?;
-                    let (reservation, key_reservation) = reservations.into_parts();
+                        .await
+                        .map_err(|error| {
+                            ProviderError::configuration("responses", error.to_string())
+                        })?;
+                        if let Some(reservation) = reservation.take() {
+                            reservation.detach_response();
+                        }
+                    }
+                    callback.begin_provider_execution_with_pricing(
+                        &provider_name,
+                        &model,
+                        pricing.clone(),
+                    );
+                    let response = provider.native_response(body).await?;
                     Ok(NativeCall {
                         callback,
                         response,
@@ -227,6 +301,8 @@ async fn create_native(
                         pricing,
                         reservation,
                         key_reservation,
+                        storage,
+                        started,
                     })
                 }
             }
@@ -239,6 +315,19 @@ async fn create_native(
     if streaming {
         return Ok(stream::response(state.clone(), context, call, lease));
     }
+    if background {
+        let value = lifecycle::read_json(&mut call.response).await;
+        return background::response(
+            state.clone(),
+            context,
+            call,
+            lease,
+            value,
+            false,
+            crate::core::request_ledger::current_facts(),
+        )
+        .await;
+    }
     let NativeCall {
         callback,
         response,
@@ -248,6 +337,8 @@ async fn create_native(
         pricing,
         reservation,
         key_reservation,
+        mut storage,
+        started: _,
     } = call;
     let mut body_stream = response.bytes_stream();
     let mut bytes = Vec::new();
@@ -324,6 +415,14 @@ async fn create_native(
         .inspect_err(|error| {
             callback.fail(error.to_string(), "guardrail_error");
         })?;
+    if let Some(storage) = storage.as_mut() {
+        storage
+            .save(&state.storage.database, &value)
+            .await
+            .inspect_err(|error| {
+                callback.fail(error.to_string(), "storage_error");
+            })?;
+    }
     callback.complete_usage(usage.as_ref(), "success");
     Ok(HttpResponse::Ok().json(value))
 }
@@ -392,7 +491,7 @@ fn budget_image_parts(value: &mut Value, parts: &mut Vec<ContentPart>) {
     }
 }
 
-fn response_usage(value: &Value) -> Option<Usage> {
+pub(super) fn response_usage(value: &Value) -> Option<Usage> {
     let usage = value.get("usage")?;
     let input = usage.get("input_tokens")?.as_u64()?;
     let output = usage.get("output_tokens")?.as_u64()?;

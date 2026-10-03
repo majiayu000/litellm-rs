@@ -9,6 +9,13 @@ use std::sync::LazyLock;
 use super::definition::{AuthType, ProviderDefinition};
 use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
+const COMPACTIFAI_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::AudioTranscription,
+];
 const GROQ_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -36,6 +43,13 @@ const DEEPINFRA_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::FunctionCalling,
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
+];
+const NSCALE_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
 ];
 
 const XINFERENCE_CAPABILITIES: &[ProviderCapability] = &[
@@ -416,12 +430,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "NEBIUS_API_KEY",
             )
         },
-        def_chat(
-            "nscale",
-            "Nscale",
-            "https://inference.api.nscale.ai/v1",
-            "NSCALE_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: NSCALE_CAPABILITIES,
+            ..def_chat(
+                "nscale",
+                "Nscale",
+                "https://inference.api.nscale.com/v1",
+                "NSCALE_API_KEY",
+            )
+        },
         def_chat(
             "hyperbolic",
             "Hyperbolic",
@@ -452,12 +469,16 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.sambanova.ai/v1",
             "SAMBANOVA_API_KEY",
         ),
-        def_chat(
-            "heroku",
-            "Heroku",
-            "https://us.inference.heroku.com/v1",
-            "HEROKU_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            alternate_auth_env_vars: &["INFERENCE_KEY", "EMBEDDING_KEY"],
+            ..def_chat(
+                "heroku",
+                "Heroku",
+                "https://us.inference.heroku.com/v1",
+                "HEROKU_API_KEY",
+            )
+        },
         def_chat(
             "friendliai",
             "FriendliAI",
@@ -563,24 +584,30 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "DASHSCOPE_API_KEY",
         ),
-        def_chat(
-            "baichuan",
-            "Baichuan",
-            "https://api.baichuan-ai.com/v1",
-            "BAICHUAN_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "baichuan",
+                "Baichuan",
+                "https://api.baichuan-ai.com/v1",
+                "BAICHUAN_API_KEY",
+            )
+        },
         def_chat(
             "minimax",
             "MiniMax",
-            "https://api.minimax.chat/v1",
+            "https://api.minimax.io/v1",
             "MINIMAX_API_KEY",
         ),
-        def_chat(
-            "volcengine",
-            "Volcengine",
-            "https://ark.cn-beijing.volces.com/api/v3",
-            "VOLCENGINE_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "volcengine",
+                "Volcengine",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "VOLCENGINE_API_KEY",
+            )
+        },
         ProviderDefinition {
             alternate_auth_env_vars: &["XIAOMI_API_KEY"],
             ..def_chat(
@@ -613,7 +640,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         def_chat(
             "wandb",
             "Weights & Biases",
-            "https://api.wandb.ai/v1",
+            "https://api.inference.wandb.ai/v1",
             "WANDB_API_KEY",
         ),
         ProviderDefinition {
@@ -668,12 +695,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.comet.com/v1",
             "COMET_API_KEY",
         ),
-        def_chat(
-            "compactifai",
-            "CompactifAI",
-            "https://api.compactif.ai/v1",
-            "COMPACTIFAI_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: COMPACTIFAI_CAPABILITIES,
+            ..def_chat(
+                "compactifai",
+                "CompactifAI",
+                "https://api.compactif.ai/v1",
+                "COMPACTIFAI_API_KEY",
+            )
+        },
         def_chat(
             "maritalk",
             "MariTalk",
@@ -693,12 +723,16 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.lambdalabs.com/v1",
             "LAMBDA_API_KEY",
         ),
-        def_chat(
-            "ovhcloud",
-            "OVHcloud",
-            "https://api.ai.cloud.ovh.net/v1",
-            "OVHCLOUD_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            alternate_auth_env_vars: &["OVH_AI_ENDPOINTS_ACCESS_TOKEN"],
+            ..def_chat(
+                "ovhcloud",
+                "OVHcloud",
+                "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+                "OVHCLOUD_API_KEY",
+            )
+        },
     ];
 
     let mut map = HashMap::with_capacity(defs.len());

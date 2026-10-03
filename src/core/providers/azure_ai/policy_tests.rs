@@ -350,3 +350,181 @@ async fn phi_4_rejects_unsupported_params_on_live_chat_paths() {
     };
     assert!(error.to_string().contains("stream"), "{error}");
 }
+
+#[tokio::test]
+async fn text_embeddings_use_text_endpoint_for_cohere_and_deployment_names() {
+    use crate::core::types::embedding::{EmbeddingInput, EmbeddingRequest};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut buffer = [0; 4096];
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let len: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse().unwrap())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + len {
+                        assert_eq!(headers.lines().next().unwrap(), "POST /embeddings HTTP/1.1");
+                        let body: serde_json::Value =
+                            serde_json::from_slice(&bytes[end + 4..end + 4 + len]).unwrap();
+                        assert_eq!(body["input"], serde_json::json!(["text document"]));
+                        let model = body["model"].as_str().unwrap().to_owned();
+                        let response = serde_json::json!({"data":[{"index":0,"embedding":[0.1,0.2]}],"model":model,"usage":{"prompt_tokens":2,"total_tokens":2}}).to_string();
+                        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).as_bytes()).await.unwrap();
+                        seen.push(model);
+                        break;
+                    }
+                }
+            }
+        }
+        seen
+    });
+    let provider = AzureAIProvider::new(policy_config(
+        &format!("http://{address}"),
+        ProviderEndpointAccess::PrivateNetwork,
+    ))
+    .unwrap();
+    for model in [
+        "Cohere-embed-v3-multilingual",
+        "customer-multimodal-deployment",
+    ] {
+        let result = provider
+            .embeddings(
+                EmbeddingRequest {
+                    model: model.to_string(),
+                    input: EmbeddingInput::Array(vec!["text document".to_string()]),
+                    user: None,
+                    encoding_format: None,
+                    dimensions: None,
+                    task_type: None,
+                    truncation: None,
+                },
+                RequestContext::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.data[0].embedding, vec![0.1, 0.2]);
+        assert_eq!(result.usage.unwrap().total_tokens, 2);
+    }
+    assert_eq!(
+        upstream.await.unwrap(),
+        [
+            "Cohere-embed-v3-multilingual",
+            "customer-multimodal-deployment"
+        ]
+    );
+}
+
+#[test]
+fn retired_foundry_alias_cannot_reenter_via_historical_pricing() {
+    use crate::core::providers::model_identity::{
+        ModelIdentityMapping, validate_deployment_identity,
+    };
+    use crate::core::providers::registry::model_catalog_authority::CatalogAuthority;
+    let pricing = crate::core::pricing_service::PricingService::with_embedded_default().unwrap();
+    let catalog = CatalogAuthority::from_embedded().unwrap();
+    assert!(
+        pricing
+            .get_model_info_for_provider("azure_ai", "mistral-large-latest")
+            .is_some()
+    );
+    let mapping =
+        ModelIdentityMapping::new(Some("azure_ai/mistral-large-latest".to_string()), None);
+    assert!(
+        validate_deployment_identity(
+            "old-mistral",
+            "azure_ai",
+            "deployment",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot()
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn configured_router_keeps_current_foundry_modalities_and_rejects_old_alias() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::router::unified::Router;
+    use crate::core::types::model::ProviderCapability;
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default().unwrap(),
+    );
+    let config = |model: &str| ProviderConfig {
+        name: "foundry-audit".to_string(),
+        provider_type: "azure_ai".to_string(),
+        api_key: "fixture-key".to_string(),
+        base_url: Some("https://example.com".to_string()),
+        models: vec![model.to_string()],
+        settings: HashMap::from([(
+            "model_identity_mappings".to_string(),
+            serde_json::json!({model: {"capability_catalog_model": format!("azure_ai/{model}")}}),
+        )]),
+        ..Default::default()
+    };
+    for (model, capability) in [
+        (
+            "Cohere-embed-v3-multilingual",
+            ProviderCapability::Embeddings,
+        ),
+        ("FLUX-1.1-pro", ProviderCapability::ImageGeneration),
+    ] {
+        let router =
+            Router::from_gateway_config_with_pricing(&[config(model)], None, pricing.clone())
+                .await
+                .unwrap();
+        assert!(
+            router
+                .select_deployment_lease_for_capability(model, &capability)
+                .is_ok(),
+            "{model} must route to {capability:?}"
+        );
+        assert!(
+            router
+                .select_deployment_lease_for_capability(model, &ProviderCapability::ChatCompletion)
+                .is_err()
+        );
+    }
+    // The native helper exists, but gateway rerank dispatch is not connected.
+    // Neither that missing route nor a chat fallback should be advertised.
+    let rerank = Router::from_gateway_config_with_pricing(
+        &[config("Cohere-rerank-v4.0-pro")],
+        None,
+        pricing.clone(),
+    )
+    .await
+    .unwrap();
+    for capability in [
+        ProviderCapability::ChatCompletion,
+        ProviderCapability::Rerank,
+    ] {
+        assert!(
+            rerank
+                .select_deployment_lease_for_capability("Cohere-rerank-v4.0-pro", &capability)
+                .is_err()
+        );
+    }
+    let old =
+        Router::from_gateway_config_with_pricing(&[config("mistral-large-latest")], None, pricing)
+            .await;
+    assert!(
+        old.is_err(),
+        "historical prices must not grant current routing capabilities"
+    );
+}

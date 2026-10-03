@@ -31,6 +31,7 @@ impl SeaOrmDatabase {
                     db,
                     backend_type,
                     sqlite_fallback: false,
+                    last_response_prune: std::sync::atomic::AtomicI64::new(0),
                 })
             }
             Err(e) => {
@@ -65,6 +66,7 @@ impl SeaOrmDatabase {
             db,
             backend_type: DatabaseBackendType::SQLite,
             sqlite_fallback: false,
+            last_response_prune: std::sync::atomic::AtomicI64::new(0),
         })
     }
 
@@ -112,6 +114,7 @@ impl SeaOrmDatabase {
             db,
             backend_type: DatabaseBackendType::SQLite,
             sqlite_fallback: true,
+            last_response_prune: std::sync::atomic::AtomicI64::new(0),
         })
     }
 

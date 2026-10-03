@@ -7,8 +7,8 @@
     "source_sha256": "6a6c5f26c342932371d7681f3dd7e5fc5d3a7f33fa59692fb167c08cad21cb4e",
     "generated_by": "scripts/sync_litellm_pricing.py",
     "upstream_model_count": 4451,
-    "compatibility_overlay_count": 215,
-    "compatibility_overlay_override_count": 97,
+    "compatibility_overlay_count": 220,
+    "compatibility_overlay_override_count": 102,
     "compatibility_overlay_add_count": 118,
     "compatibility_overlay_keys": [
       "MiniMax-M2",
@@ -79,6 +79,11 @@
       "devstral-2512",
       "devstral-medium-latest",
       "devstral-small-latest",
+      "doubao-embedding",
+      "doubao-embedding-large",
+      "doubao-embedding-large-text-240915",
+      "doubao-embedding-large-text-250515",
+      "doubao-embedding-text-240715",
       "embed-english-light-v3.0",
       "embed-english-v3.0",
       "embed-multilingual-light-v3.0",
@@ -229,8 +234,8 @@
     ],
     "total_model_count": 4569,
     "catalog_decision_revision": "responses-endpoint-and-retirement-review-20261003",
-    "catalog_decision_source_sha256": "0b95a60e714ac9902a831ebe945ea52846dc57fb7674cc30158d5f376435c987",
-    "catalog_authority_sha256": "56f72b44a503d2c32c655d9dd1ae37a5cd972211b005c4dd7a1ba7b2b39c9b29",
+    "catalog_decision_source_sha256": "f11f42da8a76fe12351bc183c14eec261a23e52b33467853ba05b0830a47d583",
+    "catalog_authority_sha256": "fa7187381bc90127da44179afdee681cfcd00ab1556f980f9dfb099082425db1",
     "catalog_authority_entry_count": 4569,
     "catalog_authority_enforced_providers": [
       "azure",
@@ -299,9 +304,9 @@
         "unreviewed": 0
       },
       "azure_ai": {
-        "callable": 36,
-        "pricing_only": 41,
-        "unreviewed": 64
+        "callable": 35,
+        "pricing_only": 47,
+        "unreviewed": 59
       },
       "azure_text": {
         "callable": 0,
@@ -23220,7 +23225,6 @@
     "supports_tool_choice": true
   },
   "doubao-embedding": {
-    "input_cost_per_token": 0.0,
     "litellm_provider": "volcengine",
     "max_input_tokens": 4096,
     "max_tokens": 4096,
@@ -23228,11 +23232,9 @@
       "notes": "Volcengine Doubao embedding model - standard version with 2560 dimensions"
     },
     "mode": "embedding",
-    "output_cost_per_token": 0.0,
     "output_vector_size": 2560
   },
   "doubao-embedding-large": {
-    "input_cost_per_token": 0.0,
     "litellm_provider": "volcengine",
     "max_input_tokens": 4096,
     "max_tokens": 4096,
@@ -23240,11 +23242,9 @@
       "notes": "Volcengine Doubao embedding model - large version with 2048 dimensions"
     },
     "mode": "embedding",
-    "output_cost_per_token": 0.0,
     "output_vector_size": 2048
   },
   "doubao-embedding-large-text-240915": {
-    "input_cost_per_token": 0.0,
     "litellm_provider": "volcengine",
     "max_input_tokens": 4096,
     "max_tokens": 4096,
@@ -23252,11 +23252,9 @@
       "notes": "Volcengine Doubao embedding model - text-240915 version with 4096 dimensions"
     },
     "mode": "embedding",
-    "output_cost_per_token": 0.0,
     "output_vector_size": 4096
   },
   "doubao-embedding-large-text-250515": {
-    "input_cost_per_token": 0.0,
     "litellm_provider": "volcengine",
     "max_input_tokens": 4096,
     "max_tokens": 4096,
@@ -23264,11 +23262,9 @@
       "notes": "Volcengine Doubao embedding model - text-250515 version with 2048 dimensions"
     },
     "mode": "embedding",
-    "output_cost_per_token": 0.0,
     "output_vector_size": 2048
   },
   "doubao-embedding-text-240715": {
-    "input_cost_per_token": 0.0,
     "litellm_provider": "volcengine",
     "max_input_tokens": 4096,
     "max_tokens": 4096,
@@ -23276,7 +23272,6 @@
       "notes": "Volcengine Doubao embedding model - text-240715 version with 2560 dimensions"
     },
     "mode": "embedding",
-    "output_cost_per_token": 0.0,
     "output_vector_size": 2560
   },
   "exa_ai/search": {
