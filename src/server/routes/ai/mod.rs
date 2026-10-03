@@ -26,6 +26,10 @@ mod output_fallback;
 mod provider_config;
 #[cfg(test)]
 mod provider_selection;
+#[cfg(feature = "websockets")]
+mod realtime;
+#[cfg(feature = "websockets")]
+mod realtime_billing;
 mod rerank;
 mod response_cache;
 mod responses;
@@ -82,6 +86,12 @@ pub fn configure_routes_with_body_limit(cfg: &mut web::ServiceConfig, max_body_s
 }
 
 fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usize>) {
+    #[cfg(feature = "websockets")]
+    cfg.service(
+        web::resource("/v1/realtime")
+            .app_data(openai_query_error_config())
+            .route(web::get().to(realtime::connect)),
+    );
     cfg.route(
         "/openapi.json",
         web::get().to(|| async {
@@ -234,6 +244,10 @@ fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usi
 
 pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
     let normalized = path.trim_end_matches('/');
+
+    if normalized == "/v1/realtime" {
+        return Some("realtime");
+    }
 
     if normalized == "/v1/chat/completions"
         || normalized == "/v1/messages"

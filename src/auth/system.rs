@@ -362,7 +362,7 @@ impl AuthSystem {
     }
 }
 
-fn api_key_budget_id(api_key: &crate::core::models::ApiKey) -> Option<Uuid> {
+pub(crate) fn api_key_budget_id(api_key: &crate::core::models::ApiKey) -> Option<Uuid> {
     api_key
         .metadata
         .extra

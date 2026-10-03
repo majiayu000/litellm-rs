@@ -35853,7 +35853,8 @@
     "supports_parallel_function_calling": true,
     "supports_system_messages": true,
     "supports_tool_choice": true,
-    "source": "https://developers.openai.com/api/docs/models/gpt-realtime-2"
+    "source": "https://developers.openai.com/api/docs/models/gpt-realtime-2",
+    "cache_read_input_audio_token_cost": 4e-07
   },
   "gpt-realtime-2.1": {
     "cache_creation_input_audio_token_cost": 4e-07,

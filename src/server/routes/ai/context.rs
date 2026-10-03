@@ -257,10 +257,14 @@ pub fn api_key_max_tokens_per_request(req: &HttpRequest) -> Result<Option<u32>, 
     let Some(api_key) = extensions.get::<ApiKey>() else {
         return Ok(None);
     };
-    let Some(permissions) = runtime_key_permissions(api_key)? else {
-        return Ok(None);
-    };
-    Ok(permissions.max_tokens_per_request)
+    api_key_output_limit(api_key)
+}
+
+pub(super) fn api_key_output_limit(api_key: &ApiKey) -> Result<Option<u32>, GatewayError> {
+    Ok(
+        runtime_key_permissions(api_key)?
+            .and_then(|permissions| permissions.max_tokens_per_request),
+    )
 }
 
 pub fn enforce_api_key_model_and_token_limits(
@@ -272,6 +276,14 @@ pub fn enforce_api_key_model_and_token_limits(
     let Some(api_key) = extensions.get::<ApiKey>() else {
         return Ok(());
     };
+    enforce_key_model_and_token_limits(api_key, model, requested_tokens)
+}
+
+pub(super) fn enforce_key_model_and_token_limits(
+    api_key: &ApiKey,
+    model: &str,
+    requested_tokens: Option<u32>,
+) -> Result<(), GatewayError> {
     let Some(permissions) = runtime_key_permissions(api_key)? else {
         return Ok(());
     };

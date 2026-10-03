@@ -717,3 +717,56 @@ async fn test_execute_stream_returns_last_error_when_budget_excludes_every_deplo
         ["primary-budget-exhausted", "fallback-provider"]
     );
 }
+
+#[cfg(feature = "websockets")]
+#[tokio::test]
+async fn cancelled_realtime_admission_restores_shared_rpm() {
+    use crate::config::models::storage::RedisConfig;
+    use crate::storage::redis::RedisPool;
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+        return;
+    };
+    let pool = Arc::new(
+        RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let router = UnifiedRouter::default().with_admission_redis(pool.clone());
+    let id = uuid::Uuid::new_v4().to_string();
+    let provider = Provider::OpenAI(
+        OpenAIProvider::with_api_key("sk-admission-test")
+            .await
+            .unwrap(),
+    );
+    router.add_deployment(
+        Deployment::new(id.clone(), provider, "gpt-4o-mini".into(), "shared".into()).with_config(
+            DeploymentConfig {
+                rpm_limit: Some(1),
+                max_parallel_requests: Some(1),
+                ..Default::default()
+            },
+        ),
+    );
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        Arc::new(router),
+        "shared",
+        ProviderCapability::ChatCompletion,
+        |_, _, _| async { Ok::<_, ProviderError>(()) },
+    )
+    .await
+    .unwrap();
+    // As on an idle Realtime socket, release the handshake before each generation.
+    lease.cancel_response();
+    for _ in 0..3 {
+        lease.begin_response(1).unwrap();
+        // A rejected budget never forwards the generation and must cancel RPM.
+        lease.cancel_response();
+    }
+    pool.delete(&RedisPool::admission_key(&id)).await.unwrap();
+}
