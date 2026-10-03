@@ -117,14 +117,17 @@ impl McpServerConfig {
                 "Configure MCP credentials in auth or static_headers, not URL userinfo".into(),
             );
         }
-        if !self.url.starts_with("https://")
+        if url.scheme() != "https"
             && (self
                 .auth
                 .as_ref()
                 .is_some_and(|auth| auth.auth_type != McpAuthType::None)
-                || !self.static_headers.is_empty())
+                || !self.static_headers.is_empty()
+                || url.query().is_some())
         {
-            return Err("MCP credentials and static headers require an HTTPS upstream".into());
+            return Err(
+                "MCP credentials, static headers and URL queries require an HTTPS upstream".into(),
+            );
         }
         if let Some(auth) = &self.auth
             && auth.auth_type == McpAuthType::OAuth2

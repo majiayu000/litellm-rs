@@ -6,7 +6,7 @@ use crate::core::net::ProviderEndpointPolicy;
 use crate::server::state::AppState;
 use crate::utils::net::http::ProviderHttpClient;
 use actix_web::{
-    HttpRequest, HttpResponse,
+    FromRequest, HttpRequest, HttpResponse,
     http::{
         StatusCode,
         header::{Accept, Header, Quality},
@@ -116,15 +116,33 @@ fn validate_request(req: &HttpRequest, message: &Value) -> Option<HttpResponse> 
         || !message.get("method").is_some_and(Value::is_string)
         || message.get("result").is_some()
         || message.get("error").is_some()
-        || message
-            .get("id")
-            .is_some_and(|id| !id.is_string() && !id.is_number())
+        || message.get("id").is_some_and(|id| {
+            !id.is_string()
+                && !id.as_number().is_some_and(|number| {
+                    number
+                        .as_str()
+                        .trim_start_matches('-')
+                        .bytes()
+                        .all(|b| b.is_ascii_digit())
+                })
+        })
     {
         return Some(rpc_error(
             StatusCode::BAD_REQUEST,
             &Value::Null,
             -32600,
             "Expected a single JSON-RPC request or notification",
+        ));
+    }
+    if matches!(
+        message["method"].as_str(),
+        Some("initialize" | "notifications/initialized")
+    ) {
+        return Some(rpc_error(
+            StatusCode::NOT_FOUND,
+            &id,
+            -32601,
+            "Initialization is not part of this protocol version",
         ));
     }
     // Core HTTP has no client notifications in this revision. Extensions can define
@@ -192,21 +210,14 @@ fn validate_request(req: &HttpRequest, message: &Value) -> Option<HttpResponse> 
             return mismatch();
         }
     }
-    if matches!(
-        message["method"].as_str(),
-        Some("initialize" | "notifications/initialized")
-    ) {
-        return Some(rpc_error(
-            StatusCode::NOT_FOUND,
-            &id,
-            -32601,
-            "Initialization is not part of this protocol version",
-        ));
-    }
     None
 }
 
-async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -> HttpResponse {
+async fn proxy(
+    req: HttpRequest,
+    payload: web::Payload,
+    state: web::Data<AppState>,
+) -> HttpResponse {
     let user = get_authenticated_user(&req);
     let key = get_authenticated_api_key(&req);
     if user.is_none() && key.is_none() {
@@ -289,20 +300,6 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             "MCP POST requires application/json",
         );
     }
-    let message: Value = match serde_json::from_slice(&body) {
-        Ok(message) => message,
-        Err(_) => {
-            return rpc_error(
-                StatusCode::BAD_REQUEST,
-                &Value::Null,
-                -32700,
-                "Invalid JSON",
-            );
-        }
-    };
-    if let Some(error) = validate_request(&req, &message) {
-        return error;
-    }
     let owner = match (key.as_ref(), user.as_ref()) {
         (Some(key), _) => format!("key:{}", key.metadata.id),
         (_, Some(user)) => format!("user:{}", user.id()),
@@ -317,6 +314,35 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         Ok(permit) => permit,
         Err(response) => return response,
     };
+    // Reserve capacity before polling the payload. Keep the standard Bytes extractor
+    // so resource PayloadConfig limits and its error status contract still apply.
+    let mut payload = payload.into_inner();
+    let body = match tokio::time::timeout(
+        Duration::from_millis(server.timeout_ms),
+        web::Bytes::from_request(&req, &mut payload),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(error)) => return error.error_response(),
+        Err(_) => {
+            return transport_error(StatusCode::REQUEST_TIMEOUT, "MCP request body timed out");
+        }
+    };
+    let message: Value = match serde_json::from_slice(&body) {
+        Ok(message) => message,
+        Err(_) => {
+            return rpc_error(
+                StatusCode::BAD_REQUEST,
+                &Value::Null,
+                -32700,
+                "Invalid JSON",
+            );
+        }
+    };
+    if let Some(error) = validate_request(&req, &message) {
+        return error;
+    }
     let request_id = message.get("id").cloned().unwrap_or(Value::Null);
     let fail = |status, message| rpc_error(status, &request_id, -32603, message);
     let client =

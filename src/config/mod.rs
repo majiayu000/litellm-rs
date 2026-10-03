@@ -372,6 +372,8 @@ impl Config {
                 let _ = url.set_username("");
                 let _ = url.set_password(None);
                 server.url = url.to_string();
+            } else {
+                redact_string(&mut server.url);
             }
             if let Some(auth) = &mut server.auth {
                 redact_optional_string(&mut auth.value);

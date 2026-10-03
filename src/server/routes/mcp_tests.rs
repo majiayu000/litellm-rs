@@ -167,6 +167,15 @@ async fn rejects_unsupported_gateway_configuration() {
         let error = malformed.validate_http_gateway("docs").unwrap_err();
         assert!(!error.contains("sentinel"));
     }
+    let query = McpServerConfig::new("docs", "http://example.com/mcp?api_key=test");
+    assert!(
+        query
+            .validate_http_gateway("docs")
+            .unwrap_err()
+            .contains("HTTPS")
+    );
+    let secure_query = McpServerConfig::new("docs", "https://example.com/mcp?api_key=test");
+    assert!(secure_query.validate_http_gateway("docs").is_ok());
     let collision = config
         .clone()
         .with_auth(AuthConfig::bearer("test"))
@@ -188,12 +197,17 @@ async fn exported_mcp_configuration_redacts_credentials() {
         .with_auth(AuthConfig::bearer("mcp-token-sentinel"))
         .with_header("x-api-key", "mcp-header-sentinel");
     config.gateway.mcp_servers.insert("docs".into(), server);
+    config.gateway.mcp_servers.insert(
+        "malformed".into(),
+        McpServerConfig::new("malformed", "https://[?token=mcp-malformed-sentinel"),
+    );
     for output in [
         config.to_json().unwrap(),
         config.to_yaml().unwrap(),
         format!("{:?}", config),
     ] {
         for secret in [
+            "mcp-malformed-sentinel",
             "mcp-query-sentinel",
             "mcp-token-sentinel",
             "mcp-header-sentinel",
@@ -413,6 +427,7 @@ async fn encoded_names_and_large_numbers_survive_without_precision_loss() {
     .await;
     for name in ["中文工具", " padded ", "=?base64?literal?=", "line\nbreak"] {
         let mut value = message("tools/call");
+        value["id"] = serde_json::from_str("184467440737095516170000").unwrap();
         value["params"]["name"] = json!(name);
         value["params"]["arguments"] = serde_json::from_str(
             r#"{"large":184467440737095516170000,"decimal":0.1234567890123456789012345}"#,
@@ -539,6 +554,7 @@ async fn rejects_anonymous_bad_origin_legacy_verbs_and_invalid_envelopes() {
         json!([]),
         json!({"jsonrpc":"2.0","id":1,"result":{}}),
         json!({"jsonrpc":"2.0","id":null,"method":"tools/list"}),
+        json!({"jsonrpc":"2.0","id":1.5,"method":"tools/list"}),
     ] {
         let req = builder("tools/list").set_json(value).to_request();
         req.extensions_mut().insert(user());
@@ -819,5 +835,134 @@ async fn finite_body_deadline_releases_admission_and_url_userinfo_is_rejected() 
         .is_err()
     );
     assert!(state.mcp_inflight.owners.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn rejects_removed_initialization_with_or_without_id() {
+    let (state, client, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for method in ["initialize", "notifications/initialized"] {
+        for include_id in [false, true] {
+            let mut value = message(method);
+            if !include_id {
+                value.as_object_mut().unwrap().remove("id");
+            }
+            let req = builder(method).set_json(value).to_request();
+            req.extensions_mut().insert(user());
+            let response = test::call_service(&app, req).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let body: Value = test::read_body_json(response).await;
+            assert_eq!(body["error"]["code"], -32601);
+        }
+    }
+    assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn mcp_key_can_be_provisioned_through_public_auth_api() {
+    use crate::core::models::user::types::UserStatus;
+    let (state, client, calls, handle) = fixture(true).await;
+    let mut owner = user();
+    owner.status = UserStatus::Active;
+    let owner = state.storage.db().create_user(&owner).await.unwrap();
+    let (_, raw) = state
+        .auth
+        .create_api_key(owner.id(), "scoped-mcp".into(), vec!["mcp.docs".into()])
+        .await
+        .unwrap();
+    let app =
+        test::init_service(crate::server::http::HttpServer::create_app(state).app_data(client))
+            .await;
+    let req = builder("tools/list")
+        .insert_header(("x-mcp-key", raw))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    drop(test::read_body(response).await);
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn stalled_request_bodies_are_admitted_before_reading_and_time_out() {
+    let (state, _, calls, handle) = fixture(false).await;
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    config
+        .gateway
+        .mcp_servers
+        .get_mut("docs")
+        .unwrap()
+        .timeout_ms = 50;
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let owner = user();
+    let principal = format!("user:{}", owner.id());
+    let (req, _) = builder("tools/list").uri("/mcp").to_http_parts();
+    req.extensions_mut().insert(owner.clone());
+    let pending = Box::pin(futures::stream::pending::<
+        Result<web::Bytes, actix_web::error::PayloadError>,
+    >())
+        as std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<web::Bytes, actix_web::error::PayloadError>>>,
+        >;
+    let mut payload = actix_web::dev::Payload::from(pending);
+    let payload = web::Payload::from_request(&req, &mut payload)
+        .await
+        .unwrap();
+    let request = proxy(req, payload, state.clone());
+    tokio::pin!(request);
+    assert!(futures::poll!(request.as_mut()).is_pending());
+    assert_eq!(state.mcp_inflight.owners.lock().unwrap()[&principal], 1);
+    let permits = (1..128)
+        .map(|_| state.mcp_inflight.acquire(principal.clone()).unwrap())
+        .collect::<Vec<_>>();
+    let (req, _) = builder("tools/list").uri("/mcp").to_http_parts();
+    // A never-ready payload must not delay rejection when this owner is saturated.
+    req.extensions_mut().insert(owner);
+    let pending = Box::pin(futures::stream::pending::<
+        Result<web::Bytes, actix_web::error::PayloadError>,
+    >())
+        as std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<web::Bytes, actix_web::error::PayloadError>>>,
+        >;
+    let mut payload = actix_web::dev::Payload::from(pending);
+    let payload = web::Payload::from_request(&req, &mut payload)
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(1), proxy(req, payload, state.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let response = request.await;
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    drop(permits);
+    assert!(state.mcp_inflight.owners.lock().unwrap().is_empty());
+    assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn request_body_size_limit_still_returns_payload_too_large() {
+    let (state, client, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .app_data(client)
+            .configure(|c| configure_routes(c, 16)),
+    )
+    .await;
+    let response = test::call_service(&app, request("tools/list", &user())).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(state.mcp_inflight.owners.lock().unwrap().is_empty());
+    assert!(calls.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
