@@ -33,6 +33,10 @@ Groq 路由按具体模型区分：Whisper v3/v3-turbo 可转写，仅 v3 可翻
 
 Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应为 id/data 且没有当前通用实现必需的 created，因此本批保持明确不支持，不把路径相同视为协议等价。其独立适配仍是 F11 的剩余工作。
 
+第五批（#1415，核验 2026-10-03）补充 Nscale embeddings/images、OVHcloud embeddings 和 Heroku embeddings。Nscale 默认 base 修正为 `https://inference.api.nscale.com/v1`，OVHcloud 为 `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`；显式自定义 base 仍优先。Heroku 使用 add-on 对应的模型、URL 和 key，向量请求的 `encoding_format: float` 映射为官方 `raw`，`task_type` 映射为 `input_type`。仅核验文本输入和浮点向量；Heroku 的自定义维度、截断等非协议参数不静默删除，错误由上游返回。Nscale 图片使用 `model/prompt/n/size` 与 `b64_json` 响应；额外图片编辑、音频能力未声明。
+
+官方协议与剩余限制见 [云供应商非聊天审计](../audit/cloud-compatible-nonchat-2026-10-03.md)。Baseten 专用 BEI、Friendli 专用 embeddings/images、HF 原生多任务接口不能从兼容聊天地址推断可用。Friendli serverless 转写虽有兼容路径，其用量按 input/output tokens 表达，当前音频路由按秒计费，故仍需明确适配。Heroku 图片的 aspect_ratio/output_format 也尚未映射，不扩大支持声明。本批本地 HTTP 覆盖真实 factory/Router、请求映射、400/429、缺价拒绝、预算不足和实际 usage 结算；没有付费实调。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -41,8 +45,8 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | --- | --- |
 | `groq` | 音频合成/转写/翻译；见上方模型限制 |
 | `ai21` | 待核验；本批未扩展非聊天声明 |
-| `huggingface` | 待核验；本批未扩展非聊天声明 |
-| `baseten` | 待核验；本批未扩展非聊天声明 |
+| `huggingface` | 官方兼容 router 非聊天任务需 Inference Clients/native 协议；embeddings/images/audio 未在兼容 base 接入 |
+| `baseten` | 已核验：embeddings 属专用 BEI 部署 /sync/v1，默认 Model APIs base 未确认该能力；图片/音频为独立部署协议，未接入 |
 | `together` | embeddings/images/audio |
 | `together_ai` | 同 together |
 | `fireworks` | embeddings；图片原生路径待适配 |
@@ -55,13 +59,13 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | `novita` | 待核验；本批未扩展非聊天声明 |
 | `nvidia_nim` | embeddings；其他待核验 |
 | `nebius` | embeddings；图片协议差异待适配 |
-| `nscale` | 待核验；本批未扩展非聊天声明 |
+| `nscale` | embeddings、images/generations；官方 .com base，模型/图片退役窗口见 cloud 审计 |
 | `hyperbolic` | 待核验；本批未扩展非聊天声明 |
 | `featherless` | 待核验；本批未扩展非聊天声明 |
 | `galadriel` | 待核验；本批未扩展非聊天声明 |
 | `sambanova` | 待核验；本批未扩展非聊天声明 |
-| `heroku` | 待核验；本批未扩展非聊天声明 |
-| `friendliai` | 待核验；本批未扩展非聊天声明 |
+| `heroku` | 文本 embeddings；float→raw、task_type→input_type；须模型 add-on 对应 URL/key；图片参数待适配 |
+| `friendliai` | 已核验：serverless 转写按 tokens 用量，与当前音频秒计费不同，未接入；dedicated embeddings/images 不在默认 base |
 | `meta_llama` | 待核验；本批未扩展非聊天声明 |
 | `v0` | 待核验；本批未扩展非聊天声明 |
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
@@ -100,6 +104,6 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
 | `yi` | 待核验；本批未扩展非聊天声明 |
 | `lambda_ai` | 待核验；本批未扩展非聊天声明 |
-| `ovhcloud` | 待核验；本批未扩展非聊天声明 |
+| `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
 选择器别名沿用 `canonical_catalog_name`，例如 hugging_face、aimlapi、ai21_chat 等不另建重复审核项。
