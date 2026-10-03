@@ -1070,7 +1070,7 @@ async fn compact_preserves_encrypted_items_and_settles_once_without_storage() {
             .configure(litellm_rs::server::routes::ai::configure_routes),
     )
     .await;
-    let body = json!({"model":"gpt-4o-mini","input":[{"type":"compaction","id":"cmp_old","encrypted_content":"opaque-old=="},{"role":"user","content":"Hello"}],"instructions":"Keep facts","future_field":{"preserve":true}});
+    let body = json!({"model":"gpt-4o-mini","service_tier":"default","input":[{"type":"compaction","id":"cmp_old","encrypted_content":"opaque-old=="},{"role":"user","content":"Hello"}],"instructions":"Keep facts","future_field":{"preserve":true}});
     let response = test::call_service(
         &app,
         test::TestRequest::post()
@@ -1086,6 +1086,7 @@ async fn compact_preserves_encrypted_items_and_settles_once_without_storage() {
     assert_eq!(value["output"][0]["encrypted_content"], "opaque==");
     assert_eq!(value["output"][0]["future_compaction_field"], true);
     assert!(value.get("status").is_none());
+    assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
     assert_eq!(upstream.seen.lock().unwrap().as_slice(), &[body]);
     assert!(upstream.lifecycle_calls.lock().unwrap().is_empty());
     let expected = 8.0 * 0.00000015 + 4.0 * 0.000000075 + 3.0 * 0.0000006;
