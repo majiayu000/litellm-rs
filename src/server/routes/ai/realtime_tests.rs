@@ -65,6 +65,7 @@ async fn upstream(
         "Bearer sk-upstream-realtime-test"
     );
     assert!(!req.headers().contains_key("x-api-key"));
+    assert_eq!(req.query_string(), "model=gpt-realtime-mini-mapped");
     let (response, mut session, mut stream) = actix_ws::handle(&req, payload)?;
     let calls = calls.get_ref().clone();
     actix_web::rt::spawn(async move {
@@ -91,6 +92,13 @@ async fn upstream(
                             }
                         }
                         "response.create" => {
+                            if value["response"]["metadata"]["reject"] == true {
+                                let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":value["event_id"],"message":"mock rejection"}}).to_string()).await;
+                                continue;
+                            }
+                            if value["response"]["metadata"]["unrelated_error"] == true {
+                                let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":"unrelated-item","message":"mock unrelated event"}}).to_string()).await;
+                            }
                             if value["response"]["metadata"]["hold"] == true {
                                 if session.text(json!({"type":"response.created","response":{"id":"response-1"}}).to_string()).await.is_err() { break; }
                                 continue;
@@ -170,6 +178,10 @@ async fn fixture() -> (
     provider.base_url = Some(base);
     provider.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
     provider.models = vec!["gpt-realtime-mini".into()];
+    provider.settings.insert(
+        "model_mappings".into(),
+        json!({"gpt-realtime-mini":"gpt-realtime-mini-mapped"}),
+    );
     provider.settings.insert("model_identity_mappings".into(), json!({"gpt-realtime-mini":{"capability_catalog_model":"gpt-realtime-mini","pricing_model":"gpt-realtime-mini"}}));
     let gateway = crate::server::http::HttpServer::new(&config).await.unwrap();
     let state = gateway.state().clone();
@@ -331,7 +343,7 @@ async fn budget_and_scope_rejections_never_reach_upstream() {
 }
 #[actix_web::test]
 async fn upstream_close_code_and_reason_are_preserved() {
-    let (_, url, key, _, handles) = fixture().await;
+    let (state, url, key, _, handles) = fixture().await;
     let mut client = client(&url, &key).await;
     next_json(&mut client).await;
     next_json(&mut client).await;
@@ -349,6 +361,28 @@ async fn upstream_close_code_and_reason_are_preserved() {
     };
     assert_eq!(u16::from(close.code), 1008);
     assert_eq!(close.reason, "mock-policy");
+    let router = state.pin_runtime().unified_router.clone();
+    let id = &router.get_deployments_for_model("gpt-realtime-mini")[0];
+    let deployment = router.get_deployment(id).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while deployment
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        deployment
+            .state
+            .success_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
     drop(client);
     for handle in handles {
         handle.stop(false).await;
@@ -529,6 +563,242 @@ async fn client_disconnect_closes_upstream_and_records_reserved_fallback() {
     })
     .await
     .expect("disconnect must settle and close the upstream");
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn realtime_2_has_complete_authoritative_audio_cache_rates() {
+    let pricing = crate::core::pricing_service::PricingService::with_embedded_default().unwrap();
+    let (_, info) = pricing
+        .snapshot()
+        .get_model_info_for_provider("openai", "gpt-realtime-2")
+        .unwrap();
+    let rates = Rates::load(&info, None).unwrap();
+    assert_eq!(
+        info.extra["cache_read_input_audio_token_cost"],
+        json!(0.0000004)
+    );
+    assert!(rates.cost(&usage()).unwrap().0 < rates.bound());
+}
+
+#[actix_web::test]
+async fn completed_tokens_survive_a_later_protocol_failure() {
+    let (state, url, key, _, handles) = fixture().await;
+    let mut client = client(&url, &key).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    client.send(Message::Text("not-json".into())).await.unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "error");
+    let router = state.pin_runtime().unified_router.clone();
+    let id = &router.get_deployments_for_model("gpt-realtime-mini")[0];
+    let deployment = router.get_deployment(id).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while deployment
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        deployment
+            .state
+            .tpm_current
+            .load(std::sync::atomic::Ordering::Relaxed),
+        60
+    );
+    assert_eq!(
+        deployment
+            .state
+            .success_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn response_creation_consumes_the_existing_key_rpm_allowance() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    key.rate_limits = Some(crate::core::models::RateLimits {
+        rpm: Some(2),
+        tpm: None,
+        rpd: None,
+        tpd: None,
+        concurrent: None,
+    });
+    state.storage.db().update_api_key(&key).await.unwrap();
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "rate_limit_error"
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|v| v["type"] == "response.create")
+            .count(),
+        1
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn only_matching_precreation_errors_consume_the_reservation() {
+    let (state, url, key, calls, handles) = fixture().await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &key).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"unrelated_error":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["event_id"],
+        "unrelated-item"
+    );
+    for kind in [
+        "response.created",
+        "response.output_audio.delta",
+        "response.function_call_arguments.done",
+        "response.done",
+    ] {
+        assert_eq!(next_json(&mut client).await["type"], kind);
+    }
+    assert!(
+        (state
+            .budget_limits
+            .providers
+            .get_provider_usage("openai")
+            .unwrap()
+            .current_spend
+            - rates().cost(&usage()).unwrap().0)
+            .abs()
+            < 1e-10
+    );
+    client.send(Message::Text(json!({"type":"response.create","event_id":"rejected-response","response":{"metadata":{"reject":true}}}).to_string().into())).await.unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["event_id"],
+        "rejected-response"
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    {
+        let events = calls.lock().unwrap();
+        for event in events.iter().filter(|v| v["type"] == "response.create") {
+            assert!(event["event_id"].as_str().is_some());
+        }
+    }
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn usage_persistence_failure_does_not_hide_completed_response() {
+    let (state, url, raw, _, handles) = fixture().await;
+    let (key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    state
+        .storage
+        .db()
+        .delete_api_key(key.metadata.id)
+        .await
+        .unwrap();
+    assert!(
+        state
+            .budgeted
+            .key_manager()
+            .record_usage(key.metadata.id, 1, 0.001)
+            .await
+            .is_err()
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for kind in [
+        "response.created",
+        "response.output_audio.delta",
+        "response.function_call_arguments.done",
+        "response.done",
+    ] {
+        assert_eq!(next_json(&mut client).await["type"], kind);
+    }
+    drop(client);
     for handle in handles {
         handle.stop(false).await;
     }

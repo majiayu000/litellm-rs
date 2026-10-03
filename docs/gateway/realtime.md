@@ -22,7 +22,10 @@ It forwards native text, base64 audio, function-call events and upstream errors.
 The gateway first disables automatic turn generation and input transcription
 and requires an acknowledged session configuration before upgrading the caller.
 Clients append/commit audio or create conversation items, then explicitly send
-`response.create`. Only one response may be in flight. Client events supported
+`response.create`. Only one response may be in flight. Each `response.create` consumes the existing
+API-key RPM allowance (or enabled gateway default); the initial HTTP handshake
+also counts as one request. Native model mappings are applied to the upstream
+handshake. Client events supported
 are `session.update`, `response.create`, `response.cancel`,
 `conversation.item.create/delete/retrieve/truncate`, and
 `input_audio_buffer.append/commit/clear`.
@@ -54,10 +57,16 @@ full 32,000-input/4,096-output reservation is $0.40192. Lower budgets cannot
 start that response even if the likely actual bill is much smaller.
 
 A matching `response.done` settles text/audio and cached text/audio separately
-using the pinned catalog prices. Malformed/incomplete usage is never treated as
+using the pinned catalog prices. The [GPT-Realtime-2 model card](https://developers.openai.com/api/docs/models/gpt-realtime-2)
+provides the cached-audio rate ($0.40 per million tokens), retained by the pricing synchronizer. Malformed/incomplete usage is never treated as
 zero cost. Cancellation, interrupted connections, or upstream errors without
 trusted usage settle the outstanding conservative reservation; unused reserves
-are refunded only after valid usage. Abrupt task cancellation keeps the budget
+are refunded only after valid usage. Errors before `response.created` are matched
+to the originating `response.create` event ID. Completed tokens remain in router
+TPM accounting if a later connection error occurs; error close frames count as
+deployment failures. A failed key-usage database write is logged separately with
+key ID, token count and settled cost, and does not suppress `response.done`;
+automatic retries or durable reconciliation are not implemented. Abrupt task cancellation keeps the budget
 reservation charged, but cannot asynchronously persist key usage, and process
 crash reconciliation is not implemented. Thus this first increment must not
 be represented as durable exactly-once accounting across process failures.

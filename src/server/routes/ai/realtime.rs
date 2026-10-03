@@ -56,6 +56,18 @@ pub(super) async fn connect(
     }
     let output_limit = context::api_key_max_tokens_per_request(&req)?;
     let runtime = state.pin_runtime();
+    let requests_per_minute = key
+        .as_ref()
+        .and_then(|key| key.rate_limits.as_ref())
+        .and_then(|limits| limits.rpm)
+        .or_else(|| {
+            runtime
+                .config
+                .gateway
+                .rate_limit
+                .enabled
+                .then(|| runtime.config.gateway.rate_limit.effective_rpm())
+        });
     if runtime.guardrails.is_enabled() {
         return Ok(denied(
             "Realtime does not implement configured content guardrails",
@@ -189,7 +201,17 @@ pub(super) async fn connect(
             }
         }
         relay(
-            session, stream, upstream, state, context, rates, provider, model, lease, timeout,
+            session,
+            stream,
+            upstream,
+            state,
+            context,
+            rates,
+            provider,
+            model,
+            lease,
+            timeout,
+            requests_per_minute,
         )
         .await;
     });
@@ -225,7 +247,8 @@ async fn open_upstream(
             "Realtime upstream credentials require HTTPS",
         ));
     }
-    url.query_pairs_mut().append_pair("model", model);
+    url.query_pairs_mut()
+        .append_pair("model", &provider.config.get_model_mapping(model));
     let client = BaseHttpClient::new_for_provider_streaming_no_redirect("openai", config.clone())?;
     let ws_key = tokio_tungstenite::tungstenite::handshake::client::generate_key();
     let mut headers = reqwest::header::HeaderMap::new();
@@ -427,9 +450,11 @@ async fn relay(
     model: String,
     lease: super::execution::StreamingDeploymentLease,
     timeout: Duration,
+    requests_per_minute: Option<u32>,
 ) {
     let mut pending: Option<Pending> = None;
     let mut response_id: Option<String> = None;
+    let mut response_event_id: Option<String> = None;
     let mut tokens = 0u64;
     let mut failure = false;
     let outcome: Result<(), String> = async {
@@ -444,8 +469,18 @@ async fn relay(
                             Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"invalid_request_error","message":message,"event_id":value.get("event_id")}}).to_string(), timeout).await?; continue; }
                         };
                         if creates {
+                            if let Some(rpm) = requests_per_minute
+                                && let Err(retry_after) = crate::server::middleware::enforce_socket_request_rate(&context, rpm).await {
+                                send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":"Realtime request rate exceeded","retry_after":retry_after}}).to_string(), timeout).await?;
+                                continue;
+                            }
                             match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound()) {
-                                Ok(reservation) => pending = Some(reservation),
+                                Ok(reservation) => {
+                                    let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                                    value["event_id"] = json!(event_id);
+                                    response_event_id = Some(event_id);
+                                    pending = Some(reservation);
+                                },
                                 Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
                             }
                         }
@@ -472,17 +507,22 @@ async fn relay(
                             if response_id.as_deref() != value["response"]["id"].as_str() || response_id.is_none() { return Err("Mismatched Realtime response ID".into()); }
                             let usage = rates.cost(&value["response"]["usage"])?;
                             let reservation = pending.take().ok_or("Missing Realtime reservation")?;
-                            tokens = tokens.saturating_add(reservation.settle(&state, context.api_key_id(), Some(usage)).await?);
+                            tokens = tokens.saturating_add(usage.1);
+                            reservation.settle(&state, context.api_key_id(), Some(usage)).await?;
                             response_id = None;
-                        } else if value["type"] == "error" && pending.is_some() && response_id.is_none() {
+                            response_event_id = None;
+                        } else if value["type"] == "error" && pending.is_some() && response_id.is_none()
+                            && response_event_id.as_deref() == value["error"]["event_id"].as_str() {
                             // No trusted usage accompanies this error; retain the documented reservation fallback.
                             if let Some(reservation) = pending.take() { reservation.settle(&state, context.api_key_id(), None).await?; }
+                            response_event_id = None;
                         }
                         tokio::time::timeout(timeout, downstream.text(text.to_string())).await.map_err(|_| "Realtime downstream write timeout")?.map_err(|_| "Client disconnected")?;
                     }
                     Some(Ok(Message::Ping(bytes))) => { tokio::time::timeout(timeout, upstream.send(Message::Pong(bytes))).await.map_err(|_| "Realtime pong timeout")?.map_err(|_| "Realtime pong failed")?; }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(reason))) => {
+                        failure = reason.as_ref().is_some_and(|reason| !matches!(u16::from(reason.code), 1000 | 1001));
                         let reason = reason.map(|reason| actix_ws::CloseReason { code: u16::from(reason.code).into(), description: Some(reason.reason.to_string()) });
                         let _ = tokio::time::timeout(timeout, downstream.clone().close(reason)).await;
                         return Ok(());
@@ -518,10 +558,10 @@ async fn relay(
         .await;
     }
     if failure {
-        lease.finish_failure(&ProviderError::network(
-            "openai",
-            "Realtime transport failed",
-        ));
+        lease.finish_failure_with_tokens(
+            &ProviderError::network("openai", "Realtime transport failed"),
+            tokens,
+        );
     } else {
         lease.finish_success(tokens);
     }

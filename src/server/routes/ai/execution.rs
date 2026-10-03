@@ -51,7 +51,17 @@ impl StreamingDeploymentLease {
         self.release();
     }
 
-    pub(super) fn finish_failure(mut self, error: &ProviderError) {
+    pub(super) fn finish_failure(self, error: &ProviderError) {
+        self.finish_failure_with_tokens(error, 0);
+    }
+
+    pub(super) fn finish_failure_with_tokens(mut self, error: &ProviderError, tokens_used: u64) {
+        if tokens_used > 0 {
+            self.deployment.record_partial_tokens(tokens_used);
+            if let Some(hold) = self.hold.take() {
+                self.admission.settle(&hold, tokens_used);
+            }
+        }
         // Mid-stream failures cannot be retried. Preserve fail-fast cooldowns
         // for rate limits and deterministic misconfiguration, while routing
         // ordinary transient failures through the counted breaker path.

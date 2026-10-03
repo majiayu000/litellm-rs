@@ -155,13 +155,16 @@ impl Pending {
                 .settle(cost)
                 .map_err(|_| "Realtime key budget settlement failed")?;
         }
-        if let Some(key_id) = key_id {
-            state
+        if let Some(key_id) = key_id
+            && let Err(error) = state
                 .budgeted
                 .key_manager()
                 .record_usage(key_id, tokens, cost)
                 .await
-                .map_err(|_| "Realtime key usage recording failed")?;
+        {
+            // Budget settlement succeeded and the native response is complete.
+            // Report persistence separately rather than suppressing response.done.
+            tracing::error!(%error, %key_id, tokens, cost, "Realtime key usage recording failed after budget settlement");
         }
         Ok(tokens)
     }

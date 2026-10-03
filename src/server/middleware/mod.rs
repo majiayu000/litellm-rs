@@ -35,6 +35,8 @@ pub use helpers::{
 pub(crate) use metrics::reset_unpriced_metrics_for_tests;
 pub use metrics::{MetricsMiddleware, MetricsMiddlewareService, MiddlewareRequestMetrics};
 pub(crate) use metrics::{record_unpriced_event, record_unpriced_spend, unpriced_model_bucket};
+#[cfg(feature = "websockets")]
+pub(crate) use rate_limit::enforce_socket_request_rate;
 pub(crate) use rate_limit::trusted_network_client_key;
 pub use rate_limit::{RateLimitMiddleware, RateLimitMiddlewareService};
 pub use request_id::{RequestIdMiddleware, RequestIdMiddlewareService};
