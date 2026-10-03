@@ -18,6 +18,31 @@ impl ModelUtils {
             return ModelCapabilities::default();
         }
 
+        if let Some(spec) = crate::core::providers::anthropic::models::get_anthropic_registry()
+            .get_model_spec(model.rsplit_once('/').map_or(model, |(_, local)| local))
+        {
+            use crate::core::providers::anthropic::models::ModelFeature;
+            return ModelCapabilities {
+                supports_function_calling: spec.model_info.supports_tools,
+                supports_parallel_function_calling: spec.model_info.supports_tools,
+                supports_tool_choice: spec.model_info.supports_tools,
+                supports_system_messages: spec.features.contains(&ModelFeature::SystemMessages),
+                supports_vision: spec.model_info.supports_multimodal,
+                supports_streaming: spec.model_info.supports_streaming,
+                max_tokens: Some(spec.limits.max_output_tokens as usize),
+                context_window: Some(spec.limits.max_context_length as usize),
+                ..ModelCapabilities::default()
+            };
+        }
+
+        if local_lower.starts_with("claude-") {
+            return ModelCapabilities {
+                supports_system_messages: false,
+                supports_streaming: false,
+                ..ModelCapabilities::default()
+            };
+        }
+
         let gpt56_limits = openai_gpt56_limits(model);
         let realtime2 = realtime2_catalog_id(model)
             .and_then(|catalog_id| get_openai_registry().get_model_spec(catalog_id));
@@ -170,57 +195,6 @@ impl ModelUtils {
                 } else {
                     4096
                 }),
-            }
-        } else if model_lower.starts_with("claude-opus-4-8")
-            || model_lower.starts_with("claude-opus-4-7")
-            || model_lower.starts_with("claude-opus-4-6")
-            || model_lower.starts_with("claude-sonnet-4-6")
-        {
-            ModelCapabilities {
-                supports_function_calling: true,
-                supports_parallel_function_calling: false,
-                supports_tool_choice: true,
-                supports_response_schema: false,
-                supports_system_messages: true,
-                supports_web_search: false,
-                supports_url_context: true,
-                supports_vision: true,
-                supports_streaming: true,
-                max_tokens: Some(1_000_000),
-                context_window: Some(1_000_000),
-            }
-        } else if model_lower.starts_with("claude-opus-4")
-            || model_lower.starts_with("claude-sonnet-4")
-            || model_lower.starts_with("claude-haiku-4-5")
-            || model_lower.starts_with("claude-haiku-4.5")
-            || model_lower.starts_with("claude-3")
-        {
-            ModelCapabilities {
-                supports_function_calling: true,
-                supports_parallel_function_calling: false,
-                supports_tool_choice: true,
-                supports_response_schema: false,
-                supports_system_messages: true,
-                supports_web_search: false,
-                supports_url_context: true,
-                supports_vision: true,
-                supports_streaming: true,
-                max_tokens: Some(200000),
-                context_window: Some(200000),
-            }
-        } else if model_lower.starts_with("claude-2") || model_lower.starts_with("claude-instant") {
-            ModelCapabilities {
-                supports_function_calling: false,
-                supports_parallel_function_calling: false,
-                supports_tool_choice: false,
-                supports_response_schema: false,
-                supports_system_messages: true,
-                supports_web_search: false,
-                supports_url_context: false,
-                supports_vision: false,
-                supports_streaming: true,
-                max_tokens: Some(100000),
-                context_window: Some(100000),
             }
         } else if model_lower.starts_with("gemini") {
             let is_gemini_3_or_25 =
@@ -443,6 +417,32 @@ impl ModelUtils {
     }
 
     pub fn is_valid_model(model: &str) -> bool {
+        let local = model.split_once('/').map_or(model, |(prefix, local)| {
+            if prefix.eq_ignore_ascii_case("anthropic") {
+                local
+            } else {
+                model
+            }
+        });
+        if local.to_ascii_lowercase().starts_with("claude-")
+            || model.to_ascii_lowercase().starts_with("anthropic/")
+        {
+            return crate::core::providers::anthropic::models::get_anthropic_registry()
+                .get_model_spec(local)
+                .is_some();
+        }
+        let gemini_local = model.split_once('/').map_or(model, |(prefix, local)| {
+            if prefix.eq_ignore_ascii_case("google") || prefix.eq_ignore_ascii_case("gemini") {
+                local
+            } else {
+                model
+            }
+        });
+        if gemini_local.to_ascii_lowercase().starts_with("gemini") {
+            return crate::core::providers::gemini::models::get_gemini_registry()
+                .get_model_spec(gemini_local)
+                .is_some();
+        }
         let known_providers = [
             "openai",
             "anthropic",
@@ -563,18 +563,12 @@ impl ModelUtils {
                     model_for_match.starts_with(&compatible_model.to_lowercase())
                 })
             }
-        } else if provider.eq_ignore_ascii_case("google") {
-            compatible_models.iter().any(|compatible_model| {
-                let compatible_model = compatible_model.to_lowercase();
-                if matches!(
-                    compatible_model.as_str(),
-                    "gemini-3.7-flash" | "gemini-3.8-flash"
-                ) {
-                    model_for_exact_match == compatible_model
-                } else {
-                    model_for_match.starts_with(&compatible_model)
-                }
-            })
+        } else if provider.eq_ignore_ascii_case("anthropic")
+            || provider.eq_ignore_ascii_case("google")
+        {
+            compatible_models
+                .iter()
+                .any(|compatible_model| model_for_exact_match == compatible_model)
         } else {
             compatible_models.iter().any(|compatible_model| {
                 model_for_match.starts_with(&compatible_model.to_lowercase())
@@ -629,43 +623,12 @@ impl ModelUtils {
                 "gpt-3.5-turbo".to_string(),
                 "gpt-3.5-turbo-16k".to_string(),
             ],
-            "anthropic" => vec![
-                "claude-opus-4-8".to_string(),
-                "claude-opus-4-7".to_string(),
-                "claude-sonnet-4-6".to_string(),
-                "claude-haiku-4-5".to_string(),
-                "claude-opus-4-6".to_string(),
-                "claude-opus-4-5".to_string(),
-                "claude-sonnet-4-5".to_string(),
-                "claude-sonnet-4".to_string(),
-                "claude-3-opus".to_string(),
-                "claude-3-sonnet".to_string(),
-                "claude-3-haiku".to_string(),
-                "claude-2".to_string(),
-                "claude-instant".to_string(),
-            ],
-            "google" => vec![
-                "gemini-3.8-flash".to_string(),
-                "gemini-3.7-flash".to_string(),
-                "gemini-3.6-flash".to_string(),
-                "gemini-3.5-flash-lite".to_string(),
-                "gemini-3.5-flash".to_string(),
-                "gemini-3.1-flash-lite".to_string(),
-                "gemini-pro".to_string(),
-                "gemini-pro-vision".to_string(),
-                "gemini-1.5-pro".to_string(),
-                "gemini-1.5-flash".to_string(),
-                "gemini-1.5-flash-8b".to_string(),
-                "gemini-2.0-flash".to_string(),
-                "gemini-2.0-flash-lite".to_string(),
-                "gemini-2.0-flash-thinking-exp".to_string(),
-                "gemini-3.1-pro-preview".to_string(),
-                "gemini-3.1-flash".to_string(),
-                "gemini-3-flash-preview".to_string(),
-                "gemini-2.5-pro".to_string(),
-                "gemini-2.5-flash".to_string(),
-                "gemini-2.5-flash-lite".to_string(),
-            ],
+            "anthropic" => crate::core::providers::anthropic::models::get_anthropic_registry()
+                .list_models()
+                .iter()
+                .map(|spec| spec.model_info.id.clone())
+                .collect(),
+            "google" => crate::core::providers::gemini::supported_models(),
             "cohere" => vec![
                 "command".to_string(),
                 "command-r".to_string(),
