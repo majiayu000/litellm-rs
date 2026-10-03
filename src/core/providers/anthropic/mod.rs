@@ -204,7 +204,7 @@ mod tests {
     fn test_model_support() {
         assert!(is_model_supported("claude-opus-4-8"));
         assert!(is_model_supported("claude-opus-4-7"));
-        assert!(is_model_supported("claude-3-haiku-20240307"));
+        assert!(is_model_supported("claude-haiku-4-5-20251001"));
         assert!(!is_model_supported("gpt-4"));
     }
 
@@ -230,7 +230,7 @@ mod tests {
             ModelFeature::ComputerUse
         ));
         assert!(model_supports_feature(
-            "claude-3-haiku-20240307",
+            "claude-haiku-4-5-20251001",
             ModelFeature::StreamingSupport
         ));
     }
@@ -248,7 +248,7 @@ mod tests {
         assert!(!models.is_empty());
         assert!(models.contains(&"claude-opus-4-8".to_string()));
         assert!(models.contains(&"claude-opus-4-7".to_string()));
-        assert!(models.contains(&"claude-3-haiku-20240307".to_string()));
+        assert!(models.contains(&"claude-haiku-4-5-20251001".to_string()));
     }
 
     #[test]

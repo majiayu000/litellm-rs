@@ -749,3 +749,47 @@ fn test_config_deserialization() {
     assert_eq!(config.timeout_seconds, 60);
     assert_eq!(config.max_retries, 5);
 }
+
+#[tokio::test]
+async fn ministral_three_vision_context_and_snapshot_requests_match_official_cards() {
+    let provider = MistralProvider::new(create_test_config()).await.unwrap();
+    for size in [3, 8, 14] {
+        for suffix in ["latest", "2512"] {
+            let id = format!("ministral-{size}b-{suffix}");
+            let model = provider
+                .models()
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap();
+            assert!(model.supports_multimodal, "{id}");
+            assert_eq!(model.max_context_length, 262144, "{id}");
+            let request: ChatRequest = serde_json::from_value(serde_json::json!({
+                "model":format!("mistral/{id}"),
+                "messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/image.png"}}]}]
+            })).unwrap();
+            let body = provider
+                .transform_request(request, RequestContext::default())
+                .await
+                .unwrap();
+            assert_eq!(body["model"], id);
+            assert_eq!(
+                body["messages"][0]["content"][0]["image_url"]["url"],
+                "https://example.test/image.png"
+            );
+        }
+    }
+    for id in ["magistral-medium-2509", "magistral-small-2509"] {
+        let request = ChatRequest {
+            model: format!("mistral/{id}"),
+            ..Default::default()
+        };
+        let body = provider
+            .transform_request(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            body["model"], id,
+            "dated snapshots must not drift to latest"
+        );
+    }
+}

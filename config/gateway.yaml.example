@@ -92,7 +92,7 @@ providers:
     max_retries: 3
     settings: {}
     models:
-      - "claude-3-5-sonnet-latest"
+      - "claude-sonnet-4-6"
     tags: ["backup"]
     enabled: true
 

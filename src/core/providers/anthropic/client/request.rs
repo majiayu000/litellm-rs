@@ -632,7 +632,9 @@ impl AnthropicClient {
         }
     }
 
-    fn validate_claude_5_request_shape(request: &ChatRequest) -> Result<(), ProviderError> {
+    pub(crate) fn validate_claude_5_request_shape(
+        request: &ChatRequest,
+    ) -> Result<(), ProviderError> {
         let unsupported = if request.temperature.is_some_and(|value| value != 1.0) {
             Some("temperature")
         } else if request

@@ -79,6 +79,8 @@ impl GatewayConfigBuilder {
             rate_limit: crate::config::models::rate_limit::RateLimitConfig::default(),
             guardrails: GatewayConfig::default().guardrails,
             ip_access: crate::core::ip_access::IpAccessConfig::default(),
+            #[cfg(feature = "mcp")]
+            mcp_servers: HashMap::new(),
             enterprise: crate::config::models::enterprise::EnterpriseConfig::default(),
             pricing: crate::config::models::gateway::GatewayPricingConfig::default(),
         };

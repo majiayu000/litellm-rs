@@ -9,6 +9,15 @@ use std::sync::LazyLock;
 use super::definition::{AuthType, ProviderDefinition};
 use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
+const GROQ_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+    ProviderCapability::TextToSpeech,
+];
 const TOGETHER_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -28,7 +37,7 @@ const DEEPINFRA_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
 ];
-const FIREWORKS_CAPABILITIES: &[ProviderCapability] = &[
+const EMBEDDING_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::ToolCalling,
@@ -200,12 +209,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
     let defs: Vec<ProviderDefinition> = vec![
         // ===== Group 1b: Cloud OpenAI-compatible =====
         // ===== Group 1b: Cloud OpenAI-compatible =====
-        def_chat(
-            "groq",
-            "Groq",
-            "https://api.groq.com/openai/v1",
-            "GROQ_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: GROQ_CAPABILITIES,
+            ..def_chat(
+                "groq",
+                "Groq",
+                "https://api.groq.com/openai/v1",
+                "GROQ_API_KEY",
+            )
+        },
         def_chat(
             "ai21",
             "AI21",
@@ -253,7 +265,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             )
         },
         ProviderDefinition {
-            capabilities: FIREWORKS_CAPABILITIES,
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
             alternate_auth_env_vars: &[
                 "FIREWORKS_AI_API_KEY",
                 "FIREWORKSAI_API_KEY",
@@ -267,7 +279,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             )
         },
         ProviderDefinition {
-            capabilities: FIREWORKS_CAPABILITIES,
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
             alternate_auth_env_vars: &[
                 "FIREWORKS_AI_API_KEY",
                 "FIREWORKSAI_API_KEY",
@@ -292,12 +304,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.cerebras.ai/v1",
             "CEREBRAS_API_KEY",
         ),
-        def_chat(
-            "openrouter",
-            "OpenRouter",
-            "https://openrouter.ai/api/v1",
-            "OPENROUTER_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "openrouter",
+                "OpenRouter",
+                "https://openrouter.ai/api/v1",
+                "OPENROUTER_API_KEY",
+            )
+        },
         ProviderDefinition {
             capabilities: DEEPINFRA_CAPABILITIES,
             ..def_chat(
@@ -319,18 +334,24 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.novita.ai/v3/openai",
             "NOVITA_API_KEY",
         ),
-        def_chat(
-            "nvidia_nim",
-            "NVIDIA NIM",
-            "https://integrate.api.nvidia.com/v1",
-            "NVIDIA_NIM_API_KEY",
-        ),
-        def_chat(
-            "nebius",
-            "Nebius AI",
-            "https://api.studio.nebius.ai/v1",
-            "NEBIUS_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "nvidia_nim",
+                "NVIDIA NIM",
+                "https://integrate.api.nvidia.com/v1",
+                "NVIDIA_NIM_API_KEY",
+            )
+        },
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "nebius",
+                "Nebius AI",
+                "https://api.tokenfactory.nebius.com/v1",
+                "NEBIUS_API_KEY",
+            )
+        },
         def_chat(
             "nscale",
             "Nscale",
@@ -419,7 +440,10 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         // ===== Group 1c: Local inference (no API key) =====
         def_local_chat("vllm", "vLLM", "http://localhost:8000/v1"),
         def_local_chat("hosted_vllm", "Hosted vLLM", "http://localhost:8000/v1"),
-        def_local_chat("lm_studio", "LM Studio", "http://localhost:1234/v1"),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_local_chat("lm_studio", "LM Studio", "http://localhost:1234/v1")
+        },
         def_local_chat("llamafile", "Llamafile", "http://localhost:8080/v1"),
         def_local_chat(
             "docker_model_runner",

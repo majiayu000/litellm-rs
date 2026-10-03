@@ -375,6 +375,26 @@ impl Config {
                 agent.url = url.to_string();
             }
         }
+        #[cfg(feature = "mcp")]
+        for server in gateway.mcp_servers.values_mut() {
+            for value in server.static_headers.values_mut() {
+                redact_string(value);
+            }
+            if let Ok(mut url) = url::Url::parse(&server.url) {
+                url.set_query(None);
+                url.set_fragment(None);
+                let _ = url.set_username("");
+                let _ = url.set_password(None);
+                server.url = url.to_string();
+            } else {
+                redact_string(&mut server.url);
+            }
+            if let Some(auth) = &mut server.auth {
+                redact_optional_string(&mut auth.value);
+                redact_optional_string(&mut auth.client_secret);
+                redact_optional_string(&mut auth.token_url);
+            }
+        }
         redact_string(&mut gateway.auth.jwt_secret);
         redact_optional_string(&mut gateway.auth.api_key_hmac_secret);
 

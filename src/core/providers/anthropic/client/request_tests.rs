@@ -74,7 +74,7 @@ async fn continuation_capture_server() -> (String, oneshot::Receiver<String>) {
         request_sender
             .send(String::from_utf8(request_bytes).unwrap())
             .unwrap();
-        let body = r#"{"id":"msg-response","model":"claude-3-opus-20240229","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}"#;
+        let body = r#"{"id":"msg-response","model":"claude-opus-4-5-20251101","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
@@ -152,7 +152,7 @@ async fn continuation_send_path_adds_interleaved_beta_once() {
             .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork),
     )
     .unwrap();
-    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    let mut request = ChatRequest::new("claude-sonnet-4-5-20250929");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("visible".to_string())),
@@ -413,7 +413,7 @@ fn issue_761_anthropic_transform_tools_sanitizes_invalid_function_names() {
 
 #[test]
 fn issue_761_anthropic_transform_request_sanitizes_specific_tool_choice() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229")
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101")
         .add_user_message("weather?")
         .with_tools(vec![tool("weather.lookup")]);
     request.tool_choice = Some(ToolChoice::Specific {
@@ -431,7 +431,7 @@ fn issue_761_anthropic_transform_request_sanitizes_specific_tool_choice() {
 
 #[test]
 fn issue_761_anthropic_transform_request_rejects_sanitized_tool_choice_alias() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229")
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101")
         .add_user_message("weather?")
         .with_tools(vec![tool("weather_lookup")]);
     request.tool_choice = Some(ToolChoice::Specific {
@@ -453,7 +453,7 @@ fn issue_761_anthropic_transform_request_rejects_sanitized_tool_choice_alias() {
 
 #[test]
 fn issue_761_anthropic_transform_request_sanitizes_assistant_tool_call_history() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("checking".to_string())),
@@ -476,7 +476,7 @@ fn issue_761_anthropic_transform_request_sanitizes_assistant_tool_call_history()
 
 #[test]
 fn issue_761_anthropic_transform_request_rejects_sanitized_history_alias() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229")
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101")
         .add_user_message("weather?")
         .with_tools(vec![tool("weather_lookup")]);
     request.messages.push(ChatMessage {
@@ -519,13 +519,13 @@ fn issue_761_anthropic_transform_tools_rejects_sanitized_name_collisions() {
 fn issue_761_anthropic_transform_response_restores_original_tool_names()
 -> Result<(), crate::core::providers::unified_provider::ProviderError> {
     let client = anthropic_client();
-    let request = ChatRequest::new("claude-3-opus-20240229")
+    let request = ChatRequest::new("claude-opus-4-5-20251101")
         .add_user_message("weather?")
         .with_tools(vec![tool("weather.lookup")]);
     let tool_name_map = client.anthropic_tool_name_map_for_request(&request)?;
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{
             "type": "tool_use",
             "id": "toolu_123",
@@ -551,7 +551,7 @@ fn issue_761_anthropic_transform_response_restores_original_tool_names()
 #[test]
 fn issue_764_maps_user_and_top_level_cache_control()
 -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-    let mut request = ChatRequest::new("claude-3-opus-20240229").add_user_message("hello");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101").add_user_message("hello");
     request.user = Some("user-123".to_string());
     request
         .extra_params
@@ -567,7 +567,7 @@ fn issue_764_maps_user_and_top_level_cache_control()
 #[test]
 fn issue_764_preserves_document_cache_control()
 -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![ContentPart::Document {
@@ -592,7 +592,7 @@ fn issue_764_preserves_document_cache_control()
 
 #[test]
 fn issue_762_rejects_unsupported_audio_content_part() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::User,
         content: Some(MessageContent::Parts(vec![ContentPart::Audio {
@@ -615,7 +615,7 @@ fn issue_762_rejects_unsupported_audio_content_part() {
 
 #[test]
 fn issue_762_rejects_non_text_system_content_part() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::System,
         content: Some(MessageContent::Parts(vec![ContentPart::Audio {
@@ -637,7 +637,7 @@ fn issue_762_rejects_non_text_system_content_part() {
 
 #[test]
 fn issue_762_rejects_invalid_assistant_tool_call_json() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: None,
@@ -664,7 +664,7 @@ fn issue_762_rejects_invalid_assistant_tool_call_json() {
 #[test]
 fn issue_762_preserves_tool_use_and_tool_result_content_parts()
 -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Parts(vec![ContentPart::ToolUse {
@@ -699,7 +699,7 @@ fn issue_762_preserves_tool_use_and_tool_result_content_parts()
 
 #[test]
 fn issue_802_rejects_rich_tool_use_alias_against_declared_tools() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229")
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101")
         .add_user_message("weather?")
         .with_tools(vec![tool("weather_lookup")]);
     request.messages.push(ChatMessage {
@@ -725,7 +725,7 @@ fn issue_802_rejects_rich_tool_use_alias_against_declared_tools() {
 #[test]
 fn issue_802_preserves_multimodal_tool_role_result_content()
 -> Result<(), crate::core::providers::unified_provider::ProviderError> {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::Tool,
         tool_call_id: Some("toolu_123".to_string()),
@@ -769,24 +769,24 @@ fn issue_802_preserves_multimodal_tool_role_result_content()
 }
 
 #[test]
-fn issue_802_rejects_cache_control_on_models_without_cache_support() {
+fn retired_model_is_rejected_before_cache_control_validation() {
     let mut request = ChatRequest::new("claude-2.1").add_user_message("hello");
     request
         .extra_params
         .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
 
     let message = match anthropic_client().transform_chat_request(&request) {
-        Ok(_) => panic!("cache_control must fail closed for unsupported known models"),
+        Ok(_) => panic!("retired model must fail closed"),
         Err(error) => error.to_string(),
     };
 
     assert!(message.contains("claude-2.1"));
-    assert!(message.contains("cache control"));
+    assert!(message.contains("Unsupported model"));
 }
 
 #[test]
 fn provider_rejects_internal_order_without_thinking_payload() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101");
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
         content: Some(MessageContent::Text("visible".to_string())),
@@ -803,7 +803,7 @@ fn provider_rejects_internal_order_without_thinking_payload() {
 
 #[test]
 fn issue_802_adds_extended_cache_beta_for_one_hour_cache_control() {
-    let mut request = ChatRequest::new("claude-3-opus-20240229").add_user_message("hello");
+    let mut request = ChatRequest::new("claude-opus-4-5-20251101").add_user_message("hello");
     request.extra_params.insert(
         "cache_control".to_string(),
         json!({"type": "ephemeral", "ttl": "1h"}),

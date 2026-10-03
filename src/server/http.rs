@@ -202,7 +202,7 @@ impl HttpServer {
         });
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
-        #[cfg(feature = "a2a")]
+        #[cfg(any(feature = "a2a", feature = "mcp"))]
         let cors = if cfg.gateway.auth.enable_api_key {
             cors.allowed_header(cfg.gateway.auth.api_key_header.as_str())
         } else {
@@ -247,6 +247,12 @@ impl HttpServer {
                 audit
             }))
             .wrap(RequestIdMiddleware)
+            .configure(|cfg| {
+                #[cfg(feature = "mcp")]
+                routes::mcp::configure_routes(cfg, max_body_size);
+                #[cfg(not(feature = "mcp"))]
+                let _ = cfg;
+            })
             .configure(routes::health::configure_routes)
             .configure(routes::auth::configure_routes)
             .configure(routes::keys::configure_routes)
@@ -312,6 +318,19 @@ impl HttpServer {
                 .allowed_header("a2a-extensions")
                 .expose_headers(["a2a-version", "a2a-extensions", "retry-after"]);
         }
+        #[cfg(feature = "mcp")]
+        {
+            for name in [
+                "x-api-key",
+                "mcp-method",
+                "mcp-protocol-version",
+                "mcp-name",
+            ] {
+                cors = cors.allowed_header(name);
+            }
+            cors = cors.expose_headers(["mcp-protocol-version", "retry-after"]);
+        }
+
         cors = cors.max_age(cors_config.max_age as usize);
 
         if cors_config.allow_credentials {

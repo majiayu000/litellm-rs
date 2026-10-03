@@ -33,15 +33,8 @@ pub mod http; // Shared outbound HTTP client utilities
 pub mod integrations; // Experimental module-only integrations; see subsystem_registry.
 pub mod ip_access; // Experimental module-only IP access control; see subsystem_registry.
 pub mod keys; // API Key Management System
-#[cfg_attr(
-    not(test),
-    deprecated(
-        since = "0.6.0",
-        note = "core::mcp is a default-off compatibility surface scheduled for removal in 0.7.0"
-    )
-)]
 #[cfg(feature = "mcp")]
-pub mod mcp; // Experimental module-only MCP gateway; see subsystem_registry.
+pub mod mcp; // MCP library types and optional Streamable HTTP gateway.
 pub mod models;
 pub mod net; // Network validation and safety utilities
 pub mod observability; // Experimental module-only observability; see subsystem_registry.

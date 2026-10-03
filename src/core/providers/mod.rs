@@ -44,7 +44,7 @@ mod enterprise;
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
 // Catalog Tier 1: featherless, fireworks, friendliai, galadriel.
-#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+// Model metadata is available in every build; transports remain feature-gated.
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
 pub mod github;

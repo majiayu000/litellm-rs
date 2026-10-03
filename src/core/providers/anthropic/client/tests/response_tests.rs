@@ -11,7 +11,7 @@ fn test_transform_chat_response_text() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [
             {"type": "text", "text": "Hello, world!"}
         ],
@@ -24,7 +24,7 @@ fn test_transform_chat_response_text() {
 
     let result = client.transform_chat_response(response).unwrap();
     assert_eq!(result.id, "msg_123");
-    assert_eq!(result.model, "claude-3-opus-20240229");
+    assert_eq!(result.model, "claude-opus-4-5-20251101");
     assert_eq!(result.choices.len(), 1);
 
     if let Some(MessageContent::Text(text)) = &result.choices.first().unwrap().message.content {
@@ -107,7 +107,7 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
     for original_content in cases {
         let response = json!({
             "id": "msg_interleaved",
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-sonnet-4-5-20250929",
             "content": original_content,
             "stop_reason": "tool_use"
         });
@@ -125,7 +125,7 @@ fn response_replay_preserves_multiple_thinking_tool_interleavings() {
         }
         let extensions: Vec<ChatMessageContinuation> =
             serde_json::from_value(serialized_extensions).unwrap();
-        let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+        let mut request = ChatRequest::new("claude-sonnet-4-5-20250929");
         request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
         request.messages.push(response.choices[0].message.clone());
 
@@ -151,7 +151,7 @@ fn ordered_continuation_sidecars_are_isolated_per_message() {
             json!({"type": "thinking", "thinking": "b", "signature": "sig-b"}),
         ],
     ];
-    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    let mut request = ChatRequest::new("claude-sonnet-4-5-20250929");
     request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
     let mut extensions = Vec::new();
 
@@ -160,7 +160,7 @@ fn ordered_continuation_sidecars_are_isolated_per_message() {
             .transform_chat_response_with_continuation(
                 json!({
                     "id": format!("msg-{index}"),
-                    "model": "claude-sonnet-4-20250514",
+                    "model": "claude-sonnet-4-5-20250929",
                     "content": original,
                     "stop_reason": "tool_use"
                 }),
@@ -188,7 +188,7 @@ fn ordered_continuation_metadata_fails_closed_on_span_drift() {
         .transform_chat_response_with_continuation(
             json!({
                 "id": "msg-span",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5-20250929",
                 "content": [
                     {"type": "thinking", "thinking": "plan", "signature": "sig"},
                     {"type": "text", "text": "世界"}
@@ -198,7 +198,7 @@ fn ordered_continuation_metadata_fails_closed_on_span_drift() {
         )
         .unwrap();
     let (response, extensions) = parsed.into_parts();
-    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    let mut request = ChatRequest::new("claude-sonnet-4-5-20250929");
     request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
     request.messages.push(response.choices[0].message.clone());
     let serialized = serde_json::to_value(extensions).unwrap();
@@ -230,7 +230,7 @@ fn test_transform_chat_response_usage() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "usage": {
             "input_tokens": 100,
@@ -252,7 +252,7 @@ fn test_anthropic_usage_cache_details() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "usage": {
             "input_tokens": 100,
@@ -281,7 +281,7 @@ fn test_anthropic_client_preserves_thinking_blocks() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [
             {
                 "type": "thinking",
@@ -326,7 +326,7 @@ fn test_transform_chat_response_tool_use() {
 
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [
             {
                 "type": "tool_use",
@@ -360,7 +360,7 @@ fn test_transform_chat_response_finish_reasons() {
     // end_turn -> Stop
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "stop_reason": "end_turn"
     });
@@ -373,7 +373,7 @@ fn test_transform_chat_response_finish_reasons() {
     // max_tokens -> Length
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "stop_reason": "max_tokens"
     });
@@ -386,7 +386,7 @@ fn test_transform_chat_response_finish_reasons() {
     // tool_use -> ToolCalls
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "stop_reason": "tool_use"
     });
@@ -399,7 +399,7 @@ fn test_transform_chat_response_finish_reasons() {
     // stop_sequence -> StopSequence
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "stop_reason": "stop_sequence"
     });
@@ -412,7 +412,7 @@ fn test_transform_chat_response_finish_reasons() {
     // refusal -> Refusal
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "refusal", "refusal": "I cannot help with that."}],
         "stop_reason": "refusal"
     });
@@ -425,7 +425,7 @@ fn test_transform_chat_response_finish_reasons() {
     // pause_turn -> PauseTurn
     let response = json!({
         "id": "msg_123",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5-20251101",
         "content": [{"type": "text", "text": "Hi"}],
         "stop_reason": "pause_turn"
     });

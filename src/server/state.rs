@@ -64,6 +64,8 @@ pub struct AppState {
     pub audit_logger: Arc<AuditLogger>,
     /// IP policy consumed by the outer HTTP middleware.
     pub ip_access: Arc<IpAccessControl>,
+    #[cfg(feature = "mcp")]
+    pub(crate) mcp_inflight: Arc<super::routes::mcp::Inflight>,
     pub(super) runtime: Arc<AtomicValue<RuntimeRevision>>,
     #[cfg(feature = "a2a")]
     pub(crate) a2a_tasks: Arc<crate::server::routes::a2a::TaskOwners>,
@@ -127,6 +129,8 @@ impl AppState {
             callbacks: RuntimeObservability::disabled(),
             audit_logger: Arc::new(AuditLogger::disabled()),
             ip_access: Arc::new(IpAccessControl::disabled()),
+            #[cfg(feature = "mcp")]
+            mcp_inflight: Arc::new(super::routes::mcp::Inflight::default()),
             runtime: Arc::new(AtomicValue::new(revision)),
             #[cfg(feature = "a2a")]
             a2a_tasks: Arc::default(),
