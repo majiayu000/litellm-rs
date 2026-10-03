@@ -1354,7 +1354,8 @@
             "type": "string"
           },
           "service_tier": {
-            "type": "string"
+            "type": "string",
+            "enum": ["default"]
           }
         }
       },

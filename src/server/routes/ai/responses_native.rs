@@ -205,7 +205,8 @@ async fn create_native(
         &model,
         ProviderCapability::Responses,
         |deployment| {
-            previous.as_ref().is_none_or(|(record, _)| {
+            (!compact || matches!(&deployment.provider, crate::core::providers::Provider::OpenAI(_)))
+                && previous.as_ref().is_none_or(|(record, _)| {
                 record.deployment_id.as_deref() == Some(deployment.id.as_str())
                     && deployment.provider.native_response_binding() == record.deployment_binding
             })
@@ -231,7 +232,18 @@ async fn create_native(
                     )?;
                     // This projection is only for the token reservation. The native wire body
                     // never passes through the chat transformer, including tools and reasoning.
-                    let budget_request = budget_request(&body, &model);
+                    let mut budget_request = budget_request(&body, &model);
+                    if compact {
+                        budget_request.max_tokens = Some(
+                            pricing.model_info()
+                                .and_then(|info| info.max_output_tokens)
+                                .filter(|limit| *limit > 0)
+                                .ok_or_else(|| ProviderError::invalid_request(
+                                    "openai",
+                                    "Compaction requires a verified model output bound for budget reservation",
+                                ))?,
+                        );
+                    }
                     let mut storage = if store || background {
                         let binding = provider.native_response_binding().ok_or_else(|| {
                             ProviderError::not_supported("responses", "Stored native responses")
@@ -542,8 +554,9 @@ pub(super) fn response_usage(value: &Value) -> Option<Usage> {
     let output = usage.get("output_tokens")?.as_u64()?;
     let total = usage.get("total_tokens")?.as_u64()?;
     let cached = optional_tokens(usage.pointer("/input_tokens_details/cached_tokens"))?;
+    let written = optional_tokens(usage.pointer("/input_tokens_details/cache_write_tokens"))?;
     let reasoning = optional_tokens(usage.pointer("/output_tokens_details/reasoning_tokens"))?;
-    if reasoning > output {
+    if reasoning > output || cached.checked_add(written)? > input {
         return None;
     }
     let mut normalized = crate::core::providers::shared::strict_usage(
@@ -552,6 +565,10 @@ pub(super) fn response_usage(value: &Value) -> Option<Usage> {
         Some((total, &[input, output])),
         Some((cached, input)),
     )?;
+    normalized
+        .prompt_tokens_details
+        .as_mut()?
+        .cache_creation_tokens = Some(u32::try_from(written).ok()?);
     normalized.completion_tokens_details =
         Some(crate::core::types::responses::CompletionTokensDetails {
             reasoning_tokens: Some(u32::try_from(reasoning).unwrap_or(u32::MAX)),

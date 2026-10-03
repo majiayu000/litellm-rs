@@ -192,6 +192,248 @@ fn request(stream: bool) -> Value {
     json!({"model":"gpt-4o-mini","input":"Hello","stream":stream,"store":false,"service_tier":"default","tools":[{"type":"function","name":"weather","parameters":{"type":"object","properties":{}}},{"type":"custom","name":"calculator"}],"reasoning":{"effort":"low"},"include":["reasoning.encrypted_content"],"future_request_field":{"preserved":true},"max_output_tokens":16})
 }
 
+fn cache_write_pricing(state: &AppState, output_bound: Value) {
+    state.pricing.add_custom_model(
+        "gpt-4o-mini".into(),
+        serde_json::from_value(json!({
+            "litellm_provider":"openai", "mode":"chat", "max_output_tokens":output_bound,
+            "input_cost_per_token":0.000001, "output_cost_per_token":0.00002,
+            "cache_read_input_token_cost":0.0000001, "cache_creation_input_token_cost":0.00000125
+        }))
+        .unwrap(),
+    );
+}
+
+#[tokio::test]
+async fn compact_reserves_model_output_and_cache_writes_before_generation() {
+    use litellm_rs::core::{
+        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        types::context::RequestContext,
+    };
+    // 0.02 catches the old 100-output-token allowance; 0.024 fits the model
+    // output bound plus ordinary input, but not the provider's cache-write rate.
+    for scope in ["provider", "model", "key"] {
+        for limit in [0.02, 0.024] {
+            let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+            cache_write_pricing(&state, json!(500));
+            let mut context = RequestContext::new();
+            match scope {
+                "provider" => state.budget_limits.providers.set_provider_limit(
+                    "native-test",
+                    ProviderLimitConfig::new(limit, ResetPeriod::Monthly),
+                ),
+                "model" => state.budget_limits.models.set_model_limit(
+                    "gpt-4o-mini",
+                    ModelLimitConfig::new(limit, ResetPeriod::Monthly),
+                ),
+                _ => {
+                    let budget = state
+                        .budget_manager
+                        .create_budget(
+                            BudgetScope::ApiKey("compact-test".into()),
+                            BudgetConfig::new("compact bound", limit),
+                        )
+                        .await
+                        .unwrap();
+                    context = context.with_api_key_budget(budget.id.parse().unwrap());
+                }
+            }
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let req = test::TestRequest::post().uri("/v1/responses/compact").set_json(json!({"model":"gpt-4o-mini","input":[{"type":"compaction","encrypted_content":"opaque=="}]})).to_request();
+            req.extensions_mut().insert(context);
+            let response = test::call_service(&app, req).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYMENT_REQUIRED,
+                "{scope}/{limit}"
+            );
+            assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
+            assert!(upstream.seen.lock().unwrap().is_empty());
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn compact_settles_cache_write_usage_in_provider_model_and_key_budgets() {
+    use litellm_rs::core::{
+        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        keys::CreateKeyConfig,
+        types::context::RequestContext,
+    };
+    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    cache_write_pricing(&state, json!(500));
+    upstream.output.lock().unwrap()["usage"]["input_tokens_details"]["cache_write_tokens"] =
+        json!(5);
+    state.budget_limits.providers.set_provider_limit(
+        "native-test",
+        ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    state.budget_limits.models.set_model_limit(
+        "gpt-4o-mini",
+        ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    let scope = BudgetScope::ApiKey("compact-settlement".into());
+    let budget = state
+        .budget_manager
+        .create_budget(scope.clone(), BudgetConfig::new("compact settlement", 1.0))
+        .await
+        .unwrap();
+    let (key_id, _) = state
+        .key_manager
+        .generate_key(CreateKeyConfig {
+            name: "compact-cache-write".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let req = test::TestRequest::post()
+        .uri("/v1/responses/compact")
+        .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+        .to_request();
+    req.extensions_mut().insert(
+        RequestContext::new()
+            .with_api_key(key_id)
+            .with_api_key_budget(budget.id.parse().unwrap()),
+    );
+    let response = test::call_service(&app, req).await;
+    let status = response.status();
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(
+        value["usage"]["input_tokens_details"]["cache_write_tokens"],
+        5
+    );
+    let expected = 3.0 * 0.000001 + 4.0 * 0.0000001 + 5.0 * 0.00000125 + 3.0 * 0.00002;
+    for actual in [
+        state
+            .budget_limits
+            .providers
+            .get_provider_usage("native-test")
+            .unwrap()
+            .current_spend,
+        state
+            .budget_limits
+            .models
+            .get_model_usage("gpt-4o-mini")
+            .unwrap()
+            .current_spend,
+        state.budget_manager.get_current_spend(&scope),
+        state
+            .key_manager
+            .get_usage_stats(key_id)
+            .await
+            .unwrap()
+            .total_cost,
+    ] {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn compact_rejects_unknown_output_bounds_and_invalid_cache_write_usage() {
+    for (bound, written, status) in [
+        (Value::Null, json!(5), StatusCode::BAD_REQUEST),
+        (json!(500), json!(9), StatusCode::BAD_GATEWAY),
+        (json!(500), json!(-1), StatusCode::BAD_GATEWAY),
+        (json!(500), json!(1.5), StatusCode::BAD_GATEWAY),
+        (json!(500), json!(u64::MAX), StatusCode::BAD_GATEWAY),
+    ] {
+        let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+        cache_write_pricing(&state, bound);
+        upstream.output.lock().unwrap()["usage"]["input_tokens_details"]["cache_write_tokens"] =
+            written;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses/compact")
+                .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            upstream.seen.lock().unwrap().len(),
+            usize::from(status == StatusCode::BAD_GATEWAY)
+        );
+        handle.stop(false).await;
+    }
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn compact_skips_higher_priority_non_openai_responses_deployments() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.router.strategy =
+            litellm_rs::core::router::config::RoutingStrategy::PriorityBased;
+        config.gateway.providers[0].priority = 1;
+        let mut copilot = config.gateway.providers[0].clone();
+        copilot.name = "copilot-test".into();
+        copilot.provider_type = "github_copilot".into();
+        copilot.api_key.clear();
+        copilot.priority = 0;
+        config.gateway.providers.push(copilot);
+    })
+    .await;
+    let router = state.unified_router();
+    let copilot = router
+        .get_deployments_for_model("gpt-4o-mini")
+        .into_iter()
+        .filter_map(|id| router.get_deployment(&id))
+        .find(|deployment| {
+            matches!(
+                &deployment.provider,
+                litellm_rs::core::providers::Provider::GitHubCopilot(_)
+            )
+        })
+        .unwrap();
+    assert!(
+        copilot
+            .provider
+            .capabilities()
+            .contains(&litellm_rs::core::types::model::ProviderCapability::Responses)
+    );
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses/compact")
+            .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    assert_eq!(copilot.state.total_requests.load(Ordering::Relaxed), 0);
+    handle.stop(false).await;
+}
+
 #[tokio::test]
 async fn native_json_and_sse_preserve_tools_reasoning_and_extension_fields() {
     let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
