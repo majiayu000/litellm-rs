@@ -93,6 +93,44 @@ class ComparisonTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "unrecorded external Cargo"):
                     bench.reject_external_cargo_config(env)
 
+    def test_checkout_root_cargo_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "repo"
+            (checkout / ".cargo").mkdir(parents=True)
+            (checkout / ".cargo/config.toml").write_text("[build]\n")
+            with patch.object(bench, "ROOT", checkout):
+                with self.assertRaisesRegex(RuntimeError, "unrecorded external Cargo"):
+                    bench.reject_external_cargo_config({"HOME": str(root), "CARGO_HOME": str(root / "cargo-home")})
+
+    def test_local_probes_ignore_ambient_proxies(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("content-length", 0)))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"choices":[{"message":{"content":"pong"}}],"usage":{"total_tokens":2}}')
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            env = {"HTTP_PROXY":"http://127.0.0.1:1", "http_proxy":"http://127.0.0.1:1", "NO_PROXY":"", "no_proxy":""}
+            with patch.dict(os.environ, env), patch.object(bench.urllib.request, "getproxies", return_value={"http":"http://127.0.0.1:1"}):
+                url = f"http://127.0.0.1:{server.server_port}"
+                bench.ready(SimpleNamespace(poll=lambda: None), url)
+                self.assertEqual(bench.probe(url)["body"]["usage"]["total_tokens"], 2)
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
     def test_orphan_workers_are_stopped_after_launcher_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -92,7 +92,7 @@ def ready(process: subprocess.Popen, url: str) -> None:
         if process.poll() is not None:
             raise RuntimeError(f"service exited with {process.returncode}; inspect saved log")
         try:
-            with urllib.request.urlopen(url, timeout=1) as response:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url, timeout=1) as response:
                 if response.status == 200:
                     return
         except (OSError, urllib.error.URLError):
@@ -103,7 +103,7 @@ def ready(process: subprocess.Popen, url: str) -> None:
 
 def probe(url: str) -> dict:
     request = urllib.request.Request(url, data=REQUEST.encode(), headers={"content-type": "application/json"})
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=15) as response:
         data = response.read()
         value = json.loads(data)
         if value["choices"][0]["message"]["content"] != "pong" or value["usage"]["total_tokens"] != 2:
@@ -166,7 +166,7 @@ def measure(oha: str, process: subprocess.Popen, url: str, seconds: int, concurr
 
 
 def reject_external_cargo_config(env: dict[str, str]) -> None:
-    directories = [parent / ".cargo" for parent in ROOT.parents]
+    directories = [parent / ".cargo" for parent in (ROOT, *ROOT.parents)]
     directories.append(Path(env.get("CARGO_HOME", str(Path(env["HOME"]) / ".cargo"))).expanduser())
     for directory in dict.fromkeys(directories):
         for name in ("config", "config.toml"):
