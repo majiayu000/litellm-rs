@@ -1238,7 +1238,7 @@ async fn volcengine_embeddings_require_prices_and_obey_gateway_budgets() {
         "volcengine",
         "test-key",
         &provider.config().get_api_base(),
-        vec!["test-model".into()],
+        vec!["doubao-embedding-text-240715".into()],
     )];
     let state = litellm_rs::server::HttpServer::new(&config)
         .await
@@ -1255,7 +1255,7 @@ async fn volcengine_embeddings_require_prices_and_obey_gateway_budgets() {
     let request = || {
         test::TestRequest::post()
             .uri("/v1/embeddings")
-            .set_json(json!({"model":"test-model","input":"hello"}))
+            .set_json(json!({"model":"doubao-embedding-text-240715","input":"hello"}))
             .to_request()
     };
     let response = test::call_service(&app, request()).await;
@@ -1272,7 +1272,9 @@ async fn volcengine_embeddings_require_prices_and_obey_gateway_budgets() {
         .unwrap();
     price.litellm_provider = "volcengine".into();
     price.input_cost_per_token = Some(0.1);
-    state.pricing.add_custom_model("test-model".into(), price);
+    state
+        .pricing
+        .add_custom_model("doubao-embedding-text-240715".into(), price);
     state.budget_limits.providers.set_provider_limit(
         "volcengine",
         ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),

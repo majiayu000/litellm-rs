@@ -16,7 +16,7 @@ No callable models or prices are inferred from a price table. Existing explicit 
 
 ## Validation
 
-Local HTTP tests cover actual factory/Router at `/api/v3/embeddings`, array/string input, model identity, vectors/token usage, 400/429 contracts and unsupported modes. Gateway budget regression covers missing prices, rejection before dispatch and actual usage settlement. Passed: 26 HTTP/gateway tests; fmt/check; default complete tests (7,132 library passed, 1 ignored, plus integration/doc suites); default and gateway/sqlite all-target clippy; gateway/sqlite complete tests (9,426 library passed, 1 ignored, plus integration/doc suites). Full tests used `--test-threads=2`. These are local protocol simulations, not cloud or SambaStack calls.
+Local HTTP tests cover actual factory/Router at `/api/v3/embeddings`, array/string input, model identity, vectors/token usage, 400/429 contracts and unsupported modes. Gateway budget regression covers missing prices, rejection before dispatch and actual usage settlement. Original PR head `a5ce53a1` verification: 26 HTTP/gateway tests; fmt/check; default complete tests (7,132 library passed, 1 ignored, plus integration/doc suites); default and gateway/sqlite all-target clippy; gateway/sqlite complete tests (9,426 library passed, 1 ignored, plus integration/doc suites). Full tests used `--test-threads=2`. These are local protocol simulations, not cloud or SambaStack calls.
 
 ## Source evidence
 
@@ -34,3 +34,7 @@ Retrieved 2026-10-03; SHA-256 hashes identify the downloaded documents. Mutable 
 - [sambanova-retirement](https://docs.sambanova.ai/docs/en/models/deprecations.md): SHA-256 `ddccc28a762c84624f1a6b0748df95a8aa002193cdadc5f639a78c34de523ffe`.
 - [hyperbolic-current-index](https://www.hyperbolic.ai/docs/llms.txt): SHA-256 `646bf005f3d9b8c5097b6798ed5b5fd6814aaa3962beb2047de0246decd8287c`.
 - [Historical Japanese SambaNova translation page](https://docs.sambanova.ai/docs/ja/api-reference/endpoints/translation): older cloud URL example is superseded for availability by the current English feature restrictions above.
+
+## Pricing review correction
+
+The five bundled legacy Doubao embedding rows contained unverified zero token prices. The current [official Ark pricing page](https://docs.volcengine.com/docs/ark/model-pricing?lang=zh) describes paid vector input tokens, but does not establish a current USD rate or callable status for these legacy IDs. Both zero cost fields are removed using the existing sync overrides; future upstream zero rows cannot silently restore them. Metadata and identities remain unchanged. The gateway regression uses the real bundled `doubao-embedding-text-240715` row: absent pricing rejects before I/O, then an explicitly supplied test price demonstrates budget rejection and actual usage settlement. The test price is not a vendor price. No currency conversion or model availability is inferred.
