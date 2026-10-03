@@ -42,7 +42,8 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
     let path = req
         .path()
         .replace("/api/v1", "/v1")
-        .replace("/v3/openai", "/v1");
+        .replace("/v3/openai", "/v1")
+        .replace("/api/v3", "/v1");
     match path.as_str() {
         "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}})),
         "/v1/images/generations" => HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]})),
@@ -100,6 +101,7 @@ async fn fixture(
                 "docker_model_runner" => "/engines/llama.cpp/v1",
                 "nanogpt" => "/api/v1",
                 "novita" => "/v3/openai",
+                "volcengine" => "/api/v3",
                 _ => "/v1",
             }
         ),
@@ -1004,4 +1006,158 @@ async fn aggregator_errors_and_unverified_operations_fail_closed() {
         assert!(upstream.seen.lock().unwrap().is_empty());
         handle.stop(false).await;
     }
+}
+
+#[tokio::test]
+async fn volcengine_embeddings_preserve_wire_usage_and_errors() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::BAD_REQUEST,
+        StatusCode::TOO_MANY_REQUESTS,
+    ] {
+        let (router, upstream, handle) = fixture("volcengine", status).await;
+        let request = serde_json::from_value(
+            json!({"model":"doubao-embedding-text-240515","input":["hello"]}),
+        )
+        .unwrap();
+        let result = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await;
+        match status {
+            StatusCode::OK => {
+                let response = result.unwrap();
+                assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+                assert_eq!(response.usage.unwrap().total_tokens, 2);
+                let calls = upstream.seen.lock().unwrap();
+                assert_eq!(calls[0].0, "/api/v3/embeddings");
+                let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+                assert_eq!(body["model"], "doubao-embedding-text-240515");
+                assert_eq!(body["input"], json!(["hello"]));
+            }
+            StatusCode::BAD_REQUEST => assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::InvalidRequest { .. } | ProviderError::ApiError { status: 400, .. }
+            )),
+            _ => assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            )),
+        }
+        for capability in [
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn volcengine_embeddings_require_prices_and_obey_gateway_budgets() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("volcengine", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("catalog provider")
+    };
+    let mut config = litellm_rs::Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+        "volcengine",
+        "volcengine",
+        "test-key",
+        &provider.config().get_api_base(),
+        vec!["test-model".into()],
+    )];
+    let state = litellm_rs::server::HttpServer::new(&config)
+        .await
+        .unwrap()
+        .state()
+        .clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::post()
+            .uri("/v1/embeddings")
+            .set_json(json!({"model":"test-model","input":"hello"}))
+            .to_request()
+    };
+    let response = test::call_service(&app, request()).await;
+    assert!(!response.status().is_success());
+    let error: Value = test::read_body_json(response).await;
+    assert!(
+        error.to_string().to_lowercase().contains("pricing"),
+        "{error}"
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let (_, mut price) = state
+        .pricing
+        .get_model_info_for_provider("openai", "text-embedding-3-small")
+        .unwrap();
+    price.litellm_provider = "volcengine".into();
+    price.input_cost_per_token = Some(0.1);
+    state.pricing.add_custom_model("test-model".into(), price);
+    state.budget_limits.providers.set_provider_limit(
+        "volcengine",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    assert_eq!(
+        test::call_service(&app, request()).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    state.budget_limits.providers.set_provider_limit(
+        "volcengine",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let response = test::call_service(&app, request()).await;
+    let status = response.status();
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("volcengine")
+        .unwrap()
+        .current_spend;
+    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn volcengine_embedding_string_is_sent_as_one_item_array() {
+    let (router, upstream, handle) = fixture("volcengine", StatusCode::OK).await;
+    let request =
+        serde_json::from_value(json!({"model":"doubao-embedding-text-240515","input":"hello"}))
+            .unwrap();
+    selected(&router, ProviderCapability::Embeddings)
+        .create_embeddings(request, RequestContext::default())
+        .await
+        .unwrap();
+    let calls = upstream.seen.lock().unwrap().clone();
+    let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+    assert_eq!(body["input"], json!(["hello"]));
+    handle.stop(false).await;
 }

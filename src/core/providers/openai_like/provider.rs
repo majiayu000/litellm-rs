@@ -328,6 +328,10 @@ impl OpenAILikeProvider {
         let headers = self.get_request_headers();
         let mut body = serde_json::to_value(&request)
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        // Ark documents text inputs as an array, even for a single string.
+        if self.provider_name == "volcengine" && body["input"].is_string() {
+            body["input"] = Value::Array(vec![body["input"].take()]);
+        }
         if matches!(
             self.provider_name.as_str(),
             "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim"

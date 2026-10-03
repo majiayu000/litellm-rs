@@ -65,6 +65,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
 
+第九批（#1427，核验 2026-10-03）接入火山方舟文本 embeddings：使用现有 `/api/v3` base，按官方协议把单字符串输入规范为单元素数组，保留批量文本与浮点响应。模型或 Endpoint ID 由已有配置指定；多模态 `/embeddings/multimodal` 仍是独立协议。MiniMax 的 OpenAI 默认地址修正为 `https://api.minimax.io/v1`；它的原生图片/语音协议没有因此自动获得支持。
+
+SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 SambaStack，默认 SambaCloud 选择器不扩展能力。Hyperbolic 当前文档站转向 GPU 租用，托管推理非聊天协议仍未确认；这不是已退役的证据。详细官方来源和剩余差异见 [原生协议边界审计](../audit/native-compatible-nonchat-2026-10-03.md)。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -88,10 +92,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `nvidia_nim` | embeddings；其他待核验 |
 | `nebius` | embeddings；图片协议差异待适配 |
 | `nscale` | 待核验；本批未扩展非聊天声明 |
-| `hyperbolic` | 待核验；本批未扩展非聊天声明 |
+| `hyperbolic` | 旧文档现跳 GPU 租用新站，未找到当前托管推理非聊天协议；保持未确认，不凭重定向断言退役 |
 | `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
 | `galadriel` | 官方 OpenAPI 的 embeddings、images/generations；须配置实际可用模型，未实调账户目录 |
-| `sambanova` | 待核验；本批未扩展非聊天声明 |
+| `sambanova` | 当前官方 embeddings/Whisper 仅 SambaStack，公共云未开放；旧日文云端点说明不可当现行证据 |
 | `heroku` | 待核验；本批未扩展非聊天声明 |
 | `friendliai` | 待核验；本批未扩展非聊天声明 |
 | `meta_llama` | 待核验；本批未扩展非聊天声明 |
@@ -111,8 +115,8 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `dashscope` | 待核验；本批未扩展非聊天声明 |
 | `qwen` | 待核验；本批未扩展非聊天声明 |
 | `baichuan` | 待核验；本批未扩展非聊天声明 |
-| `minimax` | 待核验；本批未扩展非聊天声明 |
-| `volcengine` | 待核验；本批未扩展非聊天声明 |
+| `minimax` | 修默认 OpenAI base 为 api.minimax.io/v1；ASR /speech_to_text、TTS /t2a_v2、图片原生 JSON 待独立适配 |
+| `volcengine` | 文本 embeddings（/api/v3），单字符串转数组；多模态向量/Seedream图片参数及部分失败、音频另待适配 |
 | `xiaomi_mimo` | 待核验；本批未扩展非聊天声明 |
 | `zhipu` | 待核验；本批未扩展非聊天声明 |
 | `zai` | 待核验；本批未扩展非聊天声明 |
