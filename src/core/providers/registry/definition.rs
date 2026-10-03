@@ -92,12 +92,19 @@ impl ProviderDefinition {
     /// Resolve the API key: explicit value > environment variable
     pub fn resolve_api_key(&self, explicit: Option<&str>) -> Option<String> {
         explicit
+            .filter(|value| !value.trim().is_empty())
             .map(|s| s.to_string())
-            .or_else(|| std::env::var(self.auth_env_var).ok())
             .or_else(|| {
-                self.alternate_auth_env_vars
-                    .iter()
-                    .find_map(|env_var| std::env::var(env_var).ok())
+                std::env::var(self.auth_env_var)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .or_else(|| {
+                self.alternate_auth_env_vars.iter().find_map(|env_var| {
+                    std::env::var(env_var)
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                })
             })
     }
 }
