@@ -1214,6 +1214,13 @@
       "reviewed_on": "2026-10-03",
       "revision": "responses-endpoints-1375",
       "sha256": "18119b30a9cce7bd42efc980126cb47b5ad01cb1ec2bad5ed5c31331ee159547"
+    },
+    "f10-deepseek-retirement-20261003": {
+      "kind": "official_model_retirement_notice",
+      "location": "https://api-docs.deepseek.com/updates/",
+      "reviewed_on": "2026-10-03",
+      "revision": "deepseek-xai-cohere-review-20261003",
+      "sha256": "2922113bc4e0e970fa6d3c4065c3cff3ec661a4db03d671cc2310545c5b5bb71"
     }
   },
   "provider_aliases": {
@@ -14762,10 +14769,11 @@
     {
       "provider": "deepseek",
       "pricing_key": "deepseek-chat",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "f10-deepseek-retirement-20261003"
+      ],
+      "reason": "Retired native API model name on 2026-07-24; retain historical pricing only."
     },
     {
       "provider": "deepseek",
@@ -14786,10 +14794,11 @@
     {
       "provider": "deepseek",
       "pricing_key": "deepseek-reasoner",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "f10-deepseek-retirement-20261003"
+      ],
+      "reason": "Retired native API model name on 2026-07-24; retain historical pricing only."
     },
     {
       "provider": "deepseek",
@@ -14818,10 +14827,11 @@
     {
       "provider": "deepseek",
       "pricing_key": "deepseek/deepseek-chat",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "f10-deepseek-retirement-20261003"
+      ],
+      "reason": "Retired native API model name on 2026-07-24; retain historical pricing only."
     },
     {
       "provider": "deepseek",
@@ -14850,10 +14860,11 @@
     {
       "provider": "deepseek",
       "pricing_key": "deepseek/deepseek-reasoner",
-      "decision": "unreviewed",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-001"
-      ]
+        "f10-deepseek-retirement-20261003"
+      ],
+      "reason": "Retired native API model name on 2026-07-24; retain historical pricing only."
     },
     {
       "provider": "deepseek",
