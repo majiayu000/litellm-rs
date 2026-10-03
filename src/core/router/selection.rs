@@ -537,6 +537,22 @@ impl Router {
         )
     }
 
+    #[cfg(all(feature = "gateway", feature = "websockets"))]
+    pub(crate) fn select_pinned_response_lease(
+        &self,
+        deployment: &Deployment,
+        estimated_tokens: u64,
+    ) -> Result<DeploymentLease, RouterError> {
+        let snapshot = self.load_routing_snapshot();
+        self.select_deployment_matching(
+            snapshot.as_ref(),
+            &deployment.model_name,
+            |candidate| std::ptr::eq(candidate, deployment),
+            None,
+            estimated_tokens,
+        )
+    }
+
     /// Release a deployment after request completion
     ///
     /// Decrements the active_requests counter for the deployment.

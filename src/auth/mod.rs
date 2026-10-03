@@ -31,3 +31,6 @@ pub(crate) const AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE: &str =
     "Authentication service temporarily unavailable";
 
 // Re-export OAuth types for convenience
+
+#[cfg(all(feature = "gateway", feature = "websockets"))]
+pub(crate) use system::api_key_budget_id;

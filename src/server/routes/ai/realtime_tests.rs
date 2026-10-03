@@ -52,7 +52,7 @@ async fn explicit_manual_scope_and_output_policy() {
     }
     let mut event = json!({"type":"response.create","response":{"tools":[{"type":"function","name":"weather"}]}});
     assert!(prepare_event(&mut event, &rates, false).unwrap());
-    assert_eq!(event["response"]["max_output_tokens"], rates.max_output);
+    assert!(event["response"].get("max_output_tokens").is_none());
     assert!(prepare_event(&mut event, &rates, true).is_err());
 }
 async fn upstream(
@@ -99,6 +99,13 @@ async fn upstream(
                             if value["response"]["metadata"]["unrelated_error"] == true {
                                 let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":"unrelated-item","message":"mock unrelated event"}}).to_string()).await;
                             }
+                            if value["response"]["metadata"]["normal_close"] == true {
+                                let _ = session.text(json!({"type":"response.created","response":{"id":"response-1"}}).to_string()).await;
+                                let _ = session
+                                    .close(Some(actix_ws::CloseCode::Normal.into()))
+                                    .await;
+                                return;
+                            }
                             if value["response"]["metadata"]["hold"] == true {
                                 if session.text(json!({"type":"response.created","response":{"id":"response-1"}}).to_string()).await.is_err() { break; }
                                 continue;
@@ -107,12 +114,15 @@ async fn upstream(
                                 json!({"type":"response.created","response":{"id":"response-1"}}),
                                 json!({"type":"response.output_audio.delta","delta":"aGVsbG8="}),
                                 json!({"type":"response.function_call_arguments.done","arguments":"{}","call_id":"call-1"}),
-                                json!({"type":"response.done","response":{"id":"response-1","status":"completed","usage":usage()}}),
+                                json!({"type":"response.done","response":{"id":"response-1","status":value["response"]["metadata"]["status"].as_str().unwrap_or("completed"),"status_details":{"error":{"type":"server_error","message":"mock failure"}},"usage":usage()}}),
                             ] {
                                 if session.text(event.to_string()).await.is_err() {
                                     break;
                                 }
                             }
+                        }
+                        "input_audio_buffer.clear" => {
+                            let _ = session.text(json!({"type":"response.done","response":{"id":"response-1","status":"completed","usage":usage()}}).to_string()).await;
                         }
                         "conversation.item.delete" => {
                             let _ = session
@@ -151,6 +161,17 @@ async fn fixture() -> (
     Calls,
     Vec<actix_web::dev::ServerHandle>,
 ) {
+    fixture_with_config(|_| {}).await
+}
+async fn fixture_with_config(
+    configure: impl FnOnce(&mut crate::Config),
+) -> (
+    AppState,
+    String,
+    String,
+    Calls,
+    Vec<actix_web::dev::ServerHandle>,
+) {
     let calls: Calls = Arc::default();
     let copy = calls.clone();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -159,6 +180,10 @@ async fn fixture() -> (
         App::new()
             .app_data(web::Data::new(copy.clone()))
             .route("/v1/realtime", web::get().to(upstream))
+            .route(
+                "/broken/v1/realtime",
+                web::get().to(rejected_initialization),
+            )
     })
     .workers(1)
     .listen(listener)
@@ -183,6 +208,7 @@ async fn fixture() -> (
         json!({"gpt-realtime-mini":"gpt-realtime-mini-mapped"}),
     );
     provider.settings.insert("model_identity_mappings".into(), json!({"gpt-realtime-mini":{"capability_catalog_model":"gpt-realtime-mini","pricing_model":"gpt-realtime-mini"}}));
+    configure(&mut config);
     let gateway = crate::server::http::HttpServer::new(&config).await.unwrap();
     let state = gateway.state().clone();
     let mut owner = crate::core::models::user::types::User::new(
@@ -603,18 +629,13 @@ async fn completed_tokens_survive_a_later_protocol_failure() {
     let router = state.pin_runtime().unified_router.clone();
     let id = &router.get_deployments_for_model("gpt-realtime-mini")[0];
     let deployment = router.get_deployment(id).unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while deployment
+    assert_eq!(
+        deployment
             .state
             .fail_requests
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == 0
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
     assert_eq!(
         deployment
             .state
@@ -627,7 +648,7 @@ async fn completed_tokens_survive_a_later_protocol_failure() {
             .state
             .success_requests
             .load(std::sync::atomic::Ordering::Relaxed),
-        0
+        1
     );
     drop(client);
     for handle in handles {
@@ -770,6 +791,15 @@ async fn usage_persistence_failure_does_not_hide_completed_response() {
     let mut client = client(&url, &raw).await;
     next_json(&mut client).await;
     next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"hold":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.created");
     state
         .storage
         .db()
@@ -786,19 +816,384 @@ async fn usage_persistence_failure_does_not_hide_completed_response() {
     );
     client
         .send(Message::Text(
-            json!({"type":"response.create"}).to_string().into(),
+            json!({"type":"input_audio_buffer.clear"})
+                .to_string()
+                .into(),
         ))
         .await
         .unwrap();
-    for kind in [
-        "response.created",
-        "response.output_audio.delta",
-        "response.function_call_arguments.done",
-        "response.done",
-    ] {
-        assert_eq!(next_json(&mut client).await["type"], kind);
-    }
+    assert_eq!(next_json(&mut client).await["type"], "response.done");
     drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+async fn rejected_initialization(
+    req: HttpRequest,
+    payload: web::Payload,
+    calls: web::Data<Calls>,
+) -> actix_web::Result<HttpResponse> {
+    let (response, mut session, mut input) = actix_ws::handle(&req, payload)?;
+    actix_web::rt::spawn(async move {
+        if let Some(Ok(actix_ws::Message::Text(_))) = input.next().await {
+            calls
+                .lock()
+                .unwrap()
+                .push(json!({"initialization_rejected":true}));
+            let _ = session
+                .text(
+                    json!({"type":"error","error":{"type":"server_error","message":"bad backend"}})
+                        .to_string(),
+                )
+                .await;
+        }
+    });
+    Ok(response)
+}
+
+#[actix_web::test]
+async fn session_limits_survive_omitted_fields_and_restricted_key_updates() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    for event in [
+        json!({"type":"session.update","session":{"max_output_tokens":128}}),
+        json!({"type":"session.update","session":{"instructions":"brief"}}),
+    ] {
+        client
+            .send(Message::Text(event.to_string().into()))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "session.updated");
+    }
+    for cap in [128, 64] {
+        if cap == 64 {
+            key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":64,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+            state.storage.db().update_api_key(&key).await.unwrap();
+        }
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            next_json(&mut client).await;
+        }
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|v| v["type"] == "response.create")
+                .unwrap()["response"]["max_output_tokens"],
+            cap
+        );
+    }
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|v| v["session"]["instructions"] == "brief")
+            .unwrap()["session"]
+            .get("max_output_tokens")
+            .is_none()
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn active_normal_close_and_failed_done_affect_provider_health() {
+    for metadata in [
+        json!({"normal_close":true}),
+        json!({"status":"failed"}),
+        json!({"status":"cancelled"}),
+        json!({"status":"incomplete"}),
+    ] {
+        let should_fail = metadata["normal_close"] == true || metadata["status"] == "failed";
+        let (state, url, key, _, handles) = fixture().await;
+        let mut client = client(&url, &key).await;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        client
+            .send(Message::Text(
+                json!({"type":"response.create","response":{"metadata":metadata}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        if metadata["normal_close"] == true {
+            assert_eq!(next_json(&mut client).await["type"], "response.created");
+            assert!(matches!(
+                client.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+        } else {
+            for _ in 0..4 {
+                next_json(&mut client).await;
+            }
+        }
+        let router = state.pin_runtime().unified_router.clone();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        if should_fail {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while deployment
+                    .state
+                    .fail_requests
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    == 0
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        } else {
+            assert_eq!(
+                deployment
+                    .state
+                    .fail_requests
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(
+                deployment
+                    .state
+                    .success_requests
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+        }
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn initialization_failure_retries_before_the_client_upgrade() {
+    let (_, url, key, calls, handles) = fixture_with_config(|config| {
+        config.gateway.router.strategy =
+            crate::core::router::config::RoutingStrategy::PriorityBased;
+        let mut broken = config.gateway.providers[0].clone();
+        broken.name = "broken-openai".into();
+        broken.base_url = broken.base_url.map(|url| url.replace("/v1", "/broken/v1"));
+        broken.priority = 0;
+        config.gateway.providers[0].priority = 1;
+        config.gateway.providers.insert(0, broken);
+    })
+    .await;
+    let mut client = client(&url, &key).await;
+    assert_eq!(next_json(&mut client).await["type"], "session.created");
+    assert_eq!(next_json(&mut client).await["type"], "session.updated");
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|v| v["initialization_rejected"] == true)
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn response_boundaries_recheck_deployment_rpm_tpm_and_parallel_admission() {
+    for rpm in [true, false] {
+        let (state, url, key, calls, handles) = fixture_with_config(|config| {
+            config.gateway.providers[0].max_concurrent_requests = 1;
+            if rpm {
+                config.gateway.providers[0].rpm = 1;
+            } else {
+                config.gateway.providers[0].tpm = 60;
+            }
+        })
+        .await;
+        let mut client = client(&url, &key).await;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            next_json(&mut client).await;
+        }
+        let router = state.pin_runtime().unified_router.clone();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        assert_eq!(
+            deployment
+                .state
+                .tpm_current
+                .load(std::sync::atomic::Ordering::Relaxed),
+            60
+        );
+        assert_eq!(
+            deployment
+                .state
+                .rpm_current
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            deployment
+                .state
+                .active_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            next_json(&mut client).await["error"]["type"],
+            "rate_limit_error"
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|v| v["type"] == "response.create")
+                .count(),
+            1
+        );
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn response_boundaries_reauthorize_current_keys() {
+    for change in [
+        "deleted",
+        "revoked",
+        "expired",
+        "permission",
+        "model",
+        "endpoint",
+        "rpm",
+    ] {
+        let (state, url, raw, calls, handles) = fixture().await;
+        let (mut key, _) = state
+            .auth
+            .api_key()
+            .verify_key(&raw)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut client = client(&url, &raw).await;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        match change {
+            "revoked" => key.is_active = false,
+            "expired" => key.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            "permission" => key.permissions = vec!["api.chat".into()],
+            "model" | "endpoint" => {
+                key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":if change=="model" {vec!["other"]} else {vec![]},"allowed_endpoints":if change=="endpoint" {vec!["/v1/chat/completions"]} else {vec![]},"is_admin":false,"custom_permissions":["api.realtime"]}}));
+            }
+            "rpm" => {
+                key.rate_limits = Some(crate::core::models::RateLimits {
+                    rpm: Some(1),
+                    tpm: None,
+                    rpd: None,
+                    tpd: None,
+                    concurrent: None,
+                })
+            }
+            _ => {}
+        }
+        if change == "deleted" {
+            state
+                .storage
+                .db()
+                .delete_api_key(key.metadata.id)
+                .await
+                .unwrap();
+        } else {
+            state.storage.db().update_api_key(&key).await.unwrap();
+        }
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        if change == "rpm" {
+            for _ in 0..4 {
+                next_json(&mut client).await;
+            }
+            client
+                .send(Message::Text(
+                    json!({"type":"response.create"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+        }
+        assert_eq!(next_json(&mut client).await["type"], "error", "{change}");
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|v| v["type"] == "response.create")
+                .count(),
+            usize::from(change == "rpm"),
+            "{change}"
+        );
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn realtime_auth_middleware_returns_openai_error_envelopes() {
+    assert_eq!(
+        super::super::operation_for_path("/v1/realtime"),
+        Some("realtime")
+    );
+    let (_, url, _, _, handles) = fixture().await;
+    for key in [None, Some("invalid-local-key")] {
+        let mut request = reqwest::Client::new().get(url.replace("ws://", "http://"));
+        if let Some(key) = key {
+            request = request.header("x-api-key", key);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let error: Value = response.json().await.unwrap();
+        assert!(error["error"]["message"].is_string());
+    }
     for handle in handles {
         handle.stop(false).await;
     }

@@ -42,6 +42,17 @@ impl StreamingDeploymentLease {
     }
 
     pub(super) fn finish_success(mut self, tokens_used: u64) {
+        self.complete_response(tokens_used, None);
+    }
+
+    pub(super) fn complete_response(&mut self, tokens_used: u64, error: Option<&ProviderError>) {
+        if let Some(error) = error {
+            self.complete_failure(error, tokens_used);
+            return;
+        }
+        if self.finalized {
+            return;
+        }
         let latency_us = self.started_at.elapsed().as_micros() as u64;
         self.router
             .record_success_for_deployment(&self.deployment, tokens_used, latency_us);
@@ -56,6 +67,10 @@ impl StreamingDeploymentLease {
     }
 
     pub(super) fn finish_failure_with_tokens(mut self, error: &ProviderError, tokens_used: u64) {
+        self.complete_failure(error, tokens_used);
+    }
+
+    fn complete_failure(&mut self, error: &ProviderError, tokens_used: u64) {
         if tokens_used > 0 {
             self.deployment.record_partial_tokens(tokens_used);
             if let Some(hold) = self.hold.take() {
@@ -74,6 +89,33 @@ impl StreamingDeploymentLease {
         };
         self.router
             .record_failure_with_reason_for_deployment(&self.deployment, cooldown_reason);
+        self.release();
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn begin_response(&mut self, estimated_tokens: u64) -> Result<(), ProviderError> {
+        // The handshake and each generation are separate admission boundaries.
+        // Idle sockets do not hold a generation's parallel-request slot.
+        self.release();
+        let mut selected = self
+            .router
+            .select_pinned_response_lease(&self.deployment, estimated_tokens)
+            .map_err(router_error_to_provider_error)?;
+        (self.admission, self.hold) = selected.take_admission();
+        let _ = selected.into_deployment_id();
+        self.started_at = Instant::now();
+        self.finalized = false;
+        Ok(())
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn finish_neutral(&mut self, tokens_used: u64) {
+        if tokens_used > 0 {
+            self.deployment.record_partial_tokens(tokens_used);
+        }
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle(&hold, tokens_used);
+        }
         self.release();
     }
 

@@ -239,6 +239,10 @@ fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usi
 pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
     let normalized = path.trim_end_matches('/');
 
+    if normalized == "/v1/realtime" {
+        return Some("realtime");
+    }
+
     if normalized == "/v1/chat/completions"
         || (normalized.starts_with("/v1/engines/") && normalized.ends_with("/chat/completions"))
         || (normalized.starts_with("/openai/deployments/")

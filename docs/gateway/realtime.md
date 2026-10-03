@@ -24,7 +24,7 @@ and requires an acknowledged session configuration before upgrading the caller.
 Clients append/commit audio or create conversation items, then explicitly send
 `response.create`. Only one response may be in flight. Each `response.create` consumes the existing
 API-key RPM allowance (or enabled gateway default); the initial HTTP handshake
-also counts as one request. Native model mappings are applied to the upstream
+also counts as one request when that limiter is enabled. Every response rechecks the current key status, expiry, owner, permissions, model/output restrictions, budget and RPM policy. Native model mappings are applied to the upstream
 handshake. Client events supported
 are `session.update`, `response.create`, `response.cancel`,
 `conversation.item.create/delete/retrieve/truncate`, and
@@ -41,8 +41,7 @@ removal of those separate legacy types remains tracked in [#1402](https://github
 Both peers' close codes/reasons and request-scoped native events are retained.
 Frames use bounded buffers, with the existing server body-size setting as the
 message limit; transport writes and idle connections use the provider timeout. Closing the downstream
-socket drops the upstream connection. Router admission remains held for the
-connection lifetime. No mid-session failover is attempted.
+socket drops the upstream connection. Initialization failures can retry another eligible deployment before the client upgrade. Every generation reacquires admission for the pinned deployment, including RPM/TPM and parallel-request limits; completed usage is settled immediately, and idle sockets release generation slots. TPM follows the existing streaming admission behavior (a minimal initial token estimate, settled to actual usage), rather than a predictive full-context token reservation. No mid-session failover is attempted.
 
 ## Cost and budgets
 
@@ -50,7 +49,7 @@ Every `response.create` reserves the selected model's full input-context limit
 plus the allowed maximum output, priced at the most expensive supported input
 and output modality. The existing provider/model and API-key budget mechanisms
 must both admit it **before** the event is forwarded. The output cap is the
-smaller of the model limit and key limit; an explicit client cap must fit it.
+smaller of the model limit and key limit; an explicit client cap must fit it. Omitted caps preserve the last explicit session cap and are additionally bounded by the current key policy.
 This conservative approach intentionally requires more available budget than a
 short actual response will cost. For the current embedded mini price row, the
 full 32,000-input/4,096-output reservation is $0.40192. Lower budgets cannot
@@ -64,7 +63,7 @@ trusted usage settle the outstanding conservative reservation; unused reserves
 are refunded only after valid usage. Errors before `response.created` are matched
 to the originating `response.create` event ID. Completed tokens remain in router
 TPM accounting if a later connection error occurs; error close frames count as
-deployment failures. A failed key-usage database write is logged separately with
+deployment failures, including normal close codes during an unfinished response. Failed response outcomes affect provider health; cancelled/incomplete responses do not. Client protocol errors and disconnects do not penalize provider health. A failed key-usage database write is logged separately with
 key ID, token count and settled cost, and does not suppress `response.done`;
 automatic retries or durable reconciliation are not implemented. Abrupt task cancellation keeps the budget
 reservation charged, but cannot asynchronously persist key usage, and process

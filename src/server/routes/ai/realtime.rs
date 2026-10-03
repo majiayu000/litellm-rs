@@ -56,18 +56,12 @@ pub(super) async fn connect(
     }
     let output_limit = context::api_key_max_tokens_per_request(&req)?;
     let runtime = state.pin_runtime();
-    let requests_per_minute = key
-        .as_ref()
-        .and_then(|key| key.rate_limits.as_ref())
-        .and_then(|limits| limits.rpm)
-        .or_else(|| {
-            runtime
-                .config
-                .gateway
-                .rate_limit
-                .enabled
-                .then(|| runtime.config.gateway.rate_limit.effective_rpm())
-        });
+    let requests_per_minute = runtime
+        .config
+        .gateway
+        .rate_limit
+        .enabled
+        .then(|| runtime.config.gateway.rate_limit.effective_rpm());
     if runtime.guardrails.is_enabled() {
         return Ok(denied(
             "Realtime does not implement configured content guardrails",
@@ -125,17 +119,59 @@ pub(super) async fn connect(
                     ));
                 };
                 let timeout = openai.config.base.timeout_duration();
-                let upstream = open_upstream(openai, &model, max_size).await?;
-                Ok((upstream, rates, provider.name().to_owned(), model, timeout))
+                let mut upstream = open_upstream(openai, &model, max_size).await?;
+                let initial = initialize_upstream(&mut upstream, &rates, timeout).await?;
+                Ok((
+                    upstream,
+                    rates,
+                    provider.name().to_owned(),
+                    model,
+                    timeout,
+                    initial,
+                ))
             }
         },
     )
     .await;
-    let ((mut upstream, rates, provider, model, timeout), lease) = match selected {
+    let ((upstream, rates, provider, model, timeout, initial), lease) = match selected {
         Ok(selected) => selected,
         Err(error) => return Ok(super::openai_errors::gateway_error_response(&error)),
     };
-    // Establish the manual-generation contract before any client event reaches upstream.
+    let state = state.get_ref().clone();
+    let stream = stream
+        .max_frame_size(max_size)
+        .aggregate_continuations()
+        .max_continuation_size(max_size);
+    actix_web::rt::spawn(async move {
+        for event in initial {
+            if session.text(event).await.is_err() {
+                return;
+            }
+        }
+        relay(
+            session,
+            stream,
+            upstream,
+            state,
+            context,
+            rates,
+            provider,
+            model,
+            lease,
+            timeout,
+            requests_per_minute,
+            query.model.clone(),
+        )
+        .await;
+    });
+    Ok(response)
+}
+
+async fn initialize_upstream(
+    upstream: &mut Upstream,
+    rates: &Rates,
+    timeout: Duration,
+) -> Result<Vec<String>, ProviderError> {
     let initialize = async {
         upstream.send(Message::Text(json!({"type":"session.update","session":{"type":"realtime","tools":[],"max_output_tokens":rates.max_output,"audio":{"input":{"turn_detection":null,"transcription":null}}}}).to_string().into())).await.map_err(|_| "Realtime initialization write failed")?;
         let mut initial = Vec::new();
@@ -177,45 +213,14 @@ pub(super) async fn connect(
         }
         Err("Realtime initialization closed")
     };
-    let initial = match tokio::time::timeout(timeout, initialize).await {
-        Ok(Ok(initial)) => initial,
-        _ => {
-            lease.finish_failure(&ProviderError::network(
-                "openai",
-                "Realtime initialization failed",
-            ));
-            return Ok(HttpResponse::BadGateway().json(
-                json!({"error":{"message":"Realtime manual-session initialization failed"}}),
-            ));
-        }
-    };
-    let state = state.get_ref().clone();
-    let stream = stream
-        .max_frame_size(max_size)
-        .aggregate_continuations()
-        .max_continuation_size(max_size);
-    actix_web::rt::spawn(async move {
-        for event in initial {
-            if session.text(event).await.is_err() {
-                return;
-            }
-        }
-        relay(
-            session,
-            stream,
-            upstream,
-            state,
-            context,
-            rates,
-            provider,
-            model,
-            lease,
-            timeout,
-            requests_per_minute,
-        )
-        .await;
-    });
-    Ok(response)
+    match tokio::time::timeout(timeout, initialize).await {
+        Ok(Ok(initial)) => Ok(initial),
+        Ok(Err(message)) => Err(ProviderError::network("openai", message)),
+        Err(_) => Err(ProviderError::network(
+            "openai",
+            "Realtime initialization timeout",
+        )),
+    }
 }
 
 async fn open_upstream(
@@ -396,7 +401,6 @@ fn prepare_event(value: &mut Value, rates: &Rates, active: bool) -> Result<bool,
             if limit == 0 || limit > rates.max_output as u64 {
                 return Err("Realtime output limit exceeds model or key policy");
             }
-            options.insert("max_output_tokens".into(), json!(limit));
         }
         "conversation.item.create"
         | "conversation.item.delete"
@@ -444,34 +448,64 @@ async fn relay(
     mut input: actix_ws::AggregatedMessageStream,
     mut upstream: Upstream,
     state: AppState,
-    context: crate::core::types::context::RequestContext,
+    mut context: crate::core::types::context::RequestContext,
     rates: Rates,
     provider: String,
     model: String,
-    lease: super::execution::StreamingDeploymentLease,
+    mut lease: super::execution::StreamingDeploymentLease,
     timeout: Duration,
     requests_per_minute: Option<u32>,
+    public_model: String,
 ) {
     let mut pending: Option<Pending> = None;
     let mut response_id: Option<String> = None;
     let mut response_event_id: Option<String> = None;
     let mut tokens = 0u64;
     let mut failure = false;
+    let mut error_type = "server_error";
+    let mut session_output_limit = rates.max_output;
+    lease.finish_neutral(0);
     let outcome: Result<(), String> = async {
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(timeout) => return Err("Realtime connection idle timeout".into()),
+                _ = tokio::time::sleep(timeout) => { failure = pending.is_some(); return Err("Realtime connection idle timeout".into()); },
                 event = input.next() => match event {
                     Some(Ok(actix_ws::AggregatedMessage::Text(text))) => {
-                        let mut value: Value = serde_json::from_str(&text).map_err(|_| "Invalid Realtime JSON")?;
+                        let mut value: Value = serde_json::from_str(&text).map_err(|_| { error_type = "invalid_request_error"; "Invalid Realtime JSON" })?;
                         let creates = match prepare_event(&mut value, &rates, pending.is_some()) {
                             Ok(creates) => creates,
                             Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"invalid_request_error","message":message,"event_id":value.get("event_id")}}).to_string(), timeout).await?; continue; }
                         };
                         if creates {
-                            if let Some(rpm) = requests_per_minute
+                            let mut key_rpm = requests_per_minute;
+                            let mut output_limit = rates.max_output;
+                            if let Some(key_id) = context.api_key_id() {
+                                let key = state.storage.db().find_api_key_by_id(key_id).await.map_err(|_| "Realtime key reauthorization unavailable")?.ok_or("Realtime API key no longer exists")?;
+                                if !key.is_active || key.expires_at.is_some_and(|expires| expires <= chrono::Utc::now())
+                                    || !context::check_permission(None, Some(&key), "realtime")
+                                    || !context::api_key_allows_endpoint(Some(&key), "/v1/realtime").map_err(|_| "Invalid Realtime key policy")? {
+                                    return Err("Realtime API key is no longer authorized".into());
+                                }
+                                if let Some(user_id) = key.user_id {
+                                    let owner = state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?;
+                                    if !owner.is_some_and(|owner| owner.is_active()) { return Err("Realtime API key owner is no longer authorized".into()); }
+                                }
+                                context::enforce_key_model_and_token_limits(&key, &public_model, value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok())).map_err(|_| "Realtime model or output policy denied")?;
+                                output_limit = context::api_key_output_limit(&key).map_err(|_| "Invalid Realtime key policy")?.map_or(output_limit, |limit| limit.min(output_limit));
+                                key_rpm = key.rate_limits.as_ref().and_then(|limits| limits.rpm).or(requests_per_minute);
+                                if let Some(budget_id) = crate::auth::api_key_budget_id(&key) { context.set_api_key_budget_id(budget_id); } else { context.clear_api_key_budget_id(); }
+                            }
+                            if output_limit == 0 { return Err("Realtime output is forbidden by current key policy".into()); }
+                            if value["response"].get("max_output_tokens").is_none() {
+                                value["response"]["max_output_tokens"] = json!(session_output_limit.min(output_limit));
+                            }
+                            if let Some(rpm) = key_rpm
                                 && let Err(retry_after) = crate::server::middleware::enforce_socket_request_rate(&context, rpm).await {
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":"Realtime request rate exceeded","retry_after":retry_after}}).to_string(), timeout).await?;
+                                continue;
+                            }
+                            if let Err(error) = lease.begin_response(1) {
+                                send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":error.to_string()}}).to_string(), timeout).await?;
                                 continue;
                             }
                             match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound()) {
@@ -481,10 +515,11 @@ async fn relay(
                                     response_event_id = Some(event_id);
                                     pending = Some(reservation);
                                 },
-                                Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
+                                Err(message) => { lease.finish_neutral(0); send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
                             }
                         }
-                        tokio::time::timeout(timeout, upstream.send(Message::Text(value.to_string().into()))).await.map_err(|_| "Realtime upstream write timeout")?.map_err(|_| "Realtime upstream write failed")?;
+                        tokio::time::timeout(timeout, upstream.send(Message::Text(value.to_string().into()))).await.map_err(|_| { failure = true; "Realtime upstream write timeout" })?.map_err(|_| { failure = true; "Realtime upstream write failed" })?;
+                        if value["type"] == "session.update" && let Some(limit) = value["session"]["max_output_tokens"].as_u64() { session_output_limit = limit as u32; }
                     }
                     Some(Ok(actix_ws::AggregatedMessage::Ping(bytes))) => { tokio::time::timeout(timeout, downstream.pong(&bytes)).await.map_err(|_| "Realtime pong timeout")?.map_err(|_| "Client disconnected")?; }
                     Some(Ok(actix_ws::AggregatedMessage::Pong(_))) => {}
@@ -495,40 +530,49 @@ async fn relay(
                         return Ok(());
                     }
                     None => return Ok(()),
-                    _ => return Err("Unsupported or invalid Realtime client frame".into()),
+                    _ => { error_type = "invalid_request_error"; return Err("Unsupported or invalid Realtime client frame".into()); },
                 },
                 event = upstream.next() => match event {
                     Some(Ok(Message::Text(text))) => {
-                        let value: Value = serde_json::from_str(&text).map_err(|_| "Malformed upstream Realtime event")?;
+                        let value: Value = serde_json::from_str(&text).map_err(|_| { failure = true; "Malformed upstream Realtime event" })?;
                         if value["type"] == "response.created" {
-                            if pending.is_none() || response_id.is_some() { return Err("Unreserved upstream Realtime response".into()); }
-                            response_id = Some(value["response"]["id"].as_str().ok_or("Missing Realtime response ID")?.to_owned());
+                            if pending.is_none() || response_id.is_some() { failure = true; return Err("Unreserved upstream Realtime response".into()); }
+                            response_id = Some(value["response"]["id"].as_str().ok_or_else(|| { failure = true; "Missing Realtime response ID" })?.to_owned());
                         } else if value["type"] == "response.done" {
-                            if response_id.as_deref() != value["response"]["id"].as_str() || response_id.is_none() { return Err("Mismatched Realtime response ID".into()); }
-                            let usage = rates.cost(&value["response"]["usage"])?;
+                            if response_id.as_deref() != value["response"]["id"].as_str() || response_id.is_none() { failure = true; return Err("Mismatched Realtime response ID".into()); }
+                            let usage = rates.cost(&value["response"]["usage"]).inspect_err(|_| { failure = true; })?;
                             let reservation = pending.take().ok_or("Missing Realtime reservation")?;
-                            tokens = tokens.saturating_add(usage.1);
+                            tokens = usage.1;
                             reservation.settle(&state, context.api_key_id(), Some(usage)).await?;
+                            let provider_failed = value["response"]["status"] == "failed"
+                                && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
+                            if provider_failed {
+                                lease.complete_response(tokens, Some(&ProviderError::api_error("openai", 500, value["response"]["status_details"]["error"].to_string())));
+                            } else {
+                                lease.complete_response(tokens, None);
+                            }
+                            tokens = 0;
                             response_id = None;
                             response_event_id = None;
                         } else if value["type"] == "error" && pending.is_some() && response_id.is_none()
                             && response_event_id.as_deref() == value["error"]["event_id"].as_str() {
                             // No trusted usage accompanies this error; retain the documented reservation fallback.
                             if let Some(reservation) = pending.take() { reservation.settle(&state, context.api_key_id(), None).await?; }
+                            lease.finish_neutral(0);
                             response_event_id = None;
                         }
                         tokio::time::timeout(timeout, downstream.text(text.to_string())).await.map_err(|_| "Realtime downstream write timeout")?.map_err(|_| "Client disconnected")?;
                     }
-                    Some(Ok(Message::Ping(bytes))) => { tokio::time::timeout(timeout, upstream.send(Message::Pong(bytes))).await.map_err(|_| "Realtime pong timeout")?.map_err(|_| "Realtime pong failed")?; }
+                    Some(Ok(Message::Ping(bytes))) => { tokio::time::timeout(timeout, upstream.send(Message::Pong(bytes))).await.map_err(|_| { failure = true; "Realtime pong timeout" })?.map_err(|_| { failure = true; "Realtime pong failed" })?; }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(reason))) => {
-                        failure = reason.as_ref().is_some_and(|reason| !matches!(u16::from(reason.code), 1000 | 1001));
+                        failure = pending.is_some() || reason.as_ref().is_some_and(|reason| !matches!(u16::from(reason.code), 1000 | 1001));
                         let reason = reason.map(|reason| actix_ws::CloseReason { code: u16::from(reason.code).into(), description: Some(reason.reason.to_string()) });
                         let _ = tokio::time::timeout(timeout, downstream.clone().close(reason)).await;
                         return Ok(());
                     }
-                    None => return Err("Realtime upstream closed without a close frame".into()),
-                    _ => return Err("Realtime upstream transport failed".into()),
+                    None => { failure = true; return Err("Realtime upstream closed without a close frame".into()); },
+                    _ => { failure = true; return Err("Realtime upstream transport failed".into()); },
                 }
             }
         }
@@ -537,14 +581,12 @@ async fn relay(
         && let Err(error) = reservation.settle(&state, context.api_key_id(), None).await
     {
         tracing::error!(%error, "Realtime interrupted usage settlement failed");
-        failure = true;
     }
     if let Err(error) = outcome {
-        failure = true;
         let _ = tokio::time::timeout(
             timeout,
             downstream.text(
-                json!({"type":"error","error":{"type":"server_error","message":error}}).to_string(),
+                json!({"type":"error","error":{"type":error_type,"message":error}}).to_string(),
             ),
         )
         .await;
@@ -563,7 +605,7 @@ async fn relay(
             tokens,
         );
     } else {
-        lease.finish_success(tokens);
+        lease.finish_neutral(tokens);
     }
 }
 
