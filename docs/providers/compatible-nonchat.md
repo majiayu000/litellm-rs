@@ -87,16 +87,16 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `baseten` | 已核验：embeddings 属专用 BEI 部署 /sync/v1，默认 Model APIs base 未确认该能力；图片/音频为独立部署协议，未接入 |
 | `together` | embeddings/images/audio |
 | `together_ai` | 同 together |
-| `fireworks` | embeddings；图片原生路径待适配 |
+| `fireworks` | embeddings；图片原生路径待适配，独立 ASR/TTS 当前合同未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `fireworks_ai` | 同 fireworks |
 | `perplexity`（已移出目录） | Sonar 聊天端点已退役，具名选择器在构造阶段拒绝；[F10 审核证据](../audit/perplexity-sonar-retirement-2026-10-03.md)。Agent/Responses、搜索与 embeddings 不因此自动获得支持，仍待各自核验/适配 |
 | `cerebras` | 官方 OpenAPI 仅列 chat/completions；独立 embeddings/images/audio 未确认 |
-| `openrouter` | embeddings；其他待核验 |
+| `openrouter` | embeddings；已确认独立 Image/TTS/STT 合同，原生输入及实际媒体计费尚待适配；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
 | `deepseek` | 核对当前官方 API；Responses/文件/视觉是独立范围，未确认 embeddings/images/audio |
 | `novita` | 文本 embeddings；原生异步图片及 MiniMax 音频协议仍待适配 |
-| `nvidia_nim` | embeddings；其他待核验 |
-| `nebius` | embeddings；图片协议差异待适配 |
+| `nvidia_nim` | embeddings；图片为另一 genai 主机/路径，音频为独立 Speech NIM 部署，默认 base 不扩声明；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
+| `nebius` | embeddings；图片 width/height 与 data/id 响应待适配，独立音频未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `nscale` | embeddings；图片像素计价未接入，能力暂不声明；官方 .com base，模型/图片退役窗口见 cloud 审计 |
 | `hyperbolic` | 旧文档现跳 GPU 租用新站，未找到当前托管推理非聊天协议；保持未确认，不凭重定向断言退役 |
 | `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
@@ -108,7 +108,7 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `v0` | 待核验；本批未扩展非聊天声明 |
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
 | `github` | 待核验；本批未扩展非聊天声明 |
-| `xai` | 待核验；本批未扩展非聊天声明 |
+| `xai` | 已确认原生 images、/tts、/stt；请求/响应与计费尚待接入，未确认独立 embeddings；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
 | `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |
 | `lm_studio` | 文本 embeddings；当前官方端点清单未确认图片生成/独立音频协议，不扩展声明 |
