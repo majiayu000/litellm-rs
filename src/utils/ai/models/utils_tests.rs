@@ -643,7 +643,7 @@ fn test_validate_model_with_provider_valid() {
     assert!(ModelUtils::validate_model_with_provider("openai/gpt-5.5", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("openai/gpt-5.5-pro", "openai").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gpt-4", "openai").is_ok());
-    assert!(ModelUtils::validate_model_with_provider("claude-3-opus", "anthropic").is_ok());
+    assert!(ModelUtils::validate_model_with_provider("claude-sonnet-5-5", "anthropic").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.1-pro-preview", "google").is_ok());
     assert!(ModelUtils::validate_model_with_provider("gemini-3.7-flash", "google").is_ok());
     assert!(ModelUtils::validate_model_with_provider("google/gemini-3.7-flash", "google").is_ok());
@@ -691,23 +691,26 @@ fn test_get_compatible_models_openai() {
 #[test]
 fn test_get_compatible_models_anthropic() {
     let models = ModelUtils::get_compatible_models_for_provider("anthropic");
+    assert!(models.contains(&"claude-sonnet-5-5".to_string()));
     assert!(models.contains(&"claude-opus-4-8".to_string()));
-    assert!(models.contains(&"claude-3-opus".to_string()));
-    assert!(models.contains(&"claude-2".to_string()));
+    assert!(!models.contains(&"claude-2".to_string()));
+    assert!(!models.contains(&"claude-3-opus".to_string()));
 }
 
 #[test]
 fn test_get_compatible_models_google() {
     let models = ModelUtils::get_compatible_models_for_provider("google");
-    assert!(models.contains(&"gemini-3.7-flash".to_string()));
-    assert!(models.contains(&"gemini-3.5-flash".to_string()));
-    assert!(models.contains(&"gemini-3.1-flash-lite".to_string()));
-    assert!(models.contains(&"gemini-pro".to_string()));
-    assert!(models.contains(&"gemini-1.5-pro".to_string()));
-    assert!(models.contains(&"gemini-2.0-flash".to_string()));
-    assert!(models.contains(&"gemini-3.1-flash".to_string()));
-    assert!(models.contains(&"gemini-3.1-pro-preview".to_string()));
-    assert!(models.contains(&"gemini-3-flash-preview".to_string()));
+    for model in [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+    ] {
+        assert!(models.contains(&model.to_string()));
+    }
+    for retired in ["gemini-pro", "gemini-1.5-pro", "gemini-2.0-flash"] {
+        assert!(!models.contains(&retired.to_string()));
+    }
 }
 
 #[test]

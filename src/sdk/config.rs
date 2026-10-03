@@ -186,14 +186,11 @@ impl SdkConfigBuilder {
             name: "Anthropic".to_string(),
             api_key: api_key.to_string(),
             base_url: None,
-            models: vec![
-                "claude-opus-4-8".to_string(),
-                "claude-opus-4-7".to_string(),
-                "claude-sonnet-4-6".to_string(),
-                "claude-haiku-4-5-20251001".to_string(),
-                "claude-haiku-4-5".to_string(),
-                "claude-3-5-haiku-20241022".to_string(),
-            ],
+            models: crate::core::providers::anthropic::models::get_anthropic_registry()
+                .list_models()
+                .iter()
+                .map(|spec| spec.model_info.id.clone())
+                .collect(),
             enabled: true,
             weight: 1.0,
             rate_limit_rpm: Some(1000),

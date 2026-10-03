@@ -86,7 +86,19 @@ fn test_compatible_models() {
     assert!(openai_models.contains(&"gpt-4".to_string()));
 
     let anthropic_models = ModelUtils::get_compatible_models_for_provider("anthropic");
-    assert!(anthropic_models.contains(&"claude-3-opus".to_string()));
+    assert!(anthropic_models.contains(&"claude-sonnet-5-5".to_string()));
+    assert!(
+        !anthropic_models
+            .iter()
+            .any(|id| id.starts_with("claude-3-") || id == "claude-2")
+    );
+    let google_models = ModelUtils::get_compatible_models_for_provider("google");
+    assert!(google_models.contains(&"gemini-3.7-flash".to_string()));
+    assert!(
+        !google_models
+            .iter()
+            .any(|id| id.starts_with("gemini-1.") || id.starts_with("gemini-2.0"))
+    );
 
     let unknown_models = ModelUtils::get_compatible_models_for_provider("unknown");
     assert!(unknown_models.is_empty());

@@ -585,6 +585,10 @@ async fn retired_vertex_gemini_ids_fail_before_transport() {
         "gemini-1.5-pro-002",
         "gemini-1.5-flash-002",
     ] {
+        assert!(matches!(
+            provider.count_tokens(model, &[]).await,
+            Err(ProviderError::ModelNotFound { .. })
+        ));
         let request = ChatRequest {
             model: model.into(),
             messages: vec![],

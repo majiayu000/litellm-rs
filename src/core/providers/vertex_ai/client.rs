@@ -252,6 +252,11 @@ impl VertexAIProvider {
         model: &str,
         messages: &[Value],
     ) -> Result<usize, VertexAIError> {
+        if model.starts_with("gemini-")
+            && !super::is_vertex_gemini_catalog_model(model, self.config.enable_experimental)
+        {
+            return Err(ProviderError::model_not_found("vertex_ai", model));
+        }
         let url = self.count_tokens_url(model);
 
         let body = serde_json::json!({
