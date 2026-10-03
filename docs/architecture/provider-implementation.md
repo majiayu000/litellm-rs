@@ -126,7 +126,7 @@ pub enum DeepSeekError {
 /// Error mapping to unified system
 impl ProviderErrorTrait for DeepSeekError {
     fn error_type(&self) -> &'static str;
-    fn is_retryable(&self) -> bool;
+    fn retry_delay(&self) -> Option<u64>;
     fn http_status(&self) -> u16;
 }
 ```

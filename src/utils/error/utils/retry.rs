@@ -30,20 +30,6 @@ impl ErrorUtils {
         None
     }
 
-    #[deprecated(
-        since = "0.6.0",
-        note = "use RetryPolicy::decide with ProviderFailureFacts for provider routing/retry; removal tracked in 0.7.0 follow-up (SP965-T010)"
-    )]
-    pub fn should_retry(error: &ProviderError) -> bool {
-        matches!(
-            error,
-            ProviderError::Network { .. }
-                | ProviderError::Timeout { .. }
-                | ProviderError::ProviderUnavailable { .. }
-                | ProviderError::RateLimit { .. }
-        )
-    }
-
     pub fn get_retry_delay(error: &ProviderError) -> Duration {
         match error {
             ProviderError::RateLimit { retry_after, .. } => {
@@ -58,7 +44,6 @@ impl ErrorUtils {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::core::providers::unified_provider::ProviderError;
@@ -141,56 +126,6 @@ mod tests {
         // retry-after should take priority
         let duration = ErrorUtils::extract_retry_after(&headers);
         assert_eq!(duration, Some(Duration::from_secs(60)));
-    }
-
-    #[test]
-    fn test_should_retry_retryable_errors() {
-        assert!(ErrorUtils::should_retry(&ProviderError::Network {
-            provider: "test",
-            message: "test".to_string()
-        }));
-        assert!(ErrorUtils::should_retry(&ProviderError::Timeout {
-            provider: "test",
-            message: "test".to_string()
-        }));
-        assert!(ErrorUtils::should_retry(
-            &ProviderError::ProviderUnavailable {
-                provider: "test",
-                message: "test".to_string()
-            }
-        ));
-        assert!(ErrorUtils::should_retry(&ProviderError::RateLimit {
-            provider: "test",
-            message: "test".to_string(),
-            retry_after: None,
-            rpm_limit: None,
-            tpm_limit: None,
-            current_usage: None,
-        }));
-    }
-
-    #[test]
-    fn test_should_retry_non_retryable_errors() {
-        assert!(!ErrorUtils::should_retry(&ProviderError::InvalidRequest {
-            provider: "test",
-            message: "test".to_string()
-        }));
-        assert!(!ErrorUtils::should_retry(&ProviderError::Authentication {
-            provider: "test",
-            message: "test".to_string()
-        }));
-        assert!(!ErrorUtils::should_retry(&ProviderError::ModelNotFound {
-            provider: "test",
-            model: "test".to_string()
-        }));
-        assert!(!ErrorUtils::should_retry(&ProviderError::QuotaExceeded {
-            provider: "test",
-            message: "test".to_string()
-        }));
-        assert!(!ErrorUtils::should_retry(&ProviderError::Configuration {
-            provider: "test",
-            message: "test".to_string()
-        }));
     }
 
     #[test]
