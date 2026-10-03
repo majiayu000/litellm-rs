@@ -46,13 +46,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "a2a",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: a2a"),
-        note: "A2A library types are excluded from the default build; enabling the feature does not mount HTTP routes.",
-    },
-    CoreSubsystem {
-        name: "analytics",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: analytics"),
-        note: "Deprecated analytics types remain default-off for the 0.6 migration window and are scheduled for removal in 0.7.",
+        note: "Opt-in A2A 1.0 JSON-RPC HTTP gateway with caller-bound tasks and Streamable events; ownership is process-local.",
     },
     CoreSubsystem {
         name: "audio",
@@ -235,12 +229,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         note: "Core security filters are library support; server security middleware is separate.",
     },
     CoreSubsystem {
-        name: "semantic_cache",
-        decision: SubsystemDecision::ConfigRejected,
-        runtime_path: None,
-        note: "Deprecated types remain available during the 0.6 compatibility window, while cache.semantic_cache stays rejected before 0.7 removal.",
-    },
-    CoreSubsystem {
         name: "streaming",
         decision: SubsystemDecision::Wired,
         runtime_path: Some("chat/completions/responses SSE routes"),
@@ -281,12 +269,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         decision: SubsystemDecision::Wired,
         runtime_path: Some("AppState canonical RuntimeVirtualKeyManager"),
         note: "The virtual-keys runtime facade resolves to the canonical KeyManager used by auth and /v1/keys; storage record types remain in use.",
-    },
-    CoreSubsystem {
-        name: "webhooks",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: webhooks"),
-        note: "Webhook library types are excluded from the default build and are not advertised as a gateway runtime capability.",
     },
 ];
 

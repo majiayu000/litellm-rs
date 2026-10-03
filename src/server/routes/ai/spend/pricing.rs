@@ -415,6 +415,12 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     model: &str,
     surface: ProviderCapability,
 ) -> (String, String) {
+    if surface == ProviderCapability::Responses
+        && let Provider::Bedrock(bedrock) = provider
+        && let Some((pricing_provider, wire_model)) = bedrock.responses_pricing_identity(model)
+    {
+        return (pricing_provider.to_string(), wire_model);
+    }
     let provider_name = provider.name();
     let mut provider_candidates = vec![provider_name.to_string()];
 

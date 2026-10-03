@@ -74,6 +74,7 @@ pastey = "0.2.2"
 
 # HTTP client
 http = "1.4"
+mime = { version = "0.3", optional = true }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
 
 # Serialization and deserialization
@@ -223,10 +224,9 @@ metrics = ["dep:sysinfo"]
 tracing = ["dep:tracing-subscriber"]
 
 # Default-off protocol and platform experiments. These features expose library
-# modules; gateway+mcp also mounts configured MCP Streamable HTTP routes.
-a2a = []
+# modules; gateway+mcp/a2a mount the corresponding configured HTTP routes.
+a2a = ["dep:mime"]
 mcp = ["serde_json/arbitrary_precision"]
-webhooks = []
 
 # JSON Schema validation for MCP tool parameters
 mcp-validation = ["dep:jsonschema", "mcp"]
@@ -235,19 +235,17 @@ mcp-validation = ["dep:jsonschema", "mcp"]
 vector-db = ["storage"]
 # Realtime WebSocket API (`core::realtime`)
 websockets = []
-# Storage-backed analytics module (`core::analytics`)
-analytics = ["storage"]
-# Enterprise-oriented bundle; enables the feature-gated analytics and vector search surfaces.
-enterprise = ["analytics", "vector-db"]
+# Enterprise-oriented bundle; enables vector search.
+enterprise = ["vector-db"]
 
 # Full feature set
-full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "analytics", "a2a", "mcp-validation", "webhooks", "cloud-secrets", "providers-extra", "providers-extended", "runway-media"]
+full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "a2a", "mcp-validation", "cloud-secrets", "providers-extra", "providers-extended", "runway-media"]
 
 # Metadata
 [package.metadata.docs.rs]
 # Exclude vector-db feature because qdrant-client fails on docs.rs read-only filesystem
 all-features = false
-features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "analytics", "a2a", "mcp-validation", "webhooks", "providers-extra", "providers-extended", "runway-media"]
+features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "a2a", "mcp-validation", "providers-extra", "providers-extended", "runway-media"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.playground]

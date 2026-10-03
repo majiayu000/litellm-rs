@@ -2,8 +2,6 @@
 //!
 //! This module contains comprehensive unit tests for error handling.
 
-#![allow(deprecated)]
-
 #[cfg(test)]
 mod contextual_error_tests {
     use crate::core::providers::unified_provider::ProviderError;
@@ -23,12 +21,44 @@ mod contextual_error_tests {
     fn test_contextual_error_methods() {
         let err = ProviderError::rate_limit("anthropic", Some(60)).with_context("req-abc", None);
 
-        assert!(err.is_retryable());
+        assert_eq!(err.to_error_response()["error"]["retryable"], true);
         assert_eq!(err.retry_delay(), Some(60));
         assert_eq!(err.http_status(), 429);
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.request_id(), "req-abc");
         assert!(err.model().is_none());
+    }
+
+    #[test]
+    fn serialized_retry_facts_keep_status_and_provider_delay() {
+        for (error, status, retryable, delay) in [
+            (
+                ProviderError::rate_limit("test", Some(17)),
+                429,
+                true,
+                Some(17),
+            ),
+            (
+                ProviderError::api_error("test", 408, "timeout status"),
+                408,
+                false,
+                None,
+            ),
+            (
+                ProviderError::authentication("test", "denied"),
+                401,
+                false,
+                None,
+            ),
+        ] {
+            let value = error
+                .with_context("request-id", Some("model"))
+                .to_error_response();
+            assert_eq!(value["error"]["code"], status);
+            assert_eq!(value["error"]["retryable"], retryable);
+            assert_eq!(value["error"]["retry_after"], serde_json::json!(delay));
+            assert_eq!(value["error"]["request_id"], "request-id");
+        }
     }
 
     #[test]
@@ -48,6 +78,7 @@ mod contextual_error_tests {
 mod provider_error_tests {
     use crate::core::providers::bedrock::BedrockErrorMapper;
     use crate::core::providers::unified_provider::{ProviderError, provider_http_error_facts};
+    use crate::utils::error::CanonicalError;
 
     // ==================== Factory Method Tests ====================
 
@@ -56,7 +87,7 @@ mod provider_error_tests {
         let err = ProviderError::authentication("openai", "Invalid API key");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 401);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -64,7 +95,7 @@ mod provider_error_tests {
         let err = ProviderError::rate_limit("anthropic", Some(60));
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.http_status(), 429);
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(60));
     }
 
@@ -84,7 +115,7 @@ mod provider_error_tests {
             Some(0.9),
         );
         assert_eq!(err.provider(), "openai");
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
     }
 
     #[test]
@@ -92,7 +123,7 @@ mod provider_error_tests {
         let err = ProviderError::quota_exceeded("vertex_ai", "Monthly quota exceeded");
         assert_eq!(err.provider(), "vertex_ai");
         assert_eq!(err.http_status(), 402);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -100,7 +131,7 @@ mod provider_error_tests {
         let err = ProviderError::model_not_found("openai", "gpt-5");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 404);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -108,7 +139,7 @@ mod provider_error_tests {
         let err = ProviderError::invalid_request("anthropic", "Missing messages");
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.http_status(), 400);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -116,7 +147,7 @@ mod provider_error_tests {
         let err = ProviderError::network("openai", "Connection refused");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 502);
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(1));
     }
 
@@ -124,7 +155,7 @@ mod provider_error_tests {
     fn test_provider_unavailable_factory() {
         let err = ProviderError::provider_unavailable("anthropic", "Service down");
         assert_eq!(err.provider(), "anthropic");
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(5));
     }
 
@@ -133,7 +164,7 @@ mod provider_error_tests {
         let err = ProviderError::not_supported("openai", "vision");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 501);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -141,7 +172,7 @@ mod provider_error_tests {
         let err = ProviderError::not_implemented("anthropic", "streaming");
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.http_status(), 501);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -149,7 +180,7 @@ mod provider_error_tests {
         let err = ProviderError::configuration("openai", "Missing API key");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 500);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -157,7 +188,7 @@ mod provider_error_tests {
         let err = ProviderError::serialization("anthropic", "Invalid JSON");
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.http_status(), 500);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -165,7 +196,7 @@ mod provider_error_tests {
         let err = ProviderError::timeout("openai", "Request timed out after 30s");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 504);
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(1));
     }
 
@@ -176,7 +207,7 @@ mod provider_error_tests {
         let err = ProviderError::context_length_exceeded("openai", 4096, 5000);
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 400);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -184,20 +215,20 @@ mod provider_error_tests {
         let err = ProviderError::api_error("anthropic", 500, "Internal server error");
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.http_status(), 500);
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
     }
 
     #[test]
     fn test_api_error_429() {
         let err = ProviderError::api_error("openai", 429, "Rate limited");
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(60));
     }
 
     #[test]
     fn test_api_error_400() {
         let err = ProviderError::api_error("openai", 400, "Bad request");
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
         assert!(err.retry_delay().is_none());
     }
 
@@ -206,7 +237,7 @@ mod provider_error_tests {
         let err = ProviderError::token_limit_exceeded("openai", "Max tokens exceeded");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 400);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -214,7 +245,7 @@ mod provider_error_tests {
         let err = ProviderError::feature_disabled("vertex_ai", "code_execution");
         assert_eq!(err.provider(), "vertex_ai");
         assert_eq!(err.http_status(), 501);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -222,7 +253,7 @@ mod provider_error_tests {
         let err = ProviderError::deployment_error("my-deployment", "Deployment not found");
         assert_eq!(err.provider(), "azure");
         assert_eq!(err.http_status(), 404);
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
     }
 
     #[test]
@@ -230,7 +261,7 @@ mod provider_error_tests {
         let err = ProviderError::response_parsing("openai", "Invalid JSON response");
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 502);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -242,7 +273,7 @@ mod provider_error_tests {
         );
         assert_eq!(err.provider(), "openrouter");
         assert_eq!(err.http_status(), 503);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -255,7 +286,7 @@ mod provider_error_tests {
         );
         assert_eq!(err.provider(), "openrouter");
         assert_eq!(err.http_status(), 500);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -263,7 +294,7 @@ mod provider_error_tests {
         let err = ProviderError::content_filtered("openai", "Content policy violation", None, None);
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 400);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -274,7 +305,7 @@ mod provider_error_tests {
             Some(vec!["violence".to_string()]),
             Some(true),
         );
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(10));
     }
 
@@ -287,7 +318,7 @@ mod provider_error_tests {
         );
         assert_eq!(err.provider(), "openai");
         assert_eq!(err.http_status(), 499);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     #[test]
@@ -301,7 +332,7 @@ mod provider_error_tests {
         );
         assert_eq!(err.provider(), "anthropic");
         assert_eq!(err.http_status(), 502);
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
         assert_eq!(err.retry_delay(), Some(2));
     }
 
@@ -310,7 +341,7 @@ mod provider_error_tests {
         let err = ProviderError::other("unknown", "Unknown error occurred");
         assert_eq!(err.provider(), "unknown");
         assert_eq!(err.http_status(), 502);
-        assert!(!err.is_retryable());
+        assert!(!err.canonical_retryable());
     }
 
     // ==================== Error Type String Tests ====================
@@ -427,16 +458,16 @@ mod provider_error_tests {
 
     #[test]
     fn test_retryable_errors() {
-        assert!(ProviderError::network("a", "b").is_retryable());
-        assert!(ProviderError::timeout("a", "b").is_retryable());
-        assert!(ProviderError::rate_limit("a", None).is_retryable());
-        assert!(ProviderError::provider_unavailable("a", "b").is_retryable());
-        assert!(ProviderError::deployment_error("a", "b").is_retryable());
-        assert!(ProviderError::streaming_error("a", "b", None, None, "c").is_retryable());
+        assert!(ProviderError::network("a", "b").canonical_retryable());
+        assert!(ProviderError::timeout("a", "b").canonical_retryable());
+        assert!(ProviderError::rate_limit("a", None).canonical_retryable());
+        assert!(ProviderError::provider_unavailable("a", "b").canonical_retryable());
+        assert!(ProviderError::deployment_error("a", "b").canonical_retryable());
+        assert!(ProviderError::streaming_error("a", "b", None, None, "c").canonical_retryable());
         let failed_dependency =
             BedrockErrorMapper::map_service_error("DependencyFailedException", "not ready")
                 .expect("modeled Bedrock service error");
-        assert!(failed_dependency.is_retryable());
+        assert!(failed_dependency.canonical_retryable());
         assert_eq!(failed_dependency.retry_delay(), Some(3));
         assert_eq!(failed_dependency.provider(), "bedrock");
         let reconstructed = ProviderError::api_error(
@@ -444,28 +475,28 @@ mod provider_error_tests {
             424,
             "ordinary reconstructed error",
         );
-        assert!(!reconstructed.is_retryable());
+        assert!(!reconstructed.canonical_retryable());
         assert_eq!(reconstructed.retry_delay(), None);
         let ordinary_failed_dependency = ProviderError::api_error(
             "bedrock",
             424,
             "ModelNotReadyException: misleading ordinary HTTP message",
         );
-        assert!(!ordinary_failed_dependency.is_retryable());
+        assert!(!ordinary_failed_dependency.canonical_retryable());
         assert_eq!(ordinary_failed_dependency.retry_delay(), None);
         let unrelated_failed_dependency = ProviderError::api_error("custom_httpx", 424, "failed");
-        assert!(!unrelated_failed_dependency.is_retryable());
+        assert!(!unrelated_failed_dependency.canonical_retryable());
         assert_eq!(unrelated_failed_dependency.retry_delay(), None);
     }
 
     #[test]
     fn test_non_retryable_errors() {
-        assert!(!ProviderError::authentication("a", "b").is_retryable());
-        assert!(!ProviderError::quota_exceeded("a", "b").is_retryable());
-        assert!(!ProviderError::model_not_found("a", "b").is_retryable());
-        assert!(!ProviderError::invalid_request("a", "b").is_retryable());
-        assert!(!ProviderError::not_supported("a", "b").is_retryable());
-        assert!(!ProviderError::configuration("a", "b").is_retryable());
+        assert!(!ProviderError::authentication("a", "b").canonical_retryable());
+        assert!(!ProviderError::quota_exceeded("a", "b").canonical_retryable());
+        assert!(!ProviderError::model_not_found("a", "b").canonical_retryable());
+        assert!(!ProviderError::invalid_request("a", "b").canonical_retryable());
+        assert!(!ProviderError::not_supported("a", "b").canonical_retryable());
+        assert!(!ProviderError::configuration("a", "b").canonical_retryable());
     }
 
     // ==================== Clone Tests ====================

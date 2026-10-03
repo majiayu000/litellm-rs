@@ -385,6 +385,13 @@ fn forbidden_response<B>(
 }
 
 fn authentication_unavailable_response<B>(req: ServiceRequest) -> ServiceResponse<EitherBody<B>> {
+    if req.path() == "/v1/messages" {
+        return req
+            .into_response(ai::messages::error_response(&GatewayError::Internal(
+                AUTHENTICATION_SERVICE_UNAVAILABLE_MESSAGE.into(),
+            )))
+            .map_into_right_body();
+    }
     if ai::is_openai_compatible_path(req.path()) {
         return req
             .into_response(ai::openai_internal_error_response(

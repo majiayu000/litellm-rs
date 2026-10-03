@@ -34,10 +34,6 @@ const EDIT_CAPABILITIES: &[ProviderCapability] = &[ProviderCapability::ImageEdit
 const GENERATION_MODELS: &[&str] = &[
     "stable-image-core",
     "stable-image-ultra",
-    "sd3",
-    "sd3-large",
-    "sd3-large-turbo",
-    "sd3-medium",
     "sd3.5-large",
     "sd3.5-large-turbo",
     "sd3.5-medium",
@@ -162,8 +158,9 @@ impl StabilityProvider {
         let path = match model {
             "stable-image-core" => "v2beta/stable-image/generate/core",
             "stable-image-ultra" => "v2beta/stable-image/generate/ultra",
-            "sd3" | "sd3-large" | "sd3-large-turbo" | "sd3-medium" | "sd3.5-large"
-            | "sd3.5-large-turbo" | "sd3.5-medium" => "v2beta/stable-image/generate/sd3",
+            "sd3.5-large" | "sd3.5-large-turbo" | "sd3.5-medium" => {
+                "v2beta/stable-image/generate/sd3"
+            }
             _ => return Err(ProviderError::model_not_found(PROVIDER, model)),
         };
         Ok(format!(
@@ -234,12 +231,8 @@ impl StabilityProvider {
         if request.size.is_some() {
             form = form.text("aspect_ratio", "1:1".to_string());
         }
-        if model.starts_with("sd3") {
-            let upstream_model = match model {
-                "sd3" => "sd3.5-large",
-                other => other,
-            };
-            form = form.text("model", upstream_model.to_string());
+        if model.starts_with("sd3.5-") {
+            form = form.text("model", model.to_string());
         }
         Ok((form, output_format))
     }
@@ -593,7 +586,7 @@ fn model_info(model: &str, capabilities: &[ProviderCapability]) -> ModelInfo {
         name: model.to_string(),
         provider: PROVIDER.to_string(),
         max_context_length: 0,
-        supports_multimodal: true,
+        supports_multimodal: capabilities.contains(&ProviderCapability::ImageEdit),
         capabilities: capabilities.to_vec(),
         ..ModelInfo::default()
     }

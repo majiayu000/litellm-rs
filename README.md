@@ -160,14 +160,13 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/guardrails` | wire | Default-on prompt-injection checks run before provider execution and on non-streaming output; `guardrails.enabled: false` is the explicit opt-out. |
 | `core/ip_access` | wire | Configured allow/block rules run as an outer Actix middleware and short-circuit before downstream side effects; empty/default rules allow all. |
 | `core/mcp` | feature-gated | `gateway,mcp` mounts authenticated Streamable HTTP at `/{server_name}/mcp` (`/mcp` for one enabled server). See [MCP gateway](docs/gateway/mcp.md) for configuration and stateless transport limits. Responses API MCP descriptors pass through independently. |
-| `core/a2a` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `a2a`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. |
+| `core/a2a` | experimental-gate | Opt-in `gateway,a2a` exposes authenticated A2A 1.0 agent cards, messages, task queries/cancellation and SSE. Task ownership is process-local; see [A2A gateway](docs/gateway/a2a.md). |
 | `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. Domain records and async batch helpers remain; the unreachable `BatchProcessor` has been removed. |
-| `core/webhooks` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `webhooks`; it is not a gateway runtime capability and is scheduled for 0.7 removal. |
-| `core/semantic_cache` | remove | Deprecated but retained with `storage` during the 0.6 compatibility window; `cache.semantic_cache=true` remains rejected before the planned 0.7 removal. |
-| `core/analytics` | remove | Deprecated and default-off behind `analytics`, with removal planned for 0.7. |
+| Former `core/webhooks` | removed | The unused library and `webhooks` feature have been removed from unreleased source. Budget-alert delivery and provider-native webhook fields remain separate. |
+| Former `core/semantic_cache` and `core/analytics` | removed | Removed from unreleased source after the expired 0.7 deadline. Deterministic caching, request metrics and callbacks remain; see the migration guide for removed fields/features. |
 | `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy manager has been removed. Storage record types remain in use. |
 | `core/user_management` | internal | Domain records back current auth/storage paths. The unused `UserManager` and its `user-management` feature have been removed. |
 
@@ -200,15 +199,23 @@ advanced types have been removed on the development branch.
 
 ## Provider Support
 
+Perplexity's old Sonar Chat Completions endpoint retired on 2026-09-27. The
+`perplexity` / `perplexity-ai` / `pplx` selectors are not currently dispatchable;
+the replacement Agent API requires a native protocol adapter. Historical prices
+remain available and do not establish callable models. See the
+[retirement audit](docs/audit/perplexity-sonar-retirement-2026-10-03.md).
+
 Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLAUDE.md#provider-tiers) for the engineering definition).
 
-- **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The current crate runtime exposes chat completions and chat streaming for these providers; embeddings, images, audio, and other non-chat endpoints are not forwarded yet.
+- **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The runtime supports chat and streaming plus explicitly verified embeddings, images and audio capabilities for selected providers; see [compatible non-chat support](docs/providers/compatible-nonchat.md). Capability declarations do not imply that every model supports every endpoint.
 - **Tier 2 — code-based**: providers with custom request/response handling, auth signing, or streaming. Wired into the `Provider` enum and the factory. Some Tier 2 builders are feature-gated.
 
-Router deployments use the closed `Provider` enum. Implementing `LLMProvider`
-alone does not make a third-party provider routeable; use the generic
-OpenAI-compatible path for compatible endpoints, or wire a code-based provider
-into the enum, dispatch, registry metadata, and factory.
+External Rust providers implement `ExternalProvider` and register through
+`Provider::External(Arc::new(provider))`, `Deployment::new`, and
+`UnifiedRouter::add_deployment`, without editing the internal enum. See the
+[external provider integration tests](tests/external_provider_registration.rs)
+for capability, health, error and streaming behavior. This is an in-process API;
+OpenAI-compatible servers can use the existing configuration path.
 
 > The provider and legacy adapter matrices below are validated against the provider registry and Tier 1 catalog. The source of truth for Tier 1 entries is [`catalog.rs`](./src/core/providers/registry/catalog.rs); Tier 2 identity and dispatch metadata lives in [`src/core/providers/registry/types.rs`](./src/core/providers/registry/types.rs), with construction branches in [`src/core/providers/factory/registry.rs`](./src/core/providers/factory/registry.rs). Legacy adapter availability lives in [`src/core/providers/registry/support_matrix.rs`](./src/core/providers/registry/support_matrix.rs). `passthrough` means a retained adapter forwards the call to the upstream OpenAI-compatible endpoint without per-provider transformation.
 
@@ -249,7 +256,7 @@ a gateway video route.
 | OpenAI (`openai`) | always | ✅ | ✅ | ✅ | ✅ | ✅ | Reference implementation. |
 | Anthropic (`anthropic`) | always | ✅ | ✅ | – | – | – | Native Anthropic messages API. |
 | Mistral (`mistral`) | always | ✅ | ✅ | passthrough | – | – | Native client. |
-| Cloudflare Workers AI (`cloudflare`) | always | ✅ | – | – | – | – | Native client with account-id auth; streaming and embeddings currently return `NotSupported`. |
+| Cloudflare Workers AI (`cloudflare`) | always | ✅ | ✅ | – | – | – | Official compatible chat endpoint with account-id auth; model-gated tools/vision and native SSE usage/errors. Embeddings remain unsupported. |
 | Deepgram (`deepgram`) | always | – | – | – | – | ✅ | Native speech-to-text and text-to-speech REST transport. |
 | ElevenLabs (`elevenlabs`) | always | – | – | – | – | ✅ | Native speech-to-text and text-to-speech REST transport. |
 | Cohere (`cohere`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native Cohere `/v2/chat` and `/v2/embed`; the concrete provider also exposes a `/v1/rerank` helper. Explicitly unsupported without `providers-extended`. |
@@ -264,35 +271,29 @@ a gateway video route.
 | Amazon SageMaker (`sagemaker`) | always | ✅ | – | – | – | – | SigV4 InvokeEndpoint; payload transformer is required and unknown schemas fail closed. |
 | Google Vertex AI (`vertex_ai`) | native factory (`providers-extra`) | ✅ | ✅ | ✅ | ✅ | – | Uses native Vertex auth and Google-specific URLs when `providers-extra` is enabled; otherwise explicitly unsupported. |
 | Google Gemini (`gemini`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native Google AI Studio Gemini auth; use `vertex_ai` for Vertex AI project/location credentials. |
-| Meta Llama API (`meta_llama`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
-| Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
-| Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
+| Meta Llama API (`meta_llama`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
+| Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
+| Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
 | fal.ai (`fal_ai`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native Fal AI image-generation endpoints; chat and streaming are explicitly unsupported. |
 | Stability AI (`stability`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native v2beta multipart image generation and editing endpoints. |
 | Black Forest Labs (`black_forest_labs`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native asynchronous submit/poll image generation and Kontext editing. |
 | Replicate (`replicate`) | native factory (`providers-extended`) | ✅ | ✅ | – | ✅ | – | Uses native Replicate prediction lifecycle handling for chat, streaming, and image generation; explicitly unsupported without `providers-extended`. |
 | Ollama (`ollama`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native `/api/chat` NDJSON streaming, `/api/embed`, and model tags/show endpoints. Localhost defaults to private-network endpoint policy; explicit endpoints keep their configured policy. |
-| GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
+| GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
 | GitHub Copilot (`github_copilot`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native GitHub Copilot auth and model access when `providers-extended` is enabled; otherwise explicitly unsupported. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | passthrough | passthrough | passthrough | For self-hosted / unlisted OpenAI-compatible chat, embeddings, image, and audio endpoints. |
 
 ### Tier 1 — catalog providers (OpenAI-compatible, always available)
 
-All entries below route through `OpenAILikeProvider`. Chat and streaming work for any endpoint that follows OpenAI's `/chat/completions` SSE protocol. Embeddings, images, audio, and other non-chat endpoints are not exposed through this path today, even when the upstream provider offers them.
+All entries below route through `OpenAILikeProvider`. Chat and streaming use the compatible `/chat/completions` protocol. Selected providers also expose verified non-chat capabilities listed in [compatible non-chat support](docs/providers/compatible-nonchat.md); other capabilities fail explicitly.
 
 **Cloud (`Bearer` auth via env var):**
 
-`groq`, `ai21`, `huggingface`, `baseten`, `together`, `together_ai`, `fireworks`, `fireworks_ai`, `perplexity`, `cerebras`, `openrouter`, `deepinfra`, `deepseek`, `novita`, `nvidia_nim`, `nebius`, `nscale`, `hyperbolic`, `featherless`, `galadriel`, `sambanova`, `heroku`, `friendliai`, `xai`, `moonshot`, `dashscope`, `qwen`, `baichuan`, `minimax`, `volcengine`, `xiaomi_mimo`, `zhipu`, `zai`, `lemonade`, `linkup`, `poe`, `wandb`, `nanogpt`, `aiml_api`, `aiml`, `aleph_alpha`, `anyscale`, `bytez`, `comet_api`, `compactifai`, `maritalk`, `siliconflow`, `yi`, `lambda_ai`, `ovhcloud`
+`groq`, `ai21`, `huggingface`, `baseten`, `together`, `together_ai`, `fireworks`, `fireworks_ai`, `cerebras`, `openrouter`, `deepinfra`, `deepseek`, `novita`, `nvidia_nim`, `nebius`, `nscale`, `hyperbolic`, `featherless`, `galadriel`, `sambanova`, `heroku`, `friendliai`, `xai`, `moonshot`, `dashscope`, `qwen`, `baichuan`, `minimax`, `volcengine`, `xiaomi_mimo`, `zhipu`, `zai`, `lemonade`, `linkup`, `poe`, `wandb`, `nanogpt`, `aiml_api`, `aiml`, `aleph_alpha`, `anyscale`, `bytez`, `comet_api`, `compactifai`, `maritalk`, `siliconflow`, `yi`, `lambda_ai`, `ovhcloud`
 
 **Local (no API key):**
 
 `vllm`, `hosted_vllm`, `lm_studio`, `llamafile`, `docker_model_runner`, `xinference`, `infinity`, `oobabooga`
-
-### Experimental / module-only
-
-The following modules exist under `src/core/providers/` (gated on `providers-extra` or `providers-extended`) but are **not wired into the unified `Provider` enum or the factory** today. They compile but cannot be selected through `create_provider`/`from_config_async`. Treat them as experimental scaffolding subject to change:
-
-`custom_api`
 
 For self-hosted or unlisted OpenAI-compatible endpoints, prefer the generic `openai_compatible` provider type instead.
 

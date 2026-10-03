@@ -8,9 +8,9 @@ use std::sync::OnceLock;
 
 use crate::core::pricing::get_pricing_db;
 use crate::core::providers::registry::model_catalog_authority::{
-    CatalogAuthority, CatalogResolution,
+    CatalogAuthority, CatalogEndpoint, CatalogResolution,
 };
-use crate::core::types::model::ModelInfo;
+use crate::core::types::model::{ModelInfo, ProviderCapability};
 
 use super::registry_types::{
     OpenAIModelConfig, OpenAIModelFamily, OpenAIModelFeature, OpenAIModelSpec, OpenAIUseCase,
@@ -91,6 +91,51 @@ impl OpenAIModelRegistry {
                 CatalogResolution::Callable(_)
             )
         });
+        // Endpoint support is model-specific. Name prefixes and pricing modes
+        // cannot turn image/audio or Responses-only models into chat models.
+        for (id, spec) in &mut self.models {
+            let CatalogResolution::Callable(model) = authority.resolve_model("openai", id) else {
+                continue;
+            };
+            let Some(endpoints) = model.explicit_endpoints() else {
+                continue;
+            };
+            let chat = endpoints.contains(&CatalogEndpoint::ChatCompletions);
+            spec.features.retain(|feature| {
+                !matches!(
+                    feature,
+                    OpenAIModelFeature::ChatCompletion
+                        | OpenAIModelFeature::StreamingSupport
+                        | OpenAIModelFeature::Responses
+                )
+            });
+            spec.model_info.capabilities.retain(|capability| {
+                !matches!(
+                    capability,
+                    ProviderCapability::ChatCompletion
+                        | ProviderCapability::ChatCompletionStream
+                        | ProviderCapability::Responses
+                )
+            });
+            if chat {
+                spec.features.push(OpenAIModelFeature::ChatCompletion);
+                spec.model_info
+                    .capabilities
+                    .push(ProviderCapability::ChatCompletion);
+                if spec.model_info.supports_streaming {
+                    spec.features.push(OpenAIModelFeature::StreamingSupport);
+                    spec.model_info
+                        .capabilities
+                        .push(ProviderCapability::ChatCompletionStream);
+                }
+            }
+            if endpoints.contains(&CatalogEndpoint::Responses) {
+                spec.features.push(OpenAIModelFeature::Responses);
+                spec.model_info
+                    .capabilities
+                    .push(ProviderCapability::Responses);
+            }
+        }
     }
 
     /// Detect model features based on model info

@@ -13,13 +13,6 @@ impl Validate for CacheConfig {
             return Err("cache.ttl must be greater than 0 when cache.enabled=true".to_string());
         }
 
-        if self.semantic_cache {
-            return Err(
-                "Semantic cache is not wired into runtime request handling; leave cache.semantic_cache=false until support lands"
-                    .to_string(),
-            );
-        }
-
         Ok(())
     }
 }

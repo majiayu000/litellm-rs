@@ -126,5 +126,6 @@ never passed to `build_otlp_payload`; exported resources currently contain only
 problems never take down request handling.
 
 The legacy `PerformanceTracer`, `LogAggregator`, and `MetricsCollector` exports under
-`src/core/observability/` are deprecated library-only surfaces scheduled for removal in 0.7;
-do not wire new code to them.
+`src/core/observability/` have been removed from unreleased source. Use the configured
+callback integrations and `RuntimeObservability`; provider-configuration redaction
+remains supported. Do not import the deleted types.

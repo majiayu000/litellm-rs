@@ -7,15 +7,11 @@ pub mod external;
 pub use external::ExternalProvider;
 // Base infrastructure
 pub mod base;
+#[cfg(feature = "gateway")]
+mod responses_native;
 // Provider modules - alphabetically ordered
 // Tier 1 providers removed in favor of registry/catalog.rs are commented with their tier.
 // Catalog Tier 1: aiml_api, aleph_alpha.
-#[cfg(feature = "providers-extended")]
-#[cfg_attr(
-    not(test),
-    deprecated(since = "0.6.0", note = "use catalog amazon_nova before 0.7")
-)]
-pub mod amazon_nova;
 pub mod anthropic;
 // anyscale: Tier 1 -> registry/catalog.rs
 #[cfg(feature = "providers-extra")]
@@ -26,19 +22,9 @@ pub mod azure_ai;
 pub mod bedrock;
 // Catalog Tier 1: bytez, cerebras.
 pub mod cloudflare;
-#[cfg(feature = "providers-extended")]
 pub mod cohere;
 pub mod databricks;
 // Catalog Tier 1: comet_api, compactifai.
-#[cfg(feature = "providers-extended")]
-#[cfg_attr(
-    not(test),
-    deprecated(
-        since = "0.6.0",
-        note = "use a catalog or typed provider before 0.7.0 removal"
-    )
-)]
-pub mod custom_api;
 // Catalog Tier 1: dashscope, deepinfra, deepseek, docker_model_runner.
 mod enterprise;
 #[cfg(feature = "providers-extended")]
@@ -47,15 +33,11 @@ pub mod fal_ai;
 // Model metadata is available in every build; transports remain feature-gated.
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
-pub mod github;
-#[cfg(feature = "providers-extended")]
 pub mod github_copilot;
 pub(crate) mod google_error;
 pub(crate) mod google_tool_loop;
 // Catalog Tier 1: groq, heroku, hosted_vllm, hyperbolic, infinity, lambda_ai,
 // lemonade, linkup, llamafile, lm_studio, maritalk.
-#[cfg(feature = "providers-extra")]
-pub mod meta_llama;
 // minimax: Tier 1 -> registry/catalog.rs
 pub mod mistral;
 // Catalog Tier 1: moonshot, nanogpt, nebius, novita, nscale, nvidia_nim.
@@ -65,7 +47,7 @@ pub mod ollama;
 pub mod oci;
 pub mod openai;
 pub mod openai_like;
-// Catalog Tier 1: openrouter, ovhcloud, perplexity, poe, qwen.
+// Catalog Tier 1: openrouter, ovhcloud, poe, qwen.
 #[cfg(feature = "providers-extended")]
 #[path = "black_forest_labs/mod.rs"]
 pub mod bfl;
@@ -80,8 +62,6 @@ pub mod stability;
 #[cfg(feature = "runway-media")]
 pub use media::runway;
 // Catalog Tier 1: sambanova, siliconflow, together.
-#[cfg(feature = "providers-extra")]
-pub mod v0;
 #[cfg(feature = "providers-extra")]
 pub mod vertex_ai;
 pub mod voyage;
@@ -565,6 +545,37 @@ impl Provider {
             _ => Err(ProviderError::not_supported(
                 "provider",
                 "Gemini native generateContent",
+            )),
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => provider.native_response(body).await,
+            Provider::Bedrock(provider) => provider.native_response(body).await,
+            #[cfg(feature = "providers-extended")]
+            Provider::GitHubCopilot(provider) => provider.native_response(body).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses API",
+            )),
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response_input_tokens(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<u32, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => provider.native_response_input_tokens(body).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses input token counting",
             )),
         }
     }

@@ -89,7 +89,10 @@ fn test_bedrock_capabilities_constant() {
     assert!(BEDROCK_CAPABILITIES.contains(&ProviderCapability::ChatCompletionStream));
     assert!(BEDROCK_CAPABILITIES.contains(&ProviderCapability::FunctionCalling));
     assert!(BEDROCK_CAPABILITIES.contains(&ProviderCapability::Embeddings));
-    assert_eq!(BEDROCK_CAPABILITIES.len(), 4);
+    assert_eq!(
+        BEDROCK_CAPABILITIES.contains(&ProviderCapability::Responses),
+        cfg!(feature = "gateway")
+    );
 }
 
 // ==================== Provider Clone/Debug Tests ====================

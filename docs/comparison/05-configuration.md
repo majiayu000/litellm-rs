@@ -92,7 +92,6 @@ monitoring:       # Monitoring configuration
 cache:            # Caching configuration
   enabled: true
   ttl: 300
-  semantic_cache: false
 
 rate_limit:       # Rate limiting configuration
   enabled: true
@@ -625,8 +624,8 @@ config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 | Cache enabled | `cache.enabled` | `litellm_settings.cache` |
 | Cache TTL | `cache.ttl` | `litellm_settings.cache_params.ttl` |
 | Max size | `cache.max_size` | Redis-based (unlimited) |
-| Semantic cache | `cache.semantic_cache` | `litellm_settings.enable_semantic_caching` |
-| Similarity threshold | `cache.similarity_threshold` | `litellm_settings.semantic_cache_params` |
+| Semantic cache | Not implemented; removed config | `litellm_settings.enable_semantic_caching` |
+| Similarity threshold | Not implemented; removed config | `litellm_settings.semantic_cache_params` |
 
 ### 5.7 Monitoring Configuration
 
