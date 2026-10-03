@@ -417,6 +417,45 @@ mod tests {
     }
 
     #[test]
+    fn retired_models_and_aliases_are_not_callable() {
+        let registry = get_anthropic_registry();
+        for id in [
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-1",
+            "claude-opus-4-20250514",
+            "claude-opus-4",
+            "claude-sonnet-4-20250514",
+            "claude-sonnet-4",
+            "claude-3-5-haiku-20241022",
+            "claude-3-5-haiku-latest",
+            "claude-3-5-sonnet-20240620",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-sonnet-latest",
+            "claude-3-opus-20240229",
+            "claude-3-opus-latest",
+            "claude-3-sonnet-20240229",
+            "claude-3-haiku-20240307",
+            "claude-2.1",
+            "claude-instant-1.2",
+        ] {
+            assert!(registry.get_model_spec(id).is_none(), "{id} is retired");
+            assert!(!registry.supports_feature(id, &ModelFeature::ToolCalling));
+            assert!(
+                !registry
+                    .list_models()
+                    .iter()
+                    .any(|spec| spec.model_info.id == id)
+            );
+        }
+        // Deprecated is not retired: this model is available until 2026-11-30.
+        assert!(
+            registry
+                .get_model_spec("claude-sonnet-4-5-20250929")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn test_model_registry() {
         let registry = get_anthropic_registry();
 
@@ -436,52 +475,39 @@ mod tests {
     }
 
     #[test]
-    fn test_opus47_alias_and_limits() {
+    fn model_aliases_match_documented_claude_api_ids() {
         let registry = get_anthropic_registry();
-
-        let Some(alias_spec) = registry.get_model_spec("claude-opus-4-7-latest") else {
-            panic!("claude-opus-4-7-latest should alias claude-opus-4-7");
-        };
-        assert_eq!(alias_spec.family, AnthropicModelFamily::ClaudeOpus47);
-        assert_eq!(alias_spec.model_info.max_context_length, 1_000_000);
-        assert_eq!(alias_spec.model_info.max_output_length, Some(128_000));
-
-        let Some(limits) = registry.get_model_limits("claude-opus-4-7-latest") else {
-            panic!("claude-opus-4-7-latest should expose Opus 4.7 limits");
-        };
-        assert_eq!(limits.max_context_length, 1_000_000);
-        assert_eq!(limits.max_output_tokens, 128_000);
-
-        // Verify the alias resolves to a spec whose pricing matches the canonical Opus 4.7 entry.
-        // The alias spec carries its own id (`claude-opus-4-7-latest`), but the underlying
-        // pricing/cost numbers must match the canonical `claude-opus-4-7` entry so callers
-        // who route by alias do not see a cheaper or pricier model than the canonical id.
-        let canonical_spec = registry
-            .get_model_spec("claude-opus-4-7")
-            .expect("canonical claude-opus-4-7 should exist");
+        for id in [
+            "claude-opus-4-7-latest",
+            "claude-opus-4-6-20260205",
+            "claude-opus-4-5-20251110",
+            "claude-sonnet-4-6-20251001",
+            "claude-sonnet-4-5-20251101",
+        ] {
+            assert!(
+                registry.get_model_spec(id).is_none(),
+                "unverified alias {id}"
+            );
+        }
+        for (alias, canonical) in [
+            ("claude-opus-4-5", "claude-opus-4-5-20251101"),
+            ("claude-sonnet-4-5", "claude-sonnet-4-5-20250929"),
+            ("claude-haiku-4-5", "claude-haiku-4-5-20251001"),
+        ] {
+            let alias = registry.get_model_spec(alias).unwrap();
+            let canonical = registry.get_model_spec(canonical).unwrap();
+            assert_eq!(alias.family, canonical.family);
+            assert_eq!(
+                alias.pricing.input_cost_per_1k_tokens,
+                canonical.pricing.input_cost_per_1k_tokens
+            );
+        }
         assert_eq!(
-            alias_spec.model_info.input_cost_per_1k_tokens,
-            canonical_spec.model_info.input_cost_per_1k_tokens,
-            "alias must share input cost with canonical"
-        );
-        assert_eq!(
-            alias_spec.model_info.output_cost_per_1k_tokens,
-            canonical_spec.model_info.output_cost_per_1k_tokens,
-            "alias must share output cost with canonical"
-        );
-        assert_eq!(
-            alias_spec.pricing.input_cost_per_1k_tokens,
-            canonical_spec.pricing.input_cost_per_1k_tokens,
-            "alias must share pricing.input with canonical"
-        );
-        assert_eq!(
-            alias_spec.pricing.output_cost_per_1k_tokens,
-            canonical_spec.pricing.output_cost_per_1k_tokens,
-            "alias must share pricing.output with canonical"
-        );
-        assert_eq!(
-            alias_spec.family, canonical_spec.family,
-            "alias must share family with canonical"
+            registry
+                .get_model_limits("claude-opus-4-7")
+                .unwrap()
+                .max_output_tokens,
+            128_000
         );
     }
 

@@ -102,29 +102,20 @@ impl ModelUtils {
                 ]);
             }
             "claude-opus-4-8" => {
-                aliases.extend_from_slice(&["anthropic/claude-opus-4.8".to_string()]);
+                aliases.push("anthropic/claude-opus-4-8".to_string());
             }
             "claude-opus-4-7" => {
-                aliases.extend_from_slice(&[
-                    "anthropic/claude-opus-4.7".to_string(),
-                    "claude-opus-4-7-latest".to_string(),
-                ]);
+                aliases.push("anthropic/claude-opus-4-7".to_string());
             }
             "claude-opus-4-6" => {
-                aliases.extend_from_slice(&[
-                    "anthropic/claude-opus-4.6".to_string(),
-                    "claude-opus-4-6-20260114".to_string(),
-                ]);
+                aliases.push("anthropic/claude-opus-4-6".to_string());
             }
             "claude-sonnet-4-6" => {
-                aliases.extend_from_slice(&[
-                    "anthropic/claude-sonnet-4.6".to_string(),
-                    "claude-sonnet-4-6-20251001".to_string(),
-                ]);
+                aliases.push("anthropic/claude-sonnet-4-6".to_string());
             }
             "claude-sonnet-4-5" => {
                 aliases.extend_from_slice(&[
-                    "anthropic/claude-sonnet-4.5".to_string(),
+                    "anthropic/claude-sonnet-4-5".to_string(),
                     "claude-sonnet-4-5-20250929".to_string(),
                 ]);
             }
@@ -354,23 +345,17 @@ mod tests {
 
     #[cfg(feature = "providers-extended")]
     #[test]
-    fn test_get_model_pricing_gemini_20_flash_thinking_matches_registry() {
+    fn retired_gemini_keeps_historical_prices_without_being_callable() {
         let model_id = "gemini-2.0-flash-thinking-exp";
-        let utility_pricing = ModelUtils::get_model_pricing(model_id);
-        let registry = crate::core::providers::gemini::get_gemini_registry();
-        let registry_pricing = registry.get_model_spec(model_id).map(|spec| {
-            (
-                spec.model_info
-                    .input_cost_per_1k_tokens
-                    .expect("Gemini thinking model should define input pricing"),
-                spec.model_info
-                    .output_cost_per_1k_tokens
-                    .expect("Gemini thinking model should define output pricing"),
-            )
-        });
-
-        assert_eq!(utility_pricing, registry_pricing);
-        assert_eq!(utility_pricing, Some((0.00001, 0.00004)));
+        assert!(
+            crate::core::providers::gemini::get_gemini_registry()
+                .get_model_spec(model_id)
+                .is_none()
+        );
+        assert_eq!(
+            ModelUtils::get_model_pricing(model_id),
+            Some((0.00001, 0.00004))
+        );
     }
 
     #[test]
@@ -451,7 +436,7 @@ mod tests {
     fn test_get_model_aliases_claude_opus_47() {
         let aliases = ModelUtils::get_model_aliases("claude-opus-4-7");
         assert!(!aliases.is_empty());
-        assert!(aliases.iter().any(|a| a.contains("4.7")));
+        assert_eq!(aliases, vec!["anthropic/claude-opus-4-7"]);
     }
 
     #[test]

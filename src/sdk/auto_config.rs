@@ -157,7 +157,7 @@ impl AutoConfig {
             ),
             "together" => (
                 "TOGETHER_API_KEY", 
-                "https://api.together.xyz/v1",
+                "https://api.together.ai/v1",
                 vec![]
             ),
             "fireworks" => (

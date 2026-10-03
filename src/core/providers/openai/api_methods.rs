@@ -333,14 +333,16 @@ pub(crate) async fn execute_text_to_speech(
     provider: &'static str,
 ) -> Result<SpeechResponse, OpenAIError> {
     validate_outbound_headers(&headers, provider, "speech")?;
-    let response_format = request.response_format.clone();
-    let body = serde_json::json!({
+    let response_format = request.response_format.as_deref().unwrap_or("mp3");
+    let mut body = serde_json::json!({
         "model": request.model,
         "input": request.input,
         "voice": request.voice,
-        "response_format": request.response_format,
-        "speed": request.speed,
+        "response_format": response_format,
     });
+    if let Some(speed) = request.speed {
+        body["speed"] = serde_json::json!(speed);
+    }
     let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
     let response = apply_provider_headers(
         client.post(format!("{}/audio/speech", api_base.trim_end_matches('/')))?,
@@ -355,9 +357,7 @@ pub(crate) async fn execute_text_to_speech(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string)
-        .unwrap_or_else(|| {
-            format_to_content_type(response_format.as_deref().unwrap_or("mp3")).to_string()
-        });
+        .unwrap_or_else(|| format_to_content_type(response_format).to_string());
     let audio = read_mapped_response_bytes(&client, response, provider).await?;
     Ok(SpeechResponse {
         audio,
@@ -405,30 +405,31 @@ async fn read_mapped_response_bytes(
     provider: &'static str,
 ) -> Result<Vec<u8>, OpenAIError> {
     let status = response.status();
-    let bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(_) if !status.is_success() => {
-            return Err(HttpErrorMapper::map_status_code(
-                provider,
-                status.as_u16(),
-                &format!("Provider returned HTTP {status}, but its error body was unavailable"),
-            ));
-        }
-        Err(error) => return Err(client.map_preserved_request_error(error)),
-    };
+    let header_retry = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let bytes = response.bytes().await;
     if !status.is_success() {
-        return Err(HttpErrorMapper::map_status_code(
-            provider,
-            status.as_u16(),
-            &String::from_utf8_lossy(&bytes),
-        ));
+        let message = match &bytes {
+            Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            Err(_) => {
+                format!("Provider returned HTTP {status}, but its error body was unavailable")
+            }
+        };
+        let mut error = HttpErrorMapper::map_status_code(provider, status.as_u16(), &message);
+        if let OpenAIError::RateLimit { retry_after, .. } = &mut error {
+            *retry_after = header_retry.or(*retry_after);
+        }
+        return Err(error);
     }
+    let bytes = bytes.map_err(|error| client.map_preserved_request_error(error))?;
     Ok(bytes.to_vec())
 }
 
 fn transcription_form(request: TranscriptionRequest) -> multipart::Form {
-    let form = audio_file_form(request.file, request.filename)
-        .text("model", request.model)
+    let form = audio_file_form(request.model, request.file, request.filename)
         .optional_text("language", request.language)
         .optional_text("prompt", request.prompt)
         .optional_text("response_format", request.response_format)
@@ -447,8 +448,7 @@ fn transcription_form(request: TranscriptionRequest) -> multipart::Form {
 }
 
 fn translation_form(request: TranslationRequest) -> multipart::Form {
-    audio_file_form(request.file, request.filename)
-        .text("model", request.model)
+    audio_file_form(request.model, request.file, request.filename)
         .optional_text("prompt", request.prompt)
         .optional_text("response_format", request.response_format)
         .optional_text(
@@ -457,14 +457,37 @@ fn translation_form(request: TranslationRequest) -> multipart::Form {
         )
 }
 
-fn audio_file_form(file: Vec<u8>, filename: String) -> multipart::Form {
+fn audio_file_form(model: String, file: Vec<u8>, filename: String) -> multipart::Form {
     let filename = if filename.trim().is_empty() {
         "audio.mp3".to_string()
     } else {
         filename
     };
 
-    multipart::Form::new().part("file", multipart::Part::bytes(file).file_name(filename))
+    let extension = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "wav" => "audio/wav",
+        "webm" => "audio/webm",
+        "flac" => "audio/flac",
+        "m4a" | "mp4" => "audio/mp4",
+        "oga" | "ogg" => "audio/ogg",
+        "mp3" | "mpeg" | "mpga" => "audio/mpeg",
+        "aac" => "audio/aac",
+        "opus" => "audio/opus",
+        _ => "application/octet-stream",
+    };
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
+    multipart::Form::new().text("model", model).part(
+        "file",
+        multipart::Part::bytes(file)
+            .file_name(filename)
+            .headers(headers),
+    )
 }
 
 trait OptionalMultipartText {

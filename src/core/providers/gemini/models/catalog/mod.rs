@@ -4,7 +4,6 @@ mod gemini31;
 mod gemini35;
 mod gemini36;
 mod gemini37;
-mod legacy;
 
 use std::collections::HashMap;
 
@@ -61,16 +60,6 @@ pub(super) fn advanced_text_capabilities() -> Vec<ProviderCapability> {
     ]
 }
 
-pub(super) fn function_batch_capabilities() -> Vec<ProviderCapability> {
-    vec![
-        ProviderCapability::ChatCompletion,
-        ProviderCapability::ChatCompletionStream,
-        ProviderCapability::ToolCalling,
-        ProviderCapability::FunctionCalling,
-        ProviderCapability::BatchProcessing,
-    ]
-}
-
 pub(super) fn register_all(registry: &mut GeminiModelRegistry) {
     gemini37::register(registry);
     gemini36::register(registry);
@@ -78,5 +67,4 @@ pub(super) fn register_all(registry: &mut GeminiModelRegistry) {
     gemini31::register(registry);
     gemini3::register(registry);
     gemini25::register(registry);
-    legacy::register(registry);
 }
