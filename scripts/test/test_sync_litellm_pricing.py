@@ -38,14 +38,21 @@ class SyncPricingTests(unittest.TestCase):
         for key in keys:
             legacy[key]["input_cost_per_token"] = 0.0
             legacy[key]["output_cost_per_token"] = 0.0
-        patched = sync.apply_official_overrides(legacy, legacy)
+        refreshed = {key: dict(row) for key, row in legacy.items()}
+        for key in keys:
+            refreshed[key]["max_input_tokens"] = 8192
+            refreshed[key]["output_vector_size"] = 2048
+            refreshed[key]["description"] = "updated upstream metadata"
+        patched = sync.apply_official_overrides(refreshed, legacy)
         for key in keys:
             self.assertEqual(patched[key]["litellm_provider"], "volcengine")
             self.assertEqual(patched[key]["mode"], "embedding")
+            for field in ("max_input_tokens", "output_vector_size", "description"):
+                self.assertEqual(patched[key][field], refreshed[key][field])
             for field in ("input_cost_per_token", "output_cost_per_token"):
                 self.assertNotIn(field, patched[key])
                 self.assertNotIn(field, catalog[key])
-        self.assertEqual(sync.apply_official_overrides(legacy, patched), patched)
+        self.assertEqual(sync.apply_official_overrides(refreshed, patched), patched)
 
     def test_deepseek_pro_qualified_and_bare_limits_match_official_contract(self) -> None:
         catalog = json.loads(CATALOG_PATH.read_text())

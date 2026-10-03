@@ -680,7 +680,10 @@ def apply_official_overrides(
         overlay_has_promo_signature = overlay is not None and all(
             overlay.get(field) == expected for field, expected in patch.items()
         )
-        original = overlay if overlay is not None else source_entries.get(model)
+        # Removal-only overrides must retain fresh non-pricing source metadata.
+        original = (
+            overlay if overlay is not None and patch else source_entries.get(model, overlay)
+        )
         if promo_expired and overlay_has_promo_signature:
             original = source_entries.get(model)
         if original is None:
