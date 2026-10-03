@@ -203,7 +203,11 @@ impl HttpServer {
         let ip_access = Arc::clone(&state.ip_access);
         let cors = Self::build_cors_for_app_factory(cors_config);
         #[cfg(feature = "a2a")]
-        let cors = cors.allowed_header(cfg.gateway.auth.api_key_header.as_str());
+        let cors = if cfg.gateway.auth.enable_api_key {
+            cors.allowed_header(cfg.gateway.auth.api_key_header.as_str())
+        } else {
+            cors
+        };
         let max_body_size = cfg.gateway.server.max_body_size;
 
         let budget_limits = web::Data::new(Arc::clone(&state.budget_limits));

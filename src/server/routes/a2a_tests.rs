@@ -47,7 +47,7 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             loop { yield Ok::<_, std::io::Error>(web::Bytes::from_static(b": heartbeat\n\n")); tokio::time::sleep(Duration::from_millis(20)).await; }
         };
         return HttpResponse::Ok()
-            .insert_header(("content-type", "text/event-stream"))
+            .insert_header(("content-type", "Text/Event-Stream; charset=utf-8"))
             .streaming(stream);
     }
     let result = match body["method"].as_str().unwrap() {
@@ -66,7 +66,8 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             let bytes = format!("data: {first}\r\n\r\ndata: {last}\r\n\r\n").into_bytes();
             // Single-byte frames exercise UTF-8 and CRLF split across network chunks.
             return HttpResponse::Ok()
-                .insert_header(("content-type", "text/event-stream"))
+                .insert_header(("content-type", "Text/Event-Stream; charset=utf-8"))
+                .insert_header(("a2a-extensions", "https://example.test/ext"))
                 .streaming(futures::stream::iter(
                     bytes
                         .into_iter()
@@ -180,6 +181,10 @@ async fn messages_tasks_cancellation_and_cards_reach_gateway() {
     );
     assert!(!card.to_string().contains("upstream-test"));
     assert_eq!(card["capabilities"]["pushNotifications"], false);
+    assert_eq!(card["defaultInputModes"], json!(["text/plain"]));
+    assert_eq!(card["defaultOutputModes"], json!(["text/plain"]));
+    assert_eq!(card["skills"][0]["id"], "gateway");
+    assert!(!card["skills"][0]["tags"].as_array().unwrap().is_empty());
     handle.stop(false).await;
 }
 #[actix_web::test]
@@ -194,6 +199,10 @@ async fn streaming_registers_ownership_before_task_can_be_resumed() {
     let user = user();
     let response =
         test::call_service(&app, request("SendStreamingMessage", message(), &user)).await;
+    assert_eq!(
+        response.headers().get("a2a-extensions").unwrap(),
+        "https://example.test/ext"
+    );
     let body = test::read_body(response).await;
     assert!(std::str::from_utf8(&body).unwrap().contains("你好"));
     let response = test::call_service(

@@ -246,8 +246,16 @@ async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
         "capabilities":{"streaming":agent.capabilities.streaming,"pushNotifications":false,"extendedAgentCard":false},
         "securitySchemes":schemes,
         "securityRequirements":requirements,
-        "defaultInputModes":agent.capabilities.input_types,"defaultOutputModes":agent.capabilities.output_types,"skills":[]
+        "defaultInputModes":card_modes(&agent.capabilities.input_types),"defaultOutputModes":card_modes(&agent.capabilities.output_types),
+        "skills":[{"id":"gateway","name":name,"description":agent.description.as_deref().unwrap_or(name),"tags":["a2a"]}]
     }))
+}
+fn card_modes(modes: &[String]) -> Vec<String> {
+    if modes.is_empty() {
+        vec!["text/plain".into()]
+    } else {
+        modes.to_vec()
+    }
 }
 async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -> HttpResponse {
     let name = req.match_info().get("agent_name").unwrap_or("");
@@ -484,7 +492,12 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut response = HttpResponse::build(status);
-    for name in ["content-type", "retry-after", "a2a-version"] {
+    for name in [
+        "content-type",
+        "retry-after",
+        "a2a-version",
+        "a2a-extensions",
+    ] {
         if let Some(value) = upstream.headers().get(name) {
             response.insert_header((name, value.as_bytes()));
         }
@@ -499,7 +512,11 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|s| s.starts_with("text/event-stream"))
+            .is_some_and(|s| {
+                s.split(';')
+                    .next()
+                    .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"))
+            })
     {
         if !stream {
             return error(
@@ -511,9 +528,11 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         }
         let events = async_stream::try_stream! {
             let mut buffer = Vec::new();
+            let mut scan_from = 0;
             while let Some(chunk) = upstream.chunk().await.map_err(|_| actix_web::error::ErrorBadGateway("A2A stream interrupted"))? {
                 buffer.extend_from_slice(&chunk);
-                while let Some(end) = event_boundary(&buffer) {
+                while let Some(end) = event_boundary(&buffer, scan_from) {
+                    scan_from = 0;
                     if end > limit { Err(actix_web::error::ErrorBadGateway("A2A event too large"))?; }
                     let frame: Vec<_> = buffer.drain(..end).collect();
                     let text = std::str::from_utf8(&frame).map_err(|_| actix_web::error::ErrorBadGateway("Invalid A2A event encoding"))?;
@@ -528,6 +547,8 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                     }
                     yield web::Bytes::from(frame);
                 }
+                // Only revisit a possible delimiter split across chunks.
+                scan_from = buffer.len().saturating_sub(3);
                 if buffer.len() > limit { Err(actix_web::error::ErrorBadGateway("A2A event too large"))?; }
             }
             if !buffer.is_empty() { Err(actix_web::error::ErrorBadGateway("Incomplete A2A event"))?; }
@@ -596,8 +617,8 @@ fn identifier(value: Option<&Value>) -> Result<Option<&str>, ()> {
         _ => Err(()),
     }
 }
-fn event_boundary(bytes: &[u8]) -> Option<usize> {
-    (0..bytes.len()).find_map(|i| {
+fn event_boundary(bytes: &[u8], start: usize) -> Option<usize> {
+    (start..bytes.len()).find_map(|i| {
         if bytes[i..].starts_with(b"\r\n\r\n") {
             Some(i + 4)
         } else if bytes[i..].starts_with(b"\n\n") || bytes[i..].starts_with(b"\r\r") {
