@@ -350,15 +350,31 @@ fn token_count_body(body: &Value) -> Value {
 // Native fields remain unchanged, but unsupported billing modes must fail before
 // contacting either the token-count or generation endpoint.
 fn validate_billing_scope(body: &Value) -> Result<(), GatewayError> {
-    for (field, supported) in [("speed", "standard")] {
-        if body
-            .get(field)
-            .is_some_and(|value| !value.is_null() && value.as_str() != Some(supported))
-        {
-            return Err(GatewayError::validation(format!(
-                "Native Messages {field} supports only {supported} until premium pricing is implemented"
-            )));
-        }
+    if body
+        .get("speed")
+        .is_some_and(|value| !value.is_null() && value.as_str() != Some("standard"))
+    {
+        return Err(GatewayError::validation(
+            "Native Messages speed supports only standard until premium pricing is implemented",
+        ));
+    }
+    if ["fallbacks", "compaction", "container"]
+        .iter()
+        .any(|field| body.get(*field).is_some_and(|value| !value.is_null()))
+        || body
+            .pointer("/context_management/edits")
+            .and_then(Value::as_array)
+            .is_some_and(|edits| {
+                edits.iter().any(|edit| {
+                    edit.get("type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind.starts_with("compact_"))
+                })
+            })
+    {
+        return Err(GatewayError::validation(
+            "Native Messages server-side fallback, compaction and containers require separate billing",
+        ));
     }
     if body
         .get("inference_geo")
@@ -380,7 +396,8 @@ fn validate_billing_scope(body: &Value) -> Result<(), GatewayError> {
         .flatten()
     {
         let kind = tool.get("type").and_then(Value::as_str).unwrap_or_default();
-        if kind.starts_with("code_execution_")
+        if kind.starts_with("advisor_")
+            || kind.starts_with("code_execution_")
             || kind.starts_with("tool_search_")
             || kind.starts_with("mcp_")
         {

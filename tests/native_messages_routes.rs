@@ -728,6 +728,12 @@ async fn unsupported_native_billing_modes_fail_before_any_upstream_call() {
     .await;
     let cases = [
         json!({"speed":"fast"}),
+        json!({"fallbacks":"default"}),
+        json!({"fallbacks":[{"model":"claude-fable-5"}]}),
+        json!({"compaction":{"type":"summarize"}}),
+        json!({"context_management":{"edits":[{"type":"compact_20260112"}]}}),
+        json!({"container":{"id":"container-test"}}),
+        json!({"tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-fable-5","max_uses":1,"max_tokens":1024}]}),
         json!({"inference_geo":"eu"}),
         json!({"mcp_servers":[{"type":"url","url":"https://mcp.example.test","name":"remote"}]}),
         json!({"tools":[{"type":"code_execution_20260120","name":"code_execution"}]}),
