@@ -372,7 +372,7 @@ impl LLMProvider for GeminiProvider {
     async fn health_check(&self) -> HealthStatus {
         // Health check request
         let test_request = ChatRequest {
-            model: "gemini-1.0-pro".to_string(),
+            model: "gemini-3.7-flash".to_string(),
             messages: vec![crate::core::types::chat::ChatMessage {
                 role: crate::core::types::message::MessageRole::User,
                 content: Some(crate::core::types::message::MessageContent::Text(
@@ -380,7 +380,7 @@ impl LLMProvider for GeminiProvider {
                 )),
                 ..Default::default()
             }],
-            temperature: Some(0.1),
+            temperature: None,
             max_tokens: Some(5),
             max_completion_tokens: None,
             top_p: None,

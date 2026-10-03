@@ -906,3 +906,33 @@ fn test_vertex_ai_error_api_error() {
         panic!("Expected ApiError variant");
     }
 }
+
+#[tokio::test]
+async fn custom_gemini_named_endpoint_remains_callable_for_token_counting() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = vec![0; 4096];
+        let len = socket.read(&mut bytes).await.unwrap();
+        let request = String::from_utf8_lossy(&bytes[..len]);
+        assert!(request.starts_with("POST /gemini-3.7-flash-preview:countTokens "));
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"totalTokens\":7}").await.unwrap();
+    });
+    let provider = VertexAIProvider::new(VertexAIProviderConfig {
+        api_base: Some(format!("http://{address}")),
+        endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+        ..test_vertex_provider_config()
+    })
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        provider.count_tokens("gemini-3.7-flash-preview", &[]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap(), 7);
+    server.await.unwrap();
+}

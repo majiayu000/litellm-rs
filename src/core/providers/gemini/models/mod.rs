@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 mod catalog;
+#[cfg(any(test, feature = "providers-extended", feature = "providers-extra"))]
 mod contract;
 #[cfg(test)]
 mod cost_tests;
@@ -14,7 +15,9 @@ mod current_tests;
 mod pricing_schedule;
 mod surface;
 
+#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 pub(crate) use contract::{has_trailing_assistant_prefill, uses_fixed_sampling_contract};
+#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
 pub(crate) use pricing_schedule::flash_uses_standard_pricing_at;
 pub use surface::GoogleGeminiApiSurface;
 
