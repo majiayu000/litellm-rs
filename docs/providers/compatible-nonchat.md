@@ -67,6 +67,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
 
+第十批（#1429，核验 2026-10-03）接入 `aiml_api`/`aiml` 与 `comet_api` 文本 embeddings。AIML 官方响应只给 `usage.total_tokens` 时，按向量无输出 tokens 的语义填入 `prompt_tokens`，不从文本长度推估；已有 `task_type` 映射为其 `input_type`。缺失/无效 usage 仍遵循解析错误合同。CometAPI 默认主机修正为 `https://api.cometapi.com/v1`，Bytez 修正为 `https://api.bytez.com/models/v2/openai/v1`。
+
+AIML 图片响应 schema 不保证当前成功类型必需的 `created`，TTS/STT 使用原生 URL/异步任务；CometAPI 标准图片/音频接口存在，但本批尚未确认其模型计费单位与当前网关字符/秒/图片估算结算相符，保持待适配状态。Bytez 非聊天使用原生 model-run；Poe 多模态 bots 使用聊天内容。逐项证据与限制见 [多模态聚合供应商审计](../audit/multimodal-compatible-nonchat-2026-10-03.md)。
+
 第九批（#1427，核验 2026-10-03）接入火山方舟文本 embeddings：使用现有 `/api/v3` base，按官方协议把单字符串输入规范为单元素数组，保留批量文本与浮点响应。模型或 Endpoint ID 由已有配置指定；多模态 `/embeddings/multimodal` 仍是独立协议。MiniMax 的 OpenAI 默认地址修正为 `https://api.minimax.io/v1`；它的原生图片/语音协议没有因此自动获得支持。
 
 SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 SambaStack，默认 SambaCloud 选择器不扩展能力。Hyperbolic 当前文档站转向 GPU 租用，托管推理非聊天协议仍未确认；这不是已退役的证据。详细官方来源和剩余差异见 [原生协议边界审计](../audit/native-compatible-nonchat-2026-10-03.md)。
@@ -128,16 +132,16 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `zai` | 待核验；本批未扩展非聊天声明 |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
 | `linkup` | 当前官方为 Search/Fetch/Research/Tasks/Extract；无兼容非聊天证据，旧 chat 声明待 F10 复核；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
-| `poe` | 待核验；本批未扩展非聊天声明 |
+| `poe` | 图片/音频 bots 经 chat/completions 返回内容；未确认标准 embeddings/images/audio 路由，不能互相替代 |
 | `wandb` | 已核验当前 CoreWeave Serverless：修正 inference 默认地址；仅 Chat/Models 合同，独立非聊天未确认；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `nanogpt` | embeddings、images/generations、同步 speech/transcriptions；图片 /v1，其他 /api/v1；异步/克隆未接 |
-| `aiml_api` | 待核验；本批未扩展非聊天声明 |
-| `aiml` | 待核验；本批未扩展非聊天声明 |
+| `aiml_api` | 文本 embeddings；total-only usage 规范为输入tokens；图片created缺项、原生/异步语音待适配 |
+| `aiml` | 同 aiml_api（独立选择器共享已验证协议） |
 | `aleph_alpha` | 官方 SDK 有兼容 embeddings；默认 host/部署模型未确认，尚未启用；旧 semantic_embed 不等同兼容协议；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `anyscale` | 当前官方是部署型 Ray Serve/vLLM；旧共享 endpoint 与非聊天能力未确认，不推断退役；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
-| `bytez` | 待核验；本批未扩展非聊天声明 |
-| `comet_api` | 待核验；本批未扩展非聊天声明 |
-| `compactifai` | 已核验 ASR 协议；一分钟最低计费待预留/结算适配，暂不声明；其余独立非聊天未确认；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
+| `bytez` | 修正 OpenAI base /models/v2/openai/v1；非聊天原生 model-run 协议及运行时计费待适配 |
+| `comet_api` | 文本 embeddings；修正主机 api.cometapi.com；图片/音频协议存在但计费/usage差异尚待收口 |
+| `compactifai` | Whisper 转写；一分钟最低计费同时用于预留/结算，其他模型不因此获得音频能力；见下方 |
 | `maritalk` | 官方明确无自身 embeddings，推荐第三方 DeepInfra；图片/音频协议未确认 |
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
 | `yi` | 官方页面/RSC 只确认聊天资料，独立 embeddings/images/audio 未确认 |
@@ -145,3 +149,13 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
 选择器别名沿用 `canonical_catalog_name`，例如 hugging_face、aimlapi、ai21_chat 等不另建重复审核项。
+
+## CompactifAI 转录
+
+2026-10-03 核验，issue #1433。[官方模型卡](https://docs.compactif.ai/models/whisper_large_v3_turbo_slim/)确认 `cai-whisper-large-v3-turbo-slim`，[API 参考](https://docs.compactif.ai/api_reference/#audio-transcriptions)定义 multipart `/v1/audio/transcriptions`。现有配置可使用 `compactifai`，默认 base 为 `https://api.compactif.ai/v1`。只开放该模型的转写；它不作为 Chat、翻译或 TTS 候选。供应商其他聊天模型不因此获得转写能力。
+
+默认/JSON 请求上游 `verbose_json` 以取得 duration；该转换只为保留实际计费时长，沿用现有网关 JSON/verbose_json 响应范围，不宣称音频流式、SRT/VTT 或翻译支持。[官方定价](https://docs.compactif.ai/pricing/#speech-to-text-pricing)明确逐秒计费且至少一分钟。既有同一 time-pricing 入口对预算预留和结算都应用至少 60 秒，不增设配置；预留依旧使用现有文件大小时长估算，结算采用有效上游 duration。尚未提供内置价格时必须使用既有显式每秒价格配置，缺价拒绝，不把自定义测试费率当成官方价格。
+
+决策：适配既有 OpenAI multipart、Router 和 time pricing，不引入 SDK 或通用计费规则框架。接口原始依据与下载哈希见 [#1432 的先前审计](https://github.com/majiayu000/litellm-rs/pull/1432)；本节取代其中的 ASR 未接入状态。未调用供应商账户。HTTP 测试覆盖 multipart/duration、429、具体模型隔离；网关测试覆盖短/长音频、一分钟最低预留阻止超预算调用、缺价拒绝与实际费用结算。
+
+计费审查回归覆盖压缩输入被估算为 2 秒、预留最低 60 秒、返回实际 75 秒、预算只够 70 秒的场景。现有结算允许记录已经发生的超预算费用：provider/model 都计入实际 75 秒，下一请求在上游调用前被拒绝。该测试并不证明文件大小估算是时长上界，也不证明任意后端故障下账务可持久恢复；不增加重复记账或回填框架。

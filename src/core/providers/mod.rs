@@ -567,6 +567,35 @@ impl Provider {
     }
 
     #[cfg(feature = "gateway")]
+    pub(crate) fn native_response_binding(&self) -> Option<String> {
+        match self {
+            Provider::OpenAI(provider) => Some(provider.native_response_binding()),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response_lifecycle(
+        &self,
+        id: &str,
+        method: base::HttpMethod,
+        suffix: Option<&str>,
+        query: &str,
+    ) -> Result<reqwest::Response, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => {
+                provider
+                    .native_response_lifecycle(id, method, suffix, query)
+                    .await
+            }
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses lifecycle",
+            )),
+        }
+    }
+
+    #[cfg(feature = "gateway")]
     pub(crate) async fn native_response_input_tokens(
         &self,
         body: serde_json::Value,

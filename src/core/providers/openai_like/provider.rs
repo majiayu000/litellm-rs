@@ -343,7 +343,13 @@ impl OpenAILikeProvider {
         }
         if matches!(
             self.provider_name.as_str(),
-            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim" | "heroku"
+            "fireworks"
+                | "fireworks_ai"
+                | "openrouter"
+                | "nvidia_nim"
+                | "heroku"
+                | "aiml"
+                | "aiml_api"
         ) && let Some(fields) = body.as_object_mut()
             && let Some(task_type) = fields.remove("task_type")
         {
@@ -400,6 +406,28 @@ impl OpenAILikeProvider {
         // Normalize this wire shape only at the embedding boundary.
         let mut value: Value = serde_json::from_slice(&response_bytes)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
+        if matches!(self.provider_name.as_str(), "aiml" | "aiml_api") {
+            let usage = value
+                .get_mut("usage")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| {
+                    OpenAILikeError::response_parsing(
+                        PROVIDER_NAME,
+                        "AIML embeddings require a usage object",
+                    )
+                })?;
+            let total = usage
+                .get("total_tokens")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    OpenAILikeError::response_parsing(
+                        PROVIDER_NAME,
+                        "AIML embeddings require numeric usage.total_tokens",
+                    )
+                })?;
+            // AIML reports total input usage; embeddings have no generated output tokens.
+            usage.entry("prompt_tokens").or_insert(Value::from(total));
+        }
         if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
             usage.entry("completion_tokens").or_insert(Value::from(0));
         }
@@ -909,8 +937,9 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<TranscriptionResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        // Groq's verbose JSON includes duration for settlement; plain JSON does not.
-        if self.provider_name == "groq"
+        // Verbose JSON includes duration for settlement. CompactifAI's plain JSON
+        // uses a usage.seconds envelope that the common response does not expose.
+        if matches!(self.provider_name.as_str(), "groq" | "compactifai")
             && matches!(request.response_format.as_deref(), None | Some("json"))
         {
             request.response_format = Some("verbose_json".into());

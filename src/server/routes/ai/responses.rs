@@ -34,7 +34,7 @@ use super::openai_errors;
 mod codex_compat_tests;
 mod input_guardrail;
 mod lifecycle;
-pub(crate) use lifecycle::{ResponseOwner, store_response_if_requested};
+pub(crate) use lifecycle::{ResponseOwner, response_owner, store_response_if_requested};
 pub use lifecycle::{cancel_response, delete_response, get_response, list_response_input_items};
 #[cfg(test)]
 static PROVIDER_DISPATCH_COUNT: std::sync::atomic::AtomicUsize =
@@ -112,7 +112,13 @@ pub async fn create_response(
     let (request, input_extensions) = if continuation_requested {
         (request, input_extensions)
     } else {
-        let request = match lifecycle::resolve_previous_response_context(request, &owner) {
+        let request = match lifecycle::resolve_previous_response_context(
+            &state.storage.database,
+            request,
+            &owner,
+        )
+        .await
+        {
             Ok(resolved) => resolved,
             Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
         };
@@ -158,7 +164,8 @@ pub async fn create_response(
             request,
             context.as_ref().clone(),
             owner,
-        ))
+        )
+        .await)
     } else if request.stream.unwrap_or(false) {
         super::responses_stream::handle_streaming_response(
             state.get_ref(),
@@ -222,7 +229,16 @@ async fn handle_sync_response(
                 Ok(extensions) => extensions,
                 Err(error) => return Ok(openai_errors::validation_error(error)),
             };
-            lifecycle::store_response_if_requested(&request, &resp, owner);
+            if let Err(error) = lifecycle::store_response_if_requested(
+                &state.storage.database,
+                &request,
+                &resp,
+                owner,
+            )
+            .await
+            {
+                return Ok(openai_errors::gateway_error_response(&error));
+            }
             match ResponsesApiResponseWithExtensions::from_parts(resp, output_extensions) {
                 Ok(response) => Ok(HttpResponse::Ok().json(response)),
                 Err(error) => Ok(openai_errors::validation_error(error)),

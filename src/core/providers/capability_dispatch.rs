@@ -101,6 +101,17 @@ impl Provider {
                         .get_model_registry()
                         .supports_capability(model, capability)
             }
+            Provider::OpenAILike(provider) if provider.name() == "compactifai" => {
+                let model = provider.config().get_effective_model(model);
+                let transcription_model = model == "cai-whisper-large-v3-turbo-slim";
+                match capability {
+                    ProviderCapability::AudioTranscription => transcription_model,
+                    _ => {
+                        !transcription_model
+                            && LLMProvider::supports_capability(provider, capability)
+                    }
+                }
+            }
             Provider::OpenAILike(provider) if provider.name() == "groq" => {
                 let model = provider.config().get_effective_model(model);
                 // Groq's Whisper Turbo cannot translate; Orpheus is speech-only.

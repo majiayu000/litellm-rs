@@ -202,6 +202,10 @@ impl RequestPricing {
                 ProviderCapability::AudioTranscription | ProviderCapability::AudioTranslation
             ) {
             total_time_seconds.max(10.0)
+        } else if provider == "compactifai" && *surface == ProviderCapability::AudioTranscription {
+            // https://docs.compactif.ai/pricing/#speech-to-text-pricing
+            // One-minute minimum, shared by reservation and final settlement.
+            total_time_seconds.max(60.0)
         } else {
             total_time_seconds
         };
