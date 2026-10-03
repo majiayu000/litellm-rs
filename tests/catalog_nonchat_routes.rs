@@ -1324,11 +1324,10 @@ async fn baichuan_rejects_truncated_batches_before_dispatch() {
         .create_embeddings(request, RequestContext::default())
         .await
         .unwrap();
-    let calls = upstream.seen.lock().unwrap();
+    let calls = upstream.seen.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
     assert_eq!(body["input"].as_array().unwrap().len(), 16);
-    drop(calls);
     handle.stop(false).await;
 }
 

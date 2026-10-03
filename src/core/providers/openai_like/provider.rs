@@ -328,20 +328,14 @@ impl OpenAILikeProvider {
         let headers = self.get_request_headers();
         let mut body = serde_json::to_value(&request)
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
-        if self.provider_name == "baichuan" {
-            let valid = match &body["input"] {
-                Value::String(_) => true,
-                Value::Array(inputs) => {
-                    !inputs.is_empty() && inputs.len() <= 16 && inputs.iter().all(Value::is_string)
-                }
-                _ => false,
-            };
-            if !valid {
-                return Err(ProviderError::invalid_request(
-                    "baichuan",
-                    "Baichuan embeddings require a text string or 1 to 16 text strings",
-                ));
-            }
+        if self.provider_name == "baichuan"
+            && let Some(inputs) = body["input"].as_array()
+            && (inputs.is_empty() || inputs.len() > 16)
+        {
+            return Err(ProviderError::invalid_request(
+                "baichuan",
+                "Baichuan embeddings require a text string or 1 to 16 text strings",
+            ));
         }
         if matches!(
             self.provider_name.as_str(),
