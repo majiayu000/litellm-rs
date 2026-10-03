@@ -174,10 +174,10 @@ impl AnthropicClient {
                 retry_after,
             ));
         }
-        Err(AnthropicErrorMapper::from_http_status(
-            status.as_u16(),
-            &text,
-        ))
+        // Keep the native error envelope in the existing provider error payload.
+        // HTTP facts still drive retries and health; the native route restores
+        // the upstream type/message instead of serializing Display prefixes.
+        Err(ProviderError::api_error("anthropic", status.as_u16(), text))
     }
 
     /// Request

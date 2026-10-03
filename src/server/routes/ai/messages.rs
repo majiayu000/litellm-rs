@@ -696,5 +696,26 @@ pub(crate) fn error_response(error: &GatewayError) -> HttpResponse {
     if let Some(seconds) = facts.headers.retry_after {
         response.insert_header(("retry-after", seconds.to_string()));
     }
-    response.json(json!({"type":"error","error":{"type":kind,"message":message},"request_id":current_error_response_request_id()}))
+    let native = match error {
+        GatewayError::Provider(provider_error) => match provider_error.redacted() {
+            ProviderError::ApiError {
+                provider: "anthropic",
+                message,
+                ..
+            }
+            | ProviderError::RateLimit {
+                provider: "anthropic",
+                message,
+                ..
+            } => serde_json::from_str::<Value>(&message)
+                .ok()
+                .and_then(|body| {
+                    Some(json!({"type": body.pointer("/error/type")?.as_str()?,
+                        "message": body.pointer("/error/message")?.as_str()?}))
+                }),
+            _ => None,
+        },
+        _ => None,
+    };
+    response.json(json!({"type":"error","error":native.unwrap_or_else(|| json!({"type":kind,"message":message})),"request_id":current_error_response_request_id()}))
 }

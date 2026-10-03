@@ -101,14 +101,26 @@ fn calculate_usage_cost_with_rates(
     let short_cache = cache_creation_tokens.checked_sub(one_hour).ok_or_else(|| {
         GatewayError::validation("One-hour cache tokens exceed total cache creation tokens")
     })?;
-    let cache_cost = (short_cache as f64 * cache_creation_rate
-        + priced_extra_units(
+    let one_hour_cost = if one_hour == 0 {
+        0.0
+    } else {
+        let base = priced_extra_units(
             model_info,
             model,
-            Some(one_hour),
+            Some(1),
             &["cache_creation_input_token_cost_above_1hr"],
             "one-hour cache pricing",
-        )?
+        )?;
+        f64::from(one_hour)
+            * tiered_cost_per_token(
+                model_info,
+                base,
+                "cache_creation_input_token_cost_above_1hr_above_",
+                usage.prompt_tokens,
+            )
+    };
+    let cache_cost = (short_cache as f64 * cache_creation_rate
+        + one_hour_cost
         + cache_read_tokens as f64 * cache_read_rate)
         * geo_multiplier;
     let tool_cost = anthropic_search_cost(
@@ -354,7 +366,8 @@ fn tiered_cost_per_token(
         .extra
         .iter()
         .filter_map(|(key, value)| {
-            if !key.starts_with(key_prefix) {
+            let suffix = key.strip_prefix(key_prefix)?;
+            if suffix.contains("_above_") {
                 return None;
             }
             let threshold = extract_tier_threshold(key)?;
@@ -370,7 +383,7 @@ fn tiered_cost_per_token(
 }
 
 pub(super) fn extract_tier_threshold(key: &str) -> Option<u32> {
-    let threshold = key.split("_above_").nth(1)?.strip_suffix("_tokens")?;
+    let threshold = key.rsplit_once("_above_")?.1.strip_suffix("_tokens")?;
     if let Some(number) = threshold.strip_suffix('k') {
         number.parse::<u32>().ok().map(|value| value * 1000)
     } else {

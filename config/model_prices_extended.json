@@ -15934,6 +15934,13 @@
     "supports_system_message": true,
     "provider_specific_entry": {
       "us": 1.1
+    },
+    "cache_creation_input_token_cost": 3.75e-06,
+    "cache_creation_input_token_cost_above_1hr": 6e-06,
+    "search_context_cost_per_query": {
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01,
+      "search_context_size_high": 0.01
     }
   },
   "claude-sonnet-4-5-20250929-v1:0": {
@@ -16051,6 +16058,13 @@
     "supports_system_message": true,
     "provider_specific_entry": {
       "us": 1.1
+    },
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "search_context_cost_per_query": {
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01,
+      "search_context_size_high": 0.01
     }
   },
   "claude-opus-4-6-20260205": {
@@ -16110,6 +16124,13 @@
     "supports_system_message": true,
     "provider_specific_entry": {
       "us": 1.1
+    },
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "search_context_cost_per_query": {
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01,
+      "search_context_size_high": 0.01
     }
   },
   "claude-opus-4-7-20260416": {
@@ -16354,6 +16375,13 @@
     "supports_system_message": true,
     "provider_specific_entry": {
       "us": 1.1
+    },
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "search_context_cost_per_query": {
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01,
+      "search_context_size_high": 0.01
     }
   },
   "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {

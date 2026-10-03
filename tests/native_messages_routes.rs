@@ -83,6 +83,13 @@ async fn upstream(
             Some("missing_delta") => {
                 events.retain(|event| event["type"] != "message_delta");
             }
+            Some("missing_reason") => {
+                for event in &mut events {
+                    if event["type"] == "message_delta" {
+                        event["delta"]["stop_reason"] = Value::Null;
+                    }
+                }
+            }
             Some("bad_usage") => {
                 for event in &mut events {
                     if event["type"] == "message_delta" {
@@ -328,6 +335,8 @@ async fn native_messages_validate_auth_body_and_model_before_dispatch() {
 #[tokio::test]
 async fn messages_http_status_and_retry_after_use_anthropic_error_envelope() {
     for status in [
+        StatusCode::BAD_REQUEST,
+        StatusCode::INTERNAL_SERVER_ERROR,
         StatusCode::UNAUTHORIZED,
         StatusCode::FORBIDDEN,
         StatusCode::TOO_MANY_REQUESTS,
@@ -354,7 +363,8 @@ async fn messages_http_status_and_retry_after_use_anthropic_error_envelope() {
         }
         let value: Value = test::read_body_json(response).await;
         assert_eq!(value["type"], "error");
-        assert!(value["error"]["type"].is_string());
+        assert_eq!(value["error"]["type"], "overloaded_error");
+        assert_eq!(value["error"]["message"], "Unavailable");
         handle.stop(false).await;
     }
 }
@@ -516,6 +526,7 @@ async fn malformed_native_message_streams_cannot_complete_successfully() {
         "missing_start",
         "missing_stop",
         "missing_delta",
+        "missing_reason",
         "bad_usage",
     ] {
         let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;

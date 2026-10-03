@@ -46,6 +46,7 @@ pub(super) fn response(
         let mut terminal = false;
         let mut upstream_failed = false;
         let mut final_usage = false;
+        let mut terminal_reason = false;
         let mut failure = None;
         let idle = state.config().gateway.server.stream_idle_timeout;
         'upstream: loop {
@@ -112,6 +113,10 @@ pub(super) fn response(
                                     failure = Some(invalid("message_delta before message_start"));
                                     break 'upstream;
                                 }
+                                terminal_reason |= value
+                                    .pointer("/delta/stop_reason")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|reason| !reason.is_empty());
                                 if let Some(delta) = value.get("usage") {
                                     final_usage = true;
                                     if delta.is_object() {
@@ -124,6 +129,12 @@ pub(super) fn response(
                             "message_stop" => {
                                 if !started {
                                     failure = Some(invalid("message_stop before message_start"));
+                                    break 'upstream;
+                                }
+                                if !terminal_reason {
+                                    failure = Some(invalid(
+                                        "Messages stream has no terminal stop reason",
+                                    ));
                                     break 'upstream;
                                 }
                                 if !final_usage

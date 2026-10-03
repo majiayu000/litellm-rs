@@ -291,6 +291,24 @@ ANTHROPIC_GEO_PRICING_MODELS = (
     "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-5-5",
 )
 
+# Canonical first-party cache/tool rates, verified against official pricing.
+# https://platform.claude.com/docs/en/about-claude/pricing
+for model, short_write, long_write in (
+    ("claude-sonnet-4-6", 0.00000375, 0.000006),
+    ("claude-opus-4-6", 0.00000625, 0.000010),
+    ("claude-opus-4-7", 0.00000625, 0.000010),
+    ("claude-opus-4-8", 0.00000625, 0.000010),
+):
+    OFFICIAL_OVERRIDE_PATCHES.setdefault(model, {}).update({
+        "cache_creation_input_token_cost": short_write,
+        "cache_creation_input_token_cost_above_1hr": long_write,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
+    })
+
 OFFICIAL_PRICING_CONTRACTS: dict[str, dict[str, Any]] = {
     "claude-fable-5": {
         "input_cost_per_token": 0.000010,

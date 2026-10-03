@@ -808,3 +808,46 @@ fn anthropic_geo_prices_all_token_categories_but_not_search_calls() {
             .is_err()
     );
 }
+
+#[test]
+fn anthropic_canonical_cache_writes_and_long_context_tiers_are_priced() {
+    let service = PricingService::with_embedded_default().unwrap();
+    for (model, short, long) in [
+        ("claude-sonnet-4-6", 3.75e-6, 6e-6),
+        ("claude-opus-4-6", 6.25e-6, 10e-6),
+        ("claude-opus-4-7", 6.25e-6, 10e-6),
+        ("claude-opus-4-8", 6.25e-6, 10e-6),
+    ] {
+        let usage = PricingUsage {
+            prompt_tokens: 1000,
+            cache_creation_tokens: Some(1000),
+            cache_creation_1h_tokens: Some(400),
+            web_search_requests: Some(1),
+            ..Default::default()
+        };
+        let cost = service
+            .calculate_loaded_usage_cost_for_provider("anthropic", model, &usage)
+            .unwrap();
+        assert!((cost.cache_cost - (600.0 * short + 400.0 * long)).abs() < 1e-12);
+        assert_eq!(cost.tool_cost, 0.01);
+    }
+    for (tokens, short, long) in [(200_000, 3.75e-6, 6e-6), (200_001, 7.5e-6, 12e-6)] {
+        let usage = PricingUsage {
+            prompt_tokens: tokens,
+            cache_creation_tokens: Some(tokens),
+            cache_creation_1h_tokens: Some(100_000),
+            ..Default::default()
+        };
+        let cost = service
+            .calculate_loaded_usage_cost_for_provider(
+                "anthropic",
+                "claude-sonnet-4-5-20250929",
+                &usage,
+            )
+            .unwrap();
+        assert!(
+            (cost.cache_cost - (f64::from(tokens - 100_000) * short + 100_000.0 * long)).abs()
+                < 1e-12
+        );
+    }
+}
