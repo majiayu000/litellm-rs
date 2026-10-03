@@ -49,3 +49,10 @@ Task contextId may be omitted; server Messages require a contextId. Part.data
 accepts any JSON value, including null, while exactly one content variant is
 required. SubscribeToTask rejects an initial terminal Task. SSE responses set
 X-Accel-Buffering: no so a reverse proxy can forward events promptly.
+
+Streams also close after INPUT_REQUIRED or AUTH_REQUIRED interruptions. A successful
+CancelTask result must be CANCELED; other outcomes use the upstream error contract.
+Task snapshots validate artifacts with the same rules as artifact updates and
+honor requested historyLength (including zero). Invalid JSON-RPC IDs produce an
+error with id null. SSE framing accepts independent CR, LF and CRLF line endings,
+including mixed endings split across transport chunks.

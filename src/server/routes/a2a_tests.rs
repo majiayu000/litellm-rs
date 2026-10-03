@@ -38,9 +38,18 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
     if let Some(result) = body.pointer("/params/metadata/test_result_stream") {
         calls.lock().unwrap().push(body.clone());
         let value = json!({"jsonrpc":"2.0","id":body["id"],"result":result});
+        let ending = body
+            .pointer("/params/metadata/test_ending")
+            .and_then(Value::as_str)
+            .unwrap_or("\n\n");
+        let bytes = format!("data: {value}{ending}").into_bytes();
         return HttpResponse::Ok()
             .content_type("text/event-stream")
-            .body(format!("data: {value}\n\n"));
+            .streaming(futures::stream::iter(
+                bytes
+                    .into_iter()
+                    .map(|b| Ok::<_, std::io::Error>(web::Bytes::from(vec![b]))),
+            ));
     }
     if let Some(result) = body.pointer("/params/metadata/test_result") {
         calls.lock().unwrap().push(body.clone());
@@ -840,6 +849,8 @@ async fn terminal_task_events_close_without_waiting_for_upstream_eof() {
             "TASK_STATE_FAILED",
             "TASK_STATE_CANCELED",
             "TASK_STATE_REJECTED",
+            "TASK_STATE_INPUT_REQUIRED",
+            "TASK_STATE_AUTH_REQUIRED",
         ] {
             let mut params = message();
             params["metadata"] =
@@ -1220,7 +1231,12 @@ async fn optional_task_context_and_split_sse_bom_are_supported() {
         }
     }
     for method in ["SendMessage", "GetTask", "CancelTask"] {
-        let task = json!({"id":"task-1","status":{"state":"TASK_STATE_WORKING"}});
+        let state = if method == "CancelTask" {
+            "TASK_STATE_CANCELED"
+        } else {
+            "TASK_STATE_WORKING"
+        };
+        let task = json!({"id":"task-1","status":{"state":state}});
         let mut params = if method == "SendMessage" {
             message()
         } else {
@@ -1801,6 +1817,162 @@ async fn subscribe_rejects_terminal_initial_task_and_streaming_disables_proxy_bu
             .unwrap();
             assert_eq!(value["result"]["message"]["parts"][0]["data"], data);
         }
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn task_artifacts_history_and_cancel_status_are_method_correct() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    assert_eq!(
+        test::call_service(&app, request("SendMessage", message(), &owner))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    for artifacts in [
+        json!([{}]),
+        json!({}),
+        json!([{"artifactId":"a","parts":[{"text":7}]}]),
+    ] {
+        for stream in [false, true] {
+            let mut params = message();
+            let field = if stream {
+                "test_result_stream"
+            } else {
+                "test_result"
+            };
+            params["metadata"][field] = json!({"task":{"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_COMPLETED"},"artifacts":artifacts}});
+            let response = test::call_service(
+                &app,
+                request(
+                    if stream {
+                        "SendStreamingMessage"
+                    } else {
+                        "SendMessage"
+                    },
+                    params,
+                    &owner,
+                ),
+            )
+            .await;
+            if stream {
+                assert!(
+                    actix_web::body::to_bytes(response.into_body())
+                        .await
+                        .is_err()
+                );
+            } else {
+                assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            }
+        }
+    }
+    for method in ["GetTask", "SendMessage", "SendStreamingMessage"] {
+        for limit in [0, 1, 2] {
+            let task = json!({"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_COMPLETED"},"history":[{"messageId":"m","role":"ROLE_AGENT","contextId":"context-1","parts":[{"text":"hello"}]}]});
+            let stream = method == "SendStreamingMessage";
+            let mut params = if method == "GetTask" {
+                json!({"id":"task-1","historyLength":limit})
+            } else {
+                let mut p = message();
+                p["configuration"]["historyLength"] = json!(limit);
+                p
+            };
+            params["metadata"][if stream {
+                "test_result_stream"
+            } else {
+                "test_result"
+            }] = if method == "GetTask" {
+                task
+            } else {
+                json!({"task":task})
+            };
+            let response = test::call_service(&app, request(method, params, &owner)).await;
+            if stream {
+                assert_eq!(
+                    actix_web::body::to_bytes(response.into_body())
+                        .await
+                        .is_ok(),
+                    limit > 0
+                );
+            } else {
+                assert_eq!(
+                    response.status(),
+                    if limit > 0 {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::BAD_GATEWAY
+                    }
+                );
+            }
+        }
+    }
+    for status in [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_CANCELED",
+    ] {
+        let params = json!({"id":"task-1","metadata":{"test_result":{"id":"task-1","contextId":"context-1","status":{"state":status}}}});
+        assert_eq!(
+            test::call_service(&app, request("CancelTask", params, &owner))
+                .await
+                .status(),
+            if status == "TASK_STATE_CANCELED" {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        );
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn mixed_sse_endings_and_invalid_rpc_identifiers_follow_wire_contract() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for id in [json!(true), json!([]), json!({}), Value::Null] {
+        let req = test::TestRequest::post()
+            .uri("/a2a/test")
+            .insert_header(("a2a-version", "1.0"))
+            .set_json(json!({"jsonrpc":"2.0","id":id,"method":"SendMessage","params":message()}))
+            .to_request();
+        req.extensions_mut().insert(owner.clone());
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["id"], Value::Null);
+        assert_eq!(value["error"]["code"], -32600);
+    }
+    assert!(calls.lock().unwrap().is_empty());
+    for ending in [
+        "\n\n", "\r\r", "\r\n\r\n", "\n\r\n", "\r\n\r", "\r\r\n", "\r\n\n", "\n\r",
+    ] {
+        let mut params = message();
+        params["metadata"] = json!({"test_ending":ending,"test_result_stream":{"message":{"messageId":"m","contextId":"context-1","role":"ROLE_AGENT","parts":[{"text":"hello"}]}}});
+        let response =
+            test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+        let bytes = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        assert!(
+            std::str::from_utf8(&bytes).unwrap().contains("hello"),
+            "ending {ending:?}"
+        );
     }
     handle.stop(false).await;
 }

@@ -174,14 +174,16 @@ impl TaskOwners {
         {
             return Err("Invalid A2A message");
         }
-        if kind == "artifactUpdate"
-            && (identifier(object.pointer("/artifact/artifactId"))
-                .ok()
-                .flatten()
-                .is_none()
-                || !valid_parts(object.pointer("/artifact/parts")))
-        {
+        if kind == "artifactUpdate" && !valid_artifact(object.get("artifact")) {
             return Err("Invalid A2A artifact");
+        }
+        if kind == "task"
+            && let Some(artifacts) = object.get("artifacts")
+            && !artifacts
+                .as_array()
+                .is_some_and(|items| items.iter().all(|item| valid_artifact(Some(item))))
+        {
+            return Err("Invalid A2A task artifacts");
         }
         if expected_task.is_some_and(|expected| task != Some(expected))
             || expected_context
@@ -510,7 +512,11 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     {
         return error(
             StatusCode::BAD_REQUEST,
-            id,
+            if id.is_string() || id.is_number() {
+                id
+            } else {
+                Value::Null
+            },
             -32600,
             "Expected a JSON-RPC request with ID",
         );
@@ -548,6 +554,20 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         return error(StatusCode::OK, id, -32004, "Agent capability is disabled");
     }
     let params = &value["params"];
+    let history_length = if send {
+        params.pointer("/configuration/historyLength")
+    } else if method == "GetTask" {
+        params.get("historyLength")
+    } else {
+        None
+    };
+    let history_length = match history_length {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64() {
+            Some(value) => Some(value),
+            None => return error(StatusCode::BAD_REQUEST, id, -32602, "Invalid historyLength"),
+        },
+    };
     let return_immediately = match params.pointer("/configuration/returnImmediately") {
         None => false,
         Some(Value::Bool(value)) => *value,
@@ -816,9 +836,15 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                             if subscribe && !task_seen && terminal {
                                 Err(actix_web::error::ErrorBadGateway("Cannot subscribe to a terminal A2A task"))?;
                             }
+                            terminal |= result.get("task").or_else(|| result.get("statusUpdate"))
+                                .and_then(|task| task.pointer("/status/state")).and_then(Value::as_str)
+                                .is_some_and(|state| matches!(state, "TASK_STATE_INPUT_REQUIRED" | "TASK_STATE_AUTH_REQUIRED"));
                             task_seen = true;
                         }
                         if let Some(initial) = value.pointer("/result/task") {
+                            if !valid_history_length(initial, history_length) {
+                                Err(actix_web::error::ErrorBadGateway("A2A task exceeds requested historyLength"))?;
+                            }
                             let initial_task = identifier(initial.get("id")).ok().flatten().ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A task identifier"))?;
                             let initial_context = identifier(initial.get("contextId")).map_err(|_| actix_web::error::ErrorBadGateway("Invalid A2A context identifier"))?;
                             if expected_task.as_deref().is_some_and(|id| id != initial_task)
@@ -955,7 +981,19 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                     Some("TASK_STATE_UNSPECIFIED" | "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING")
                 )
             });
-        if !valid || premature {
+        let task = if send {
+            result.get("task")
+        } else {
+            Some(result)
+        };
+        let wrong_cancel = method == "CancelTask"
+            && result.pointer("/status/state").and_then(Value::as_str)
+                != Some("TASK_STATE_CANCELED");
+        if !valid
+            || premature
+            || wrong_cancel
+            || task.is_some_and(|task| !valid_history_length(task, history_length))
+        {
             return error(
                 StatusCode::BAD_GATEWAY,
                 id,
@@ -975,6 +1013,24 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         return error(StatusCode::BAD_GATEWAY, id, -32006, message);
     }
     response.body(bytes)
+}
+fn valid_artifact(value: Option<&Value>) -> bool {
+    value.is_some_and(|artifact| {
+        identifier(artifact.get("artifactId"))
+            .ok()
+            .flatten()
+            .is_some()
+            && valid_parts(artifact.get("parts"))
+    })
+}
+fn valid_history_length(task: &Value, limit: Option<u64>) -> bool {
+    limit.is_none_or(|limit| {
+        task.get("history").is_none_or(|history| {
+            history
+                .as_array()
+                .is_some_and(|history| history.len() as u64 <= limit)
+        })
+    })
 }
 fn valid_parts(value: Option<&Value>) -> bool {
     value.and_then(Value::as_array).is_some_and(|parts| {
@@ -1002,15 +1058,36 @@ fn identifier(value: Option<&Value>) -> Result<Option<&str>, ()> {
     }
 }
 fn event_boundary(bytes: &[u8], start: usize) -> Option<usize> {
-    (start..bytes.len()).find_map(|i| {
-        if bytes[i..].starts_with(b"\r\n\r\n") {
-            Some(i + 4)
-        } else if bytes[i..].starts_with(b"\n\n") || bytes[i..].starts_with(b"\r\r") {
-            Some(i + 2)
-        } else {
-            None
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i] != b'\r' && bytes[i] != b'\n' {
+            i += 1;
+            continue;
         }
-    })
+        // A CRLF is one line ending, including when the incremental scan starts
+        // at its LF byte. Each following line chooses its own ending.
+        if bytes[i] == b'\n' && i > 0 && bytes[i - 1] == b'\r' {
+            i += 1;
+            continue;
+        }
+        let first = if bytes[i..].starts_with(b"\r\n") {
+            2
+        } else {
+            1
+        };
+        let j = i + first;
+        if matches!(bytes.get(j), Some(b'\r' | b'\n')) {
+            return Some(
+                j + if bytes[j..].starts_with(b"\r\n") {
+                    2
+                } else {
+                    1
+                },
+            );
+        }
+        i = j;
+    }
+    None
 }
 
 #[cfg(test)]
