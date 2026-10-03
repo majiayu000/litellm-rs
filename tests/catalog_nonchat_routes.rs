@@ -1160,3 +1160,57 @@ async fn aggregator_errors_and_unverified_operations_fail_closed() {
         handle.stop(false).await;
     }
 }
+
+#[tokio::test]
+async fn compactifai_whisper_routes_only_to_transcription_and_preserves_errors() {
+    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        let (router, upstream, handle) = fixture("compactifai", status).await;
+        let provider = selected(&router, ProviderCapability::ChatCompletion);
+        let router = UnifiedRouter::default();
+        let model = "cai-whisper-large-v3-turbo-slim";
+        router.add_deployment(Deployment::new(
+            model.into(),
+            provider,
+            model.into(),
+            "public".into(),
+        ));
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::AudioTranslation,
+            ProviderCapability::TextToSpeech,
+            ProviderCapability::Embeddings,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        let request = TranscriptionRequest {
+            model: model.into(),
+            file: vec![1, 2],
+            filename: "sample.wav".into(),
+            language: None,
+            prompt: None,
+            response_format: None,
+            temperature: None,
+            timestamp_granularities: None,
+        };
+        let result = selected(&router, ProviderCapability::AudioTranscription)
+            .audio_transcription(request, RequestContext::default())
+            .await;
+        if status == StatusCode::OK {
+            assert_eq!(result.unwrap().duration, Some(1.0));
+        } else {
+            assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        handle.stop(false).await;
+    }
+}

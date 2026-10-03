@@ -129,7 +129,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `anyscale` | 待核验；本批未扩展非聊天声明 |
 | `bytez` | 待核验；本批未扩展非聊天声明 |
 | `comet_api` | 待核验；本批未扩展非聊天声明 |
-| `compactifai` | 待核验；本批未扩展非聊天声明 |
+| `compactifai` | Whisper 转写；一分钟最低计费同时用于预留/结算，其他模型不因此获得音频能力；见下方 |
 | `maritalk` | 待核验；本批未扩展非聊天声明 |
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
 | `yi` | 待核验；本批未扩展非聊天声明 |
@@ -137,3 +137,11 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
 选择器别名沿用 `canonical_catalog_name`，例如 hugging_face、aimlapi、ai21_chat 等不另建重复审核项。
+
+## CompactifAI 转录
+
+2026-10-03 核验，issue #1433。[官方模型卡](https://docs.compactif.ai/models/whisper_large_v3_turbo_slim/)确认 `cai-whisper-large-v3-turbo-slim`，[API 参考](https://docs.compactif.ai/api_reference/#audio-transcriptions)定义 multipart `/v1/audio/transcriptions`。现有配置可使用 `compactifai`，默认 base 为 `https://api.compactif.ai/v1`。只开放该模型的转写；它不作为 Chat、翻译或 TTS 候选。供应商其他聊天模型不因此获得转写能力。
+
+默认/JSON 请求上游 `verbose_json` 以取得 duration；该转换只为保留实际计费时长，沿用现有网关 JSON/verbose_json 响应范围，不宣称音频流式、SRT/VTT 或翻译支持。[官方定价](https://docs.compactif.ai/pricing/#speech-to-text-pricing)明确逐秒计费且至少一分钟。既有同一 time-pricing 入口对预算预留和结算都应用至少 60 秒，不增设配置；预留依旧使用现有文件大小时长估算，结算采用有效上游 duration。尚未提供内置价格时必须使用既有显式每秒价格配置，缺价拒绝，不把自定义测试费率当成官方价格。
+
+决策：适配既有 OpenAI multipart、Router 和 time pricing，不引入 SDK 或通用计费规则框架。接口原始依据与下载哈希见 [#1432 的先前审计](https://github.com/majiayu000/litellm-rs/pull/1432)；本节取代其中的 ASR 未接入状态。未调用供应商账户。HTTP 测试覆盖 multipart/duration、429、具体模型隔离；网关测试覆盖短/长音频、一分钟最低预留阻止超预算调用、缺价拒绝与实际费用结算。
