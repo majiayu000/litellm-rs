@@ -257,7 +257,7 @@ mod tests {
 
     // Locks the GitHub Models catalog policy: the full 16-model roster, the
     // transcribed pricing, and the provider capability profile. This uses
-    // Historical 0.6 metadata; provider availability is audited separately.
+    // historical 0.6 metadata; provider availability is audited separately.
     #[test]
     fn github_catalog_policy_locks_models_pricing_and_capabilities() {
         assert_eq!(GITHUB_CATALOG_MODELS.len(), 16);
