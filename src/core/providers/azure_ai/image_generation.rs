@@ -47,7 +47,7 @@ impl AzureAIImageHandler {
 
         // Build request
         let azure_request = json!({
-            "model": request.model.clone().unwrap_or_else(|| "flux-1.1-pro".to_string()),
+            "model": request.model.clone().unwrap_or_else(|| "FLUX-1.1-pro".to_string()),
             "prompt": request.prompt,
             "n": request.n.unwrap_or(1),
             "size": request.size.clone().unwrap_or_else(|| "1024x1024".to_string()),
