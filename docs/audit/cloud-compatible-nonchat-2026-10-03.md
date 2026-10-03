@@ -16,6 +16,8 @@
 
 ## 实现与验证范围
 
+Heroku 的 add-on `EMBEDDING_URL` 是主机地址，网关 API base 配置为 `${EMBEDDING_URL}/v1`，使既有 transport 追加 `/embeddings` 后与官方路径一致；区域/自定义端点同样适用。
+
 Nscale/OVHcloud/Heroku 均使用既有 `Provider::OpenAILike` 分派，模型名按现有 identity 处理，无新模型别名。Heroku 未知参数不吞掉；400 和 429/Retry-After 保留原错误合同。测试使用真实本地 HTTP 服务器而非只检查常量：三家 embedding 选择/请求/usage、Nscale image、Heroku 参数转换、不支持操作拒绝。网关测试确认缺价不等于免费、剩余预算不足不发上游请求、成功后按返回 2 tokens 结算。没有供应商账户或模型推理实调。
 
 原始官方页面下载及 SHA-256 列于下方，便于确定此次观察内容；不是复制供应商文档全文。由于网页可变，后续维护需重新核验。

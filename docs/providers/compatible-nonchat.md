@@ -59,7 +59,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 逐项官方链接、固定源码版本和剩余限制见 [本地非聊天协议审计](../audit/local-compatible-nonchat-2026-10-03.md)。实测均为本地 HTTP 模拟：覆盖 factory/Router、实际 JSON/multipart/二进制传输、模型与参数错误、429 Retry-After，以及本地模型缺价、预算不足和按真实 usage 结算。未安装模型、未运行 GPU 推理或供应商付费调用。
 
-第五批（#1415，核验 2026-10-03）补充 Nscale embeddings/images、OVHcloud embeddings 和 Heroku embeddings。Nscale 默认 base 修正为 `https://inference.api.nscale.com/v1`，OVHcloud 为 `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`；显式自定义 base 仍优先。Heroku 使用 add-on 对应的模型、URL 和 key，向量请求的 `encoding_format: float` 映射为官方 `raw`，`task_type` 映射为 `input_type`。仅核验文本输入和浮点向量；Heroku 的自定义维度、截断等非协议参数不静默删除，错误由上游返回。Nscale 图片使用 `model/prompt/n/size` 与 `b64_json` 响应；额外图片编辑、音频能力未声明。
+第五批（#1415，核验 2026-10-03）补充 Nscale embeddings/images、OVHcloud embeddings 和 Heroku embeddings。Nscale 默认 base 修正为 `https://inference.api.nscale.com/v1`，OVHcloud 为 `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`；显式自定义 base 仍优先。Heroku 使用 add-on 对应的模型和 key，网关 API base 必须配置为 `${EMBEDDING_URL}/v1`（例如 `https://us.inference.heroku.com/v1`），不能直接填写 add-on 给出的裸主机 URL；[官方示例](https://devcenter.heroku.com/articles/heroku-inference-api-v1-embeddings)在该变量后追加 `/v1/embeddings`。向量请求的 `encoding_format: float` 映射为官方 `raw`，`task_type` 映射为 `input_type`。仅核验文本输入和浮点向量；Heroku 的自定义维度、截断等非协议参数不静默删除，错误由上游返回。Nscale 图片使用 `model/prompt/n/size` 与 `b64_json` 响应；额外图片编辑、音频能力未声明。
 
 官方协议与剩余限制见 [云供应商非聊天审计](../audit/cloud-compatible-nonchat-2026-10-03.md)。Baseten 专用 BEI、Friendli 专用 embeddings/images、HF 原生多任务接口不能从兼容聊天地址推断可用。Friendli serverless 转写虽有兼容路径，其用量按 input/output tokens 表达，当前音频路由按秒计费，故仍需明确适配。Heroku 图片的 aspect_ratio/output_format 也尚未映射，不扩大支持声明。本批本地 HTTP 覆盖真实 factory/Router、请求映射、400/429、缺价拒绝、预算不足和实际 usage 结算；没有付费实调。
 
