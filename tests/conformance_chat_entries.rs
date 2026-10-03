@@ -33,7 +33,7 @@ use tokio::task::AbortHandle;
 
 const GROUP: &str = "conformance-chat";
 const REWRITE_UPSTREAM: &str = "gpt-4o-mini";
-const NON_STREAM_UPSTREAM: &str = "gpt-5.4-pro";
+const NON_STREAM_UPSTREAM: &str = "gpt-4o-mini";
 const STREAM_FALLBACK_UPSTREAM: &str = "gpt-4o";
 const MISSING_MODEL: &str = "missing-conformance-model";
 const AUDIO_ONLY: &str = "audio-only";
@@ -416,6 +416,46 @@ fn factory_provider(router: &UnifiedRouter, prefix: &str) -> litellm_rs::core::p
         .clone()
 }
 
+// The test needs a non-streaming deployment, not a false supplier capability claim.
+// GPT-5.4 Pro is Responses-only. Apply this fixture constraint to a real chat model
+// through the public extension API while retaining its existing HTTP transport.
+#[derive(Debug)]
+struct NonStreamingFixture {
+    inner: litellm_rs::core::providers::Provider,
+    models: Vec<litellm_rs::core::types::model::ModelInfo>,
+}
+impl litellm_rs::core::providers::ExternalProvider for NonStreamingFixture {
+    fn name(&self) -> &str {
+        "openai"
+    }
+    fn capabilities(&self) -> &'static [ProviderCapability] {
+        &[ProviderCapability::ChatCompletion]
+    }
+    fn models(&self) -> &[litellm_rs::core::types::model::ModelInfo] {
+        &self.models
+    }
+    fn chat_completion(
+        &self,
+        request: litellm_rs::core::types::chat::ChatRequest,
+        context: litellm_rs::core::types::context::RequestContext,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<litellm_rs::core::types::responses::ChatResponse, ProviderError>,
+    > {
+        Box::pin(self.inner.chat_completion(request, context))
+    }
+}
+fn non_streaming_fixture(router: &UnifiedRouter) -> litellm_rs::core::providers::Provider {
+    litellm_rs::core::providers::Provider::External(Arc::new(NonStreamingFixture {
+        inner: factory_provider(router, "non-stream-chat"),
+        models: vec![litellm_rs::core::types::model::ModelInfo {
+            id: NON_STREAM_UPSTREAM.into(),
+            capabilities: vec![ProviderCapability::ChatCompletion],
+            ..Default::default()
+        }],
+    }))
+}
+
 fn regroup(router: &UnifiedRouter) {
     let ids = router.list_deployments();
     let template = router
@@ -444,7 +484,7 @@ fn regroup(router: &UnifiedRouter) {
     rewrite.config = with_priority(10);
     let mut non_stream = Deployment::new(
         "non-stream-chat".into(),
-        factory_provider(router, "non-stream-chat"),
+        non_streaming_fixture(router),
         NON_STREAM_UPSTREAM.into(),
         GROUP.into(),
     );
@@ -479,7 +519,7 @@ fn regroup(router: &UnifiedRouter) {
     );
     let mut no_stream = Deployment::new(
         "no-stream-only".into(),
-        factory_provider(router, "non-stream-chat"),
+        non_streaming_fixture(router),
         NON_STREAM_UPSTREAM.into(),
         NO_STREAM_MODEL.into(),
     );

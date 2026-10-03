@@ -122,6 +122,66 @@ async fn stability_generation_uses_native_multipart_contract() {
 }
 
 #[tokio::test]
+async fn stability_current_catalog_rejects_replaced_sd3_identities() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for _ in 0..3 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            requests.push(read_http_request(&mut socket).await);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 8\r\nConnection: close\r\n\r\n\x89PNG\r\n\x1a\n").await.unwrap();
+        }
+        requests
+    });
+    let mut config = StabilityConfig::with_api_key("fixture-key");
+    config.base.api_base = Some(format!("http://{address}"));
+    config.base.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = StabilityProvider::new(config).unwrap();
+    let request = |model: &str| ImageGenerationRequest {
+        prompt: "a bird".into(),
+        model: Some(model.into()),
+        n: None,
+        size: None,
+        quality: None,
+        response_format: None,
+        style: None,
+        user: None,
+    };
+    let wrapped = Provider::Stability(provider.clone());
+    for model in ["sd3", "sd3-large", "sd3-large-turbo", "sd3-medium"] {
+        assert!(
+            !wrapped.supports_capability_for_model(model, &ProviderCapability::ImageGeneration)
+        );
+        assert!(matches!(
+            provider
+                .image_generation(request(model), RequestContext::default())
+                .await,
+            Err(ProviderError::ModelNotFound { .. })
+        ));
+    }
+    let current = ["sd3.5-large", "sd3.5-large-turbo", "sd3.5-medium"];
+    for model in current {
+        assert!(wrapped.supports_capability_for_model(model, &ProviderCapability::ImageGeneration));
+        assert!(!wrapped.supports_capability_for_model(model, &ProviderCapability::ImageEdit));
+        assert!(
+            provider
+                .image_generation(request(model), RequestContext::default())
+                .await
+                .is_ok()
+        );
+    }
+    for (http, model) in server.await.unwrap().iter().zip(current) {
+        assert!(http.starts_with("POST /v2beta/stable-image/generate/sd3 HTTP/1.1"));
+        assert!(http.contains(&format!("name=\"model\"\r\n\r\n{model}\r\n")));
+    }
+    assert_eq!(provider.models().len(), 6);
+    for model in provider.models() {
+        assert_eq!(model.supports_multimodal, model.id == "inpaint");
+    }
+}
+
+#[tokio::test]
 async fn stability_rejects_openai_style_before_network_access() {
     let mut config = StabilityConfig::with_api_key("stability-secret");
     config.base.api_base = Some("http://127.0.0.1:1".to_string());

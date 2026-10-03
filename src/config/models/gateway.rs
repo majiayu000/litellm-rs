@@ -378,14 +378,6 @@ impl GatewayConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         crate::config::validation::Validate::validate(self)?;
-        // Surface dead cache configuration at error level without blocking
-        // startup. `cache.enabled` itself is wired (the response cache is
-        // built in AppState and used by the chat and embedding routes), so
-        // only settings with no runtime effect, such as `semantic_cache`,
-        // produce a warning here.
-        for warning in self.cache.not_yet_implemented_warnings() {
-            tracing::error!("{}", warning);
-        }
         Ok(())
     }
 
@@ -420,12 +412,10 @@ impl GatewayConfig {
             "tracing" => self.monitoring.tracing.enabled,
             "health_checks" => true, // Always enabled
             "caching" => self.cache.enabled,
-            "semantic_cache" => self.cache.semantic_cache,
             "rate_limiting" => self.rate_limit.enabled,
             "enterprise" => self.enterprise.enabled,
             "sso" => self.enterprise.sso.is_some(),
             "audit_logging" => self.enterprise.audit_logging,
-            "advanced_analytics" => self.enterprise.advanced_analytics,
             _ => false,
         }
     }

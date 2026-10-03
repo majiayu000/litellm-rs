@@ -35,7 +35,7 @@ Recording methods: `record_memory_hit`, `record_memory_miss`, `record_redis_hit`
 
 ## CombinedCacheStats and Admin Endpoint
 
-`LLMCache::combined_stats()` returns `CombinedCacheStats { chat, embedding }` (src/core/cache/llm_cache.rs:497) with its own `total_hits` / `total_misses` / `hit_rate`. This is what `GET /admin/cache` serializes (`CacheAdminResponse.stats`) alongside Redis availability; `POST /admin/cache/clear` resets both layers (src/server/routes/admin.rs). The separate `CacheStats` in src/core/semantic_cache/types.rs (hits/misses/total_entries/avg_hit_similarity) belongs to the deprecated semantic cache only.
+`LLMCache::combined_stats()` returns `CombinedCacheStats { chat, embedding }` (src/core/cache/llm_cache.rs:497) with its own `total_hits` / `total_misses` / `hit_rate`. This is what `GET /admin/cache` serializes (`CacheAdminResponse.stats`) alongside Redis availability; `POST /admin/cache/clear` resets both layers (src/server/routes/admin.rs). The former semantic-cache `CacheStats` type has been removed.
 
 ## Collector Hooks
 

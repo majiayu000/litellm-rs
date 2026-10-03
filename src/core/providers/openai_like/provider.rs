@@ -405,7 +405,16 @@ impl OpenAILikeProvider {
                 .as_ref()
                 .map(|binding| binding.identity().wire_model().to_string()),
         };
-        let url = format!("{}/images/generations", self.config.get_api_base());
+        let base = self.config.get_api_base();
+        // NanoGPT publishes images at /v1, while embeddings/audio use /api/v1.
+        let image_base = if self.provider_name == "nanogpt" {
+            base.strip_suffix("/api/v1")
+                .map(|root| format!("{root}/v1"))
+                .unwrap_or(base)
+        } else {
+            base
+        };
+        let url = format!("{image_base}/images/generations");
         let headers = self.get_request_headers();
         let body = Some(
             serde_json::to_value(&request)

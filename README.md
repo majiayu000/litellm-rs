@@ -165,8 +165,7 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. Domain records and async batch helpers remain; the unreachable `BatchProcessor` has been removed. |
 | Former `core/webhooks` | removed | The unused library and `webhooks` feature have been removed from unreleased source. Budget-alert delivery and provider-native webhook fields remain separate. |
-| `core/semantic_cache` | remove | Deprecated but retained with `storage` during the 0.6 compatibility window; `cache.semantic_cache=true` remains rejected before the planned 0.7 removal. |
-| `core/analytics` | remove | Deprecated and default-off behind `analytics`, with removal planned for 0.7. |
+| Former `core/semantic_cache` and `core/analytics` | removed | Removed from unreleased source after the expired 0.7 deadline. Deterministic caching, request metrics and callbacks remain; see the migration guide for removed fields/features. |
 | `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy manager has been removed. Storage record types remain in use. |
 | `core/user_management` | internal | Domain records back current auth/storage paths. The unused `UserManager` and its `user-management` feature have been removed. |
 
@@ -271,15 +270,15 @@ a gateway video route.
 | Amazon SageMaker (`sagemaker`) | always | ✅ | – | – | – | – | SigV4 InvokeEndpoint; payload transformer is required and unknown schemas fail closed. |
 | Google Vertex AI (`vertex_ai`) | native factory (`providers-extra`) | ✅ | ✅ | ✅ | ✅ | – | Uses native Vertex auth and Google-specific URLs when `providers-extra` is enabled; otherwise explicitly unsupported. |
 | Google Gemini (`gemini`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native Google AI Studio Gemini auth; use `vertex_ai` for Vertex AI project/location credentials. |
-| Meta Llama API (`meta_llama`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
-| Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extra`, but runtime construction is catalog metadata. |
-| Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
+| Meta Llama API (`meta_llama`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
+| Vercel v0 (`v0`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
+| Amazon Nova (`amazon_nova`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
 | fal.ai (`fal_ai`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native Fal AI image-generation endpoints; chat and streaming are explicitly unsupported. |
 | Stability AI (`stability`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native v2beta multipart image generation and editing endpoints. |
 | Black Forest Labs (`black_forest_labs`) | native factory (`providers-extended`) | – | – | – | ✅ | – | Uses native asynchronous submit/poll image generation and Kontext editing. |
 | Replicate (`replicate`) | native factory (`providers-extended`) | ✅ | ✅ | – | ✅ | – | Uses native Replicate prediction lifecycle handling for chat, streaming, and image generation; explicitly unsupported without `providers-extended`. |
 | Ollama (`ollama`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native `/api/chat` NDJSON streaming, `/api/embed`, and model tags/show endpoints. Localhost defaults to private-network endpoint policy; explicit endpoints keep their configured policy. |
-| GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Native module retained behind `providers-extended`, but runtime construction is catalog metadata. |
+| GitHub Models (`github`) | catalog-only (`OpenAILike`) | ✅ | ✅ | – | – | – | Runtime construction uses catalog metadata; the unused native module has been removed from unreleased source. |
 | GitHub Copilot (`github_copilot`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native GitHub Copilot auth and model access when `providers-extended` is enabled; otherwise explicitly unsupported. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | passthrough | passthrough | passthrough | For self-hosted / unlisted OpenAI-compatible chat, embeddings, image, and audio endpoints. |
 
@@ -294,12 +293,6 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming use the
 **Local (no API key):**
 
 `vllm`, `hosted_vllm`, `lm_studio`, `llamafile`, `docker_model_runner`, `xinference`, `infinity`, `oobabooga`
-
-### Experimental / module-only
-
-The following modules exist under `src/core/providers/` (gated on `providers-extra` or `providers-extended`) but are **not wired into the unified `Provider` enum or the factory** today. They compile but cannot be selected through `create_provider`/`from_config_async`. Treat them as experimental scaffolding subject to change:
-
-`custom_api`
 
 For self-hosted or unlisted OpenAI-compatible endpoints, prefer the generic `openai_compatible` provider type instead.
 

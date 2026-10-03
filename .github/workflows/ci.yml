@@ -14,7 +14,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  FEATURES: "postgres sqlite redis s3 metrics tracing websockets analytics"
+  FEATURES: "postgres sqlite redis s3 metrics tracing websockets"
 
 jobs:
   library-default:
@@ -140,7 +140,7 @@ jobs:
           - name: postgres-redis-s3-observability
             features: "postgres,redis,s3,metrics,tracing"
           - name: current-ci-bundle
-            features: "postgres,sqlite,redis,s3,metrics,tracing,websockets,analytics"
+            features: "postgres,sqlite,redis,s3,metrics,tracing,websockets"
     steps:
       - uses: actions/checkout@v4
 

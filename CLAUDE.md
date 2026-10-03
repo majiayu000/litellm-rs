@@ -153,7 +153,7 @@ This is a **high-performance AI Gateway** written in Rust that provides OpenAI-c
 The codebase uses Cargo features extensively:
 - **Storage**: `postgres`, `sqlite`, `redis`, `s3`
 - **Monitoring**: `metrics`, `tracing` 
-- **Advanced**: `vector-db`, `websockets`, `analytics`, `enterprise`
+- **Advanced**: `vector-db`, `websockets`, `enterprise`
 - **Development**: Use `--all-features` flag for full functionality
 
 ## Database & Storage
@@ -161,7 +161,7 @@ The codebase uses Cargo features extensively:
 - **Primary DB**: PostgreSQL with Sea-ORM migrations
 - **Cache**: Redis for high-speed operations
 - **File storage**: S3-compatible object storage
-- **Vector DB**: Optional Qdrant integration for semantic caching
+- **Vector DB**: Optional Qdrant vector storage integration
 
 ## Testing Architecture
 
@@ -323,5 +323,5 @@ The `vector-db` feature (which includes `qdrant-client`) fails to build on docs.
 
 **Testing docs.rs compatibility locally**:
 ```bash
-env DOCS_RS=1 cargo doc --no-deps --features "postgres sqlite redis s3 metrics tracing websockets analytics"
+env DOCS_RS=1 cargo doc --no-deps --features "postgres sqlite redis s3 metrics tracing websockets"
 ```
