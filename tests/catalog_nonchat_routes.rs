@@ -50,7 +50,7 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
         .replace("/v3/openai", "/v1")
         .replace("/api/v3", "/v1");
     match path.as_str() {
-        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage": if req.path().starts_with("/compatible-mode/v1") { json!({"total_tokens":2}) } else { json!({"prompt_tokens":2,"total_tokens":2}) }})),
+        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage": if state.total_only || req.path().starts_with("/compatible-mode/v1") { json!({"total_tokens":2}) } else { json!({"prompt_tokens":2,"total_tokens":2}) }})),
         "/v1/images/generations" => HttpResponse::Ok().json(if state.image_url { json!({"created":1,"data":[{"url":"https://example.test/generated.png"}]}) } else { json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]}) }),
         "/v1/audio/speech" => {
             let request: Value = serde_json::from_slice(&body).unwrap();
@@ -59,32 +59,6 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
             HttpResponse::Ok().insert_header(("content-type", mime)).body("test-audio")
         },
         "/v1/audio/transcriptions" | "/v1/audio/translations" => HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0})),
-        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => {
-            let usage = if state.total_only {
-                json!({"total_tokens":2})
-            } else {
-                json!({"prompt_tokens":2,"total_tokens":2})
-            };
-            HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":usage}))
-        }
-        "/v1/images/generations" => {
-            HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]}))
-        }
-        "/v1/audio/speech" => {
-            let request: Value = serde_json::from_slice(&body).unwrap();
-            assert!(request.get("speed").is_none_or(|v| !v.is_null()));
-            let mime = if request["response_format"] == "wav" {
-                "audio/wav"
-            } else {
-                "audio/mpeg"
-            };
-            HttpResponse::Ok()
-                .insert_header(("content-type", mime))
-                .body("test-audio")
-        }
-        "/v1/audio/transcriptions" | "/v1/audio/translations" => {
-            HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0}))
-        }
         _ => HttpResponse::NotFound().finish(),
     }
 }
