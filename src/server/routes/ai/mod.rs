@@ -16,6 +16,7 @@ mod files;
 mod fine_tuning;
 mod gemini;
 mod images;
+pub(crate) mod messages;
 mod models;
 mod moderations;
 mod openai_errors;
@@ -234,6 +235,7 @@ pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
     let normalized = path.trim_end_matches('/');
 
     if normalized == "/v1/chat/completions"
+        || normalized == "/v1/messages"
         || (normalized.starts_with("/v1/engines/") && normalized.ends_with("/chat/completions"))
         || (normalized.starts_with("/openai/deployments/")
             && normalized.ends_with("/chat/completions"))
@@ -299,7 +301,7 @@ pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn is_openai_compatible_path(path: &str) -> bool {
-    operation_for_path(path).is_some()
+    operation_for_path(path).is_some_and(|operation| operation != "messages")
 }
 
 pub(crate) fn openai_gateway_error_response(error: &GatewayError) -> HttpResponse {
@@ -311,9 +313,27 @@ pub(crate) fn openai_internal_error_response(message: impl Into<String>) -> Http
 }
 
 fn openai_json_error_config(max_body_size: Option<usize>) -> web::JsonConfig {
-    let config = web::JsonConfig::default().error_handler(|error, _req| {
-        let response =
-            openai_errors::validation_error(format!("Invalid JSON request body: {error}"));
+    let config = web::JsonConfig::default().error_handler(|error, req| {
+        let cause = GatewayError::validation(format!("Invalid JSON request body: {error}"));
+        let response = if req.path() == "/v1/messages" {
+            if matches!(
+                &error,
+                actix_web::error::JsonPayloadError::Overflow { .. }
+                    | actix_web::error::JsonPayloadError::OverflowKnownLength { .. }
+            ) {
+                messages::error_response(&GatewayError::Provider(
+                    crate::core::providers::ProviderError::api_error(
+                        "anthropic",
+                        413,
+                        "Request body exceeds the configured size limit",
+                    ),
+                ))
+            } else {
+                messages::error_response(&cause)
+            }
+        } else {
+            openai_errors::gateway_error_response(&cause)
+        };
         InternalError::from_response(error, response).into()
     });
     match max_body_size {

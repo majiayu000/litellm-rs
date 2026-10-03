@@ -3284,6 +3284,7 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "lru",
+ "mime",
  "object_store",
  "parking_lot",
  "pastey",

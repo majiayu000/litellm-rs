@@ -28,7 +28,6 @@ pub mod azure_ai;
 pub mod bedrock;
 // Catalog Tier 1: bytez, cerebras.
 pub mod cloudflare;
-#[cfg(feature = "providers-extended")]
 pub mod cohere;
 pub mod databricks;
 // Catalog Tier 1: comet_api, compactifai.
@@ -67,7 +66,7 @@ pub mod ollama;
 pub mod oci;
 pub mod openai;
 pub mod openai_like;
-// Catalog Tier 1: openrouter, ovhcloud, perplexity, poe, qwen.
+// Catalog Tier 1: openrouter, ovhcloud, poe, qwen.
 #[cfg(feature = "providers-extended")]
 #[path = "black_forest_labs/mod.rs"]
 pub mod bfl;

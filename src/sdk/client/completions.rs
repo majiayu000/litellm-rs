@@ -123,9 +123,7 @@ impl LLMClient {
             crate::sdk::config::ProviderType::Google => {
                 self.call_google_api(provider, request).await
             }
-            // SP965-T010 links 0.7 removal follow-up for SDKError::ProviderError
-            #[allow(deprecated)]
-            _ => Err(SDKError::ProviderError(format!(
+            _ => Err(SDKError::NotSupported(format!(
                 "Provider type {:?} is not implemented in SDK client",
                 provider.provider_type
             ))),

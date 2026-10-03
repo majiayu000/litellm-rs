@@ -398,3 +398,6 @@ mod tests {
         assert!(invalid_order.validate(valid_fields).is_err());
     }
 }
+
+#[cfg(feature = "a2a")]
+pub mod a2a;

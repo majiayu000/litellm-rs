@@ -159,7 +159,7 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/guardrails` | wire | Default-on prompt-injection checks run before provider execution and on non-streaming output; `guardrails.enabled: false` is the explicit opt-out. |
 | `core/ip_access` | wire | Configured allow/block rules run as an outer Actix middleware and short-circuit before downstream side effects; empty/default rules allow all. |
 | `core/mcp` | feature-gated | `gateway,mcp` mounts authenticated Streamable HTTP at `/{server_name}/mcp` (`/mcp` for one enabled server). See [MCP gateway](docs/gateway/mcp.md) for configuration and stateless transport limits. Responses API MCP descriptors pass through independently. |
-| `core/a2a` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `a2a`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. |
+| `core/a2a` | experimental-gate | Opt-in `gateway,a2a` exposes authenticated A2A 1.0 agent cards, messages, task queries/cancellation and SSE. Task ownership is process-local; see [A2A gateway](docs/gateway/a2a.md). |
 | `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
@@ -198,6 +198,12 @@ construction, `core::router` for deployment management, and
 advanced types have been removed on the development branch.
 
 ## Provider Support
+
+Perplexity's old Sonar Chat Completions endpoint retired on 2026-09-27. The
+`perplexity` / `perplexity-ai` / `pplx` selectors are not currently dispatchable;
+the replacement Agent API requires a native protocol adapter. Historical prices
+remain available and do not establish callable models. See the
+[retirement audit](docs/audit/perplexity-sonar-retirement-2026-10-03.md).
 
 Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLAUDE.md#provider-tiers) for the engineering definition).
 
@@ -283,7 +289,7 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming use the
 
 **Cloud (`Bearer` auth via env var):**
 
-`groq`, `ai21`, `huggingface`, `baseten`, `together`, `together_ai`, `fireworks`, `fireworks_ai`, `perplexity`, `cerebras`, `openrouter`, `deepinfra`, `deepseek`, `novita`, `nvidia_nim`, `nebius`, `nscale`, `hyperbolic`, `featherless`, `galadriel`, `sambanova`, `heroku`, `friendliai`, `xai`, `moonshot`, `dashscope`, `qwen`, `baichuan`, `minimax`, `volcengine`, `xiaomi_mimo`, `zhipu`, `zai`, `lemonade`, `linkup`, `poe`, `wandb`, `nanogpt`, `aiml_api`, `aiml`, `aleph_alpha`, `anyscale`, `bytez`, `comet_api`, `compactifai`, `maritalk`, `siliconflow`, `yi`, `lambda_ai`, `ovhcloud`
+`groq`, `ai21`, `huggingface`, `baseten`, `together`, `together_ai`, `fireworks`, `fireworks_ai`, `cerebras`, `openrouter`, `deepinfra`, `deepseek`, `novita`, `nvidia_nim`, `nebius`, `nscale`, `hyperbolic`, `featherless`, `galadriel`, `sambanova`, `heroku`, `friendliai`, `xai`, `moonshot`, `dashscope`, `qwen`, `baichuan`, `minimax`, `volcengine`, `xiaomi_mimo`, `zhipu`, `zai`, `lemonade`, `linkup`, `poe`, `wandb`, `nanogpt`, `aiml_api`, `aiml`, `aleph_alpha`, `anyscale`, `bytez`, `comet_api`, `compactifai`, `maritalk`, `siliconflow`, `yi`, `lambda_ai`, `ovhcloud`
 
 **Local (no API key):**
 

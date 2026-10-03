@@ -68,8 +68,8 @@ fn test_model_detection() {
         deepseek_thinking::supports_thinking("deepseek-r1")
     );
     println!(
-        "DeepSeek Chat: {}",
-        deepseek_thinking::supports_thinking("deepseek-chat")
+        "DeepSeek Flash: {}",
+        deepseek_thinking::supports_thinking("deepseek-flash")
     );
 
     // OpenRouter detection

@@ -217,6 +217,18 @@ impl CallbackLifecycle {
         );
     }
 
+    pub(super) fn complete_pricing_usage(
+        &self,
+        usage: Option<&PricingUsage>,
+        outcome: &'static str,
+    ) {
+        self.complete(
+            usage.map(|usage| (usage.prompt_tokens, usage.completion_tokens)),
+            usage,
+            outcome,
+        );
+    }
+
     pub(super) fn fail(&self, _message: impl Into<String>, error_type: &'static str) {
         if !self.has_started() {
             return;

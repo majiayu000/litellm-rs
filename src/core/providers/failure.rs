@@ -27,7 +27,8 @@ pub struct ProviderFailureFacts {
     pub streaming_failure: bool,
     pub cancelled: bool,
     pub modeled_bedrock_retry: bool,
-    pub(super) legacy_retryable: bool,
+    // Coarse serialized error presentation; routing uses RetryPolicy instead.
+    pub(crate) legacy_retryable: bool,
     pub(super) legacy_retry_delay: Option<Duration>,
 }
 
@@ -134,12 +135,12 @@ impl From<&ProviderError> for ProviderFailureFacts {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::core::providers::bedrock::BedrockErrorMapper;
     use crate::core::router::RouterConfig;
     use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
+    use crate::utils::error::CanonicalError;
 
     #[test]
     fn facts_capture_rate_limit_retry_after_without_policy() {
@@ -265,7 +266,7 @@ mod tests {
             true
         );
         let api_408 = ProviderError::api_error(p, 408, m);
-        assert!(!api_408.is_retryable());
+        assert!(!api_408.canonical_retryable());
         assert_eq!(api_408.retry_delay(), None);
         case!(api_408, Timeout, 408, true);
         case!(ProviderError::api_error(p, 429, m), RateLimited, 429, true);

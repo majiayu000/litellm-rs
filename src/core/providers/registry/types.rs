@@ -274,8 +274,10 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::Perplexity,
         "perplexity",
         &["perplexity-ai", "pplx"],
-        ProviderDispatchKind::CatalogOpenAiLike,
-        true,
+        // Sonar Chat Completions retired 2026-09-27. Agent API is a
+        // different native protocol and has no runtime adapter here yet.
+        ProviderDispatchKind::UnsupportedEnum,
+        false,
     ),
     entry(
         ProviderType::Replicate,

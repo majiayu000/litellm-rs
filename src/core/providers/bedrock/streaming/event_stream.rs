@@ -167,6 +167,7 @@ impl BedrockStream {
 #[cfg(test)]
 mod strict_frame_tests {
     use super::*;
+    use crate::utils::error::CanonicalError;
 
     fn exception_message(exception_type: &str) -> EventStreamMessage {
         EventStreamMessage {
@@ -215,7 +216,6 @@ mod strict_frame_tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn maps_modeled_service_exceptions_to_structured_provider_errors() {
         let cases = [
             ("validationException", "invalid_request", None, false),
@@ -233,7 +233,11 @@ mod strict_frame_tests {
         for (exception_type, expected_category, expected_status, expected_retryable) in cases {
             let error = BedrockStream::check_stream_error(&exception_message(exception_type))
                 .expect_err("modeled exception must fail");
-            assert_eq!(error.is_retryable(), expected_retryable, "{exception_type}");
+            assert_eq!(
+                error.canonical_retryable(),
+                expected_retryable,
+                "{exception_type}"
+            );
             let (category, status) = match error {
                 ProviderError::InvalidRequest { .. } => ("invalid_request", None),
                 ProviderError::Authentication { .. } => ("authentication", None),
