@@ -154,6 +154,12 @@ impl Provider {
                     && LLMProvider::supports_capability(provider, capability)
             }
             #[cfg(feature = "providers-extended")]
+            Provider::Replicate(_) => {
+                crate::core::providers::replicate::models::get_replicate_registry()
+                    .get_model_spec(model)
+                    .is_some_and(|spec| spec.model_info.capabilities.contains(capability))
+            }
+            #[cfg(feature = "providers-extended")]
             Provider::FalAI(provider) => LLMProvider::models(provider)
                 .iter()
                 .any(|info| info.id == model && info.capabilities.contains(capability)),
@@ -184,6 +190,10 @@ impl Provider {
                 if capability == &ProviderCapability::GeminiGenerateContent =>
             {
                 openai_like_provider_supports_gemini(provider.name())
+            }
+            #[cfg(feature = "gateway")]
+            Provider::Bedrock(provider) if capability == &ProviderCapability::Responses => {
+                provider.supports_responses_model(model)
             }
             Provider::Voyage(provider) => provider.supports_capability_for_model(model, capability),
             _ => self.supports_capability(capability),
@@ -247,9 +257,29 @@ mod tests {
             &ProviderCapability::Embeddings,
         ));
         assert!(
-            provider
-                .supports_capability_for_model("dall-e-3", &ProviderCapability::ImageGeneration,)
+            provider.supports_capability_for_model(
+                "FLUX-1.1-pro",
+                &ProviderCapability::ImageGeneration,
+            )
         );
+        for model in [
+            "dall-e-3",
+            "gpt-4",
+            "command-r",
+            "command-r-plus",
+            "ai21-jamba-instruct",
+            "mistral-large-latest",
+        ] {
+            for capability in [
+                ProviderCapability::ChatCompletion,
+                ProviderCapability::ImageGeneration,
+            ] {
+                assert!(
+                    !provider.supports_capability_for_model(model, &capability),
+                    "retired/unverified model {model} advertised {capability:?}"
+                );
+            }
+        }
         for capability in [
             ProviderCapability::ChatCompletion,
             ProviderCapability::ChatCompletionStream,

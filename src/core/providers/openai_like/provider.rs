@@ -330,11 +330,15 @@ impl OpenAILikeProvider {
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         if matches!(
             self.provider_name.as_str(),
-            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim"
+            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim" | "heroku"
         ) && let Some(fields) = body.as_object_mut()
             && let Some(task_type) = fields.remove("task_type")
         {
             fields.insert("input_type".into(), task_type);
+        }
+        if self.provider_name == "heroku" && body["encoding_format"] == "float" {
+            // Heroku calls unencoded floating-point vectors "raw".
+            body["encoding_format"] = Value::String("raw".into());
         }
         if self.provider_name == "nvidia_nim"
             && let Some(fields) = body.as_object_mut()
@@ -401,7 +405,16 @@ impl OpenAILikeProvider {
                 .as_ref()
                 .map(|binding| binding.identity().wire_model().to_string()),
         };
-        let url = format!("{}/images/generations", self.config.get_api_base());
+        let base = self.config.get_api_base();
+        // NanoGPT publishes images at /v1, while embeddings/audio use /api/v1.
+        let image_base = if self.provider_name == "nanogpt" {
+            base.strip_suffix("/api/v1")
+                .map(|root| format!("{root}/v1"))
+                .unwrap_or(base)
+        } else {
+            base
+        };
+        let url = format!("{image_base}/images/generations");
         let headers = self.get_request_headers();
         let body = Some(
             serde_json::to_value(&request)

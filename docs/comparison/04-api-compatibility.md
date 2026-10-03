@@ -733,3 +733,21 @@ This work is in progress. Local integration tests, full checks and review must p
 The native OpenAI provider now sends `/v1/responses` requests to the upstream Responses endpoint and preserves native JSON fields and SSE event names, including tools, reasoning and extension fields. The gateway applies its existing authentication, routing, token limits, budget reservations, content checks, usage settlement and callbacks. OpenAI-compatible services retain the existing adapter until their native capability is verified separately.
 
 This implementation is not ready for release: it currently requires `store=false`, `background=false`, and no `previous_response_id`. Shared, owner-scoped lifecycle bindings and the exact provider/model endpoint matrix remain outstanding (parity tracker F06/F07). Native stored responses must not be enabled before those bindings exist. The first billing-safe scope is client function/custom tools and standard-tier token-priced output. Inline images/PDFs and uploaded file IDs use OpenAI’s processed-input token-count endpoint before reservation; generation retains the original native inputs. Hosted tools, mutable remote image/file URLs, prompt/conversation handles and nondefault service tiers are rejected before generation. See [native Responses billing boundaries](../providers/native-responses-billing.md) for evidence and limits.
+
+### Native OpenAI endpoint matrix (F06, unreleased)
+
+111 current OpenAI model IDs and exact documented snapshots have explicit endpoint
+contracts in `config/model_catalog_decisions.json`. Each contract links its official
+model card and records that document's digest. A snapshot inherits a contract only
+when the card lists that exact snapshot; name-prefix similarity is not evidence.
+
+Responses-only models (for example GPT-5.5 Pro and GPT-5.3 Codex) are routed to
+`/responses` and rejected by the typed Chat Completions path. Image/transcription
+models do not acquire chat support from a `gpt-` prefix. An OpenAI model without
+Responses support is rejected instead of silently entering the chat adapter.
+Other providers' compatibility adapters retain their documented behavior.
+
+Copilot authenticated model metadata and the verified Bedrock Runtime/Mantle
+endpoint/authentication matrix are implemented separately; see
+[native Responses routing](../providers/native-responses-routing.md). F07 lifecycle restrictions
+still remain on this branch. It does not establish account access or claim paid upstream validation.

@@ -57,6 +57,18 @@ impl OpenAIProvider {
             .get("model")
             .and_then(Value::as_str)
             .ok_or_else(|| ProviderError::invalid_request("openai", "model must be a string"))?;
+        let mapped_model = self.config.get_model_mapping(model);
+        let capability_model = self
+            .model_identity
+            .as_ref()
+            .and_then(|binding| binding.identity().capability_catalog_model())
+            .unwrap_or(&mapped_model);
+        if !self.model_supports_capability(capability_model, &ProviderCapability::Responses) {
+            return Err(ProviderError::invalid_request(
+                "openai",
+                format!("Model {capability_model} does not support native Responses"),
+            ));
+        }
         let wire_model = self
             .model_identity
             .as_ref()
@@ -291,6 +303,23 @@ impl OpenAIProvider {
         &self,
         request: ChatRequest,
     ) -> Result<Value, ProviderError> {
+        let mapped_model = self.config.get_model_mapping(&request.model);
+        let capability_model = self
+            .model_identity
+            .as_ref()
+            .and_then(|binding| binding.identity().capability_catalog_model())
+            .unwrap_or(&mapped_model);
+        if let Some(spec) = self.model_registry.get_model_spec(capability_model)
+            && !spec
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::ChatCompletion)
+        {
+            return Err(ProviderError::invalid_request(
+                "openai",
+                format!("Model {capability_model} does not support Chat Completions"),
+            ));
+        }
         let mut openai_request = serde_json::json!({
             "model": self.config.get_model_mapping(&request.model),
             "messages": request.messages
@@ -452,14 +481,7 @@ impl OpenAIProvider {
         capability: &ProviderCapability,
     ) -> bool {
         if let Some(model_spec) = self.model_registry.get_model_spec(model_id) {
-            if capability == &ProviderCapability::Responses {
-                model_spec
-                    .model_info
-                    .capabilities
-                    .contains(&ProviderCapability::ChatCompletion)
-            } else {
-                model_spec.model_info.capabilities.contains(capability)
-            }
+            model_spec.model_info.capabilities.contains(capability)
         } else {
             false
         }

@@ -71,10 +71,6 @@ pub fn default_cache_max_size() -> usize {
     1000
 }
 
-pub fn default_similarity_threshold() -> f64 {
-    0.95
-}
-
 pub fn default_min_requests() -> u32 {
     10
 }

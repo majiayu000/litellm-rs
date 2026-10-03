@@ -228,9 +228,9 @@
       "yi-medium"
     ],
     "total_model_count": 4569,
-    "catalog_decision_revision": "model-retirement-review-20261003",
-    "catalog_decision_source_sha256": "a0fea9220123c9e62ea7f3909799af86fb0d8c362ae4fd7d8e7b44dfa791a4eb",
-    "catalog_authority_sha256": "878b70b0d386551e858aadd6428ff70a8723e1d6c5a8d45dc599bf336a8d5753",
+    "catalog_decision_revision": "responses-endpoint-and-retirement-review-20261003",
+    "catalog_decision_source_sha256": "f11f42da8a76fe12351bc183c14eec261a23e52b33467853ba05b0830a47d583",
+    "catalog_authority_sha256": "fa7187381bc90127da44179afdee681cfcd00ab1556f980f9dfb099082425db1",
     "catalog_authority_entry_count": 4569,
     "catalog_authority_enforced_providers": [
       "azure",
@@ -299,9 +299,9 @@
         "unreviewed": 0
       },
       "azure_ai": {
-        "callable": 36,
-        "pricing_only": 41,
-        "unreviewed": 64
+        "callable": 35,
+        "pricing_only": 47,
+        "unreviewed": 59
       },
       "azure_text": {
         "callable": 0,

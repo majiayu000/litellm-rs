@@ -96,8 +96,6 @@ cache:
   enabled: false
   ttl: 3600
   max_size: 1000
-  semantic_cache: false
-  similarity_threshold: 0.95
 
 pricing:
   # Bundled pricing data is cwd-independent and available offline, so known
@@ -126,4 +124,3 @@ enterprise:
   enabled: false
   sso: null
   audit_logging: false
-  advanced_analytics: false

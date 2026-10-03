@@ -1476,12 +1476,11 @@
       },
       "CacheAdminResponse": {
         "type": "object",
-        "required": ["success", "status", "cache_enabled", "semantic_cache_enabled", "message"],
+        "required": ["success", "status", "cache_enabled", "message"],
         "properties": {
           "success": { "type": "boolean" },
           "status": { "type": "string", "enum": ["enabled", "unsupported"] },
           "cache_enabled": { "type": "boolean" },
-          "semantic_cache_enabled": { "type": "boolean" },
           "message": { "type": "string" },
           "stats": { "$ref": "#/components/schemas/CombinedCacheStats" },
           "redis_available": { "type": "boolean" }
