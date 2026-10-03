@@ -31,7 +31,7 @@ fn test_separate_system_messages_no_system() {
 fn message_carrier_preserves_signed_redacted_and_tool_order() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
-    let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+    let mut request = ChatRequest::new("claude-sonnet-4-5-20250929");
     request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
     request.messages.push(ChatMessage {
         role: MessageRole::Assistant,
@@ -76,7 +76,7 @@ fn message_carrier_preserves_signed_redacted_and_tool_order() {
 fn message_carrier_normalizes_visible_and_empty_string_content() {
     let client = AnthropicClient::new(AnthropicConfig::new_test("test-key")).unwrap();
     for (content, expected_len) in [(Some("visible answer"), 2), (None, 1)] {
-        let mut request = ChatRequest::new("claude-sonnet-4-20250514");
+        let mut request = ChatRequest::new("claude-sonnet-4-5-20250929");
         request.thinking = Some(crate::core::types::thinking::ThinkingConfig::new().enabled());
         request.messages.push(ChatMessage {
             role: MessageRole::Assistant,
@@ -179,7 +179,7 @@ fn test_anthropic_transform_messages_preserves_assistant_text_with_tool_use() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
     let model_spec = get_anthropic_registry()
-        .get_model_spec("claude-3-opus-20240229")
+        .get_model_spec("claude-opus-4-5-20251101")
         .unwrap();
 
     let messages = vec![ChatMessage {
@@ -203,7 +203,7 @@ fn test_anthropic_transform_messages_preserves_assistant_text_with_tool_use() {
     let transformed = client
         .transform_messages(
             messages,
-            "claude-3-opus-20240229",
+            "claude-opus-4-5-20251101",
             Some(model_spec),
             &Default::default(),
         )
@@ -223,7 +223,7 @@ fn test_anthropic_transform_messages_tool_role_to_tool_result() {
     let config = AnthropicConfig::new_test("test-key");
     let client = AnthropicClient::new(config).unwrap();
     let model_spec = get_anthropic_registry()
-        .get_model_spec("claude-3-opus-20240229")
+        .get_model_spec("claude-opus-4-5-20251101")
         .unwrap();
 
     let messages = vec![ChatMessage {
@@ -240,7 +240,7 @@ fn test_anthropic_transform_messages_tool_role_to_tool_result() {
     let transformed = client
         .transform_messages(
             messages,
-            "claude-3-opus-20240229",
+            "claude-opus-4-5-20251101",
             Some(model_spec),
             &Default::default(),
         )

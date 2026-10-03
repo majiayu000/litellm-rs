@@ -11,7 +11,7 @@ fn test_model_capabilities() {
     assert!(caps_35.supports_function_calling);
     assert!(!caps_35.supports_parallel_function_calling);
 
-    let caps_claude = ModelUtils::get_model_capabilities("claude-3-opus");
+    let caps_claude = ModelUtils::get_model_capabilities("claude-opus-5-5");
     assert!(caps_claude.supports_function_calling);
     assert!(caps_claude.supports_vision);
 }
@@ -53,8 +53,8 @@ fn test_base_model_extraction() {
 #[test]
 fn test_model_validation() {
     assert!(ModelUtils::is_valid_model("gpt-4"));
-    assert!(ModelUtils::is_valid_model("claude-3-opus"));
-    assert!(ModelUtils::is_valid_model("gemini-2.0-flash"));
+    assert!(!ModelUtils::is_valid_model("claude-3-opus"));
+    assert!(!ModelUtils::is_valid_model("gemini-2.0-flash"));
     assert!(ModelUtils::is_valid_model("gemini-3.1-pro-preview"));
     assert!(!ModelUtils::is_valid_model("unknown-model-xyz"));
 }
@@ -86,7 +86,19 @@ fn test_compatible_models() {
     assert!(openai_models.contains(&"gpt-4".to_string()));
 
     let anthropic_models = ModelUtils::get_compatible_models_for_provider("anthropic");
-    assert!(anthropic_models.contains(&"claude-3-opus".to_string()));
+    assert!(anthropic_models.contains(&"claude-sonnet-5-5".to_string()));
+    assert!(
+        !anthropic_models
+            .iter()
+            .any(|id| id.starts_with("claude-3-") || id == "claude-2")
+    );
+    let google_models = ModelUtils::get_compatible_models_for_provider("google");
+    assert!(google_models.contains(&"gemini-3.7-flash".to_string()));
+    assert!(
+        !google_models
+            .iter()
+            .any(|id| id.starts_with("gemini-1.") || id.starts_with("gemini-2.0"))
+    );
 
     let unknown_models = ModelUtils::get_compatible_models_for_provider("unknown");
     assert!(unknown_models.is_empty());
@@ -111,4 +123,23 @@ fn test_recommended_temperature() {
         ModelUtils::get_recommended_temperature("gemini-3.1-pro-preview"),
         0.8
     );
+}
+
+#[test]
+fn gemini_model_helpers_reject_retired_and_unregistered_ids() {
+    for model in [
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-3.7-flash-made-up",
+    ] {
+        for prefix in ["", "google/", "gemini/"] {
+            assert!(!ModelUtils::is_valid_model(&format!("{prefix}{model}")));
+        }
+        assert!(ModelUtils::validate_model_with_provider(model, "google").is_err());
+    }
+    for model in crate::core::providers::gemini::supported_models() {
+        assert!(ModelUtils::is_valid_model(&model), "{model}");
+        assert!(ModelUtils::is_valid_model(&format!("google/{model}")));
+        assert!(ModelUtils::validate_model_with_provider(&model, "google").is_ok());
+    }
 }

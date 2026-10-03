@@ -115,7 +115,7 @@ impl LLMClient {
     }
 }
 
-fn sdk_request_to_core(model: &str, request: SdkChatRequest) -> Result<CoreChatRequest> {
+pub(super) fn sdk_request_to_core(model: &str, request: SdkChatRequest) -> Result<CoreChatRequest> {
     let messages = request
         .messages
         .into_iter()

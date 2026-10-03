@@ -357,7 +357,7 @@ impl LLMProvider for AnthropicProvider {
         let health_check_model = if self.client.uses_compatible_model_allow_list() {
             self.supported_models.first().map(|model| model.id.clone())
         } else {
-            Some("claude-3-haiku-20240307".to_string())
+            Some("claude-haiku-4-5-20251001".to_string())
         };
         let Some(model) = health_check_model else {
             return HealthStatus::Unhealthy;
@@ -501,8 +501,8 @@ mod tests {
         let config = AnthropicConfig::new_test("test-key");
         let provider = AnthropicProvider::new(config).unwrap();
 
-        assert!(provider.supports_model("claude-3-5-sonnet-20241022"));
-        assert!(provider.supports_model("claude-3-haiku-20240307"));
+        assert!(provider.supports_model("claude-sonnet-4-5-20250929"));
+        assert!(provider.supports_model("claude-haiku-4-5-20251001"));
         assert!(!provider.supports_model("gpt-4"));
     }
 

@@ -40,7 +40,7 @@ data:
         timeout: 30
         max_retries: 3
         models:
-          - "claude-sonnet-4-20250514"
+          - "claude-sonnet-5-5"
         tags:
           - "backup"
         enabled: true

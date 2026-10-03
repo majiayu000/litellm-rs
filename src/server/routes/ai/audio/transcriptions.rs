@@ -45,6 +45,7 @@ pub async fn audio_transcriptions(
     let mut prompt: Option<String> = None;
     let mut response_format: Option<String> = None;
     let mut temperature: Option<f32> = None;
+    let mut timestamp_granularities = Vec::new();
 
     while let Some(item) = payload.next().await {
         let mut field = match item {
@@ -103,6 +104,17 @@ pub async fn audio_transcriptions(
                 Ok(_) => {}
                 Err(e) => return Ok(upload_error_response(e)),
             },
+            "timestamp_granularities[]" => match read_text_field(&mut field).await {
+                Ok(value) if matches!(value.as_str(), "word" | "segment") => {
+                    timestamp_granularities.push(value)
+                }
+                Ok(_) => {
+                    return Ok(openai_errors::validation_error(
+                        "timestamp_granularities[] must be word or segment",
+                    ));
+                }
+                Err(e) => return Ok(upload_error_response(e)),
+            },
             "temperature" => match read_text_field(&mut field).await {
                 Ok(value) => match parse_optional_f32_field("temperature", &value) {
                     Ok(parsed) => temperature = parsed,
@@ -143,7 +155,8 @@ pub async fn audio_transcriptions(
         prompt,
         response_format,
         temperature,
-        timestamp_granularities: None,
+        timestamp_granularities: (!timestamp_granularities.is_empty())
+            .then_some(timestamp_granularities),
     };
 
     let requested_model = model;

@@ -124,8 +124,7 @@ impl VertexAIProvider {
         let model = super::parse_vertex_model(&request.model);
         let is_catalog_gemini =
             super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
-        let is_legacy_gemini = super::is_exact_legacy_vertex_gemini_model(&request.model);
-        let is_gemini = is_catalog_gemini || is_legacy_gemini;
+        let is_gemini = is_catalog_gemini;
 
         // Transform request based on model type
         let (endpoint, body) = if is_gemini {
@@ -253,6 +252,11 @@ impl VertexAIProvider {
         model: &str,
         messages: &[Value],
     ) -> Result<usize, VertexAIError> {
+        if super::parse_vertex_model(model).is_gemini()
+            && !super::is_vertex_gemini_catalog_model(model, self.config.enable_experimental)
+        {
+            return Err(ProviderError::model_not_found("vertex_ai", model));
+        }
         let url = self.count_tokens_url(model);
 
         let body = serde_json::json!({

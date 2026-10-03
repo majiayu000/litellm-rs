@@ -3,13 +3,9 @@
 //! Support for Google AI Studio and Vertex AI Gemini model series
 //!
 //! # Supported Models
-//! - Gemini 3.5 Flash (latest)
-//! - Gemini 3.1 Flash / Pro Preview
-//! - Gemini 2.5 Pro / Flash
-//! - Gemini 2.0 Flash
-//! - Gemini 1.5 Pro
-//! - Gemini 1.5 Flash
-//! - Gemini 1.0 Pro
+//! See [`supported_models`] for the current Developer API catalog, including
+//! Gemini 3.8/3.7/3.6 Flash, supported Gemini 3.x variants, and 2.5 Pro/Flash/Lite.
+//! Retired 1.x/2.0 and retired preview IDs are not callable.
 //!
 //! # Features
 //! - Multimodal support (text, images, videos, audio)
