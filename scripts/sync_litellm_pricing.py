@@ -74,7 +74,14 @@ GEMINI_PROMO_MODELS = frozenset(
         "gemini/gemini-3.8-flash",
     )
 )
+# Ark model pricing documents paid embeddings; these legacy rows lack a
+# verified current USD rate. Missing prices are intentional, not free service.
 OFFICIAL_OVERRIDE_REMOVALS = {
+    "doubao-embedding": ("input_cost_per_token", "output_cost_per_token"),
+    "doubao-embedding-large": ("input_cost_per_token", "output_cost_per_token"),
+    "doubao-embedding-large-text-240915": ("input_cost_per_token", "output_cost_per_token"),
+    "doubao-embedding-large-text-250515": ("input_cost_per_token", "output_cost_per_token"),
+    "doubao-embedding-text-240715": ("input_cost_per_token", "output_cost_per_token"),
     "gpt-5.5-pro": GPT_PRO_TIER_FIELDS,
     "gpt-5.5-pro-2026-04-23": GPT_PRO_TIER_FIELDS,
 }
@@ -84,6 +91,11 @@ FORBIDDEN_PRICING_FIELDS = OFFICIAL_OVERRIDE_REMOVALS
 # when an official first-party source is newer or more expressive. Keep this
 # mapping narrow: upstream remains authoritative for every unlisted field/row.
 OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
+    "doubao-embedding": {},
+    "doubao-embedding-large": {},
+    "doubao-embedding-large-text-240915": {},
+    "doubao-embedding-large-text-250515": {},
+    "doubao-embedding-text-240715": {},
     "mistral-small-2603": {
         "input_cost_per_token": 0.00000015,
         "output_cost_per_token": 0.00000060,
@@ -668,7 +680,10 @@ def apply_official_overrides(
         overlay_has_promo_signature = overlay is not None and all(
             overlay.get(field) == expected for field, expected in patch.items()
         )
-        original = overlay if overlay is not None else source_entries.get(model)
+        # Removal-only overrides must retain fresh non-pricing source metadata.
+        original = (
+            overlay if overlay is not None and patch else source_entries.get(model, overlay)
+        )
         if promo_expired and overlay_has_promo_signature:
             original = source_entries.get(model)
         if original is None:
