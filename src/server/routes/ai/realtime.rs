@@ -498,7 +498,7 @@ async fn relay(
     let mut failure = false;
     let mut error_type = "server_error";
     let mut session_output_limit = rates.max_output;
-    lease.finish_neutral(0);
+    lease.cancel_response();
     let outcome: Result<(), String> = async {
         loop {
             tokio::select! {
