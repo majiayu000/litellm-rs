@@ -226,7 +226,6 @@ tracing = ["dep:tracing-subscriber"]
 # modules; gateway+mcp also mounts configured MCP Streamable HTTP routes.
 a2a = []
 mcp = ["serde_json/arbitrary_precision"]
-webhooks = []
 
 # JSON Schema validation for MCP tool parameters
 mcp-validation = ["dep:jsonschema", "mcp"]
@@ -239,13 +238,13 @@ websockets = []
 enterprise = ["vector-db"]
 
 # Full feature set
-full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "a2a", "mcp-validation", "webhooks", "cloud-secrets", "providers-extra", "providers-extended", "runway-media"]
+full = ["gateway", "postgres", "redis", "s3", "metrics", "tracing", "vector-db", "websockets", "a2a", "mcp-validation", "cloud-secrets", "providers-extra", "providers-extended", "runway-media"]
 
 # Metadata
 [package.metadata.docs.rs]
 # Exclude vector-db feature because qdrant-client fails on docs.rs read-only filesystem
 all-features = false
-features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "a2a", "mcp-validation", "webhooks", "providers-extra", "providers-extended", "runway-media"]
+features = ["gateway", "postgres", "sqlite", "redis", "s3", "metrics", "tracing", "websockets", "a2a", "mcp-validation", "providers-extra", "providers-extended", "runway-media"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.playground]

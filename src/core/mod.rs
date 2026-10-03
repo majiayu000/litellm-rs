@@ -62,12 +62,3 @@ pub mod types;
 pub mod user_management; // Experimental module-only user management; see subsystem_registry.
 #[cfg(feature = "gateway")]
 pub mod virtual_keys; // Experimental module-only virtual keys; see subsystem_registry.
-#[cfg_attr(
-    not(test),
-    deprecated(
-        since = "0.6.0",
-        note = "core::webhooks is a default-off compatibility surface scheduled for removal in 0.7.0"
-    )
-)]
-#[cfg(feature = "webhooks")]
-pub mod webhooks; // Experimental module-only webhooks; see subsystem_registry.

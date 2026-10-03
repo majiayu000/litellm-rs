@@ -164,7 +164,7 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. Domain records and async batch helpers remain; the unreachable `BatchProcessor` has been removed. |
-| `core/webhooks` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `webhooks`; it is not a gateway runtime capability and is scheduled for 0.7 removal. |
+| Former `core/webhooks` | removed | The unused library and `webhooks` feature have been removed from unreleased source. Budget-alert delivery and provider-native webhook fields remain separate. |
 | Former `core/semantic_cache` and `core/analytics` | removed | Removed from unreleased source after the expired 0.7 deadline. Deterministic caching, request metrics and callbacks remain; see the migration guide for removed fields/features. |
 | `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy manager has been removed. Storage record types remain in use. |
 | `core/user_management` | internal | Domain records back current auth/storage paths. The unused `UserManager` and its `user-management` feature have been removed. |
@@ -200,13 +200,15 @@ advanced types have been removed on the development branch.
 
 Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLAUDE.md#provider-tiers) for the engineering definition).
 
-- **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The current crate runtime exposes chat completions and chat streaming for these providers; embeddings, images, audio, and other non-chat endpoints are not forwarded yet.
+- **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The runtime supports chat and streaming plus explicitly verified embeddings, images and audio capabilities for selected providers; see [compatible non-chat support](docs/providers/compatible-nonchat.md). Capability declarations do not imply that every model supports every endpoint.
 - **Tier 2 — code-based**: providers with custom request/response handling, auth signing, or streaming. Wired into the `Provider` enum and the factory. Some Tier 2 builders are feature-gated.
 
-Router deployments use the closed `Provider` enum. Implementing `LLMProvider`
-alone does not make a third-party provider routeable; use the generic
-OpenAI-compatible path for compatible endpoints, or wire a code-based provider
-into the enum, dispatch, registry metadata, and factory.
+External Rust providers implement `ExternalProvider` and register through
+`Provider::External(Arc::new(provider))`, `Deployment::new`, and
+`UnifiedRouter::add_deployment`, without editing the internal enum. See the
+[external provider integration tests](tests/external_provider_registration.rs)
+for capability, health, error and streaming behavior. This is an in-process API;
+OpenAI-compatible servers can use the existing configuration path.
 
 > The provider and legacy adapter matrices below are validated against the provider registry and Tier 1 catalog. The source of truth for Tier 1 entries is [`catalog.rs`](./src/core/providers/registry/catalog.rs); Tier 2 identity and dispatch metadata lives in [`src/core/providers/registry/types.rs`](./src/core/providers/registry/types.rs), with construction branches in [`src/core/providers/factory/registry.rs`](./src/core/providers/factory/registry.rs). Legacy adapter availability lives in [`src/core/providers/registry/support_matrix.rs`](./src/core/providers/registry/support_matrix.rs). `passthrough` means a retained adapter forwards the call to the upstream OpenAI-compatible endpoint without per-provider transformation.
 
@@ -247,7 +249,7 @@ a gateway video route.
 | OpenAI (`openai`) | always | ✅ | ✅ | ✅ | ✅ | ✅ | Reference implementation. |
 | Anthropic (`anthropic`) | always | ✅ | ✅ | – | – | – | Native Anthropic messages API. |
 | Mistral (`mistral`) | always | ✅ | ✅ | passthrough | – | – | Native client. |
-| Cloudflare Workers AI (`cloudflare`) | always | ✅ | – | – | – | – | Native client with account-id auth; streaming and embeddings currently return `NotSupported`. |
+| Cloudflare Workers AI (`cloudflare`) | always | ✅ | ✅ | – | – | – | Official compatible chat endpoint with account-id auth; model-gated tools/vision and native SSE usage/errors. Embeddings remain unsupported. |
 | Deepgram (`deepgram`) | always | – | – | – | – | ✅ | Native speech-to-text and text-to-speech REST transport. |
 | ElevenLabs (`elevenlabs`) | always | – | – | – | – | ✅ | Native speech-to-text and text-to-speech REST transport. |
 | Cohere (`cohere`) | native factory (`providers-extended`) | ✅ | ✅ | ✅ | – | – | Uses native Cohere `/v2/chat` and `/v2/embed`; the concrete provider also exposes a `/v1/rerank` helper. Explicitly unsupported without `providers-extended`. |
@@ -276,7 +278,7 @@ a gateway video route.
 
 ### Tier 1 — catalog providers (OpenAI-compatible, always available)
 
-All entries below route through `OpenAILikeProvider`. Chat and streaming work for any endpoint that follows OpenAI's `/chat/completions` SSE protocol. Embeddings, images, audio, and other non-chat endpoints are not exposed through this path today, even when the upstream provider offers them.
+All entries below route through `OpenAILikeProvider`. Chat and streaming use the compatible `/chat/completions` protocol. Selected providers also expose verified non-chat capabilities listed in [compatible non-chat support](docs/providers/compatible-nonchat.md); other capabilities fail explicitly.
 
 **Cloud (`Bearer` auth via env var):**
 

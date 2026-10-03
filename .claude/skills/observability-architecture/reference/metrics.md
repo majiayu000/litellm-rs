@@ -104,11 +104,10 @@ Cardinality is bounded by design: `model_bucket` comes from `unpriced_model_buck
 `unknown` and `outcome` to `reject_preflight` / `candidate_excluded` / `fallback_settled` /
 `unknown`. Only the free-form `provider` label is escaped at render time.
 
-## Deprecated Library Surfaces
+## Removed legacy surfaces
 
-`core::observability::MetricsCollector` (which renders legacy `litellm_requests_total`,
-`litellm_errors_total`, `litellm_cache_hits_total`, `litellm_cache_misses_total`,
-`litellm_provider_health`) is a deprecated library-only compatibility surface scheduled for
-removal in 0.7 — it does not feed `/metrics`. The wired observability handle is
-`RuntimeObservability = core::integrations::CallbackDispatcher`
-(`src/core/subsystem_registry.rs`). Do not build new alerts on `litellm_*` series.
+The former `core::observability::MetricsCollector` and its legacy `litellm_*`
+series have been removed from unreleased source after the 0.7 deadline. They
+never fed `/metrics`. Use the wired `RuntimeObservability` callback dispatcher
+and the metrics paths described above. Configuration redaction remains in
+`core::observability`; this is not a change to published v0.7.0 artifacts.
