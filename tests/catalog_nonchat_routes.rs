@@ -1334,6 +1334,7 @@ async fn baichuan_rejects_truncated_batches_before_dispatch() {
 
 #[tokio::test]
 async fn baichuan_balance_429_is_quota_and_rate_429_preserves_retry_after() {
+    use litellm_rs::utils::error::CanonicalError;
     let (router, upstream, handle) = fixture("baichuan", StatusCode::TOO_MANY_REQUESTS).await;
     let provider = selected(&router, ProviderCapability::Embeddings);
     for (message, quota) in [
