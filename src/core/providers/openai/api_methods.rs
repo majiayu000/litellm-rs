@@ -334,13 +334,15 @@ pub(crate) async fn execute_text_to_speech(
 ) -> Result<SpeechResponse, OpenAIError> {
     validate_outbound_headers(&headers, provider, "speech")?;
     let response_format = request.response_format.as_deref().unwrap_or("mp3");
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": request.model,
         "input": request.input,
         "voice": request.voice,
         "response_format": response_format,
-        "speed": request.speed,
     });
+    if let Some(speed) = request.speed {
+        body["speed"] = serde_json::json!(speed);
+    }
     let client = BaseHttpClient::new_for_provider_no_redirect(provider, base)?;
     let response = apply_provider_headers(
         client.post(format!("{}/audio/speech", api_base.trim_end_matches('/')))?,
