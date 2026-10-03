@@ -55,6 +55,9 @@ pub(super) async fn connect(
         return Ok(super::openai_errors::gateway_error_response(&error));
     }
     let output_limit = context::api_key_max_tokens_per_request(&req)?;
+    if output_limit == Some(0) {
+        return Ok(denied("Realtime output is forbidden by key policy"));
+    }
     let runtime = state.pin_runtime();
     let jwt_token = match crate::server::middleware::extract_auth_method_with_api_key_header(
         req.headers(),
@@ -132,6 +135,7 @@ pub(super) async fn connect(
                     upstream,
                     rates,
                     provider.name().to_owned(),
+                    openai.config.get_model_mapping(&model),
                     model,
                     timeout,
                     initial,
@@ -140,7 +144,7 @@ pub(super) async fn connect(
         },
     )
     .await;
-    let ((upstream, rates, provider, model, timeout, initial), lease) = match selected {
+    let ((upstream, rates, provider, wire_model, model, timeout, initial), lease) = match selected {
         Ok(selected) => selected,
         Err(error) => return Ok(super::openai_errors::gateway_error_response(&error)),
     };
@@ -168,6 +172,7 @@ pub(super) async fn connect(
             timeout,
             requests_per_minute,
             query.model.clone(),
+            wire_model,
             jwt_token,
         )
         .await;
@@ -356,7 +361,13 @@ async fn open_upstream(
     Ok(WebSocketStream::from_raw_socket(upgraded, Role::Client, Some(ws_config)).await)
 }
 
-fn prepare_event(value: &mut Value, rates: &Rates, active: bool) -> Result<bool, &'static str> {
+fn prepare_event(
+    value: &mut Value,
+    rates: &Rates,
+    active: bool,
+    public_model: &str,
+    wire_model: &str,
+) -> Result<bool, &'static str> {
     let kind = value["type"]
         .as_str()
         .ok_or("Realtime event type is required")?;
@@ -373,8 +384,21 @@ fn prepare_event(value: &mut Value, rates: &Rates, active: bool) -> Result<bool,
             let options = value[field]
                 .as_object_mut()
                 .ok_or("Realtime options must be an object")?;
-            if options.contains_key("model") {
-                return Err("Realtime model cannot change within a session");
+            if let Some(model) = options.get("model") {
+                if creates
+                    || !model
+                        .as_str()
+                        .is_some_and(|model| model == public_model || model == wire_model)
+                {
+                    return Err("Realtime model cannot change within a session");
+                }
+                options.remove("model");
+            }
+            if options
+                .get("max_output_tokens")
+                .is_some_and(|limit| limit == "inf")
+            {
+                options.insert("max_output_tokens".into(), json!(rates.max_output));
             }
             if !creates && options.get("type").is_some_and(|v| v != "realtime") {
                 return Err("Only realtime sessions are supported");
@@ -464,6 +488,7 @@ async fn relay(
     timeout: Duration,
     requests_per_minute: Option<u32>,
     public_model: String,
+    wire_model: String,
     jwt_token: Option<String>,
 ) {
     let mut pending: Option<Pending> = None;
@@ -481,7 +506,8 @@ async fn relay(
                 event = input.next() => match event {
                     Some(Ok(actix_ws::AggregatedMessage::Text(text))) => {
                         let mut value: Value = serde_json::from_str(&text).map_err(|_| { error_type = "invalid_request_error"; "Invalid Realtime JSON" })?;
-                        let creates = match prepare_event(&mut value, &rates, pending.is_some()) {
+                        let unbounded_output = value["response"]["max_output_tokens"] == "inf";
+                        let creates = match prepare_event(&mut value, &rates, pending.is_some(), &public_model, &wire_model) {
                             Ok(creates) => creates,
                             Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"invalid_request_error","message":message,"event_id":value.get("event_id")}}).to_string(), timeout).await?; continue; }
                         };
@@ -507,13 +533,15 @@ async fn relay(
                                     let owner = state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?;
                                     if !owner.is_some_and(|owner| owner.is_active()) { return Err("Realtime API key owner is no longer authorized".into()); }
                                 }
-                                context::enforce_key_model_and_token_limits(&key, &public_model, value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok())).map_err(|_| "Realtime model or output policy denied")?;
+                                context::enforce_key_model_and_token_limits(&key, &public_model, if unbounded_output { None } else { value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok()) }).map_err(|_| "Realtime model or output policy denied")?;
                                 output_limit = context::api_key_output_limit(&key).map_err(|_| "Invalid Realtime key policy")?.map_or(output_limit, |limit| limit.min(output_limit));
                                 key_rpm = key.rate_limits.as_ref().and_then(|limits| limits.rpm).or(requests_per_minute);
                                 if let Some(budget_id) = crate::auth::api_key_budget_id(&key) { context.set_api_key_budget_id(budget_id); } else { context.clear_api_key_budget_id(); }
                             }
                             if output_limit == 0 { return Err("Realtime output is forbidden by current key policy".into()); }
-                            if value["response"].get("max_output_tokens").is_none() {
+                            if unbounded_output {
+                                value["response"]["max_output_tokens"] = json!(output_limit);
+                            } else if value["response"].get("max_output_tokens").is_none() {
                                 value["response"]["max_output_tokens"] = json!(session_output_limit.min(output_limit));
                             }
                             if let Some(rpm) = key_rpm
@@ -532,8 +560,10 @@ async fn relay(
                                     value["event_id"] = json!(event_id);
                                     response_event_id = Some(event_id);
                                     pending = Some(reservation);
+                                    // No trusted terminal usage may arrive; admission retains the reserved upper bound.
+                                    tokens = rates.max_input as u64 + effective_output as u64;
                                 },
-                                Err(message) => { lease.finish_neutral(0); send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
+                                Err(message) => { lease.cancel_response(); send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
                             }
                         }
                         tokio::time::timeout(timeout, upstream.send(Message::Text(value.to_string().into()))).await.map_err(|_| { failure = true; "Realtime upstream write timeout" })?.map_err(|_| { failure = true; "Realtime upstream write failed" })?;
@@ -593,6 +623,7 @@ async fn relay(
                                 lease.complete_response(0, Some(&ProviderError::api_error("openai", status, value["error"].to_string())));
                             }
                             response_event_id = None;
+                            tokens = 0;
                         }
                         tokio::time::timeout(timeout, downstream.text(text.to_string())).await.map_err(|_| "Realtime downstream write timeout")?.map_err(|_| "Client disconnected")?;
                     }
@@ -632,13 +663,13 @@ async fn relay(
         )
         .await;
     }
-    if failure {
-        lease.finish_failure_with_tokens(
-            &ProviderError::network("openai", "Realtime transport failed"),
-            tokens,
-        );
+    let error = ProviderError::network("openai", "Realtime transport failed");
+    if tokens > 0 {
+        lease.finish_interrupted(tokens, failure.then_some(&error));
+    } else if failure {
+        lease.finish_failure_with_tokens(&error, 0);
     } else {
-        lease.finish_neutral(tokens);
+        lease.finish_neutral(0);
     }
 }
 

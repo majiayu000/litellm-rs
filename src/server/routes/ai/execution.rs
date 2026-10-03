@@ -119,6 +119,27 @@ impl StreamingDeploymentLease {
         self.release();
     }
 
+    #[cfg(feature = "websockets")]
+    pub(super) fn cancel_response(&mut self) {
+        self.release();
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn finish_interrupted(&mut self, tokens_used: u64, error: Option<&ProviderError>) {
+        if self.finalized {
+            return;
+        }
+        self.deployment.record_interrupted_usage(tokens_used);
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle(&hold, tokens_used);
+        }
+        if let Some(error) = error {
+            self.complete_failure(error, 0);
+        } else {
+            self.release();
+        }
+    }
+
     pub(super) fn deployment_id(&self) -> &str {
         self.deployment.id.as_str()
     }

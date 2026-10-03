@@ -104,3 +104,14 @@ The principal tradeoff is conservative per-response budget admission instead
 of speculative automatic-turn charging. Local tests cover bidirectional events,
 authentication, budget/scope rejection, close propagation and modality/cache
 costs. Real provider acceptance remains unverified without an account call.
+
+Interrupted responses without trusted terminal usage retain one deployment RPM
+and the reserved input/output token upper bound in TPM, without penalizing a
+provider for a client disconnect. These are conservative admission counters,
+not measured token usage. Budget rejection before forwarding cancels deployment
+admission. Zero-output key policies are rejected before deployment selection.
+The protocol's `max_output_tokens: "inf"` maps to the pinned model/current key
+maximum; an unchanged public or wire model in `session.update` is accepted and
+stripped, while model changes remain rejected. See the official
+[session lifecycle](https://developers.openai.com/api/docs/guides/realtime-conversations#session-lifecycle-events)
+and [output limit](https://developers.openai.com/api/reference/cli/resources/realtime/subresources/calls/methods/accept).

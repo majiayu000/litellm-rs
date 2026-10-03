@@ -48,12 +48,12 @@ async fn explicit_manual_scope_and_output_policy() {
         json!({"type":"response.create","response":{"max_output_tokens":99999}}),
         json!({"type":"conversation.item.create","item":{"content":[{"type":"input_image"}]}}),
     ] {
-        assert!(prepare_event(&mut event, &rates, false).is_err());
+        assert!(prepare_event(&mut event, &rates, false, "pinned", "wire").is_err());
     }
     let mut event = json!({"type":"response.create","response":{"tools":[{"type":"function","name":"weather"}]}});
-    assert!(prepare_event(&mut event, &rates, false).unwrap());
+    assert!(prepare_event(&mut event, &rates, false, "pinned", "wire").unwrap());
     assert!(event["response"].get("max_output_tokens").is_none());
-    assert!(prepare_event(&mut event, &rates, true).is_err());
+    assert!(prepare_event(&mut event, &rates, true, "pinned", "wire").is_err());
 }
 async fn upstream(
     req: HttpRequest,
@@ -552,7 +552,8 @@ async fn upstream_handshake_status_and_error_detail_are_preserved() {
 
 #[actix_web::test]
 async fn client_disconnect_closes_upstream_and_records_reserved_fallback() {
-    let (state, url, key, calls, handles) = fixture().await;
+    let (state, url, key, calls, handles) =
+        fixture_with_config(|config| config.gateway.providers[0].rpm = 1).await;
     state.budget_limits.providers.set_provider_limit(
         "openai",
         ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
@@ -593,6 +594,33 @@ async fn client_disconnect_closes_upstream_and_records_reserved_fallback() {
     })
     .await
     .expect("disconnect must settle and close the upstream");
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        deployment.state.tpm_current.load(Ordering::Relaxed),
+        rates().max_input as u64 + rates().max_output as u64
+    );
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    let mut request = url.clone().into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("x-api-key", key.parse().unwrap());
+    let parsed = url::Url::parse(&url).unwrap();
+    let tcp = tokio::net::TcpStream::connect((parsed.host_str().unwrap(), parsed.port().unwrap()))
+        .await
+        .unwrap();
+    let error = tokio_tungstenite::client_async(request, tcp)
+        .await
+        .unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("expected RPM rejection")
+    };
+    assert_eq!(response.status().as_u16(), 429);
     for handle in handles {
         handle.stop(false).await;
     }
@@ -1609,6 +1637,113 @@ async fn completed_responses_survive_failed_budget_settlement() {
         0
     );
     drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn infinite_output_and_pinned_session_models_reach_upstream() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    for model in ["gpt-realtime-mini", "gpt-realtime-mini-mapped"] {
+        client.send(Message::Text(json!({"type":"session.update","session":{"model":model,"max_output_tokens":"inf"}}).to_string().into())).await.unwrap();
+        assert_eq!(next_json(&mut client).await["type"], "session.updated");
+    }
+    key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":64,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+    state.storage.db().update_api_key(&key).await.unwrap();
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"max_output_tokens":"inf"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    for kind in [
+        "response.created",
+        "response.output_audio.delta",
+        "response.function_call_arguments.done",
+        "response.done",
+    ] {
+        assert_eq!(next_json(&mut client).await["type"], kind);
+    }
+    let events = calls.lock().unwrap().clone();
+    for event in events
+        .iter()
+        .filter(|event| event["type"] == "session.update")
+        .skip(1)
+    {
+        assert!(event["session"].get("model").is_none());
+        assert_eq!(event["session"]["max_output_tokens"], rates().max_output);
+    }
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event["type"] == "response.create")
+            .unwrap()["response"]["max_output_tokens"],
+        64
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"session.update","session":{"model":"other-model"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "invalid_request_error"
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn zero_output_keys_do_not_acquire_or_penalize_deployments() {
+    let (state, _, raw, calls, handles) = fixture().await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":0,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+    state.storage.db().update_api_key(&key).await.unwrap();
+    let app = test::init_service(crate::server::http::HttpServer::create_app(web::Data::new(
+        state.clone(),
+    )))
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/v1/realtime?model=gpt-realtime-mini")
+            .insert_header(("x-api-key", raw))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), actix_web::http::StatusCode::FORBIDDEN);
+    assert!(calls.lock().unwrap().is_empty());
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
     for handle in handles {
         handle.stop(false).await;
     }
