@@ -93,17 +93,62 @@ impl TaskOwners {
             return Ok(());
         }
         let result = value.get("result").ok_or("Missing A2A result")?;
-        let object = result
-            .get("task")
-            .or_else(|| result.get("message"))
-            .or_else(|| result.get("statusUpdate"))
-            .or_else(|| result.get("artifactUpdate"))
-            .unwrap_or(result);
-        let task = object
-            .get("taskId")
-            .or_else(|| object.get("id"))
-            .and_then(Value::as_str);
-        let context = object.get("contextId").and_then(Value::as_str);
+        let (object, kind) = if let Some(task) = result.get("task") {
+            (task, "task")
+        } else if let Some(message) = result.get("message") {
+            (message, "message")
+        } else if let Some(update) = result.get("statusUpdate") {
+            (update, "statusUpdate")
+        } else if let Some(update) = result.get("artifactUpdate") {
+            (update, "artifactUpdate")
+        } else {
+            (result, "task")
+        };
+        // The identity field belongs to the response variant, never to arbitrary
+        // extra fields supplied by an upstream sharing several callers' tasks.
+        if !object.is_object()
+            || (kind == "task" && object.get("taskId").is_some())
+            || (kind != "task" && object.get("id").is_some())
+        {
+            return Err("Ambiguous A2A response identity");
+        }
+        let task = identifier(object.get(if kind == "task" { "id" } else { "taskId" }))
+            .map_err(|_| "Invalid A2A task identifier")?;
+        let context =
+            identifier(object.get("contextId")).map_err(|_| "Invalid A2A context identifier")?;
+        if context.is_none() || (kind != "message" && task.is_none()) {
+            return Err("Missing A2A task/context identifiers");
+        }
+        if matches!(kind, "task" | "statusUpdate")
+            && object
+                .pointer("/status/state")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            return Err("Missing A2A task status");
+        }
+        if kind == "message"
+            && (identifier(object.get("messageId")).ok().flatten().is_none()
+                || object.get("role").and_then(Value::as_str) != Some("ROLE_AGENT")
+                || object
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .is_none_or(|parts| parts.is_empty()))
+        {
+            return Err("Invalid A2A message");
+        }
+        if kind == "artifactUpdate"
+            && (identifier(object.pointer("/artifact/artifactId"))
+                .ok()
+                .flatten()
+                .is_none()
+                || object
+                    .pointer("/artifact/parts")
+                    .and_then(Value::as_array)
+                    .is_none_or(|parts| parts.is_empty()))
+        {
+            return Err("Invalid A2A artifact");
+        }
         if expected_task.is_some_and(|expected| task != Some(expected))
             || expected_context.is_some_and(|expected| context != Some(expected))
         {
@@ -115,18 +160,6 @@ impl TaskOwners {
                 id.map(|id| (binding.to_vec(), kind.to_owned(), id.to_owned()))
             })
             .collect();
-        if result.get("message").is_some()
-            && (identifier(object.get("messageId")).ok().flatten().is_none() || context.is_none())
-        {
-            return Err("Invalid A2A message identifiers");
-        }
-        if ids.is_empty()
-            || ids
-                .iter()
-                .any(|(_, _, id)| id.is_empty() || id.len() > 4096)
-        {
-            return Err("Invalid A2A task/context identifiers");
-        }
         let mut entries = self
             .entries
             .lock()
@@ -359,6 +392,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     let method = value.get("method").and_then(Value::as_str).unwrap_or("");
     let send = matches!(method, "SendMessage" | "SendStreamingMessage");
     let stream = matches!(method, "SendStreamingMessage" | "SubscribeToTask");
+    let subscribe = method == "SubscribeToTask";
     if !send && !matches!(method, "GetTask" | "CancelTask" | "SubscribeToTask") {
         return error(
             StatusCode::OK,
@@ -367,9 +401,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             "A2A method not supported by this gateway",
         );
     }
-    if stream && !agent.capabilities.streaming
-        || method == "CancelTask" && !agent.capabilities.task_cancellation
-    {
+    if stream && !agent.capabilities.streaming {
         return error(StatusCode::OK, id, -32004, "Agent capability is disabled");
     }
     let params = &value["params"];
@@ -437,6 +469,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     }
     if send
         && (!message.is_object()
+            || message.get("role").and_then(Value::as_str) != Some("ROLE_USER")
             || message
                 .get("messageId")
                 .and_then(Value::as_str)
@@ -450,7 +483,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             StatusCode::BAD_REQUEST,
             id,
             -32602,
-            "Message ID and parts are required",
+            "Client ROLE_USER, message ID and parts are required",
         );
     }
     let client =
@@ -572,6 +605,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             let mut buffer = Vec::new();
             let mut scan_from = 0;
             let mut task_seen = false;
+            let mut completed = false;
             let mut expected_task = task.clone();
             let mut expected_context = context.clone();
             'events: loop {
@@ -599,7 +633,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                         if !terminal {
                             let result = value.get("result").ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A stream result"))?;
                             let variants = ["task", "message", "statusUpdate", "artifactUpdate"].iter().filter(|key| result.get(**key).is_some()).count();
-                            if variants != 1 || (!task_seen && result.get("task").is_none() && result.get("message").is_none())
+                            if variants != 1 || (!task_seen && result.get("task").is_none() && (subscribe || result.get("message").is_none()))
                                 || (task_seen && (result.get("task").is_some() || result.get("message").is_some())) {
                                 Err(actix_web::error::ErrorBadGateway("Invalid A2A stream sequence"))?;
                             }
@@ -622,6 +656,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                         }
                         owners.observe(&binding, &principal, &value, expected_task.as_deref(), expected_context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
                         if terminal {
+                            completed = true;
                             buffer.clear();
                             yield web::Bytes::from(frame);
                             break 'events;
@@ -633,7 +668,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 scan_from = buffer.len().saturating_sub(3);
                 if buffer.len() > limit { Err(actix_web::error::ErrorBadGateway("A2A event too large"))?; }
             }
-            if !buffer.is_empty() { Err(actix_web::error::ErrorBadGateway("Incomplete A2A event"))?; }
+            if !buffer.is_empty() || !completed { Err(actix_web::error::ErrorBadGateway("A2A stream ended before a final response"))?; }
         };
         return response.streaming::<_, actix_web::Error>(events);
     }

@@ -209,6 +209,10 @@ impl AgentConfig {
         {
             return Err("A2A HTTP gateway requires an A2A agent and positive timeout; provider adapters, agent billing/limits and push notifications are not supported".into());
         }
+        if !self.url.starts_with("https://") && (self.api_key.is_some() || !self.headers.is_empty())
+        {
+            return Err("A2A credentials and static headers require an HTTPS upstream".into());
+        }
         for media in self
             .capabilities
             .input_types

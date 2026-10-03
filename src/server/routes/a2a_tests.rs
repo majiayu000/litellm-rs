@@ -12,6 +12,9 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             .contains("forbidden-first-id")
     );
     let body: Value = serde_json::from_slice(&body).unwrap();
+    if let Some(result) = body.pointer("/params/metadata/test_result") {
+        return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":result}));
+    }
     if body.pointer("/params/metadata/test_bad_envelope") == Some(&Value::Bool(true)) {
         return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"error":null,"result":{"task":{"id":"orphan","contextId":"orphan-context"}}}));
     }
@@ -29,6 +32,8 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":{"message":{"messageId":"reply","taskId":"task-1","contextId":"context-1"}}}));
         }
         if case == "idle" {
+            let mut initial = initial.clone();
+            initial["result"]["task"]["status"]["state"] = json!("TASK_STATE_COMPLETED");
             return HttpResponse::Ok()
                 .insert_header(("content-type", "text/event-stream"))
                 .streaming(async_stream::stream! {
@@ -156,7 +161,10 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
         "SendStreamingMessage" | "SubscribeToTask" => {
             let first = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}});
             let last = json!({"jsonrpc":"2.0","id":body["id"],"result":{"artifactUpdate":{"taskId":"task-1","contextId":"context-1","artifact":{"artifactId":"one","parts":[{"text":"你好"}]},"lastChunk":true}}});
-            let bytes = format!("data: {first}\r\n\r\ndata: {last}\r\n\r\n").into_bytes();
+            let terminal = json!({"jsonrpc":"2.0","id":body["id"],"result":{"statusUpdate":{"taskId":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_COMPLETED"}}}});
+            let bytes =
+                format!("data: {first}\r\n\r\ndata: {last}\r\n\r\ndata: {terminal}\r\n\r\n")
+                    .into_bytes();
             // Single-byte frames exercise UTF-8 and CRLF split across network chunks.
             return HttpResponse::Ok()
                 .insert_header(("content-type", "Text/Event-Stream; charset=utf-8"))
@@ -201,7 +209,7 @@ async fn fixture() -> (web::Data<AppState>, Calls, actix_web::dev::ServerHandle)
     let mut state = server.state().clone();
     let mut agent = AgentConfig::new("test", &url).with_api_key("upstream-test");
     agent.capabilities.streaming = true;
-    agent.capabilities.task_cancellation = true;
+    agent.capabilities.task_cancellation = false;
     config.gateway.a2a_agents.insert("test".into(), agent);
     let mut runtime = state.pin_runtime().as_ref().clone();
     runtime.config = Arc::new(config);
@@ -365,7 +373,7 @@ async fn anonymous_production_route_requires_authentication() {
 #[test]
 async fn ownership_rejects_collisions_expiry_and_account_changes() {
     let owners = TaskOwners::default();
-    let value = json!({"result":{"task":{"id":"one","contextId":"ctx"}}});
+    let value = json!({"result":{"task":{"id":"one","contextId":"ctx","status":{"state":"TASK_STATE_WORKING"}}}});
     owners
         .observe(b"account-1", "alice", &value, None, None, None)
         .unwrap();
@@ -545,7 +553,7 @@ async fn config_validation_and_export_do_not_expose_agent_credentials() {
         .observe(
             b"account",
             "alice",
-            &json!({"result":{"message":{"messageId":"reply","contextId":"reply-context","parts":[{"text":"done"}]}}}),
+            &json!({"result":{"message":{"messageId":"reply","contextId":"reply-context","role":"ROLE_AGENT","parts":[{"text":"done"}]}}}),
             None,
             None,
             None,
@@ -1000,4 +1008,108 @@ async fn enabled_agents_require_an_authentication_method() {
     );
     config.gateway.a2a_agents.get_mut("test").unwrap().enabled = false;
     config.gateway.validate().unwrap();
+}
+
+#[actix_web::test]
+async fn response_variant_identity_and_required_fields_are_checked_before_ownership() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for result in [
+        json!({"task":{"id":"other-task","taskId":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}),
+        json!({"task":{"id":"task-1","contextId":"context-1"}}),
+        json!({"task":{"id":"task-1","contextId":"context-1","status":{}}}),
+        json!({"message":{"id":"other-task","taskId":"task-1","messageId":"reply","contextId":"context-1","role":"ROLE_AGENT","parts":[{"text":"bad"}]}}),
+        json!({"message":{"messageId":"reply","contextId":"context-1","parts":[{"text":"bad"}]}}),
+        json!({"message":{"messageId":"reply","contextId":"context-1","role":"ROLE_AGENT","parts":[]}}),
+    ] {
+        let mut params = message();
+        params["metadata"] = json!({"test_result":result});
+        let response = test::call_service(&app, request("SendMessage", params, &user())).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["code"], -32006);
+        assert!(state.a2a_tasks.entries.lock().unwrap().is_empty());
+    }
+    let owner = user();
+    let _: Value =
+        test::call_and_read_body_json(&app, request("SendMessage", message(), &owner)).await;
+    let response=test::call_service(&app,request("GetTask",json!({"id":"task-1","metadata":{"test_result":{"id":"other-task","taskId":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}}),&owner)).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(
+        !state
+            .a2a_tasks
+            .entries
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|(_, _, id)| id == "other-task")
+    );
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn stream_eof_before_terminal_state_is_an_error() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let mut params = message();
+    params["metadata"] = json!({"test_contract":"early-eof"});
+    let response = test::call_service(&app, request("SendStreamingMessage", params, &user())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        actix_web::body::to_bytes(response.into_body())
+            .await
+            .is_err()
+    );
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn client_cannot_impersonate_agent_role() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for role in [json!("ROLE_AGENT"), Value::Null] {
+        for method in ["SendMessage", "SendStreamingMessage"] {
+            let mut params = message();
+            params["message"]["role"] = role.clone();
+            let response = test::call_service(&app, request(method, params, &user())).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+    assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn credentials_require_encrypted_upstream_transport() {
+    for headers in [false, true] {
+        let mut agent = AgentConfig::new("test", "http://example.com/rpc");
+        if headers {
+            agent.headers.insert("x-secret".into(), "test".into());
+        } else {
+            agent.api_key = Some("test".into());
+        }
+        assert!(
+            agent
+                .validate_http_gateway("test")
+                .unwrap_err()
+                .contains("HTTPS")
+        );
+        agent.url = "https://example.com/rpc".into();
+        agent.validate_http_gateway("test").unwrap();
+    }
 }
