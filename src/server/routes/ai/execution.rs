@@ -94,7 +94,15 @@ impl StreamingDeploymentLease {
 
     #[cfg(feature = "websockets")]
     pub(super) fn record_provider_event_failure(&mut self, error: &ProviderError) {
-        self.complete_failure(error, 0);
+        let inferred = infer_cooldown_reason(error);
+        let reason = match inferred {
+            CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
+                inferred
+            }
+            _ => CooldownReason::ConsecutiveFailures,
+        };
+        self.router
+            .record_failure_with_reason_for_deployment(&self.deployment, reason);
     }
 
     #[cfg(feature = "websockets")]

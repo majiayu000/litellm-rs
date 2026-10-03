@@ -2395,6 +2395,50 @@ async fn session_update_errors_penalize_only_provider_failures() {
 }
 
 #[actix_web::test]
+async fn failed_session_update_preserves_an_active_response_lease() {
+    let (state, url, raw, _, handles) = fixture().await;
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"hold":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.created");
+    client.send(Message::Text(json!({"type":"session.update","session":{"instructions":"reject-session:server_error"}}).to_string().into())).await.unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "server_error"
+    );
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+    client
+        .send(Message::Text(
+            json!({"type":"input_audio_buffer.clear"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.done");
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
 async fn realtime_two_preserves_infinite_wire_limit_and_reserves_model_maximum() {
     let (state, url, raw, calls, handles) = fixture_with_config(|c| {
         let p = &mut c.gateway.providers[0];
