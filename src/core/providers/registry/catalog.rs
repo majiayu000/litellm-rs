@@ -577,12 +577,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "DASHSCOPE_API_KEY",
         ),
-        def_chat(
-            "baichuan",
-            "Baichuan",
-            "https://api.baichuan-ai.com/v1",
-            "BAICHUAN_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "baichuan",
+                "Baichuan",
+                "https://api.baichuan-ai.com/v1",
+                "BAICHUAN_API_KEY",
+            )
+        },
         def_chat(
             "minimax",
             "MiniMax",
