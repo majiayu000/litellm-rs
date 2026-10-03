@@ -163,35 +163,83 @@ impl ReplicateClient {
     }
 
     /// Transform an ImageGenerationRequest to Replicate prediction input format
-    pub fn transform_image_request(request: &ImageGenerationRequest, model: &str) -> Value {
+    pub fn transform_image_request(
+        request: &ImageGenerationRequest,
+        model: &str,
+    ) -> Result<Value, ProviderError> {
         let registry = get_replicate_registry();
-        let default_params = registry.get_default_params(model);
+        let spec = registry
+            .get_model_spec(model)
+            .ok_or_else(|| ProviderError::model_not_found("replicate", model))?;
+        let model = spec.model_info.id.as_str();
+        let default_params = Some(&spec.default_params);
 
         let mut input = json!({
             "prompt": request.prompt
         });
 
-        // Parse size if provided
+        let single_image = matches!(
+            model,
+            "black-forest-labs/flux-pro" | "black-forest-labs/flux-2-pro"
+        );
+        let n = request.n.unwrap_or(1);
+        let max_images = if single_image { 1 } else { 4 };
+        if n == 0 || n > max_images {
+            return Err(ProviderError::invalid_request(
+                "replicate",
+                format!("{model} supports 1..={max_images} images"),
+            ));
+        }
+        if !single_image {
+            input["num_outputs"] = json!(n);
+        }
+        if request
+            .response_format
+            .as_deref()
+            .is_some_and(|f| f != "url")
+        {
+            return Err(ProviderError::not_supported(
+                "replicate",
+                "Only response_format=url is supported",
+            ));
+        }
+        if (request.quality.is_some() || request.style.is_some()) && model != "stability-ai/sdxl" {
+            return Err(ProviderError::not_supported(
+                "replicate",
+                "OpenAI quality/style mapping is only implemented for SDXL",
+            ));
+        }
         if let Some(size) = &request.size {
-            if let Some((w, h)) = size.split_once('x')
-                && let (Ok(width), Ok(height)) = (w.parse::<i64>(), h.parse::<i64>())
-            {
-                input["width"] = json!(width);
-                input["height"] = json!(height);
+            if matches!(
+                model,
+                "black-forest-labs/flux-dev" | "black-forest-labs/flux-schnell"
+            ) {
+                return Err(ProviderError::not_supported(
+                    "replicate",
+                    "This model accepts aspect_ratio, not exact pixel dimensions",
+                ));
+            }
+            let (width, height) = size
+                .split_once('x')
+                .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+                .filter(|(w, h)| *w > 0 && *h > 0)
+                .ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "replicate",
+                        "size must be positive WIDTHxHEIGHT",
+                    )
+                })?;
+            input["width"] = json!(width);
+            input["height"] = json!(height);
+            if single_image {
+                input["aspect_ratio"] = json!("custom");
             }
         } else if let Some(params) = default_params {
-            // Use default size from model registry
-            if let Some(width) = params.get("width") {
-                input["width"] = width.clone();
+            for key in ["width", "height"] {
+                if let Some(value) = params.get(key) {
+                    input[key] = value.clone();
+                }
             }
-            if let Some(height) = params.get("height") {
-                input["height"] = height.clone();
-            }
-        }
-
-        // Add number of outputs
-        if let Some(n) = request.n {
-            input["num_outputs"] = json!(n);
         }
 
         // Add quality/guidance scale
@@ -218,7 +266,7 @@ impl ReplicateClient {
             }
         }
 
-        input
+        Ok(input)
     }
 
     /// Transform a PredictionResponse to an ImageGenerationResponse
@@ -300,7 +348,7 @@ impl ReplicateClient {
     pub fn get_model_type(model: &str) -> ReplicateModelType {
         get_replicate_registry()
             .get_model_type(model)
-            .unwrap_or(ReplicateModelType::TextGeneration)
+            .unwrap_or(ReplicateModelType::Other)
     }
 
     /// Check if a prediction is complete
@@ -472,7 +520,8 @@ mod tests {
             user: None,
         };
 
-        let input = ReplicateClient::transform_image_request(&request, "stability-ai/sdxl");
+        let input =
+            ReplicateClient::transform_image_request(&request, "stability-ai/sdxl").unwrap();
 
         assert_eq!(input["prompt"], "A beautiful sunset over mountains");
         assert_eq!(input["width"], 1024);
@@ -480,6 +529,44 @@ mod tests {
         assert_eq!(input["num_outputs"], 2);
         assert_eq!(input["guidance_scale"], 8.0); // hd quality
         assert_eq!(input["scheduler"], "K_EULER_ANCESTRAL"); // vivid style
+    }
+
+    #[test]
+    fn audited_image_schema_rejects_ignored_arguments() {
+        let mut request = ImageGenerationRequest {
+            model: None,
+            prompt: "a bird".into(),
+            n: Some(2),
+            size: None,
+            quality: None,
+            response_format: None,
+            style: None,
+            user: None,
+        };
+        for model in ["black-forest-labs/flux-pro", "black-forest-labs/flux-2-pro"] {
+            assert!(ReplicateClient::transform_image_request(&request, model).is_err());
+        }
+        request.n = None;
+        request.size = Some("1024x1024".into());
+        for model in [
+            "black-forest-labs/flux-dev",
+            "black-forest-labs/flux-schnell",
+        ] {
+            assert!(ReplicateClient::transform_image_request(&request, model).is_err());
+        }
+        request.size = None;
+        for model in [
+            "black-forest-labs/flux-dev",
+            "black-forest-labs/flux-schnell",
+        ] {
+            let body = ReplicateClient::transform_image_request(&request, model).unwrap();
+            assert!(body.get("width").is_none());
+            assert!(body.get("height").is_none());
+        }
+        assert_eq!(
+            ReplicateClient::get_model_type("unknown/model"),
+            ReplicateModelType::Other
+        );
     }
 
     #[test]

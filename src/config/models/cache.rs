@@ -16,12 +16,6 @@ pub struct CacheConfig {
     /// Maximum cache size
     #[serde(default = "default_cache_max_size")]
     pub max_size: usize,
-    /// Enable semantic caching
-    #[serde(default)]
-    pub semantic_cache: bool,
-    /// Similarity threshold for semantic cache
-    #[serde(default = "default_similarity_threshold")]
-    pub similarity_threshold: f64,
 }
 
 impl Default for CacheConfig {
@@ -30,26 +24,11 @@ impl Default for CacheConfig {
             enabled: false,
             ttl: default_cache_ttl(),
             max_size: default_cache_max_size(),
-            semantic_cache: false,
-            similarity_threshold: default_similarity_threshold(),
         }
     }
 }
 
 impl CacheConfig {
-    /// Warnings for cache options that are parsed but not consumed by any
-    /// runtime path yet, so dead configuration is surfaced instead of silently
-    /// ignored.
-    pub fn not_yet_implemented_warnings(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-        if self.semantic_cache {
-            warnings.push(
-                "cache.semantic_cache is set but semantic caching is not implemented yet; this setting currently has no effect".to_string(),
-            );
-        }
-        warnings
-    }
-
     /// Merge cache configurations
     pub fn merge(mut self, other: Self) -> Self {
         self.enabled = other.enabled;
@@ -58,10 +37,6 @@ impl CacheConfig {
         }
         if other.max_size != default_cache_max_size() {
             self.max_size = other.max_size;
-        }
-        self.semantic_cache = other.semantic_cache;
-        if other.similarity_threshold != default_similarity_threshold() {
-            self.similarity_threshold = other.similarity_threshold;
         }
         self
     }
@@ -77,8 +52,6 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(config.ttl, 3600);
         assert_eq!(config.max_size, 1000);
-        assert!(!config.semantic_cache);
-        assert!((config.similarity_threshold - 0.95).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -87,12 +60,9 @@ mod tests {
             enabled: true,
             ttl: 7200,
             max_size: 5000,
-            semantic_cache: true,
-            similarity_threshold: 0.9,
         };
         assert!(config.enabled);
         assert_eq!(config.ttl, 7200);
-        assert!(config.semantic_cache);
     }
 
     #[test]
@@ -101,8 +71,6 @@ mod tests {
             enabled: true,
             ttl: 1800,
             max_size: 2000,
-            semantic_cache: false,
-            similarity_threshold: 0.85,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["enabled"], true);
@@ -112,11 +80,10 @@ mod tests {
 
     #[test]
     fn test_cache_config_deserialization() {
-        let json = r#"{"enabled": true, "ttl": 900, "max_size": 500, "semantic_cache": true, "similarity_threshold": 0.92}"#;
+        let json = r#"{"enabled": true, "ttl": 900, "max_size": 500}"#;
         let config: CacheConfig = serde_json::from_str(json).unwrap();
         assert!(config.enabled);
         assert_eq!(config.ttl, 900);
-        assert!(config.semantic_cache);
     }
 
     #[test]
@@ -126,8 +93,6 @@ mod tests {
             enabled: true,
             ttl: 3600,
             max_size: 1000,
-            semantic_cache: false,
-            similarity_threshold: 0.95,
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
@@ -140,39 +105,9 @@ mod tests {
             enabled: false,
             ttl: 1800,
             max_size: 1000,
-            semantic_cache: false,
-            similarity_threshold: 0.95,
         };
         let merged = base.merge(other);
         assert_eq!(merged.ttl, 1800);
-    }
-
-    #[test]
-    fn test_cache_config_merge_semantic() {
-        let base = CacheConfig::default();
-        let other = CacheConfig {
-            enabled: false,
-            ttl: 3600,
-            max_size: 1000,
-            semantic_cache: true,
-            similarity_threshold: 0.95,
-        };
-        let merged = base.merge(other);
-        assert!(merged.semantic_cache);
-    }
-
-    #[test]
-    fn test_cache_config_merge_threshold() {
-        let base = CacheConfig::default();
-        let other = CacheConfig {
-            enabled: false,
-            ttl: 3600,
-            max_size: 1000,
-            semantic_cache: false,
-            similarity_threshold: 0.8,
-        };
-        let merged = base.merge(other);
-        assert!((merged.similarity_threshold - 0.8).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -190,69 +125,11 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_config_merge_disable_semantic() {
-        let base = CacheConfig {
-            semantic_cache: true,
-            ..CacheConfig::default()
-        };
-        let other = CacheConfig {
-            semantic_cache: false,
-            ..CacheConfig::default()
-        };
-        let merged = base.merge(other);
-        assert!(!merged.semantic_cache);
-    }
-
-    #[test]
-    fn test_cache_config_not_yet_implemented_warnings_default_empty() {
-        let config = CacheConfig::default();
-        assert!(config.not_yet_implemented_warnings().is_empty());
-    }
-
-    #[test]
-    fn test_cache_config_not_yet_implemented_warnings_enabled_is_wired() {
-        let config = CacheConfig {
-            enabled: true,
-            ..CacheConfig::default()
-        };
-        let warnings = config.not_yet_implemented_warnings();
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn test_cache_config_not_yet_implemented_warnings_semantic() {
-        let config = CacheConfig {
-            enabled: true,
-            semantic_cache: true,
-            ..CacheConfig::default()
-        };
-        let warnings = config.not_yet_implemented_warnings();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("cache.semantic_cache"));
-    }
-
-    #[test]
-    fn test_cache_config_not_yet_implemented_warnings_semantic_only() {
-        // semantic_cache alone must produce exactly its own warning, so the
-        // semantic branch can't be silently dropped without a test failing.
-        let config = CacheConfig {
-            enabled: false,
-            semantic_cache: true,
-            ..CacheConfig::default()
-        };
-        let warnings = config.not_yet_implemented_warnings();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("cache.semantic_cache"));
-    }
-
-    #[test]
     fn test_cache_config_clone() {
         let config = CacheConfig {
             enabled: true,
             ttl: 3600,
             max_size: 2000,
-            semantic_cache: true,
-            similarity_threshold: 0.9,
         };
         let cloned = config.clone();
         assert_eq!(config.enabled, cloned.enabled);

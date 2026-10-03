@@ -71,6 +71,26 @@ impl AnthropicProvider {
     }
 
     #[cfg(feature = "gateway")]
+    pub(crate) async fn native_messages(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.client.native_messages(body, version, beta).await
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_count_tokens(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.client.native_count_tokens(body, version, beta).await
+    }
+
+    #[cfg(feature = "gateway")]
     pub(crate) async fn chat_with_continuation(
         &self,
         request: ChatContinuationRequest,

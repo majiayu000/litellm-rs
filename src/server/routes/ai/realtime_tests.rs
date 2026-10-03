@@ -1749,3 +1749,74 @@ async fn zero_output_keys_do_not_acquire_or_penalize_deployments() {
         handle.stop(false).await;
     }
 }
+
+#[actix_web::test]
+async fn configured_realtime_provider_budgets_reject_and_settle_to_the_same_identity() {
+    let (state, url, key, calls, handles) = fixture_with_config(|config| {
+        config.gateway.providers[0].name = "prod-openai".into();
+        config.gateway.providers[0].provider_type = "openai".into();
+    })
+    .await;
+    state.budget_limits.providers.set_provider_limit(
+        "prod-openai",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &key).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "insufficient_quota"
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event["type"] == "response.create")
+            .count(),
+        0
+    );
+    state.budget_limits.providers.set_provider_limit(
+        "prod-openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for kind in [
+        "response.created",
+        "response.output_audio.delta",
+        "response.function_call_arguments.done",
+        "response.done",
+    ] {
+        assert_eq!(next_json(&mut client).await["type"], kind);
+    }
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("prod-openai")
+        .unwrap()
+        .current_spend;
+    assert!((spend - rates().cost(&usage()).unwrap().0).abs() < 1e-12);
+    assert!(
+        state
+            .budget_limits
+            .providers
+            .get_provider_usage("openai")
+            .is_none_or(|usage| usage.current_spend == 0.0)
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}

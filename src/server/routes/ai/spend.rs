@@ -144,6 +144,7 @@ pub(super) struct UsageSpendSettlement<'a> {
     pub(super) pricing_model: &'a str,
     pub(super) request_pricing: Option<RequestPricing>,
     pub(super) usage: Option<&'a Usage>,
+    pub(super) pricing_usage: Option<PricingUsage>,
     pub(super) budget_reservation: Option<UnifiedBudgetReservation>,
     pub(super) key_budget_reservation: Option<BudgetReservation>,
     pub(super) ledger_facts: Option<SharedRequestLedgerFacts>,
@@ -185,6 +186,7 @@ pub(super) fn usage_spend_settlement_with_pricing<'a>(
         pricing_model,
         request_pricing: None,
         usage,
+        pricing_usage: None,
         budget_reservation,
         key_budget_reservation,
         ledger_facts: current_facts(),
@@ -192,6 +194,11 @@ pub(super) fn usage_spend_settlement_with_pricing<'a>(
 }
 
 impl UsageSpendSettlement<'_> {
+    pub(super) fn with_pricing_usage(mut self, usage: Option<PricingUsage>) -> Self {
+        self.pricing_usage = usage;
+        self
+    }
+
     pub(super) fn with_ledger_facts(mut self, facts: Option<SharedRequestLedgerFacts>) -> Self {
         if facts.is_some() {
             self.ledger_facts = facts;
@@ -282,6 +289,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
         pricing_model,
         request_pricing,
         usage,
+        pricing_usage,
         budget_reservation,
         key_budget_reservation,
         ledger_facts,
@@ -303,7 +311,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     };
 
     let total_tokens = u64::from(usage.total_tokens);
-    let usage_tokens = PricingUsage::from(usage);
+    let usage_tokens = pricing_usage.unwrap_or_else(|| PricingUsage::from(usage));
 
     let priced = match request_pricing.as_ref() {
         Some(request_pricing) => request_pricing.calculate_settlement(&usage_tokens),
@@ -461,6 +469,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         pricing_model,
         request_pricing,
         usage,
+        pricing_usage,
         budget_reservation,
         key_budget_reservation,
         ledger_facts,
@@ -484,7 +493,8 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
                 key_budget_reservation,
             )
         }
-        .with_ledger_facts(ledger_facts);
+        .with_ledger_facts(ledger_facts)
+        .with_pricing_usage(pricing_usage);
         record_completion_spend_with_reservation_with_policy(
             pricing_service,
             pricing_config,

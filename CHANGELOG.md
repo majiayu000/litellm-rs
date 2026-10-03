@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- Remove the unused `core::analytics` and `core::semantic_cache` modules and the
+  `analytics` Cargo feature. Use wired request metrics and callback integrations
+  for analytics, and `core::cache` for deterministic response caching (#1402, #1406).
+- Remove `cache.semantic_cache`, `cache.similarity_threshold`, and
+  `enterprise.advanced_analytics` from JSON/YAML configuration, plus the unused
+  semantic fields in `LLMCacheConfig` and the `/admin/cache` response. Delete these
+  fields and explicit `analytics` feature selections; ordinary cache TTL/size and
+  request audit logging remain supported. Published v0.7.0 retains its documented
+  deprecated symbols; these removals apply to the next release.
+
 ## [0.7.0] - 2026-10-01
 
 ### Fixed

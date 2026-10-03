@@ -62,11 +62,9 @@ fn gpt56_cyber_catalog_entry_matches_official_model_card() {
     assert_eq!(model.model_info.max_output_length, Some(128_000));
     assert_eq!(model.model_info.input_cost_per_1k_tokens, Some(0.0125));
     assert_eq!(model.model_info.output_cost_per_1k_tokens, Some(0.075));
-    assert!(
-        model
-            .features
-            .contains(&OpenAIModelFeature::StreamingSupport)
-    );
+    assert!(model.model_info.supports_streaming);
+    assert!(model.features.contains(&OpenAIModelFeature::Responses));
+    assert!(!model.features.contains(&OpenAIModelFeature::ChatCompletion));
     assert!(
         model
             .features
@@ -252,4 +250,49 @@ fn retained_historical_prices_do_not_advertise_retired_models() {
     // Deprecated models with future shutdown dates are still callable.
     assert!(registry.get_model_spec("gpt-5.1").is_some());
     assert!(registry.get_model_spec("gpt-6.1-sol").is_some());
+}
+
+#[test]
+fn official_endpoints_determine_chat_and_responses_routing() {
+    use crate::core::types::model::ProviderCapability;
+    let registry = get_openai_registry();
+    for (id, chat, responses) in [
+        ("gpt-4o-mini", true, true),
+        ("gpt-6.1-sol", true, true),
+        ("gpt-5.5-pro", false, true),
+        ("gpt-5.3-codex", false, true),
+        ("gpt-5.6-cyber", false, true),
+        ("gpt-audio-1.5", true, false),
+        ("gpt-4o-search-preview", true, false),
+        ("gpt-image-1.5", false, false),
+        ("gpt-4o-mini-transcribe", false, false),
+        ("gpt-realtime-2.1", false, false),
+    ] {
+        let model = registry.get_model_spec(id).unwrap();
+        assert_eq!(
+            model
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::ChatCompletion),
+            chat,
+            "{id}"
+        );
+        assert_eq!(
+            model
+                .model_info
+                .capabilities
+                .contains(&ProviderCapability::Responses),
+            responses,
+            "{id}"
+        );
+        if !chat {
+            assert!(
+                !model
+                    .model_info
+                    .capabilities
+                    .contains(&ProviderCapability::ChatCompletionStream),
+                "{id}"
+            );
+        }
+    }
 }

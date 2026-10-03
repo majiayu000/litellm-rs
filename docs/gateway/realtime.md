@@ -115,3 +115,7 @@ maximum; an unchanged public or wire model in `session.update` is accepted and
 stripped, while model changes remain rejected. See the official
 [session lifecycle](https://developers.openai.com/api/docs/guides/realtime-conversations#session-lifecycle-events)
 and [output limit](https://developers.openai.com/api/reference/cli/resources/realtime/subresources/calls/methods/accept).
+
+Provider budget reservations and settlement use the configured deployment provider
+name; canonical OpenAI identity remains the source for pricing. For example, an
+OpenAI deployment named `prod-openai` charges its `prod-openai` budget.

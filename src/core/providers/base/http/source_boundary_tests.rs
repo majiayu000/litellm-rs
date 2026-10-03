@@ -46,7 +46,6 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
     exception!("src/core/providers/base/mod.rs", "unified provider HTTP wrapper re-export", ["<module>: raw HTTP path crate::utils::net::http::ProviderRequestBuilder"]),
     exception!("src/core/providers/cloudflare/provider.rs", "native runtime is restricted by the factory to its account-scoped official endpoint", ["new: legacy GlobalPoolManager::new() constructor"]),
     exception!("src/core/providers/fal_ai/provider.rs", "native runtime is restricted by the factory to the fixed https://fal.run endpoint", ["<module>: raw HTTP path crate::core::providers::base::apply_headers", "execute_image_request: raw HTTP client accessor .client()", "new: legacy GlobalPoolManager::new() constructor"]),
-    exception!("src/core/providers/github/provider.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", ["chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request", "new: legacy GlobalPoolManager::new() constructor"]),
     exception!("src/core/providers/github_copilot/authenticator.rs", "fixed GitHub OAuth and token exchange endpoints, outside provider API base configuration", ["perform_device_flow: raw HTTP path crate::core::http::outbound::default_outbound_client", "refresh_api_key: raw HTTP path crate::core::http::outbound::default_outbound_client"]),
     exception!("src/core/providers/github_copilot/provider.rs", "service-discovered Copilot endpoint; factory rejects caller-configured endpoint access", [
             "chat_completion: raw HTTP path crate::core::http::outbound::default_outbound_client", "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request", "embeddings: raw HTTP path crate::core::http::outbound::default_outbound_client",
@@ -57,14 +56,8 @@ const BOUNDARY_EXCEPTIONS: &[BoundaryException] = &[
     exception!("src/core/providers/macros/provider_definitions.rs", "retained but uninvoked legacy lifecycle macro", [
             "standard_provider: raw HTTP macro token crate :: utils :: net :: http :: create_custom_client", "standard_provider: raw HTTP macro token create_custom_client", "standard_provider: raw HTTP macro token reqwest :: Client",
     ]),
-    exception!("src/core/providers/meta_llama/common_utils.rs", "unwired lifecycle stub; Gateway uses the policy-wired catalog route", [
-            "<module>: raw HTTP path crate::utils::net::http::create_custom_client", "<module>: raw HTTP path reqwest::Client",
-    ]),
     exception!("src/core/providers/replicate/provider.rs", "native runtime is restricted by the factory to the fixed Replicate API endpoint", [
             "<module>: raw HTTP path crate::core::providers::base::apply_headers", "build_request: raw HTTP client accessor .client()", "build_request: raw HTTP client accessor .client()", "build_request: raw HTTP client accessor .client()", "build_request: raw HTTP client accessor .client()", "chat_completion_stream: raw HTTP path crate::core::http::outbound::streaming_outbound_client", "chat_completion_stream: raw HTTP path crate::core::providers::base::connection_pool::send_streaming_request_with_timeout", "new: legacy GlobalPoolManager::new() constructor",
-    ]),
-    exception!("src/core/providers/v0/mod.rs", "unwired lifecycle stub with no Gateway factory owner", [
-            "<module>: raw HTTP path crate::utils::net::http::create_custom_client", "<module>: raw HTTP path reqwest::Client", "new_or_default: raw HTTP path crate::core::http::outbound::default_outbound_client",
     ]),
     exception!("src/core/providers/vertex_ai/auth.rs", "fixed Google service-account token exchange, not the configurable Vertex API base", [
             "<module>: raw HTTP path reqwest::Client", "new: raw HTTP path crate::core::http::outbound::default_outbound_client",

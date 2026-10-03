@@ -225,9 +225,9 @@ impl OpenAILikeModelRegistry {
             self.register_model(OpenAILikeModelConfig {
                 id: (*model_id).to_string(),
                 max_context_length: context_length,
-                max_output_length: Some(self.default_output_length),
-                supports_streaming: true,
-                supports_tools: true,
+                max_output_length: None, // Official cards publish context, not an independent output cap.
+                supports_streaming: !is_xai_grok_420_multi_agent_model(model_id),
+                supports_tools: !is_xai_grok_420_multi_agent_model(model_id),
                 supports_multimodal: true,
                 input_cost_per_1k: Some(input_cost_per_1k),
                 output_cost_per_1k: Some(output_cost_per_1k),
@@ -323,6 +323,11 @@ impl OpenAILikeModelRegistry {
 
     /// Build capabilities from model config
     fn build_capabilities(&self, config: &OpenAILikeModelConfig) -> Vec<ProviderCapability> {
+        // The native multi-agent API is Responses-only. The current compatible
+        // provider has no Responses transport; never offer it to chat routing.
+        if is_xai_grok_420_multi_agent_model(&config.id) {
+            return vec![];
+        }
         let mut capabilities = vec![ProviderCapability::ChatCompletion];
 
         if config.supports_streaming {
@@ -579,7 +584,11 @@ mod tests {
             assert_eq!(info.id, model_id);
             assert_eq!(info.provider, "openai_like");
             assert_eq!(info.max_context_length, 1_000_000);
-            assert!(info.supports_tools);
+            assert_eq!(
+                info.supports_tools,
+                !is_xai_grok_420_multi_agent_model(model_id)
+            );
+            assert_eq!(info.max_output_length, None);
             assert!(info.supports_multimodal);
             assert_eq!(
                 info.input_cost_per_1k_tokens,

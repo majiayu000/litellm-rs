@@ -4,15 +4,6 @@
 
 #[cfg(feature = "a2a")]
 pub mod a2a; // Opt-in A2A gateway and library client.
-#[cfg_attr(
-    not(test),
-    deprecated(
-        since = "0.6.0",
-        note = "core::analytics is scheduled for removal in 0.7.0; use wired request metrics and callback integrations"
-    )
-)]
-#[cfg(feature = "analytics")]
-pub mod analytics;
 pub mod audio; // Audio API (transcription, translation, speech)
 pub mod audit; // Audit logging system
 pub mod request_ledger; // Metadata-only terminal request ledger
@@ -55,15 +46,6 @@ pub mod rerank; // Rerank API for RAG systems
 pub mod router;
 pub mod secret_managers; // Secret management system
 pub mod security;
-#[cfg_attr(
-    not(test),
-    deprecated(
-        since = "0.6.0",
-        note = "core::semantic_cache is scheduled for removal in 0.7.0; cache.semantic_cache remains rejected"
-    )
-)]
-#[cfg(feature = "storage")]
-pub mod semantic_cache; // Semantic similarity cache (vector-based)
 pub mod streaming;
 pub mod subsystem_registry; // Runtime wiring decisions for exported core modules.
 pub mod teams; // Team management module

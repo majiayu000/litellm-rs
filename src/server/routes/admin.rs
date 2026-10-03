@@ -17,7 +17,6 @@ struct CacheAdminResponse {
     success: bool,
     status: &'static str,
     cache_enabled: bool,
-    semantic_cache_enabled: bool,
     message: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<crate::core::cache::CombinedCacheStats>,
@@ -32,7 +31,6 @@ async fn cache_admin_response(state: &web::Data<AppState>) -> CacheAdminResponse
             success: true,
             status: "enabled",
             cache_enabled: cfg.gateway.cache.enabled,
-            semantic_cache_enabled: cfg.gateway.cache.semantic_cache,
             message: CACHE_WIRED_MESSAGE,
             stats: Some(cache.combined_stats()),
             redis_available: Some(cache.is_redis_available().await),
@@ -43,7 +41,6 @@ async fn cache_admin_response(state: &web::Data<AppState>) -> CacheAdminResponse
         success: false,
         status: "unsupported",
         cache_enabled: cfg.gateway.cache.enabled,
-        semantic_cache_enabled: cfg.gateway.cache.semantic_cache,
         message: CACHE_UNWIRED_MESSAGE,
         stats: None,
         redis_available: None,
@@ -277,7 +274,6 @@ mod tests {
         assert_eq!(body["success"], false);
         assert_eq!(body["status"], "unsupported");
         assert_eq!(body["cache_enabled"], false);
-        assert_eq!(body["semantic_cache_enabled"], false);
         assert!(
             body["message"]
                 .as_str()

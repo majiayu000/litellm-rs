@@ -103,13 +103,17 @@ pub(super) async fn connect(
     let context = context::get_request_context(&req)?;
     let pricing = state.pricing.clone();
     let max_size = runtime.config.gateway.server.max_body_size;
+    let budget_router = runtime.unified_router.clone();
     let selected = super::execution::execute_stream_with_selected_deployment_matching(
         runtime.unified_router.clone(),
         &query.model,
         ProviderCapability::RealtimeApi,
         |deployment| matches!(&deployment.provider, Provider::OpenAI(_)),
-        move |provider, model, _| {
+        move |provider, model, deployment_id| {
             let pricing = pricing.clone();
+            let budget_provider = budget_router
+                .configured_provider_name(&deployment_id)
+                .unwrap_or_else(|| provider.name().to_string());
             async move {
                 let request_pricing = super::spend::request_pricing_for_provider(
                     &pricing,
@@ -134,7 +138,7 @@ pub(super) async fn connect(
                 Ok((
                     upstream,
                     rates,
-                    provider.name().to_owned(),
+                    budget_provider,
                     openai.config.get_model_mapping(&model),
                     model,
                     timeout,

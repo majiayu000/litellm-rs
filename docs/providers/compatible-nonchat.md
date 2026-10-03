@@ -33,6 +33,38 @@ Groq 路由按具体模型区分：Whisper v3/v3-turbo 可转写，仅 v3 可翻
 
 Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应为 id/data 且没有当前通用实现必需的 created，因此本批保持明确不支持，不把路径相同视为协议等价。其独立适配仍是 F11 的剩余工作。
 
+
+第四批（#1409，核验 2026-10-03）接入本地/自托管服务的已验证协议：
+
+| 选择器 | 当前接入的非聊天能力 | 默认 API base |
+| --- | --- | --- |
+| `vllm` / `hosted_vllm` | embeddings、audio/transcriptions、audio/translations | `http://localhost:8000/v1` |
+| `llamafile` | embeddings | `http://localhost:8080/v1` |
+| `docker_model_runner` | embeddings | `http://localhost:12434/engines/llama.cpp/v1` |
+| `xinference` | embeddings、images/generations、audio/speech、audio/transcriptions、audio/translations | `http://localhost:9997/v1` |
+| `infinity` | embeddings | `http://localhost:7997` |
+| `oobabooga` | embeddings、images/generations | `http://localhost:5000/v1` |
+| `lemonade` | embeddings、images/generations、audio/speech、audio/transcriptions | `http://localhost:13305/v1` |
+
+Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器；此前 Lemonade 的 `.social` 地址没有该协议依据，现改用官方本地地址。两者已有显式 `base_url` 配置仍优先。所有本地选择器可不设上游 key，显式 key 仍通过 Bearer 传递；网关自身鉴权保持原有规则。
+
+本批验证文本/浮点 embeddings、图片生成的 `b64_json`、上传文件的 JSON 转写/翻译，以及不流式的 WAV/MP3 语音响应。模型 ID 是部署端的真实名称或 UID，须在既有 `providers[].models` 配置；供应商级协议声明不表示任意模型都支持它。不要把自托管成本自动当作零：未知价格仍拒绝，需使用既有显式价格配置，已有预算预留和结算继续生效。
+
+- vLLM 转写/翻译需音频依赖和兼容模型；Whisper Turbo 不支持翻译。vLLM-Omni、模型原生语音生成和 WebSocket 不属于此协议范围。
+- llamafile 需要 dedicated embedding 模型；Whisperfile/Diffusionfile 是独立服务，不能从同一 `/v1` base 推断音频或图片端点。
+- Docker Model Runner 图片使用 `/engines/diffusers/v1/images/generations`，官方响应示例也缺少当前通用响应必需的 `created`，暂不宣称已接入。
+- Infinity 服务主要做 embedding/rerank/classify，原先统一聊天声明已移除。图像/音频 embedding 需要 `modality` 和相应输入格式，不等于图片/音频生成；当前只验证文本 embeddings。
+- Oobabooga embeddings 使用服务端配置的 embedding 模型，图片使用已加载 diffusion 模型；请求 `model` 不负责选择它们。当前图片 `n` 是 `batch_size` 别名。音频转写虽注册端点，但已核对源码包含 `FormData.getvalue` 等未验证路径，因此保留未接入状态，不能写成供应商没有音频能力。
+- Lemonade embeddings 依赖 llamacpp/flm recipe；ONNX recipe 不支持。图片生成使用 diffusion 模型、`n=1` 和 `b64_json`；转写目前限 WAV 输入；语音格式依模型后端限制，OpenMOSS 建议显式 WAV。原始 PCM 的额外采样率元数据、克隆、原生 streaming 未验证。官方图像编辑/变体已存在，但具名网关 multipart 调度尚未接入；音频翻译未得到当前端点证据。
+- LM Studio 当前官方兼容端点只确认聊天/Responses/completions/models/embeddings，图像输入不是图像生成。没有对未知独立音频或图片端点作否定推断。
+
+逐项官方链接、固定源码版本和剩余限制见 [本地非聊天协议审计](../audit/local-compatible-nonchat-2026-10-03.md)。实测均为本地 HTTP 模拟：覆盖 factory/Router、实际 JSON/multipart/二进制传输、模型与参数错误、429 Retry-After，以及本地模型缺价、预算不足和按真实 usage 结算。未安装模型、未运行 GPU 推理或供应商付费调用。
+
+
+第七批（#1422，核验 2026-10-03）接入 Novita 文本 embeddings、Featherless 文本 embeddings/同步语音、Galadriel embeddings/图片生成，以及 NanoGPT embeddings/图片生成/同步语音/转写。NanoGPT 默认地址修正为 `https://api.nano-gpt.com/api/v1`；图片按官方协议使用同一主机的 `/v1/images/generations`。显式 base 以 `/api/v1` 结尾时，图片使用相邻 `/v1`；其他自定义 base 保持原路径。
+
+所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -40,25 +72,25 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | 选择器 | 非聊天核验状态 |
 | --- | --- |
 | `groq` | 音频合成/转写/翻译；见上方模型限制 |
-| `ai21` | 待核验；本批未扩展非聊天声明 |
+| `ai21` | 已核对官方 Jamba/工具目录；未确认兼容 embeddings/images/audio，保持不声明 |
 | `huggingface` | 待核验；本批未扩展非聊天声明 |
 | `baseten` | 待核验；本批未扩展非聊天声明 |
 | `together` | embeddings/images/audio |
 | `together_ai` | 同 together |
 | `fireworks` | embeddings；图片原生路径待适配 |
 | `fireworks_ai` | 同 fireworks |
-| `perplexity` | 待核验；本批未扩展非聊天声明 |
-| `cerebras` | 待核验；本批未扩展非聊天声明 |
+| `perplexity`（已移出目录） | Sonar 聊天端点已退役，具名选择器在构造阶段拒绝；[F10 审核证据](../audit/perplexity-sonar-retirement-2026-10-03.md)。Agent/Responses、搜索与 embeddings 不因此自动获得支持，仍待各自核验/适配 |
+| `cerebras` | 官方 OpenAPI 仅列 chat/completions；独立 embeddings/images/audio 未确认 |
 | `openrouter` | embeddings；其他待核验 |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
 | `deepseek` | 待核验；本批未扩展非聊天声明 |
-| `novita` | 待核验；本批未扩展非聊天声明 |
+| `novita` | 文本 embeddings；原生异步图片及 MiniMax 音频协议仍待适配 |
 | `nvidia_nim` | embeddings；其他待核验 |
 | `nebius` | embeddings；图片协议差异待适配 |
 | `nscale` | 待核验；本批未扩展非聊天声明 |
 | `hyperbolic` | 待核验；本批未扩展非聊天声明 |
-| `featherless` | 待核验；本批未扩展非聊天声明 |
-| `galadriel` | 待核验；本批未扩展非聊天声明 |
+| `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
+| `galadriel` | 官方 OpenAPI 的 embeddings、images/generations；须配置实际可用模型，未实调账户目录 |
 | `sambanova` | 待核验；本批未扩展非聊天声明 |
 | `heroku` | 待核验；本批未扩展非聊天声明 |
 | `friendliai` | 待核验；本批未扩展非聊天声明 |
@@ -67,14 +99,14 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
 | `github` | 待核验；本批未扩展非聊天声明 |
 | `xai` | 待核验；本批未扩展非聊天声明 |
-| `vllm` | 待核验；本批未扩展非聊天声明 |
-| `hosted_vllm` | 待核验；本批未扩展非聊天声明 |
-| `lm_studio` | embeddings；其他待核验 |
-| `llamafile` | 待核验；本批未扩展非聊天声明 |
-| `docker_model_runner` | 待核验；本批未扩展非聊天声明 |
-| `xinference` | 待核验；本批未扩展非聊天声明 |
-| `infinity` | 待核验；本批未扩展非聊天声明 |
-| `oobabooga` | 待核验；本批未扩展非聊天声明 |
+| `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
+| `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |
+| `lm_studio` | 文本 embeddings；当前官方端点清单未确认图片生成/独立音频协议，不扩展声明 |
+| `llamafile` | embeddings；需要 embedding 模型与 server/embedding 模式，Whisperfile 是独立协议 |
+| `docker_model_runner` | embeddings；需 embedding 模型/运行标志；Diffusers 图片独立路径和响应待适配 |
+| `xinference` | embeddings、images/generations、audio/speech/transcriptions/translations；须启动相应模型 UID |
+| `infinity` | 文本 embeddings；默认根路径 /embeddings；移除原来虚假的聊天声明；图像/音频 embedding 待扩展输入 |
+| `oobabooga` | embeddings、images/generations；依赖已加载模型；音频转写源实现异常待上游确认 |
 | `moonshot` | 待核验；本批未扩展非聊天声明 |
 | `dashscope` | 待核验；本批未扩展非聊天声明 |
 | `qwen` | 待核验；本批未扩展非聊天声明 |
@@ -84,11 +116,11 @@ Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应
 | `xiaomi_mimo` | 待核验；本批未扩展非聊天声明 |
 | `zhipu` | 待核验；本批未扩展非聊天声明 |
 | `zai` | 待核验；本批未扩展非聊天声明 |
-| `lemonade` | 待核验；本批未扩展非聊天声明 |
+| `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
 | `linkup` | 待核验；本批未扩展非聊天声明 |
 | `poe` | 待核验；本批未扩展非聊天声明 |
 | `wandb` | 待核验；本批未扩展非聊天声明 |
-| `nanogpt` | 待核验；本批未扩展非聊天声明 |
+| `nanogpt` | embeddings、images/generations、同步 speech/transcriptions；图片 /v1，其他 /api/v1；异步/克隆未接 |
 | `aiml_api` | 待核验；本批未扩展非聊天声明 |
 | `aiml` | 待核验；本批未扩展非聊天声明 |
 | `aleph_alpha` | 待核验；本批未扩展非聊天声明 |
