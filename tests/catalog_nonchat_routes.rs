@@ -985,7 +985,7 @@ async fn zhipu_and_zai_images_preserve_url_responses() {
     for selector in ["zhipu", "zai"] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
         let request = serde_json::from_value(
-            json!({"model":"test-model","prompt":"山水","size":"1280x1280","quality":"hd"}),
+            json!({"model":"test-model","prompt":"山水","size":"1280x1280","quality":"hd","user":"user-123"}),
         )
         .unwrap();
         let response = selected(&router, ProviderCapability::ImageGeneration)
@@ -1001,6 +1001,12 @@ async fn zhipu_and_zai_images_preserve_url_responses() {
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["size"], "1280x1280");
         assert_eq!(body["quality"], "hd");
+        if selector == "zai" {
+            assert_eq!(body["user_id"], "user-123");
+            assert!(body.get("user").is_none());
+        } else {
+            assert_eq!(body["user"], "user-123");
+        }
         handle.stop(false).await;
     }
 }

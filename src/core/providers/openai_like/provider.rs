@@ -442,10 +442,15 @@ impl OpenAILikeProvider {
         };
         let url = format!("{image_base}/images/generations");
         let headers = self.get_request_headers();
-        let body = Some(
-            serde_json::to_value(&request)
-                .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?,
-        );
+        let mut body = serde_json::to_value(&request)
+            .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        if self.provider_name == "zai"
+            && let Some(fields) = body.as_object_mut()
+            && let Some(user) = fields.remove("user")
+        {
+            fields.insert("user_id".into(), user);
+        }
+        let body = Some(body);
 
         let response = self
             .pool_manager
