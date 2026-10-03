@@ -8,7 +8,7 @@ mod tests {
     use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
     use bytes::Bytes;
     use litellm_rs::Config;
-    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::pricing_service::LiteLLMModelInfo;
     use litellm_rs::server::HttpServer as GatewayHttpServer;
     use serde_json::{Value, json};
@@ -109,7 +109,7 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
-        HttpResponse::Ok().json(json!({ "text": "mock transcript" }))
+        HttpResponse::Ok().json(json!({ "text": "mock transcript", "duration":state.duration }))
     }
 
     async fn mock_audio_translations(
@@ -446,6 +446,102 @@ mod tests {
             "successful time-priced translation must record spend"
         );
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn compactifai_transcription_reserves_and_settles_a_minute_minimum() {
+        for (duration, limit, priced, expected_status) in [
+            (3.0, 1.0, true, StatusCode::OK),
+            (75.0, 1.0, true, StatusCode::OK),
+            (75.0, 0.07, true, StatusCode::OK),
+            (3.0, 0.059, true, StatusCode::PAYMENT_REQUIRED),
+            (3.0, 1.0, false, StatusCode::BAD_REQUEST),
+        ] {
+            let mock = MockAudioServer::start_with_duration(Some(duration)).await;
+            let model = "cai-whisper-large-v3-turbo-slim";
+            let state =
+                build_audio_state_for_provider(&mock.base_url, vec![model.into()], "compactifai")
+                    .await;
+            if priced {
+                state.pricing.add_custom_model(model.into(), serde_json::from_value(json!({
+                    "litellm_provider":"compactifai", "mode":"audio_transcription", "input_cost_per_second":0.001
+                })).unwrap());
+            }
+            state.budget_limits.providers.set_provider_limit(
+                "compactifai",
+                ProviderLimitConfig::new(limit, ResetPeriod::Monthly),
+            );
+            state
+                .budget_limits
+                .models
+                .set_model_limit(model, ModelLimitConfig::new(limit, ResetPeriod::Monthly));
+            let budgets = state.budget_limits.clone();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let boundary = "compactifai-duration";
+            let request = test::TestRequest::post()
+                .uri("/v1/audio/transcriptions")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(audio_multipart_body(
+                    boundary,
+                    model,
+                    "sample.mp3",
+                    &vec![b'a'; 32_000],
+                ))
+                .to_request();
+            let response = test::call_service(&app, request).await;
+            assert_eq!(
+                response.status(),
+                expected_status,
+                "duration={duration}, limit={limit}, priced={priced}"
+            );
+            if expected_status == StatusCode::OK {
+                let body: Value = test::read_body_json(response).await;
+                assert_eq!(body["duration"], duration);
+                let spent = budgets
+                    .providers
+                    .get_provider_usage("compactifai")
+                    .unwrap()
+                    .current_spend;
+                assert!((spent - duration.max(60.0) * 0.001).abs() < 1e-10);
+                assert!(
+                    (budgets.models.get_model_usage(model).unwrap().current_spend - spent).abs()
+                        < 1e-10
+                );
+                if duration * 0.001 > limit {
+                    assert!(spent > limit);
+                    let request = test::TestRequest::post()
+                        .uri("/v1/audio/transcriptions")
+                        .insert_header((
+                            "content-type",
+                            format!("multipart/form-data; boundary={boundary}"),
+                        ))
+                        .set_payload(audio_multipart_body(
+                            boundary,
+                            model,
+                            "sample.mp3",
+                            &vec![b'a'; 32_000],
+                        ))
+                        .to_request();
+                    let response = test::call_service(&app, request).await;
+                    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+                }
+                let requests = mock.requests();
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].path, "/audio/transcriptions");
+                assert!(String::from_utf8_lossy(&requests[0].body).contains("verbose_json"));
+            } else {
+                assert!(mock.requests().is_empty());
+            }
+            mock.shutdown().await;
+        }
     }
 
     #[tokio::test]
