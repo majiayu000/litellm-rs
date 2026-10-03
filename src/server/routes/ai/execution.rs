@@ -622,10 +622,13 @@ where
                 }
 
                 let cooldown_reason = infer_cooldown_reason(&err);
-                router.record_failure_with_reason_for_deployment(
-                    deployment_lease.deployment(),
-                    cooldown_reason,
-                );
+                // Local caller policy errors do not describe provider health.
+                if !matches!(err, ProviderError::InvalidRequest { .. }) {
+                    router.record_failure_with_reason_for_deployment(
+                        deployment_lease.deployment(),
+                        cooldown_reason,
+                    );
+                }
                 drop(deployment_lease);
                 return Err(GatewayError::Provider(err));
             }

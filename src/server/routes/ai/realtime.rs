@@ -120,6 +120,9 @@ pub(super) async fn connect(
                 })?;
                 let rates = Rates::load(&info, output_limit)
                     .map_err(|e| ProviderError::configuration("openai", e))?;
+                let wire_output_limit = rates
+                    .wire_output_limit(rates.max_output)
+                    .map_err(|message| ProviderError::invalid_request("openai", message))?;
                 let Provider::OpenAI(openai) = &provider else {
                     return Err(ProviderError::invalid_request(
                         "openai",
@@ -130,7 +133,7 @@ pub(super) async fn connect(
                 let mut upstream = open_upstream(openai, &model, max_size).await?;
                 let initial = initialize_upstream(
                     &mut upstream,
-                    &rates,
+                    wire_output_limit,
                     &openai.config.get_model_mapping(&model),
                     timeout,
                 )
@@ -205,13 +208,10 @@ fn manual_session(value: &Value) -> bool {
 
 async fn initialize_upstream(
     upstream: &mut Upstream,
-    rates: &Rates,
+    output_limit: Value,
     wire_model: &str,
     timeout: Duration,
 ) -> Result<Vec<String>, ProviderError> {
-    let output_limit = rates
-        .wire_output_limit(rates.max_output)
-        .map_err(|message| ProviderError::invalid_request("openai", message))?;
     let initialize = async {
         upstream.send(Message::Text(json!({"type":"session.update","session":{"type":"realtime","tools":[],"max_output_tokens":output_limit,"audio":{"input":{"turn_detection":null,"transcription":null}}}}).to_string().into())).await.map_err(|_| ProviderError::network("openai", "Realtime initialization write failed"))?;
         let mut initial = Vec::new();

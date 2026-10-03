@@ -1865,6 +1865,55 @@ async fn infinite_output_and_pinned_session_models_reach_upstream() {
 }
 
 #[actix_web::test]
+async fn unrepresentable_key_output_caps_do_not_penalize_deployments() {
+    let (state, url, raw, calls, handles) = fixture_with_config(|config| {
+        let provider = &mut config.gateway.providers[0];
+        provider.models = vec!["gpt-realtime-2".into()];
+        provider.settings.insert("model_mappings".into(), json!({"gpt-realtime-2":"gpt-realtime-mini-mapped"}));
+        provider.settings.insert("model_identity_mappings".into(), json!({"gpt-realtime-2":{"capability_catalog_model":"gpt-realtime-2","pricing_model":"gpt-realtime-2"}}));
+    }).await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":5000,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+    state.storage.db().update_api_key(&key).await.unwrap();
+    let url = url.replace("gpt-realtime-mini", "gpt-realtime-2");
+    for _ in 0..4 {
+        let mut request = url.as_str().into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("x-api-key", raw.parse().unwrap());
+        let parsed = url::Url::parse(&url).unwrap();
+        let tcp =
+            tokio::net::TcpStream::connect((parsed.host_str().unwrap(), parsed.port().unwrap()))
+                .await
+                .unwrap();
+        let error = tokio_tungstenite::client_async(request, tcp)
+            .await
+            .unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+            panic!("expected an HTTP policy rejection: {error}");
+        };
+        assert_eq!(response.status().as_u16(), 400);
+    }
+    assert!(calls.lock().unwrap().is_empty());
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-2")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
 async fn zero_output_keys_do_not_acquire_or_penalize_deployments() {
     let (state, _, raw, calls, handles) = fixture().await;
     let (mut key, _) = state
