@@ -161,7 +161,7 @@ The codebase uses Cargo features extensively:
 - **Primary DB**: PostgreSQL with Sea-ORM migrations
 - **Cache**: Redis for high-speed operations
 - **File storage**: S3-compatible object storage
-- **Vector DB**: Optional Qdrant integration for semantic caching
+- **Vector DB**: Optional Qdrant vector storage integration
 
 ## Testing Architecture
 
