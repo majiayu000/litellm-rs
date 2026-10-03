@@ -9,6 +9,32 @@ use std::sync::LazyLock;
 use super::definition::{AuthType, ProviderDefinition};
 use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
+const TOGETHER_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+    ProviderCapability::TextToSpeech,
+];
+const DEEPINFRA_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+];
+const FIREWORKS_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+];
 pub(crate) const AMAZON_NOVA_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -199,6 +225,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "BASETEN_API_KEY",
         ),
         ProviderDefinition {
+            capabilities: TOGETHER_CAPABILITIES,
             alternate_auth_env_vars: &[
                 "TOGETHER_AI_API_KEY",
                 "TOGETHERAI_API_KEY",
@@ -207,11 +234,12 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             ..def_chat(
                 "together",
                 "Together AI",
-                "https://api.together.xyz/v1",
+                "https://api.together.ai/v1",
                 "TOGETHER_API_KEY",
             )
         },
         ProviderDefinition {
+            capabilities: TOGETHER_CAPABILITIES,
             alternate_auth_env_vars: &[
                 "TOGETHER_AI_API_KEY",
                 "TOGETHERAI_API_KEY",
@@ -220,11 +248,12 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             ..def_chat(
                 "together_ai",
                 "Together AI",
-                "https://api.together.xyz/v1",
+                "https://api.together.ai/v1",
                 "TOGETHER_API_KEY",
             )
         },
         ProviderDefinition {
+            capabilities: FIREWORKS_CAPABILITIES,
             alternate_auth_env_vars: &[
                 "FIREWORKS_AI_API_KEY",
                 "FIREWORKSAI_API_KEY",
@@ -238,6 +267,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             )
         },
         ProviderDefinition {
+            capabilities: FIREWORKS_CAPABILITIES,
             alternate_auth_env_vars: &[
                 "FIREWORKS_AI_API_KEY",
                 "FIREWORKSAI_API_KEY",
@@ -268,12 +298,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://openrouter.ai/api/v1",
             "OPENROUTER_API_KEY",
         ),
-        def_chat(
-            "deepinfra",
-            "DeepInfra",
-            "https://api.deepinfra.com/v1/openai",
-            "DEEPINFRA_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: DEEPINFRA_CAPABILITIES,
+            ..def_chat(
+                "deepinfra",
+                "DeepInfra",
+                "https://api.deepinfra.com/v1/openai",
+                "DEEPINFRA_API_KEY",
+            )
+        },
         def_chat(
             "deepseek",
             "DeepSeek",
@@ -616,7 +649,7 @@ mod tests {
                     definition.name
                 );
                 assert!(
-                    OPENAI_LIKE_CATALOG_CAPABILITIES.contains(capability),
+                    crate::core::providers::openai_like::provider::OPENAI_COMPATIBLE_PROXY_CAPABILITIES.contains(capability),
                     "{} declares non-executable capability {capability:?}",
                     definition.name
                 );
@@ -689,7 +722,7 @@ mod tests {
                 "together_ai",
                 "together_ai",
                 "TOGETHER_API_KEY",
-                "https://api.together.xyz/v1",
+                "https://api.together.ai/v1",
             ),
             (
                 "fireworks_ai",
