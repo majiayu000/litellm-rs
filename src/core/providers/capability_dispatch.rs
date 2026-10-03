@@ -101,6 +101,32 @@ impl Provider {
                         .get_model_registry()
                         .supports_capability(model, capability)
             }
+            Provider::OpenAILike(provider) if provider.name() == "groq" => {
+                let model = provider.config().get_effective_model(model);
+                // Groq's Whisper Turbo cannot translate; Orpheus is speech-only.
+                // https://console.groq.com/docs/speech-to-text
+                // https://console.groq.com/docs/text-to-speech/orpheus
+                match capability {
+                    ProviderCapability::AudioTranscription => matches!(
+                        model.as_str(),
+                        "whisper-large-v3" | "whisper-large-v3-turbo"
+                    ),
+                    ProviderCapability::AudioTranslation => model == "whisper-large-v3",
+                    ProviderCapability::TextToSpeech => matches!(
+                        model.as_str(),
+                        "canopylabs/orpheus-v1-english" | "canopylabs/orpheus-arabic-saudi"
+                    ),
+                    _ => {
+                        !matches!(
+                            model.as_str(),
+                            "whisper-large-v3"
+                                | "whisper-large-v3-turbo"
+                                | "canopylabs/orpheus-v1-english"
+                                | "canopylabs/orpheus-arabic-saudi"
+                        ) && LLMProvider::supports_capability(provider, capability)
+                    }
+                }
+            }
             Provider::OpenAILike(provider) if provider.name() == "xai" => {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)

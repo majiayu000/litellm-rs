@@ -20,3 +20,5 @@
 验证使用本地 HTTP 模拟服务，覆盖实际 factory 构造、现有 Router 的 capability 选择、JSON/二进制/multipart 传输和错误。未运行付费供应商实调。`registry/support_matrix.rs` 记录的是旧适配入口，不应作为当前运行时能力的唯一依据。
 
 Groq 音频按 [转写/翻译协议](https://console.groq.com/docs/speech-to-text) 和 [Orpheus 协议](https://console.groq.com/docs/text-to-speech/orpheus) 接入（2026-10-03）。语音合成省略格式时使用 WAV，显式格式/参数仍交给上游校验；当前 Orpheus 只支持 WAV。Whisper Large V3 支持转写和翻译，Turbo 只支持转写。网关仍限上传文件与 JSON/verbose_json 响应，不包含 URL 输入或原始文本字幕响应。为得到实际时长，Groq 默认/JSON 转写和翻译请求上游 verbose_json；响应保留时长及时间戳。预算预留与结算统一使用至少十秒的计费时长，预留时长仍沿用现有文件大小估算。不会把供应商级音频能力解释成所有模型均支持音频。
+
+Groq 路由按具体模型区分：Whisper v3/v3-turbo 可转写，仅 v3 可翻译，Orpheus 英语/沙特阿拉伯语模型可合成语音。音频模型不作为聊天部署候选。翻译成功后的计费优先使用上游返回的有效正数 duration；缺失或无效时保留已有文件大小估算，两种情况均应用十秒最低计费。
