@@ -9,6 +9,13 @@ use std::sync::LazyLock;
 use super::definition::{AuthType, ProviderDefinition};
 use crate::core::providers::openai_like::provider::OPENAI_LIKE_CATALOG_CAPABILITIES;
 use crate::core::types::model::{ModelInfo, ProviderCapability};
+const COMPACTIFAI_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::AudioTranscription,
+];
 const GROQ_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -589,15 +596,18 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         def_chat(
             "minimax",
             "MiniMax",
-            "https://api.minimax.chat/v1",
+            "https://api.minimax.io/v1",
             "MINIMAX_API_KEY",
         ),
-        def_chat(
-            "volcengine",
-            "Volcengine",
-            "https://ark.cn-beijing.volces.com/api/v3",
-            "VOLCENGINE_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "volcengine",
+                "Volcengine",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "VOLCENGINE_API_KEY",
+            )
+        },
         ProviderDefinition {
             alternate_auth_env_vars: &["XIAOMI_API_KEY"],
             ..def_chat(
@@ -685,12 +695,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.comet.com/v1",
             "COMET_API_KEY",
         ),
-        def_chat(
-            "compactifai",
-            "CompactifAI",
-            "https://api.compactif.ai/v1",
-            "COMPACTIFAI_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: COMPACTIFAI_CAPABILITIES,
+            ..def_chat(
+                "compactifai",
+                "CompactifAI",
+                "https://api.compactif.ai/v1",
+                "COMPACTIFAI_API_KEY",
+            )
+        },
         def_chat(
             "maritalk",
             "MariTalk",

@@ -328,6 +328,10 @@ impl OpenAILikeProvider {
         let headers = self.get_request_headers();
         let mut body = serde_json::to_value(&request)
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        // Ark documents text inputs as an array, even for a single string.
+        if self.provider_name == "volcengine" && body["input"].is_string() {
+            body["input"] = Value::Array(vec![body["input"].take()]);
+        }
         if self.provider_name == "baichuan"
             && let Some(inputs) = body["input"].as_array()
             && (inputs.is_empty() || inputs.len() > 16)
@@ -905,8 +909,9 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<TranscriptionResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        // Groq's verbose JSON includes duration for settlement; plain JSON does not.
-        if self.provider_name == "groq"
+        // Verbose JSON includes duration for settlement. CompactifAI's plain JSON
+        // uses a usage.seconds envelope that the common response does not expose.
+        if matches!(self.provider_name.as_str(), "groq" | "compactifai")
             && matches!(request.response_format.as_deref(), None | Some("json"))
         {
             request.response_format = Some("verbose_json".into());
