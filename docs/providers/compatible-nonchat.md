@@ -60,6 +60,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 逐项官方链接、固定源码版本和剩余限制见 [本地非聊天协议审计](../audit/local-compatible-nonchat-2026-10-03.md)。实测均为本地 HTTP 模拟：覆盖 factory/Router、实际 JSON/multipart/二进制传输、模型与参数错误、429 Retry-After，以及本地模型缺价、预算不足和按真实 usage 结算。未安装模型、未运行 GPU 推理或供应商付费调用。
 
+第八批（#1425，核验 2026-10-03）沿用现有传输接入百川文本 embeddings，官方端点为 `https://api.baichuan-ai.com/v1/embeddings`。官方已索引协议限定 `Baichuan-Text-Embedding`、每条最多 512 tokens、批次最多 16 条、固定 1024 维；超限由上游截断。当前直接文档页面仅显示申请体验外壳，未实调账户可用性，不据此新增静态 callable 型号或价格。使用已获访问权限的真实模型配置和正确价格。
+
+本批同时核验 Moonshot、DeepSeek、Xiaomi MiMo、Yi、Maritalk。MiMo 的 TTS/ASR 官方确实存在，但经聊天请求/响应中的音频协议，需要独立适配后才能挂到网关 `/audio/*`；Maritaca 官方明确推荐其他供应商的 embeddings。未确认端点保持不声明，详见 [区域供应商审计](../audit/regional-compatible-nonchat-2026-10-03.md)。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -78,7 +82,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `cerebras` | 待核验；本批未扩展非聊天声明 |
 | `openrouter` | embeddings；其他待核验 |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
-| `deepseek` | 待核验；本批未扩展非聊天声明 |
+| `deepseek` | 核对当前官方 API；Responses/文件/视觉是独立范围，未确认 embeddings/images/audio |
 | `novita` | 待核验；本批未扩展非聊天声明 |
 | `nvidia_nim` | embeddings；其他待核验 |
 | `nebius` | embeddings；图片协议差异待适配 |
@@ -102,13 +106,13 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `xinference` | embeddings、images/generations、audio/speech/transcriptions/translations；须启动相应模型 UID |
 | `infinity` | 文本 embeddings；默认根路径 /embeddings；移除原来虚假的聊天声明；图像/音频 embedding 待扩展输入 |
 | `oobabooga` | embeddings、images/generations；依赖已加载模型；音频转写源实现异常待上游确认 |
-| `moonshot` | 待核验；本批未扩展非聊天声明 |
+| `moonshot` | 核对当前官方模型/端点目录；未确认独立 embeddings/images/audio，图像/视频理解不等于生成 |
 | `dashscope` | 待核验；本批未扩展非聊天声明 |
 | `qwen` | 待核验；本批未扩展非聊天声明 |
-| `baichuan` | 待核验；本批未扩展非聊天声明 |
+| `baichuan` | 官方已索引标准文本 embeddings 协议；账户可用性未实调，输入 ≤512 tokens/批量 ≤16，固定1024维 |
 | `minimax` | 待核验；本批未扩展非聊天声明 |
 | `volcengine` | 待核验；本批未扩展非聊天声明 |
-| `xiaomi_mimo` | 待核验；本批未扩展非聊天声明 |
+| `xiaomi_mimo` | 官方 TTS/ASR 经 chat/completions 音频契约；通用 /audio/* 尚未适配，embeddings/images 未确认 |
 | `zhipu` | 待核验；本批未扩展非聊天声明 |
 | `zai` | 待核验；本批未扩展非聊天声明 |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
@@ -123,9 +127,9 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `bytez` | 待核验；本批未扩展非聊天声明 |
 | `comet_api` | 待核验；本批未扩展非聊天声明 |
 | `compactifai` | 待核验；本批未扩展非聊天声明 |
-| `maritalk` | 待核验；本批未扩展非聊天声明 |
+| `maritalk` | 官方明确无自身 embeddings，推荐第三方 DeepInfra；图片/音频协议未确认 |
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
-| `yi` | 待核验；本批未扩展非聊天声明 |
+| `yi` | 官方页面/RSC 只确认聊天资料，独立 embeddings/images/audio 未确认 |
 | `lambda_ai` | 待核验；本批未扩展非聊天声明 |
 | `ovhcloud` | 待核验；本批未扩展非聊天声明 |
 
