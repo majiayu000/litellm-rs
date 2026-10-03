@@ -1,6 +1,7 @@
 //! Realtime uses modality-specific cache rates absent from chat Usage.
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::pricing_service::LiteLLMModelInfo;
+use crate::core::providers::ProviderError;
 use crate::server::state::AppState;
 use serde_json::Value;
 use uuid::Uuid;
@@ -59,7 +60,7 @@ impl Rates {
                 .fold(0.0, f64::max)
             + max_output.min(self.max_output) as f64 * self.output.into_iter().fold(0.0, f64::max)
     }
-    pub fn cost(&self, usage: &Value) -> Result<(f64, u64), String> {
+    pub fn cost(&self, usage: &Value, max_output: u32) -> Result<(f64, u64), String> {
         let count = |v: &Value| {
             v.as_u64()
                 .ok_or_else(|| "Missing or invalid realtime usage".to_string())
@@ -87,7 +88,7 @@ impl Rates {
         let output_total = count(&usage["output_tokens"])?;
         let total = count(&usage["total_tokens"])?;
         if input_total > self.max_input as u64
-            || output_total > self.max_output as u64
+            || output_total > max_output.min(self.max_output) as u64
             || i[0].checked_add(i[1]) != Some(input_total)
             || o[0].checked_add(o[1]) != Some(output_total)
             || c[0].checked_add(c[1]) != Some(count(&input["cached_tokens"])?)
@@ -116,6 +117,7 @@ pub(super) struct Pending {
     provider: Option<UnifiedBudgetReservation>,
     key: Option<BudgetReservation>,
     bound: f64,
+    pub max_output: u32,
 }
 impl Pending {
     pub fn reserve(
@@ -124,18 +126,21 @@ impl Pending {
         model: &str,
         key_budget: Option<Uuid>,
         bound: f64,
-    ) -> Result<Self, String> {
+        max_output: u32,
+    ) -> Result<Self, ProviderError> {
         let reservation = state
             .budget_limits
             .reserve_spend(provider, model, bound)
-            .map_err(|_| "Realtime provider/model budget is insufficient".to_string())?;
+            .map_err(|error| {
+                super::spend::reservation_error_to_provider_error(error, provider, model)
+            })?;
         let key =
-            super::spend::reserve_api_key_budget(&state.budget_manager, key_budget, Some(bound))
-                .map_err(|_| "Realtime API key budget is insufficient".to_string())?;
+            super::spend::reserve_api_key_budget(&state.budget_manager, key_budget, Some(bound))?;
         Ok(Self {
             provider: Some(reservation),
             key,
             bound,
+            max_output,
         })
     }
     pub async fn settle(

@@ -22,7 +22,7 @@ fn rates() -> Rates {
 #[actix_web::test]
 async fn modality_cache_cost_and_conservative_bound() {
     let rates = rates();
-    let (cost, tokens) = rates.cost(&usage()).unwrap();
+    let (cost, tokens) = rates.cost(&usage(), rates.max_output).unwrap();
     let expected = 10.0 * 0.0000006
         + 15.0 * 0.00001
         + 10.0 * 0.00000006
@@ -34,8 +34,8 @@ async fn modality_cache_cost_and_conservative_bound() {
     assert!((rates.bound(rates.max_output) - 0.40192).abs() < 1e-12);
     let mut invalid = usage();
     invalid["input_token_details"]["cached_tokens_details"]["audio_tokens"] = json!(500);
-    assert!(rates.cost(&invalid).is_err());
-    assert!(rates.cost(&json!({})).is_err());
+    assert!(rates.cost(&invalid, rates.max_output).is_err());
+    assert!(rates.cost(&json!({}), rates.max_output).is_err());
 }
 #[actix_web::test]
 async fn explicit_manual_scope_and_output_policy() {
@@ -312,7 +312,7 @@ async fn gateway_websocket_preserves_events_and_records_modality_cost() {
     ] {
         assert_eq!(next_json(&mut client).await["type"], event);
     }
-    let cost = rates().cost(&usage()).unwrap().0;
+    let cost = rates().cost(&usage(), rates().max_output).unwrap().0;
     assert!(
         (state
             .budget_limits
@@ -503,15 +503,45 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         .unwrap();
     let id = Some(budget.id.parse().unwrap());
     let bound = rates().bound(rates().max_output);
-    let pending = Pending::reserve(&state, "openai", "gpt-realtime-mini", id, bound).unwrap();
-    assert!(Pending::reserve(&state, "openai", "gpt-realtime-mini", id, bound).is_err());
+    let pending = Pending::reserve(
+        &state,
+        "openai",
+        "gpt-realtime-mini",
+        id,
+        bound,
+        rates().max_output,
+    )
+    .unwrap();
+    assert!(
+        Pending::reserve(
+            &state,
+            "openai",
+            "gpt-realtime-mini",
+            id,
+            bound,
+            rates().max_output
+        )
+        .is_err()
+    );
     pending
-        .settle(&state, None, Some(rates().cost(&usage()).unwrap()))
+        .settle(
+            &state,
+            None,
+            Some(rates().cost(&usage(), rates().max_output).unwrap()),
+        )
         .await
         .unwrap();
-    let expected = rates().cost(&usage()).unwrap().0;
+    let expected = rates().cost(&usage(), rates().max_output).unwrap().0;
     assert!((state.budget_manager.get_current_spend(&scope) - expected).abs() < 1e-9);
-    let pending = Pending::reserve(&state, "openai", "gpt-realtime-mini", id, bound).unwrap();
+    let pending = Pending::reserve(
+        &state,
+        "openai",
+        "gpt-realtime-mini",
+        id,
+        bound,
+        rates().max_output,
+    )
+    .unwrap();
     drop(pending);
     assert!((state.budget_manager.get_current_spend(&scope) - expected - bound).abs() < 1e-9);
     assert!(
@@ -651,7 +681,7 @@ async fn realtime_2_has_complete_authoritative_audio_cache_rates() {
         info.extra["cache_read_input_audio_token_cost"].as_f64(),
         Some(0.0000004)
     );
-    assert!(rates.cost(&usage()).unwrap().0 < rates.bound(rates.max_output));
+    assert!(rates.cost(&usage(), rates.max_output).unwrap().0 < rates.bound(rates.max_output));
 }
 
 #[actix_web::test]
@@ -793,7 +823,7 @@ async fn only_matching_precreation_errors_consume_the_reservation() {
             .get_provider_usage("openai")
             .unwrap()
             .current_spend
-            - rates().cost(&usage()).unwrap().0)
+            - rates().cost(&usage(), rates().max_output).unwrap().0)
             .abs()
             < 1e-10
     );
@@ -1204,7 +1234,17 @@ async fn response_boundaries_reauthorize_current_keys() {
                 .await
                 .unwrap();
         }
-        assert_eq!(next_json(&mut client).await["type"], "error", "{change}");
+        let error = next_json(&mut client).await;
+        assert_eq!(error["type"], "error", "{change}");
+        assert_eq!(
+            error["error"]["type"],
+            if change == "rpm" {
+                "rate_limit_error"
+            } else {
+                "authentication_error"
+            },
+            "{change}"
+        );
         assert_eq!(
             calls
                 .lock()
@@ -1635,7 +1675,7 @@ async fn completed_responses_survive_failed_budget_settlement() {
         .await
         .unwrap()
         .unwrap();
-    let (cost, tokens) = rates().cost(&usage()).unwrap();
+    let (cost, tokens) = rates().cost(&usage(), rates().max_output).unwrap();
     assert_eq!(stored.usage_stats.total_tokens, tokens);
     assert!((stored.usage_stats.total_cost - cost).abs() < 1e-12);
     let router = state.pin_runtime().unified_router.clone();
@@ -1819,7 +1859,7 @@ async fn configured_realtime_provider_budgets_reject_and_settle_to_the_same_iden
         .get_provider_usage("prod-openai")
         .unwrap()
         .current_spend;
-    assert!((spend - rates().cost(&usage()).unwrap().0).abs() < 1e-12);
+    assert!((spend - rates().cost(&usage(), rates().max_output).unwrap().0).abs() < 1e-12);
     assert!(
         state
             .budget_limits
@@ -1975,6 +2015,137 @@ async fn cancellations_without_modality_usage_keep_native_terminal_and_neutral_h
             for handle in handles {
                 handle.stop(false).await;
             }
+        }
+    }
+}
+
+#[actix_web::test]
+async fn unavailable_budget_backend_is_not_customer_quota_exhaustion() {
+    let (mut state, _, raw, calls, mut handles) = fixture().await;
+    let limits = crate::core::budget::UnifiedBudgetLimits::with_unavailable_backend();
+    limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    state.budget_limits = Arc::new(limits);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "ws://{}/v1/realtime?model=gpt-realtime-mini",
+        listener.local_addr().unwrap()
+    );
+    let copy = state.clone();
+    let server = HttpServer::new(move || {
+        crate::server::http::HttpServer::create_app(web::Data::new(copy.clone()))
+    })
+    .workers(1)
+    .listen(listener)
+    .unwrap()
+    .run();
+    handles.push(server.handle());
+    actix_web::rt::spawn(server);
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    let error = next_json(&mut client).await;
+    assert_eq!(error["error"]["type"], "server_error");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("backend unavailable")
+    );
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|event| event["type"] != "response.create")
+    );
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn terminal_usage_cannot_exceed_the_effective_response_output_cap() {
+    for source in ["response", "session", "key"] {
+        let (state, url, raw, _, handles) = fixture().await;
+        state.budget_limits.providers.set_provider_limit(
+            "openai",
+            ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        let mut client = client(&url, &raw).await;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        if source == "session" {
+            client
+                .send(Message::Text(
+                    json!({"type":"session.update","session":{"max_output_tokens":16}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(next_json(&mut client).await["type"], "session.updated");
+        } else if source == "key" {
+            let (mut key, _) = state
+                .auth
+                .api_key()
+                .verify_key(&raw)
+                .await
+                .unwrap()
+                .unwrap();
+            key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":16,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+            state.storage.db().update_api_key(&key).await.unwrap();
+        }
+        let event = if source == "response" {
+            json!({"type":"response.create","response":{"max_output_tokens":16}})
+        } else {
+            json!({"type":"response.create"})
+        };
+        client
+            .send(Message::Text(event.to_string().into()))
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            next_json(&mut client).await;
+        }
+        let terminal = next_json(&mut client).await;
+        assert_eq!(terminal["type"], "error", "{source}");
+        assert!(
+            terminal["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("usage exceeds reserved"),
+            "{source}"
+        );
+        let spend = state
+            .budget_limits
+            .providers
+            .get_provider_usage("openai")
+            .unwrap()
+            .current_spend;
+        assert!(
+            (spend - rates().bound(16)).abs() < 1e-9,
+            "{source}: {spend}"
+        );
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
         }
     }
 }

@@ -532,17 +532,18 @@ async fn relay(
                                 context = authenticated.context;
                             }
                             if let Some(key_id) = context.api_key_id() {
-                                let key = state.storage.db().find_api_key_by_id(key_id).await.map_err(|_| "Realtime key reauthorization unavailable")?.ok_or("Realtime API key no longer exists")?;
+                                let key = state.storage.db().find_api_key_by_id(key_id).await.map_err(|_| "Realtime key reauthorization unavailable")?.ok_or_else(|| { error_type = "authentication_error"; "Realtime API key no longer exists" })?;
                                 if !key.is_active || key.expires_at.is_some_and(|expires| expires <= chrono::Utc::now())
                                     || !context::check_permission(None, Some(&key), "realtime")
                                     || !context::api_key_allows_endpoint(Some(&key), "/v1/realtime").map_err(|_| "Invalid Realtime key policy")? {
+                                    error_type = "authentication_error";
                                     return Err("Realtime API key is no longer authorized".into());
                                 }
                                 if let Some(user_id) = key.user_id {
                                     let owner = state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?;
-                                    if !owner.is_some_and(|owner| owner.is_active()) { return Err("Realtime API key owner is no longer authorized".into()); }
+                                    if !owner.is_some_and(|owner| owner.is_active()) { error_type = "authentication_error"; return Err("Realtime API key owner is no longer authorized".into()); }
                                 }
-                                context::enforce_key_model_and_token_limits(&key, &public_model, if unbounded_output { None } else { value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok()) }).map_err(|_| "Realtime model or output policy denied")?;
+                                context::enforce_key_model_and_token_limits(&key, &public_model, if unbounded_output { None } else { value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok()) }).map_err(|_| { error_type = "authentication_error"; "Realtime model or output policy denied" })?;
                                 output_limit = context::api_key_output_limit(&key).map_err(|_| "Invalid Realtime key policy")?.map_or(output_limit, |limit| limit.min(output_limit));
                                 key_rpm = key.rate_limits.as_ref().and_then(|limits| limits.rpm).or(requests_per_minute);
                                 if let Some(budget_id) = crate::auth::api_key_budget_id(&key) { context.set_api_key_budget_id(budget_id); } else { context.clear_api_key_budget_id(); }
@@ -563,7 +564,7 @@ async fn relay(
                                 continue;
                             }
                             let effective_output = value["response"]["max_output_tokens"].as_u64().ok_or("Missing Realtime output limit")? as u32;
-                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output)) {
+                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output) {
                                 Ok(reservation) => {
                                     let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                                     value["event_id"] = json!(event_id);
@@ -572,7 +573,7 @@ async fn relay(
                                     // No trusted terminal usage may arrive; admission retains the reserved upper bound.
                                     tokens = rates.max_input as u64 + effective_output as u64;
                                 },
-                                Err(message) => { lease.cancel_response(); send_client(&mut downstream, json!({"type":"error","error":{"type":"insufficient_quota","message":message}}).to_string(), timeout).await?; continue; }
+                                Err(error) => { lease.cancel_response(); let kind = if matches!(error, ProviderError::QuotaExceeded { .. }) { "insufficient_quota" } else { "server_error" }; send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.to_string()}}).to_string(), timeout).await?; continue; }
                             }
                         }
                         if value["type"] == "session.update" {
@@ -609,8 +610,8 @@ async fn relay(
                             response_id = Some(value["response"]["id"].as_str().ok_or_else(|| { failure = true; "Missing Realtime response ID" })?.to_owned());
                         } else if value["type"] == "response.done" {
                             if response_id.as_deref() != value["response"]["id"].as_str() || response_id.is_none() { failure = true; return Err("Mismatched Realtime response ID".into()); }
-                            let usage = rates.cost(&value["response"]["usage"]);
                             let reservation = pending.take().ok_or("Missing Realtime reservation")?;
+                            let usage = rates.cost(&value["response"]["usage"], reservation.max_output);
                             match usage {
                                 Ok(usage) => {
                                     tokens = usage.1;
