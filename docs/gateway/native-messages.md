@@ -13,3 +13,9 @@ The geo calculation adapts the existing LiteLLM `provider_specific_entry` price 
 This change reuses the existing transport and budget pipeline. References checked 2026-10-03: [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing), [web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool), [web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool), [code execution](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool). Local HTTP tests verify rejection before generation, unchanged native tool definitions and auth restrictions; they do not validate provider-side invoices.
 
 [Advisor calls](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) use another model and omit its usage from top-level totals; [compaction](https://platform.claude.com/docs/en/build-with-claude/compaction-threshold) also adds separately billed iterations. [Server-side fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) can change the model without passing through gateway model permissions. These modes are explicitly rejected before count/generation rather than passed through under the selected model price. They remain outside the first supported scope.
+
+When no trustworthy terminal usage is available, the gateway retains the reserved
+budget commitment but records the key request as unpriced with zero reported
+actual cost/tokens and leaves ledger cost unknown. An estimate is not presented
+as a provider invoice. This includes malformed finite usage and interrupted or
+failed streams; the original protocol error is still returned.

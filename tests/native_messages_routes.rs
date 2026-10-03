@@ -927,3 +927,68 @@ async fn geo_capable_models_reject_missing_billing_region_but_haiku45_accepts_it
         }
     }
 }
+
+#[tokio::test]
+async fn unknown_messages_usage_retains_budget_without_recording_an_actual_bill() {
+    use actix_web::HttpMessage;
+    use litellm_rs::core::{
+        budget::{ModelLimitConfig, ResetPeriod},
+        keys::CreateKeyConfig,
+        types::context::RequestContext,
+    };
+    for stream in [false, true] {
+        let (state, upstream, handle) = fixture(StatusCode::OK, stream, |_| {}).await;
+        state.budget_limits.models.set_model_limit(
+            "claude-opus-5",
+            ModelLimitConfig::new(1.0, ResetPeriod::Never),
+        );
+        let keys = state.key_manager.clone();
+        let (key_id, _) = keys
+            .generate_key(CreateKeyConfig {
+                name: "messages-unknown-usage".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        if !stream {
+            *upstream.reported_usage.lock().unwrap() = Value::Null;
+        }
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(request(stream))
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_api_key(key_id));
+        let response = test::call_service(&app, req).await;
+        assert_eq!(
+            response.status(),
+            if stream {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        );
+        let _ = test::read_body(response).await;
+        let usage = keys.get_usage_stats(key_id).await.unwrap();
+        assert_eq!(usage.total_requests, 1);
+        assert_eq!(usage.unpriced_requests, 1);
+        assert_eq!(usage.total_tokens, 0);
+        assert_eq!(usage.total_cost, 0.0);
+        assert!(
+            state
+                .budget_limits
+                .models
+                .get_model_usage("claude-opus-5")
+                .unwrap()
+                .current_spend
+                > 0.0
+        );
+        handle.stop(false).await;
+    }
+}

@@ -207,7 +207,7 @@ impl UsageSpendSettlement<'_> {
     }
 }
 
-fn capture_ledger_settlement(
+pub(super) fn capture_ledger_settlement(
     facts: Option<&SharedRequestLedgerFacts>,
     provider: &str,
     model: &str,
