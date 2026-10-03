@@ -29,7 +29,7 @@ Groq 路由按具体模型区分：Whisper v3/v3-turbo 可转写，仅 v3 可翻
 
 第三批（#1400）沿用现有 HTTP/Router 实现。依据：[OpenRouter embeddings](https://openrouter.ai/docs/api/api-reference/embeddings/create-embeddings)、[Nebius 官方 OpenAPI](https://api.tokenfactory.nebius.com/docs)、[NVIDIA embeddings](https://docs.api.nvidia.com/nim/reference/nvidia-llama-nemotron-embed-1b-v2-infer)、[LM Studio embeddings](https://lmstudio.ai/docs/developer/openai-compat/embeddings)，核验日期 2026-10-03。Nebius 默认 base 使用官方 Token Factory 地址；已有显式 base 配置仍优先。
 
-本批验证文本输入和浮点向量响应。NVIDIA/OpenRouter 的供应商 `input_type` 通过现有网关 `task_type` 参数传递，NVIDIA 的 `truncation: true/false` 分别映射 `truncate: END/NONE`；没有增加供应商配置或默认截断。NVIDIA 的维度、模型可用性仍受实际模型协议约束。LM Studio 需要本地加载 embedding 模型；本地服务不自动获得零价，继续使用已有价格配置和缺价策略。多模态输入及 base64 向量响应未在本批验证。
+本批验证文本输入和浮点向量响应。NVIDIA/OpenRouter 的供应商 `input_type` 通过 HTTP 请求的 `input_type` 字段传递（内部映射为 `task_type`），NVIDIA 的 `truncation: true/false` 分别映射 `truncate: END/NONE`；没有增加供应商配置或默认截断。NVIDIA 的维度、模型可用性仍受实际模型协议约束。LM Studio 需要本地加载 embedding 模型；本地服务不自动获得零价，继续使用已有价格配置和缺价策略。多模态输入及 base64 向量响应未在本批验证。
 
 Nebius 图片端点虽然路径相同，官方请求使用 width/height，响应为 id/data 且没有当前通用实现必需的 created，因此本批保持明确不支持，不把路径相同视为协议等价。其独立适配仍是 F11 的剩余工作。
 
@@ -59,7 +59,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 逐项官方链接、固定源码版本和剩余限制见 [本地非聊天协议审计](../audit/local-compatible-nonchat-2026-10-03.md)。实测均为本地 HTTP 模拟：覆盖 factory/Router、实际 JSON/multipart/二进制传输、模型与参数错误、429 Retry-After，以及本地模型缺价、预算不足和按真实 usage 结算。未安装模型、未运行 GPU 推理或供应商付费调用。
 
-第五批（#1415，核验 2026-10-03）补充 Nscale embeddings、OVHcloud embeddings 和 Heroku embeddings。Nscale 默认 base 修正为 `https://inference.api.nscale.com/v1`，OVHcloud 为 `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`；显式自定义 base 仍优先。Heroku 使用 add-on 对应的模型和 key，网关 API base 必须配置为 `${EMBEDDING_URL}/v1`（例如 `https://us.inference.heroku.com/v1`），不能直接填写 add-on 给出的裸主机 URL；[官方示例](https://devcenter.heroku.com/articles/heroku-inference-api-v1-embeddings)在该变量后追加 `/v1/embeddings`。向量请求的 `encoding_format: float` 映射为官方 `raw`，`task_type` 映射为 `input_type`。仅核验文本输入和浮点向量；Heroku 的自定义维度、截断等非协议参数不静默删除，错误由上游返回。Nscale 图片虽有兼容协议，但当前模型按像素计价，网关尚未支持该计费单位，因此不声明图片生成能力，并在请求上游前拒绝。Heroku 凭据按显式 key、`HEROKU_API_KEY`、`INFERENCE_KEY`、`EMBEDDING_KEY` 顺序解析；多个模型资源使用显式 key 选择对应资源。OVHcloud 同样接受官方 `OVH_AI_ENDPOINTS_ACCESS_TOKEN`，显式 key 和 `OVHCLOUD_API_KEY` 优先。
+第五批（#1415，核验 2026-10-03）补充 Nscale embeddings、OVHcloud embeddings 和 Heroku embeddings。Nscale 默认 base 修正为 `https://inference.api.nscale.com/v1`，OVHcloud 为 `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`；显式自定义 base 仍优先。Heroku 使用 add-on 对应的模型和 key，网关 API base 必须配置为 `${EMBEDDING_URL}/v1`（例如 `https://us.inference.heroku.com/v1`），不能直接填写 add-on 给出的裸主机 URL；[官方示例](https://devcenter.heroku.com/articles/heroku-inference-api-v1-embeddings)在该变量后追加 `/v1/embeddings`。向量请求的 `encoding_format: float` 映射为官方 `raw`，HTTP 请求使用 `input_type` 字段，内部 `task_type` 再映射为上游 `input_type`。仅核验文本输入和浮点向量；Heroku 的自定义维度、截断等非协议参数不静默删除，错误由上游返回。Nscale 图片虽有兼容协议，但当前模型按像素计价，网关尚未支持该计费单位，因此不声明图片生成能力，并在请求上游前拒绝。Heroku 凭据按显式 key、`HEROKU_API_KEY`、`INFERENCE_KEY`、`EMBEDDING_KEY` 顺序解析；多个模型资源使用显式 key 选择对应资源。OVHcloud 同样接受官方 `OVH_AI_ENDPOINTS_ACCESS_TOKEN`，显式 key 和 `OVHCLOUD_API_KEY` 优先。
 
 官方协议与剩余限制见 [云供应商非聊天审计](../audit/cloud-compatible-nonchat-2026-10-03.md)。Baseten 专用 BEI、Friendli 专用 embeddings/images、HF 原生多任务接口不能从兼容聊天地址推断可用。Friendli serverless 转写虽有兼容路径，其用量按 input/output tokens 表达，当前音频路由按秒计费，故仍需明确适配。Heroku 图片的 aspect_ratio/output_format 也尚未映射，不扩大支持声明。本批本地 HTTP 覆盖真实 factory/Router、请求映射、400/429、缺价拒绝、预算不足和实际 usage 结算；没有付费实调。
 
@@ -94,7 +94,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
 | `galadriel` | 官方 OpenAPI 的 embeddings、images/generations；须配置实际可用模型，未实调账户目录 |
 | `sambanova` | 待核验；本批未扩展非聊天声明 |
-| `heroku` | 文本 embeddings；float→raw、task_type→input_type；须模型 add-on 对应 URL/key；图片参数待适配 |
+| `heroku` | 文本 embeddings；float→raw、HTTP input_type→上游 input_type；须模型 add-on 对应 URL/key；图片参数待适配 |
 | `friendliai` | 已核验：serverless 转写按 tokens 用量，与当前音频秒计费不同，未接入；dedicated embeddings/images 不在默认 base |
 | `meta_llama` | 待核验；本批未扩展非聊天声明 |
 | `v0` | 待核验；本批未扩展非聊天声明 |

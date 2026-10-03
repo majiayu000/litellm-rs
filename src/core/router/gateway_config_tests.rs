@@ -145,6 +145,40 @@ mod matrix {
     }
 
     #[tokio::test]
+    async fn direct_factory_skips_blank_primary_and_alternate_credentials() {
+        for (selector, values, selected) in [
+            (
+                "heroku",
+                vec![
+                    ("HEROKU_API_KEY", " "),
+                    ("INFERENCE_KEY", ""),
+                    ("EMBEDDING_KEY", "embedding-fixture"),
+                ],
+                "embedding-fixture",
+            ),
+            (
+                "ovhcloud",
+                vec![
+                    ("OVHCLOUD_API_KEY", ""),
+                    ("OVH_AI_ENDPOINTS_ACCESS_TOKEN", "ovh-fixture"),
+                ],
+                "ovh-fixture",
+            ),
+        ] {
+            let _env = EnvScope::new(&values);
+            let mut config = provider(selector, "");
+            config.provider_type = selector.to_owned();
+            let created = crate::core::providers::create_provider(config)
+                .await
+                .unwrap();
+            let crate::core::providers::Provider::OpenAILike(created) = created else {
+                panic!("expected catalog provider");
+            };
+            assert_eq!(created.config().base.api_key.as_deref(), Some(selected));
+        }
+    }
+
+    #[tokio::test]
     async fn complete_construction_credential_precedence_matrix() {
         #[rustfmt::skip]
     let cases = [
