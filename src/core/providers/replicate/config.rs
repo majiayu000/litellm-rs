@@ -117,9 +117,22 @@ impl ReplicateConfig {
         if version_id.contains("deployments/") {
             let deployment = version_id.replace("deployments/", "");
             format!("{}/deployments/{}/predictions", base, deployment)
+        } else if Self::prediction_version(model).is_some() {
+            format!("{}/predictions", base)
         } else {
             format!("{}/models/{}/predictions", base, version_id)
         }
+    }
+
+    /// The explicit requested version, or the audited community-model version.
+    pub(crate) fn prediction_version(model: &str) -> Option<String> {
+        Self::extract_version_hash(model).or_else(|| {
+            super::models::get_replicate_registry()
+                .get_model_spec(model)
+                .and_then(|spec| spec.model_info.metadata.get("version"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
     }
 
     /// Extract version ID from model string
