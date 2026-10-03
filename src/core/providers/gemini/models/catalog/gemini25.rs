@@ -48,14 +48,7 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::VideoUnderstanding,
                 ModelFeature::AudioUnderstanding,
             ],
-            pricing: pricing_per_million(
-                1.25,
-                10.0,
-                Some(0.3125),
-                Some(0.005),
-                Some(0.005),
-                Some(0.0005),
-            ),
+            pricing: pricing_per_million(1.25, 10.0, Some(0.125), None, None, None),
             limits: ModelLimits {
                 max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_tokens: 65536,
@@ -104,14 +97,10 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::VideoUnderstanding,
                 ModelFeature::AudioUnderstanding,
             ],
-            pricing: pricing_per_million(
-                0.30,
-                2.50,
-                Some(0.075),
-                Some(0.0002),
-                Some(0.0002),
-                Some(0.0001),
-            ),
+            pricing: crate::core::cost::types::ModelPricing {
+                input_cost_per_audio_token: Some(1.0 / 1_000_000.0),
+                ..pricing_per_million(0.30, 2.50, Some(0.03), None, None, None)
+            },
             limits: ModelLimits {
                 max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_tokens: 65536,
@@ -158,7 +147,10 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
                 ModelFeature::CodeExecution,
                 ModelFeature::SearchGrounding,
             ],
-            pricing: pricing_per_million(0.10, 0.40, Some(0.025), Some(0.0001), None, None),
+            pricing: crate::core::cost::types::ModelPricing {
+                input_cost_per_audio_token: Some(0.30 / 1_000_000.0),
+                ..pricing_per_million(0.10, 0.40, Some(0.01), None, None, None)
+            },
             limits: ModelLimits {
                 max_context_length: GEMINI_25_CONTEXT_WINDOW,
                 max_output_tokens: 65536,

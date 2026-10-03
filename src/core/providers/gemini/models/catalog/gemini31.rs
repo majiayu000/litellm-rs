@@ -66,62 +66,6 @@ pub(super) fn register(registry: &mut GeminiModelRegistry) {
         },
     );
 
-    // Gemini 3.1 Flash
-    registry.register_model(
-        "gemini-3.1-flash",
-        ModelSpec {
-            model_info: ModelInfo {
-                id: "gemini-3.1-flash".to_string(),
-                name: "Gemini 3.1 Flash".to_string(),
-                provider: "gemini".to_string(),
-                max_context_length: 1_048_576,
-                max_output_length: Some(65536),
-                supports_streaming: true,
-                supports_tools: true,
-                supports_multimodal: true,
-                input_cost_per_1k_tokens: Some(0.000075),
-                output_cost_per_1k_tokens: Some(0.0003),
-                currency: "USD".to_string(),
-                capabilities: advanced_text_capabilities(),
-                created_at: None,
-                updated_at: None,
-                metadata: std::collections::HashMap::new(),
-            },
-            family: GeminiModelFamily::Gemini31Flash,
-            features: vec![
-                ModelFeature::MultimodalSupport,
-                ModelFeature::ToolCalling,
-                ModelFeature::FunctionCalling,
-                ModelFeature::StreamingSupport,
-                ModelFeature::ContextCaching,
-                ModelFeature::SystemInstructions,
-                ModelFeature::BatchProcessing,
-                ModelFeature::JsonMode,
-                ModelFeature::CodeExecution,
-                ModelFeature::SearchGrounding,
-                ModelFeature::VideoUnderstanding,
-                ModelFeature::AudioUnderstanding,
-            ],
-            pricing: pricing_per_million(
-                0.075,
-                0.30,
-                Some(0.01875),
-                Some(0.0002),
-                Some(0.0002),
-                Some(0.00002),
-            ),
-            limits: ModelLimits {
-                max_context_length: 1_048_576,
-                max_output_tokens: 65536,
-                max_images: Some(3000),
-                max_video_seconds: Some(3600),
-                max_audio_seconds: Some(9600),
-                rpm_limit: Some(2000),
-                tpm_limit: Some(4_000_000),
-            },
-        },
-    );
-
     // Gemini 3.1 Flash-Lite
     registry.register_model(
         "gemini-3.1-flash-lite",
