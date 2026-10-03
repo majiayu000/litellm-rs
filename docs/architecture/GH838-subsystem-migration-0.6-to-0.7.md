@@ -17,8 +17,8 @@ use the breaking-release path in `.github/workflows/version-bump.yml`.
 | `core::webhooks` | Deprecated default-off library feature | Removed with the `webhooks` feature; independent budget-alert delivery remains |
 | `core::realtime` | Deprecated default-off `websockets` library feature; no mounted route | Remove unless a separately approved runtime design supersedes the decision |
 | `core::batch::BatchProcessor` | Deprecated; `/v1/batches` continues to use the provider proxy | Processor removed; provider proxy and async batch helpers retained |
-| `core::semantic_cache` | Deprecated but retained with `storage` for 0.6 compatibility; config enablement is rejected | Remove module and rejected config fields |
-| `core::analytics` | Deprecated and default-off behind `analytics` | Remove module and unwired config fields |
+| `core::semantic_cache` | Removed from unreleased source | Use deterministic `core::cache`; remove semantic cache fields |
+| `core::analytics` | Removed from unreleased source, including the `analytics` Cargo feature | Use runtime request metrics and callback integrations |
 | `core::virtual_keys::VirtualKeyManager` | Deprecated duplicate; gateway runtime uses `core::keys::KeyManager` through `RuntimeVirtualKeyManager` | Manager removed; canonical KeyManager and storage records retained |
 | `core::user_management::UserManager` | Deprecated and default-off behind `user-management`; compatibility record types remain because auth/storage use them | Manager and user-management feature removed; auth/storage records retained |
 
@@ -43,7 +43,7 @@ shipped as a patch release.
 
 Issue #1402 removes the unreachable BatchProcessor, duplicate VirtualKeyManager, unused UserManager and user-management Cargo feature, and resolved GH838 temporary-exemption constants/variant. Repository references were confined to the implementations, exports and compatibility-only tests. Batch async helpers, RuntimeVirtualKeyManager (canonical KeyManager), and user/team/virtual-key records remain because current runtime/storage paths consume them. This is a source-breaking removal, without replacement shims.
 
-Remaining F16 review: legacy analytics, semantic-cache and retry helpers; the retained observability redaction helpers still protect provider configuration output. A2A/MCP/Realtime declarations follow their respective gateway implementations. Removal of the three unused managers does not complete the entire subsystem audit.
+Remaining F16 review: legacy retry helpers and realtime; the retained observability redaction helpers still protect provider configuration output. A2A/MCP/Realtime declarations follow their respective gateway implementations. Removal of the three unused managers does not complete the entire subsystem audit.
 
 ## Legacy observability and webhook removal
 
@@ -54,6 +54,14 @@ Use configured callback integrations through `RuntimeObservability`; provider
 configuration still uses the retained redaction helpers. Existing budget-alert
 webhook delivery and provider-native webhook request fields are separate and
 remain supported. No replacement compatibility facade is introduced.
+
+The next unreleased source also removes the unused semantic knobs from
+`LLMCacheConfig` and `/admin/cache` output. Drop `analytics` from explicit Cargo
+feature lists; `enterprise` now selects only vector search. Build workflows,
+Docker defaults and configuration examples have been updated together. This is
+an intentional source/configuration break, not a change to already published
+v0.7.0 artifacts. Ordinary cache TTL/size, audit logging, metrics, user usage
+records and callback integrations remain wired and supported.
 
 ## Expired duplicate provider modules
 

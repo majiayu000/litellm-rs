@@ -242,8 +242,6 @@ cache:
   enabled: false
   ttl: 3600
   max_size: 1000
-  semantic_cache: false
-  similarity_threshold: 0.95
 
 pricing:
   # PricingService source path/URL. The embedded default is cwd-independent;
@@ -279,5 +277,3 @@ enterprise:
   # Explicitly enables request audit middleware. Events are emitted as JSON on
   # stderr; request/response bodies remain disabled by default.
   audit_logging: false
-  # Deprecated removal candidate; enabling remains rejected.
-  advanced_analytics: false

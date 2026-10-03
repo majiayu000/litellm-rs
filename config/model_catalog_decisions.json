@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "model-retirement-review-20261003",
+  "revision": "responses-endpoint-and-retirement-review-20261003",
   "sources": {
     "evidence-001": {
       "kind": "runtime_pricing_row_pending_provider_review",
@@ -724,6 +724,496 @@
       "location": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
       "reviewed_on": "2026-10-03",
       "revision": "retirement-audit-1373"
+    },
+    "endpoints-20261003-chat-latest": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/chat-latest.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "b6b9dc5e8a6c720641cfc8ada231e311d66ebbf2ba5ac14d7d480535679079cc"
+    },
+    "endpoints-20261003-chatgpt-image-latest": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/chatgpt-image-latest.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "ff082cd50241d10e6512f57bb9838830838e65d5daf182ff852f19ee2013666e"
+    },
+    "endpoints-20261003-gpt-3.5-turbo": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-3.5-turbo.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "b60a7c8d28140cc069586bce75b6b49313637670614c656f2dc3a830af7a610a"
+    },
+    "endpoints-20261003-gpt-4": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "1dc4685828109ba85929c8629caf7ec286763a770a413c808af255253f4257cb"
+    },
+    "endpoints-20261003-gpt-4-turbo": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4-turbo.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "06a1457db35c5a8e5a3a2095265386f99317e103b86646873c80e06a3451f603"
+    },
+    "endpoints-20261003-gpt-4.1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4.1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "14b53095d54acc36d1346302259bc4d21e9f9de71f3859c11f1405087fa0da74"
+    },
+    "endpoints-20261003-gpt-4.1-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4.1-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "e0c12fb617705a1f88e6dc3e5c1f1a32970e9bcd30c43adc4739232f4bfcf6eb"
+    },
+    "endpoints-20261003-gpt-4.1-nano": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4.1-nano.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "b7bd756c48509d7eaa8187100fc682537c78eec6c3ff099ad6d3e28ace1a86eb"
+    },
+    "endpoints-20261003-gpt-4o": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "c90025dc613e12e76583d997c33c0fa8d63412b70d90bfc9e04153e9b8c4ba13"
+    },
+    "endpoints-20261003-gpt-4o-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "20d4047a067750279b96f24debe3b8e1d6316e90caa1d6aae25b11dd4ab49bdf"
+    },
+    "endpoints-20261003-gpt-4o-mini-search-preview": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "a671379bce440695b30a83d0da43c058f89fa6f105d2f0a7119dd34902164efb"
+    },
+    "endpoints-20261003-gpt-4o-mini-transcribe": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "d178cd0057b1f4fef0bccd4e0b891755a6404cf2c917788a4bf6ee1949a6e7ad"
+    },
+    "endpoints-20261003-gpt-4o-mini-tts": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "b984b2b83125764bb7ba42fcb30615aefae114a5a1ed89e6db1e3c14eb00374f"
+    },
+    "endpoints-20261003-gpt-4o-search-preview": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-search-preview.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "2191ae4262d8df11be52b21b0637e01e8e3b023d440df4b0f1004905f504560c"
+    },
+    "endpoints-20261003-gpt-4o-transcribe": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-transcribe.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "52282959e3d6b278353f16f09e6c2e68210c4024ef234f64a9552c58d73c863d"
+    },
+    "endpoints-20261003-gpt-4o-transcribe-diarize": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-4o-transcribe-diarize.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "22311d1c4acd7baf52e530e4aace47b64255da9d2cc5867c1826e8da9d4ad56a"
+    },
+    "endpoints-20261003-gpt-5": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "05de1e96f42e9bcdf1f2fc9b8bba47f0263f99974b61027413d01e2a6f7331fa"
+    },
+    "endpoints-20261003-gpt-5-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "3f3228b22ff8f4d6235158bb70ce1206a521724beb2b0dd814f0f38d0d897800"
+    },
+    "endpoints-20261003-gpt-5-nano": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5-nano.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "81508b2800ec4c9da22cf057ad4d6c2ba9237d98ec6a3915b5bc1df0ce45d131"
+    },
+    "endpoints-20261003-gpt-5-pro": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5-pro.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "c8d1fdb4e218de05be24d572e38df6451d0692f01adbca181f00fa461d6a8fda"
+    },
+    "endpoints-20261003-gpt-5.1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "7cf672ec607b598612e26e0d6b80648983bb24bd7541e43273c9130f14b38b5c"
+    },
+    "endpoints-20261003-gpt-5.2": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.2.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "6171f4e1534915bdfd2386e1cf5c7e5de4c357d4a2c0bf9dbf1dd26ad3eb9282"
+    },
+    "endpoints-20261003-gpt-5.2-pro": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.2-pro.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "d11ff93b2c0ab2ef9ba94db8f89c33d9739b835ae1669c99a4e079d4789a3d0b"
+    },
+    "endpoints-20261003-gpt-5.3-codex": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.3-codex.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "6d228a9894bf1b4c38e029cb283e3bb85d410d8100c262f35c7e7ee4fb3d0b22"
+    },
+    "endpoints-20261003-gpt-5.4": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.4.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "c30e86b38bc6ceacb3d6db269aa6ba4a09c3c5e1322bfaf90f924fddce4013a5"
+    },
+    "endpoints-20261003-gpt-5.4-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.4-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "97dbda29af4009ed275112e92037a5b46f313caf0d1232ff9b54b899b4fb65a7"
+    },
+    "endpoints-20261003-gpt-5.4-nano": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.4-nano.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "3dd20e2c95f09f3efb19c6255387a4e07d4d7c213367cca0a015e162a8f5b4e0"
+    },
+    "endpoints-20261003-gpt-5.4-pro": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.4-pro.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "7d4e6f56440cf9cebd56c7384118be317d30d3d2f0c33e1254c4b906fb972e22"
+    },
+    "endpoints-20261003-gpt-5.5": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.5.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "fdb0fc8fe9ea7f276716c2a5b49b902e7e676ff262bb8adfdf2d5b8911bad3ba"
+    },
+    "endpoints-20261003-gpt-5.5-pro": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.5-pro.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "a61a55e1d58cfbbf56fa075936c77fbfd59e41df4463f41056f9c6a7461f1b57"
+    },
+    "endpoints-20261003-gpt-5.6-sol": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.6-sol.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "5f5a574b3818f2a0010c228b73ae0d9f9ac83ace745f07566617cc3629c0fc6c"
+    },
+    "endpoints-20261003-gpt-5.6-cyber": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.6-cyber.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "fca3d2272bb2bf23971d5bb67bed7d9862242314c5bcf996db8fc1429658e669"
+    },
+    "endpoints-20261003-gpt-5.6-luna": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.6-luna.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "1f425d8f2a93f8418702ac7acbb62b26850b98fe20680f82205bed5fce38fed0"
+    },
+    "endpoints-20261003-gpt-5.6-terra": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-5.6-terra.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "359b9ad58c0c7f2339273fff8627ff3225acb9bca0f1d9c5edcee41701808209"
+    },
+    "endpoints-20261003-gpt-6-astra": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-6-astra.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "290905c5491e594376583ae22c7d21b3b6f5469074c9a7de0189bd3ae54b290a"
+    },
+    "endpoints-20261003-gpt-6-luna": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-6-luna.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "9bde4b64e369ace4696d98a7dd6ec8b8e0c6a8de090a116970d55dcd4cadfc7b"
+    },
+    "endpoints-20261003-gpt-6-sol": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-6-sol.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "8250fec500df31d551bf994b7314208a56fe736d4253a817d136ef826fd0d709"
+    },
+    "endpoints-20261003-gpt-6.1-sol": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "972f4265295eea723d5332016dc22cde03f46173fafcbcba5c23b24c8cee90c6"
+    },
+    "endpoints-20261003-gpt-audio": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-audio.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "fb395f4e7db0b026fe849c38a090ef69ec4cf7c16d316b4b91d38f1d09f667f5"
+    },
+    "endpoints-20261003-gpt-audio-1.5": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-audio-1.5.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "238d9905ff53d6f920587c50d4f7faac84af6db29b3b89da93a9f782cb4b6a02"
+    },
+    "endpoints-20261003-gpt-audio-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-audio-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "b5a5d731928592e2e1cb756bcb98fdcedeec638ea4ecb545ce370ccf8c46b271"
+    },
+    "endpoints-20261003-gpt-image-1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-image-1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "9f307e042c86d7bcf295b685a9197617fc463384b6a9ec40737c4b1089c577e0"
+    },
+    "endpoints-20261003-gpt-image-1-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-image-1-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "46177e71f21f6cab0b765af93d8e6891e1b875c7e2a54413ae4754b384bf7984"
+    },
+    "endpoints-20261003-gpt-image-1.5": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-image-1.5.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "df2ec502293c4d69ae45b7448ac032f23de1583e8f04d7f7101337ce7be750c5"
+    },
+    "endpoints-20261003-gpt-image-2": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-image-2.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "ae126c64205ec3d43f8f48eda1475a589574f35c97686988d1a1bdac52305dd8"
+    },
+    "endpoints-20261003-gpt-image-2.5-flare": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "87b1b83dcf0088cc0c0f43e67a458dcbd40182f8b58578d9bd3abd49292ca94e"
+    },
+    "endpoints-20261003-gpt-image-2.5-sunburst": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "4b83a727c044e4b772db4636b751d18791df8412501e13e21a51bd2e2e3b5ff6"
+    },
+    "endpoints-20261003-gpt-live-transcribe": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-live-transcribe.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "dd367d50cc25431aac8c59bd0f51355acfb62f2e9ef54a4351884cc4c064204f"
+    },
+    "endpoints-20261003-gpt-realtime": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "4342540669a83fa33d9fcad4b7dc030d30405dd15a720feff1950a35487f8f70"
+    },
+    "endpoints-20261003-gpt-realtime-1.5": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-1.5.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "379bc2a3f13f89a66a5d4a62e089c9d07ad4da9d8649b555013d5eacd1e03598"
+    },
+    "endpoints-20261003-gpt-realtime-2": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-2.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "257b86ef6ca6368df1723a16fcf8d2d8f9a8323926a7ceb13a76ee6fa06c2a03"
+    },
+    "endpoints-20261003-gpt-realtime-2.1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "4ab3318598ef8f29b919a3da13125b84b54c463ad71e67dee644aa6adc78a408"
+    },
+    "endpoints-20261003-gpt-realtime-2.1-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "bec9dbe2d4ea92540cbc688f85a935916dbe6b0f3605405dc8ae2bc034e1094b"
+    },
+    "endpoints-20261003-gpt-realtime-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "2e65e290569094fbac1dd48520bb346c93152b851a55b7da9378e8a5021da099"
+    },
+    "endpoints-20261003-gpt-realtime-translate": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-translate.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "a95860e250772faa38ba78b08834abde51619679962f081c9c3b1b2f0636ab13"
+    },
+    "endpoints-20261003-gpt-realtime-whisper": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-realtime-whisper.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "3321100ca14e47d0c4c6ceee07bb750d5da3a737916c8f53925f3892e496ba32"
+    },
+    "endpoints-20261003-gpt-transcribe": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/gpt-transcribe.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "b01f0e3e215c4536dffff243e69ab6885208af36f1ba916917cf878b1ccd48ec"
+    },
+    "endpoints-20261003-o1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/o1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "36b3428a41e8b9cbeee41f2dc9ab734ba876274543ee0bbc5380394f456d6b89"
+    },
+    "endpoints-20261003-o1-pro": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/o1-pro.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "28c725c01a25087e79a0230fb5fc3a60aa736794a2d298ef677714ef03475397"
+    },
+    "endpoints-20261003-o3": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/o3.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "a0772d56014efc4553a315ff49cca153bcb17e90d0657b276d14a76895a547de"
+    },
+    "endpoints-20261003-o3-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/o3-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "d2fee3aa4ed7d8fadde35570035459f133165334f73118dbc0f81c28a56e5f8f"
+    },
+    "endpoints-20261003-o3-pro": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/o3-pro.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "2e31f39d04324c3f744028eccb9931541372e31f82e8c54d01913434c6faf1c5"
+    },
+    "endpoints-20261003-o4-mini": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/o4-mini.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "06f644cd52700497dc59769a0f77c8822aa585d30d0158fb0cb3d3d4cd997b12"
+    },
+    "endpoints-20261003-omni-moderation-latest": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/omni-moderation-latest.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "6ccbbcbe10ed5a3b1b1eb8e10f4bb1c86d981a5312572bfa8061b60063413bca"
+    },
+    "endpoints-20261003-text-embedding-3-large": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/text-embedding-3-large.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "44dc3ed65817757f1abfae3f18829d01ffe7aa54424e4ffce6120d1a0236c06c"
+    },
+    "endpoints-20261003-text-embedding-3-small": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/text-embedding-3-small.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "727fa16f2461f7e8bf9e9adf47b839e10a4b12980d9486b634de77f00c0be567"
+    },
+    "endpoints-20261003-text-embedding-ada-002": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/text-embedding-ada-002.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "2e069da231b07ba05d4df734df3b13bc3dea6e17c4e5f2ea9756b311c2c7dccc"
+    },
+    "endpoints-20261003-tts-1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/tts-1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "6b0a6d8b788e47939cca8720d5ad60f344f54e5bba1d63efeb537b4cab4c64a7"
+    },
+    "endpoints-20261003-tts-1-hd": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/tts-1-hd.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "60eb8d40efd5aa359abf01d5de13f5d75e42faf9968bc2c7cb1c92714fcd34be"
+    },
+    "endpoints-20261003-whisper-1": {
+      "kind": "official_model_endpoint_matrix",
+      "location": "https://developers.openai.com/api/docs/models/whisper-1.md",
+      "reviewed_on": "2026-10-03",
+      "revision": "responses-endpoints-1375",
+      "sha256": "18119b30a9cce7bd42efc980126cb47b5ad01cb1ec2bad5ed5c31331ee159547"
     },
     "f10-deepseek-retirement-20261003": {
       "kind": "official_model_retirement_notice",
@@ -11343,6 +11833,22 @@
     },
     {
       "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/deepseek-ai/deepseek-v4-flash-0731",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "refresh-cloudflare"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/deepseek-ai/deepseek-v4-pro-0813",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "refresh-cloudflare"
+      ]
+    },
+    {
+      "provider": "cloudflare",
       "pricing_key": "cloudflare/@cf/google/gemma-2b-it-lora",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -11571,6 +12077,22 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/zai-org/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "refresh-cloudflare"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/zai-org/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "refresh-cloudflare"
       ]
     },
     {
@@ -22290,6 +22812,14 @@
     },
     {
       "provider": "nebius",
+      "pricing_key": "nebius/Qwen/Qwen3.8-27B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "nebius",
       "pricing_key": "nebius/deepseek-ai/DeepSeek-R1",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -24475,20 +25005,30 @@
       "pricing_key": "chat-latest",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-011"
+        "evidence-011",
+        "endpoints-20261003-chat-latest"
       ],
       "catalog_model_id": "chat-latest",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "chatgpt-image-latest",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-012"
+        "evidence-012",
+        "endpoints-20261003-chatgpt-image-latest"
       ],
       "catalog_model_id": "chatgpt-image-latest",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ]
     },
     {
       "provider": "openai",
@@ -24637,20 +25177,30 @@
       "pricing_key": "gpt-3.5-turbo",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-014"
+        "evidence-014",
+        "endpoints-20261003-gpt-3.5-turbo"
       ],
       "catalog_model_id": "gpt-3.5-turbo",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-3.5-turbo-0125",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-014"
+        "evidence-014",
+        "endpoints-20261003-gpt-3.5-turbo"
       ],
       "catalog_model_id": "gpt-3.5-turbo-0125",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -24675,20 +25225,30 @@
       "pricing_key": "gpt-4",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-015"
+        "evidence-015",
+        "endpoints-20261003-gpt-4"
       ],
       "catalog_model_id": "gpt-4",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4-0613",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-015"
+        "evidence-015",
+        "endpoints-20261003-gpt-4"
       ],
       "catalog_model_id": "gpt-4-0613",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -24703,120 +25263,180 @@
       "pricing_key": "gpt-4-turbo",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-016"
+        "evidence-016",
+        "endpoints-20261003-gpt-4-turbo"
       ],
       "catalog_model_id": "gpt-4-turbo",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4-turbo-2024-04-09",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-016"
+        "evidence-016",
+        "endpoints-20261003-gpt-4-turbo"
       ],
       "catalog_model_id": "gpt-4-turbo-2024-04-09",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4.1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-018"
+        "evidence-018",
+        "endpoints-20261003-gpt-4.1"
       ],
       "catalog_model_id": "gpt-4.1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4.1-2025-04-14",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-018"
+        "evidence-018",
+        "endpoints-20261003-gpt-4.1"
       ],
       "catalog_model_id": "gpt-4.1-2025-04-14",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4.1-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-019"
+        "evidence-019",
+        "endpoints-20261003-gpt-4.1-mini"
       ],
       "catalog_model_id": "gpt-4.1-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4.1-mini-2025-04-14",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-019"
+        "evidence-019",
+        "endpoints-20261003-gpt-4.1-mini"
       ],
       "catalog_model_id": "gpt-4.1-mini-2025-04-14",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4.1-nano",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-020"
+        "evidence-020",
+        "endpoints-20261003-gpt-4.1-nano"
       ],
       "catalog_model_id": "gpt-4.1-nano",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4.1-nano-2025-04-14",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-020"
+        "evidence-020",
+        "endpoints-20261003-gpt-4.1-nano"
       ],
       "catalog_model_id": "gpt-4.1-nano-2025-04-14",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-021"
+        "evidence-021",
+        "endpoints-20261003-gpt-4o"
       ],
       "catalog_model_id": "gpt-4o",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-2024-05-13",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-021"
+        "evidence-021",
+        "endpoints-20261003-gpt-4o"
       ],
       "catalog_model_id": "gpt-4o-2024-05-13",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-2024-08-06",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-021"
+        "evidence-021",
+        "endpoints-20261003-gpt-4o"
       ],
       "catalog_model_id": "gpt-4o-2024-08-06",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-2024-11-20",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-021"
+        "evidence-021",
+        "endpoints-20261003-gpt-4o"
       ],
       "catalog_model_id": "gpt-4o-2024-11-20",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -24843,20 +25463,30 @@
       "pricing_key": "gpt-4o-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-023"
+        "evidence-023",
+        "endpoints-20261003-gpt-4o-mini"
       ],
       "catalog_model_id": "gpt-4o-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-2024-07-18",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-023"
+        "evidence-023",
+        "endpoints-20261003-gpt-4o-mini"
       ],
       "catalog_model_id": "gpt-4o-mini-2024-07-18",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -24883,120 +25513,174 @@
       "pricing_key": "gpt-4o-mini-search-preview",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-026"
+        "evidence-026",
+        "endpoints-20261003-gpt-4o-mini-search-preview"
       ],
       "catalog_model_id": "gpt-4o-mini-search-preview",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-transcribe",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-027"
+        "evidence-027",
+        "endpoints-20261003-gpt-4o-mini-transcribe"
       ],
       "catalog_model_id": "gpt-4o-mini-transcribe",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-transcribe-2025-03-20",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-027"
+        "evidence-027",
+        "endpoints-20261003-gpt-4o-mini-transcribe"
       ],
       "catalog_model_id": "gpt-4o-mini-transcribe-2025-03-20",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-transcribe-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-027"
+        "evidence-027",
+        "endpoints-20261003-gpt-4o-mini-transcribe"
       ],
       "catalog_model_id": "gpt-4o-mini-transcribe-2025-12-15",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-tts",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-028"
+        "evidence-028",
+        "endpoints-20261003-gpt-4o-mini-tts"
       ],
       "catalog_model_id": "gpt-4o-mini-tts",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "text_to_speech"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-tts-2025-03-20",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-028"
+        "evidence-028",
+        "endpoints-20261003-gpt-4o-mini-tts"
       ],
       "catalog_model_id": "gpt-4o-mini-tts-2025-03-20",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "text_to_speech"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-mini-tts-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-028"
+        "evidence-028",
+        "endpoints-20261003-gpt-4o-mini-tts"
       ],
       "catalog_model_id": "gpt-4o-mini-tts-2025-12-15",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "text_to_speech"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-search-preview",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-030"
+        "evidence-030",
+        "endpoints-20261003-gpt-4o-search-preview"
       ],
       "catalog_model_id": "gpt-4o-search-preview",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-transcribe",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-031"
+        "evidence-031",
+        "endpoints-20261003-gpt-4o-transcribe"
       ],
       "catalog_model_id": "gpt-4o-transcribe",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-4o-transcribe-diarize",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-032"
+        "evidence-032",
+        "endpoints-20261003-gpt-4o-transcribe-diarize"
       ],
       "catalog_model_id": "gpt-4o-transcribe-diarize",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-033"
+        "evidence-033",
+        "endpoints-20261003-gpt-5"
       ],
       "catalog_model_id": "gpt-5",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-2025-08-07",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-033"
+        "evidence-033",
+        "endpoints-20261003-gpt-5"
       ],
       "catalog_model_id": "gpt-5-2025-08-07",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25031,60 +25715,88 @@
       "pricing_key": "gpt-5-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-036"
+        "evidence-036",
+        "endpoints-20261003-gpt-5-mini"
       ],
       "catalog_model_id": "gpt-5-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-mini-2025-08-07",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-036"
+        "evidence-036",
+        "endpoints-20261003-gpt-5-mini"
       ],
       "catalog_model_id": "gpt-5-mini-2025-08-07",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-nano",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-037"
+        "evidence-037",
+        "endpoints-20261003-gpt-5-nano"
       ],
       "catalog_model_id": "gpt-5-nano",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-nano-2025-08-07",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-037"
+        "evidence-037",
+        "endpoints-20261003-gpt-5-nano"
       ],
       "catalog_model_id": "gpt-5-nano-2025-08-07",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-038"
+        "evidence-038",
+        "endpoints-20261003-gpt-5-pro"
       ],
       "catalog_model_id": "gpt-5-pro",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5-pro-2025-10-06",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-038"
+        "evidence-038",
+        "endpoints-20261003-gpt-5-pro"
       ],
       "catalog_model_id": "gpt-5-pro-2025-10-06",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25107,20 +25819,30 @@
       "pricing_key": "gpt-5.1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-039"
+        "evidence-039",
+        "endpoints-20261003-gpt-5.1"
       ],
       "catalog_model_id": "gpt-5.1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.1-2025-11-13",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-039"
+        "evidence-039",
+        "endpoints-20261003-gpt-5.1"
       ],
       "catalog_model_id": "gpt-5.1-2025-11-13",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25167,20 +25889,30 @@
       "pricing_key": "gpt-5.2",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-044"
+        "evidence-044",
+        "endpoints-20261003-gpt-5.2"
       ],
       "catalog_model_id": "gpt-5.2",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.2-2025-12-11",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-044"
+        "evidence-044",
+        "endpoints-20261003-gpt-5.2"
       ],
       "catalog_model_id": "gpt-5.2-2025-12-11",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25207,20 +25939,28 @@
       "pricing_key": "gpt-5.2-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-047"
+        "evidence-047",
+        "endpoints-20261003-gpt-5.2-pro"
       ],
       "catalog_model_id": "gpt-5.2-pro",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.2-pro-2025-12-11",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-047"
+        "evidence-047",
+        "endpoints-20261003-gpt-5.2-pro"
       ],
       "catalog_model_id": "gpt-5.2-pro-2025-12-11",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25237,110 +25977,162 @@
       "pricing_key": "gpt-5.3-codex",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-049"
+        "evidence-049",
+        "endpoints-20261003-gpt-5.3-codex"
       ],
       "catalog_model_id": "gpt-5.3-codex",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-050"
+        "evidence-050",
+        "endpoints-20261003-gpt-5.4"
       ],
       "catalog_model_id": "gpt-5.4",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-2026-03-05",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-050"
+        "evidence-050",
+        "endpoints-20261003-gpt-5.4"
       ],
       "catalog_model_id": "gpt-5.4-2026-03-05",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-051"
+        "evidence-051",
+        "endpoints-20261003-gpt-5.4-mini"
       ],
       "catalog_model_id": "gpt-5.4-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-mini-2026-03-17",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-051"
+        "evidence-051",
+        "endpoints-20261003-gpt-5.4-mini"
       ],
       "catalog_model_id": "gpt-5.4-mini-2026-03-17",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-nano",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-052"
+        "evidence-052",
+        "endpoints-20261003-gpt-5.4-nano"
       ],
       "catalog_model_id": "gpt-5.4-nano",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-nano-2026-03-17",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-052"
+        "evidence-052",
+        "endpoints-20261003-gpt-5.4-nano"
       ],
       "catalog_model_id": "gpt-5.4-nano-2026-03-17",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-053"
+        "evidence-053",
+        "endpoints-20261003-gpt-5.4-pro"
       ],
       "catalog_model_id": "gpt-5.4-pro",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.4-pro-2026-03-05",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-053"
+        "evidence-053",
+        "endpoints-20261003-gpt-5.4-pro"
       ],
       "catalog_model_id": "gpt-5.4-pro-2026-03-05",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.5",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-054"
+        "evidence-054",
+        "endpoints-20261003-gpt-5.5"
       ],
       "catalog_model_id": "gpt-5.5",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.5-2026-04-23",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-054"
+        "evidence-054",
+        "endpoints-20261003-gpt-5.5"
       ],
       "catalog_model_id": "gpt-5.5-2026-04-23",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25356,30 +26148,43 @@
       "pricing_key": "gpt-5.5-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-055"
+        "evidence-055",
+        "endpoints-20261003-gpt-5.5-pro"
       ],
       "catalog_model_id": "gpt-5.5-pro",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.5-pro-2026-04-23",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-055"
+        "evidence-055",
+        "endpoints-20261003-gpt-5.5-pro"
       ],
       "catalog_model_id": "gpt-5.5-pro-2026-04-23",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.6",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-058"
+        "evidence-058",
+        "endpoints-20261003-gpt-5.6-sol"
       ],
       "catalog_model_id": "gpt-5.6",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25387,20 +26192,29 @@
       "decision": "callable",
       "evidence_sources": [
         "evidence-056",
-        "evidence-064"
+        "evidence-064",
+        "endpoints-20261003-gpt-5.6-cyber"
       ],
       "catalog_model_id": "gpt-5.6-cyber",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.6-luna",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-057"
+        "evidence-057",
+        "endpoints-20261003-gpt-5.6-luna"
       ],
       "catalog_model_id": "gpt-5.6-luna",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -25408,27 +26222,38 @@
       "decision": "callable",
       "evidence_sources": [
         "evidence-058",
-        "evidence-063"
+        "evidence-063",
+        "endpoints-20261003-gpt-5.6-sol"
       ],
       "catalog_model_id": "gpt-5.6-sol",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-5.6-terra",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-059"
+        "evidence-059",
+        "endpoints-20261003-gpt-5.6-terra"
       ],
       "catalog_model_id": "gpt-5.6-terra",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-6-astra",
       "decision": "callable",
       "evidence_sources": [
-        "refresh-gpt-6-astra"
+        "refresh-gpt-6-astra",
+        "endpoints-20261003-gpt-6-astra"
       ],
       "catalog_model_id": "gpt-6-astra",
       "endpoints": [
@@ -25442,7 +26267,8 @@
       "pricing_key": "gpt-6-luna",
       "decision": "callable",
       "evidence_sources": [
-        "refresh-gpt-6-luna"
+        "refresh-gpt-6-luna",
+        "endpoints-20261003-gpt-6-luna"
       ],
       "catalog_model_id": "gpt-6-luna",
       "endpoints": [
@@ -25456,7 +26282,8 @@
       "pricing_key": "gpt-6-sol",
       "decision": "callable",
       "evidence_sources": [
-        "refresh-gpt-6-sol"
+        "refresh-gpt-6-sol",
+        "endpoints-20261003-gpt-6-sol"
       ],
       "catalog_model_id": "gpt-6-sol",
       "endpoints": [
@@ -25470,7 +26297,8 @@
       "pricing_key": "gpt-6.1-sol",
       "decision": "callable",
       "evidence_sources": [
-        "refresh-gpt-6.1-sol"
+        "refresh-gpt-6.1-sol",
+        "endpoints-20261003-gpt-6.1-sol"
       ],
       "catalog_model_id": "gpt-6.1-sol",
       "endpoints": [
@@ -25484,50 +26312,70 @@
       "pricing_key": "gpt-audio",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-060"
+        "evidence-060",
+        "endpoints-20261003-gpt-audio"
       ],
       "catalog_model_id": "gpt-audio",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-audio-1.5",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-061"
+        "evidence-061",
+        "endpoints-20261003-gpt-audio-1.5"
       ],
       "catalog_model_id": "gpt-audio-1.5",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-audio-2025-08-28",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-060"
+        "evidence-060",
+        "endpoints-20261003-gpt-audio"
       ],
       "catalog_model_id": "gpt-audio-2025-08-28",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-audio-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-062"
+        "evidence-062",
+        "endpoints-20261003-gpt-audio-mini"
       ],
       "catalog_model_id": "gpt-audio-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-audio-mini-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-062"
+        "evidence-062",
+        "endpoints-20261003-gpt-audio-mini"
       ],
       "catalog_model_id": "gpt-audio-mini-2025-12-15",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions"
+      ]
     },
     {
       "provider": "openai",
@@ -25552,72 +26400,104 @@
       "pricing_key": "gpt-image-1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-065"
+        "evidence-065",
+        "endpoints-20261003-gpt-image-1"
       ],
       "catalog_model_id": "gpt-image-1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-image-1-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-066"
+        "evidence-066",
+        "endpoints-20261003-gpt-image-1-mini"
       ],
       "catalog_model_id": "gpt-image-1-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-image-1.5",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-067"
+        "evidence-067",
+        "endpoints-20261003-gpt-image-1.5"
       ],
       "catalog_model_id": "gpt-image-1.5",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-image-1.5-2025-12-16",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-067"
+        "evidence-067",
+        "endpoints-20261003-gpt-image-1.5"
       ],
       "catalog_model_id": "gpt-image-1.5-2025-12-16",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-image-2",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-068"
+        "evidence-068",
+        "endpoints-20261003-gpt-image-2"
       ],
       "catalog_model_id": "gpt-image-2",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-image-2-2026-04-21",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-068"
+        "evidence-068",
+        "endpoints-20261003-gpt-image-2"
       ],
       "catalog_model_id": "gpt-image-2-2026-04-21",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-image-2.5-flare",
       "decision": "callable",
       "evidence_sources": [
-        "refresh-gpt-image-2.5-flare"
+        "refresh-gpt-image-2.5-flare",
+        "endpoints-20261003-gpt-image-2.5-flare"
       ],
       "catalog_model_id": "gpt-image-2.5-flare",
       "endpoints": [
-        "image_generation",
-        "image_edit"
+        "image_edit",
+        "image_generation"
       ],
       "aliases": []
     },
@@ -25635,12 +26515,13 @@
       "pricing_key": "gpt-image-2.5-sunburst",
       "decision": "callable",
       "evidence_sources": [
-        "refresh-gpt-image-2.5-sunburst"
+        "refresh-gpt-image-2.5-sunburst",
+        "endpoints-20261003-gpt-image-2.5-sunburst"
       ],
       "catalog_model_id": "gpt-image-2.5-sunburst",
       "endpoints": [
-        "image_generation",
-        "image_edit"
+        "image_edit",
+        "image_generation"
       ],
       "aliases": []
     },
@@ -25667,110 +26548,154 @@
       "pricing_key": "gpt-live-transcribe",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-069"
+        "evidence-069",
+        "endpoints-20261003-gpt-live-transcribe"
       ],
       "catalog_model_id": "gpt-live-transcribe",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-070"
+        "evidence-070",
+        "endpoints-20261003-gpt-realtime"
       ],
       "catalog_model_id": "gpt-realtime",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-1.5",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-071"
+        "evidence-071",
+        "endpoints-20261003-gpt-realtime-1.5"
       ],
       "catalog_model_id": "gpt-realtime-1.5",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-2",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-072"
+        "evidence-072",
+        "endpoints-20261003-gpt-realtime-2"
       ],
       "catalog_model_id": "gpt-realtime-2",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-2.1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-073"
+        "evidence-073",
+        "endpoints-20261003-gpt-realtime-2.1"
       ],
       "catalog_model_id": "gpt-realtime-2.1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-2.1-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-074"
+        "evidence-074",
+        "endpoints-20261003-gpt-realtime-2.1-mini"
       ],
       "catalog_model_id": "gpt-realtime-2.1-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-2025-08-28",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-070"
+        "evidence-070",
+        "endpoints-20261003-gpt-realtime"
       ],
       "catalog_model_id": "gpt-realtime-2025-08-28",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-075"
+        "evidence-075",
+        "endpoints-20261003-gpt-realtime-mini"
       ],
       "catalog_model_id": "gpt-realtime-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-mini-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-075"
+        "evidence-075",
+        "endpoints-20261003-gpt-realtime-mini"
       ],
       "catalog_model_id": "gpt-realtime-mini-2025-12-15",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-translate",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-076"
+        "evidence-076",
+        "endpoints-20261003-gpt-realtime-translate"
       ],
       "catalog_model_id": "gpt-realtime-translate",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "gpt-realtime-whisper",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-077"
+        "evidence-077",
+        "endpoints-20261003-gpt-realtime-whisper"
       ],
       "catalog_model_id": "gpt-realtime-whisper",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
@@ -25786,10 +26711,15 @@
       "pricing_key": "gpt-transcribe",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-078"
+        "evidence-078",
+        "endpoints-20261003-gpt-transcribe"
       ],
       "catalog_model_id": "gpt-transcribe",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ]
     },
     {
       "provider": "openai",
@@ -26093,60 +27023,88 @@
       "pricing_key": "o1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-079"
+        "evidence-079",
+        "endpoints-20261003-o1"
       ],
       "catalog_model_id": "o1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o1-2024-12-17",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-079"
+        "evidence-079",
+        "endpoints-20261003-o1"
       ],
       "catalog_model_id": "o1-2024-12-17",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o1-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-080"
+        "evidence-080",
+        "endpoints-20261003-o1-pro"
       ],
       "catalog_model_id": "o1-pro",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o1-pro-2025-03-19",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-080"
+        "evidence-080",
+        "endpoints-20261003-o1-pro"
       ],
       "catalog_model_id": "o1-pro-2025-03-19",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o3",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-081"
+        "evidence-081",
+        "endpoints-20261003-o3"
       ],
       "catalog_model_id": "o3",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o3-2025-04-16",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-081"
+        "evidence-081",
+        "endpoints-20261003-o3"
       ],
       "catalog_model_id": "o3-2025-04-16",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -26163,60 +27121,88 @@
       "pricing_key": "o3-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-083"
+        "evidence-083",
+        "endpoints-20261003-o3-mini"
       ],
       "catalog_model_id": "o3-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o3-mini-2025-01-31",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-083"
+        "evidence-083",
+        "endpoints-20261003-o3-mini"
       ],
       "catalog_model_id": "o3-mini-2025-01-31",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o3-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-084"
+        "evidence-084",
+        "endpoints-20261003-o3-pro"
       ],
       "catalog_model_id": "o3-pro",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o3-pro-2025-06-10",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-084"
+        "evidence-084",
+        "endpoints-20261003-o3-pro"
       ],
       "catalog_model_id": "o3-pro-2025-06-10",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o4-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-085"
+        "evidence-085",
+        "endpoints-20261003-o4-mini"
       ],
       "catalog_model_id": "o4-mini",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "o4-mini-2025-04-16",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-085"
+        "evidence-085",
+        "endpoints-20261003-o4-mini"
       ],
       "catalog_model_id": "o4-mini-2025-04-16",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ]
     },
     {
       "provider": "openai",
@@ -26233,20 +27219,28 @@
       "pricing_key": "omni-moderation-2024-09-26",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-087"
+        "evidence-087",
+        "endpoints-20261003-omni-moderation-latest"
       ],
       "catalog_model_id": "omni-moderation-2024-09-26",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "moderation"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "omni-moderation-latest",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-087"
+        "evidence-087",
+        "endpoints-20261003-omni-moderation-latest"
       ],
       "catalog_model_id": "omni-moderation-latest",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "moderation"
+      ]
     },
     {
       "provider": "openai",
@@ -26370,30 +27364,42 @@
       "pricing_key": "text-embedding-3-large",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-090"
+        "evidence-090",
+        "endpoints-20261003-text-embedding-3-large"
       ],
       "catalog_model_id": "text-embedding-3-large",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "embeddings"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "text-embedding-3-small",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-091"
+        "evidence-091",
+        "endpoints-20261003-text-embedding-3-small"
       ],
       "catalog_model_id": "text-embedding-3-small",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "embeddings"
+      ]
     },
     {
       "provider": "openai",
       "pricing_key": "text-embedding-ada-002",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-092"
+        "evidence-092",
+        "endpoints-20261003-text-embedding-ada-002"
       ],
       "catalog_model_id": "text-embedding-ada-002",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "embeddings"
+      ]
     },
     {
       "provider": "openai",
@@ -26408,10 +27414,14 @@
       "pricing_key": "tts-1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-095"
+        "evidence-095",
+        "endpoints-20261003-tts-1"
       ],
       "catalog_model_id": "tts-1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "text_to_speech"
+      ]
     },
     {
       "provider": "openai",
@@ -26426,10 +27436,14 @@
       "pricing_key": "tts-1-hd",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-096"
+        "evidence-096",
+        "endpoints-20261003-tts-1-hd"
       ],
       "catalog_model_id": "tts-1-hd",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "text_to_speech"
+      ]
     },
     {
       "provider": "openai",
@@ -26444,10 +27458,15 @@
       "pricing_key": "whisper-1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-097"
+        "evidence-097",
+        "endpoints-20261003-whisper-1"
       ],
       "catalog_model_id": "whisper-1",
-      "aliases": []
+      "aliases": [],
+      "endpoints": [
+        "audio_transcription",
+        "audio_translation"
+      ]
     },
     {
       "provider": "openrouter",
@@ -26799,6 +27818,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/apodex/apodex-1.1-mini:free",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -29859,6 +30886,14 @@
     },
     {
       "provider": "openrouter",
+      "pricing_key": "openrouter/unbiased/pareto-26.10-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "openrouter",
       "pricing_key": "openrouter/undi95/remm-slerp-l2-13b",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -30531,6 +31566,14 @@
     },
     {
       "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-fable-5-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
       "pricing_key": "perplexity/anthropic/claude-haiku-4-5",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -30575,6 +31618,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-opus-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -30707,6 +31758,14 @@
     },
     {
       "provider": "perplexity",
+      "pricing_key": "perplexity/google/gemini-3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
       "pricing_key": "perplexity/llama-2-70b-chat",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -30831,6 +31890,30 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -31135,6 +32218,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/xai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -35562,6 +36653,14 @@
       ]
     },
     {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/xai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
       "provider": "vertex_ai-ai21_models",
       "pricing_key": "vertex_ai/jamba-1.5",
       "decision": "unreviewed",
@@ -36859,6 +37958,14 @@
     },
     {
       "provider": "voyage",
+      "pricing_key": "voyage/rerank-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
+      ]
+    },
+    {
+      "provider": "voyage",
       "pricing_key": "voyage/rerank-2",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -36903,6 +38010,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/rerank-lite-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -37031,6 +38146,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "voyage",
+      "pricing_key": "voyage/voyage-large-2-instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     },
     {
@@ -38450,150 +39573,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "cloudflare",
-      "pricing_key": "cloudflare/@cf/deepseek-ai/deepseek-v4-flash-0731",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-cloudflare"
-      ]
-    },
-    {
-      "provider": "cloudflare",
-      "pricing_key": "cloudflare/@cf/deepseek-ai/deepseek-v4-pro-0813",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-cloudflare"
-      ]
-    },
-    {
-      "provider": "cloudflare",
-      "pricing_key": "cloudflare/@cf/zai-org/glm-5.3-flash",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-cloudflare"
-      ]
-    },
-    {
-      "provider": "cloudflare",
-      "pricing_key": "cloudflare/@cf/zai-org/glm-5.3",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-cloudflare"
-      ]
-    },
-    {
-      "provider": "nebius",
-      "pricing_key": "nebius/Qwen/Qwen3.8-27B",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "openrouter",
-      "pricing_key": "openrouter/apodex/apodex-1.1-mini:free",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "openrouter",
-      "pricing_key": "openrouter/unbiased/pareto-26.10-preview",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/anthropic/claude-fable-5-1",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/anthropic/claude-opus-5-5",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/google/gemini-3.8-flash",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/openai/gpt-6-luna",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/openai/gpt-6-sol",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/openai/gpt-6.1-sol",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "perplexity",
-      "pricing_key": "perplexity/xai/grok-4.7",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "vertex_ai",
-      "pricing_key": "vertex_ai/xai/grok-4.7",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "voyage",
-      "pricing_key": "voyage/rerank-1",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "voyage",
-      "pricing_key": "voyage/rerank-lite-1",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
-      ]
-    },
-    {
-      "provider": "voyage",
-      "pricing_key": "voyage/voyage-large-2-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "upstream-pricing-a5fef4b4e68963640c3062d464509129ec8863c6"
       ]
     }
   ]

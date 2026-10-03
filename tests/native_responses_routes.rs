@@ -542,3 +542,64 @@ async fn native_missing_usage_never_records_reserved_cost_as_actual_key_usage() 
     assert_eq!(usage.total_cost, 0.0);
     handle.stop(false).await;
 }
+
+#[tokio::test]
+async fn responses_only_model_uses_native_endpoint() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.providers[0].models = vec!["gpt-5.5-pro".into()];
+    })
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["model"] = json!("gpt-5.5-pro");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(body)
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let bytes = test::read_body(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn chat_only_model_does_not_fall_back_from_native_responses() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.providers[0].models = vec!["gpt-audio-1.5".into()];
+    })
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["model"] = json!("gpt-audio-1.5");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(body)
+            .to_request(),
+    )
+    .await;
+    assert!(!response.status().is_success());
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}

@@ -15,6 +15,8 @@ use crate::core::types::{model::ModelInfo, model::ProviderCapability};
 pub enum OpenAIModelFeature {
     /// Chat completion support
     ChatCompletion,
+    /// Native Responses API support
+    Responses,
     /// Streaming response support
     StreamingSupport,
     /// Function/tool calling support
@@ -60,6 +62,7 @@ impl OpenAIModelFeature {
     pub fn to_provider_capability(&self) -> Option<ProviderCapability> {
         match self {
             OpenAIModelFeature::ChatCompletion => Some(ProviderCapability::ChatCompletion),
+            OpenAIModelFeature::Responses => Some(ProviderCapability::Responses),
             OpenAIModelFeature::StreamingSupport => Some(ProviderCapability::ChatCompletionStream),
             OpenAIModelFeature::FunctionCalling => Some(ProviderCapability::ToolCalling),
             OpenAIModelFeature::ImageGeneration => Some(ProviderCapability::ImageGeneration),

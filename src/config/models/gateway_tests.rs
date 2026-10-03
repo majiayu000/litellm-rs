@@ -441,13 +441,6 @@ fn test_gateway_config_is_feature_enabled_caching() {
 }
 
 #[test]
-fn test_gateway_config_is_feature_enabled_semantic_cache() {
-    let mut config = GatewayConfig::default();
-    config.cache.semantic_cache = true;
-    assert!(config.is_feature_enabled("semantic_cache"));
-}
-
-#[test]
 fn test_gateway_config_is_feature_enabled_rate_limiting() {
     let mut config = GatewayConfig::default();
     config.rate_limit.enabled = true;
@@ -479,13 +472,6 @@ fn test_gateway_config_is_feature_enabled_audit_logging() {
     let mut config = GatewayConfig::default();
     config.enterprise.audit_logging = true;
     assert!(config.is_feature_enabled("audit_logging"));
-}
-
-#[test]
-fn test_gateway_config_is_feature_enabled_advanced_analytics() {
-    let mut config = GatewayConfig::default();
-    config.enterprise.advanced_analytics = true;
-    assert!(config.is_feature_enabled("advanced_analytics"));
 }
 
 #[test]
