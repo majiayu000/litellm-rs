@@ -135,7 +135,14 @@ impl TaskOwners {
             .entries
             .lock()
             .map_err(|_| "A2A ownership unavailable")?;
-        entries.retain(|_, owner| owner.expires > Instant::now());
+        let now = Instant::now();
+        // Only inspect identifiers carried by this event. Full expiry cleanup
+        // belongs to per-request reservation, not every artifact chunk.
+        for id in &ids {
+            if entries.get(id).is_some_and(|owner| owner.expires <= now) {
+                entries.remove(id);
+            }
+        }
         if ids.iter().any(|id| {
             entries
                 .get(id)
@@ -171,6 +178,7 @@ fn error(status: StatusCode, id: Value, code: i32, message: &str) -> HttpRespons
         .json(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}))
 }
 pub fn configure_routes(cfg: &mut web::ServiceConfig, max_body_size: usize) {
+    cfg.service(web::resource("/.well-known/agent-card.json").route(web::get().to(card)));
     cfg.service(
         web::resource("/a2a/{agent_name}")
             .app_data(web::PayloadConfig::new(max_body_size))
@@ -208,11 +216,31 @@ fn authenticated(req: &HttpRequest, name: &str) -> Result<String, HttpResponse> 
     Ok(principal)
 }
 async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
-    let name = req.match_info().get("agent_name").unwrap_or("");
+    let runtime = state.pin_runtime();
+    let name = if let Some(name) = req.match_info().get("agent_name") {
+        name
+    } else {
+        let mut enabled = runtime
+            .config
+            .gateway
+            .a2a_agents
+            .iter()
+            .filter(|(_, agent)| agent.enabled);
+        match (enabled.next(), enabled.next()) {
+            (Some((name, _)), None) => name.as_str(),
+            _ => {
+                return error(
+                    StatusCode::NOT_FOUND,
+                    Value::Null,
+                    -32601,
+                    "Use a configured Agent Card URL",
+                );
+            }
+        }
+    };
     if let Err(response) = authenticated(&req, name) {
         return response;
     }
-    let runtime = state.pin_runtime();
     let Some(agent) = runtime
         .config
         .gateway
@@ -483,26 +511,26 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     } else {
         None
     };
-    let mut upstream =
-        match tokio::time::timeout(Duration::from_millis(agent.timeout_ms), request.send()).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => {
-                return error(
-                    StatusCode::BAD_GATEWAY,
-                    id,
-                    -32603,
-                    "A2A upstream connection failed",
-                );
-            }
-            Err(_) => {
-                return error(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    id,
-                    -32603,
-                    "A2A upstream timed out",
-                );
-            }
-        };
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(agent.timeout_ms);
+    let mut upstream = match tokio::time::timeout_at(deadline, request.send()).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                id,
+                -32603,
+                "A2A upstream connection failed",
+            );
+        }
+        Err(_) => {
+            return error(
+                StatusCode::GATEWAY_TIMEOUT,
+                id,
+                -32603,
+                "A2A upstream timed out",
+            );
+        }
+    };
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut response = HttpResponse::build(status);
@@ -566,7 +594,11 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                                 || (task_seen && (result.get("task").is_some() || result.get("message").is_some())) {
                                 Err(actix_web::error::ErrorBadGateway("Invalid A2A stream sequence"))?;
                             }
-                            terminal = result.get("message").is_some();
+                            terminal = result.get("message").is_some()
+                                || result.get("task").or_else(|| result.get("statusUpdate"))
+                                    .and_then(|task| task.pointer("/status/state"))
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|state| matches!(state, "TASK_STATE_COMPLETED" | "TASK_STATE_FAILED" | "TASK_STATE_CANCELED" | "TASK_STATE_REJECTED"));
                             task_seen = true;
                         }
                         owners.observe(&binding, &principal, &value, task.as_deref(), context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
@@ -596,7 +628,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         }
         Ok::<_, ()>(bytes)
     };
-    let bytes = match tokio::time::timeout(Duration::from_millis(agent.timeout_ms), read).await {
+    let bytes = match tokio::time::timeout_at(deadline, read).await {
         Ok(Ok(b)) => b,
         _ => {
             return error(

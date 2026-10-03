@@ -30,3 +30,7 @@ Header acquisition and finite response reads (including upstream errors) use tim
 Validation uses local mock agents, not paid live providers. References: [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/), [LiteLLM A2A gateway](https://docs.litellm.ai/docs/a2a).
 
 Version query keys are case-insensitive. Configured discovery modes are parsed as MIME types; the public capability constructors use MIME values. Invalid upstream response envelopes return A2A InvalidAgentResponseError (-32006). Task streams must start with a Task and then contain status/artifact updates; a direct Message or terminal RPC error closes the stream immediately. Invalid envelopes cannot release capacity while leaving an untracked successful task.
+
+With exactly one enabled agent, `/.well-known/agent-card.json` exposes the same authenticated card. With multiple agents, configure each named card URL directly (`/a2a/{agent_name}/.well-known/agent-card.json`); [A2A 1.0 section 8.2](https://a2a-protocol.org/v1.0.0/specification/#82-discovery-mechanisms) explicitly supports direct configuration. The root route does not choose an arbitrary agent.
+
+Finite calls share one deadline for headers and body. Task streams close immediately after forwarding a terminal task/status event, even if the upstream leaves its connection open. Ownership expiry sweeps run at request reservation rather than on every artifact chunk.

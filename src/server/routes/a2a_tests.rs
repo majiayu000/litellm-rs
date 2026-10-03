@@ -29,6 +29,39 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
                 "data: {event}\n\ndata: {{\"unexpected-extra-event\":true}}\n\n"
             ));
     }
+    if let Some(state) = body
+        .pointer("/params/metadata/test_terminal")
+        .and_then(Value::as_str)
+    {
+        let task = json!({"id":"task-1","contextId":"context-1","status":{"state":state}});
+        let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":task}});
+        let initial = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}});
+        let update = json!({"jsonrpc":"2.0","id":body["id"],"result":{"statusUpdate":{"taskId":"task-1","contextId":"context-1","status":{"state":state}}}});
+        let events =
+            if body.pointer("/params/metadata/test_status_update") == Some(&Value::Bool(true)) {
+                format!("data: {initial}\n\ndata: {update}\n\n")
+            } else {
+                format!("data: {event}\n\n")
+            };
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "text/event-stream"))
+            .streaming(async_stream::stream! {
+                yield Ok::<_, std::io::Error>(web::Bytes::from(events));
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                yield Ok(web::Bytes::from_static(b"data: invalid-post-terminal\n\n"));
+            });
+    }
+    if body.pointer("/params/metadata/test_split_timeout") == Some(&Value::Bool(true)) {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","contextId":"context-1"}}}).to_string();
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "application/json"))
+            .streaming(async_stream::stream! {
+                yield Ok::<_, std::io::Error>(web::Bytes::from_static(b" "));
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                yield Ok(web::Bytes::from(event));
+            });
+    }
     if body.pointer("/params/metadata/test_big_error") == Some(&Value::Bool(true)) {
         return HttpResponse::TooManyRequests().body("x".repeat(1024));
     }
@@ -685,6 +718,74 @@ async fn invalid_envelopes_and_stream_sequences_release_reservations() {
     let text = std::str::from_utf8(&body).unwrap();
     assert!(text.contains("direct-reply"));
     assert!(!text.contains("unexpected-extra-event"));
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn terminal_task_events_close_without_waiting_for_upstream_eof() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for status_update in [false, true] {
+        for terminal in [
+            "TASK_STATE_COMPLETED",
+            "TASK_STATE_FAILED",
+            "TASK_STATE_CANCELED",
+            "TASK_STATE_REJECTED",
+        ] {
+            let mut params = message();
+            params["metadata"] =
+                json!({"test_terminal":terminal,"test_status_update":status_update});
+            let response =
+                test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+            let bytes = tokio::time::timeout(Duration::from_secs(2), test::read_body(response))
+                .await
+                .unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(text.contains(terminal));
+            assert!(!text.contains("invalid-post-terminal"));
+        }
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn finite_response_uses_one_deadline_and_root_card_discovers_single_agent() {
+    let (state, _, handle) = fixture().await;
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    config
+        .gateway
+        .a2a_agents
+        .get_mut("test")
+        .unwrap()
+        .timeout_ms = 250;
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let req = test::TestRequest::get()
+        .uri("/.well-known/agent-card.json")
+        .to_request();
+    req.extensions_mut().insert(user());
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let card: Value = test::read_body_json(response).await;
+    assert_eq!(card["name"], "test");
+    let mut params = message();
+    params["metadata"] = json!({"test_split_timeout":true});
+    let response = test::call_service(&app, request("SendMessage", params, &user())).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     handle.stop(false).await;
 }
