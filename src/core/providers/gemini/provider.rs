@@ -409,7 +409,7 @@ impl LLMProvider for GeminiProvider {
             extra_params: std::collections::HashMap::new(),
         };
 
-        match self.client.chat(test_request).await {
+        match self.client.health_probe(test_request).await {
             Ok(_) => HealthStatus::Healthy,
             Err(e) => match &e {
                 ProviderError::Authentication { .. } => HealthStatus::Unhealthy,
@@ -443,6 +443,54 @@ mod native_tests {
         let error = crate::core::providers::gemini_transport_error(true);
         assert!(matches!(error, ProviderError::Timeout { .. }));
     }
+    #[tokio::test]
+    async fn regional_vertex_health_probe_uses_global_and_preserves_config() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            for location in ["global", "us-central1"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let n = socket.read(&mut chunk).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&chunk[..n]);
+                    if bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = std::str::from_utf8(&bytes).unwrap();
+                assert!(request.starts_with(&format!("POST /v1/projects/project/locations/{location}/publishers/google/models/gemini-3.7-flash:generateContent ")));
+                let body = r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"Hi"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let mut config = GeminiConfig::new_vertex_ai("project", "us-central1");
+        config.base_url = format!("http://{address}");
+        config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        let provider = GeminiProvider::new(config.clone()).unwrap();
+        assert_eq!(provider.health_check().await, HealthStatus::Healthy);
+        provider
+            .client
+            .chat(ChatRequest {
+                model: "gemini-3.7-flash".into(),
+                messages: vec![ChatMessage {
+                    role: MessageRole::User,
+                    content: Some(MessageContent::Text("test".into())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        task.await.unwrap();
+    }
+
     async fn error_provider(status: u16, headers: &str, body: &str, key: &str) -> ProviderError {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

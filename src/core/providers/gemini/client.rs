@@ -72,6 +72,31 @@ impl GeminiClient {
         self.config.api_key.as_deref().unwrap_or_default()
     }
 
+    /// Synthetic health traffic contains no customer data. Modern Gemini models
+    /// require global/us/eu; use global for this probe without changing inference routing.
+    pub(super) async fn health_probe(
+        &self,
+        request: ChatRequest,
+    ) -> Result<ChatResponse, ProviderError> {
+        let mut probe = self.clone();
+        if probe.config.use_vertex_ai {
+            let location = probe.config.location.as_deref().unwrap_or_default();
+            let regional = format!("https://{location}-aiplatform.googleapis.com");
+            let multiregion = format!("https://aiplatform.{location}.rep.googleapis.com");
+            if [
+                regional.as_str(),
+                multiregion.as_str(),
+                "https://aiplatform.googleapis.com",
+            ]
+            .contains(&probe.config.base_url.trim_end_matches('/'))
+            {
+                probe.config.base_url = "https://aiplatform.googleapis.com".into();
+            }
+            probe.config.location = Some("global".into());
+        }
+        probe.chat(request).await
+    }
+
     /// Create
     pub fn new(config: GeminiConfig) -> Result<Self, ProviderError> {
         config
