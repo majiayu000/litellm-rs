@@ -858,6 +858,12 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<TranscriptionResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
+        // Groq's verbose JSON includes duration for settlement; plain JSON does not.
+        if self.provider_name == "groq"
+            && matches!(request.response_format.as_deref(), None | Some("json"))
+        {
+            request.response_format = Some("verbose_json".into());
+        }
         crate::core::providers::openai::execute_audio_transcription(
             self.config.base.clone(),
             &self.config.get_api_base(),
@@ -874,6 +880,12 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<TranslationResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
+        // Groq's verbose JSON includes duration for settlement; plain JSON does not.
+        if self.provider_name == "groq"
+            && matches!(request.response_format.as_deref(), None | Some("json"))
+        {
+            request.response_format = Some("verbose_json".into());
+        }
         crate::core::providers::openai::execute_audio_translation(
             self.config.base.clone(),
             &self.config.get_api_base(),
@@ -890,6 +902,9 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
+        if self.provider_name == "groq" && request.response_format.is_none() {
+            request.response_format = Some("wav".into());
+        }
         let together_pcm = matches!(self.provider_name.as_str(), "together" | "together_ai")
             && request.response_format.as_deref() == Some("pcm");
         if together_pcm {

@@ -20,6 +20,37 @@ mod time_pricing_tests {
     }
 
     #[test]
+    fn groq_whisper_minimum_applies_to_transcription_and_translation() {
+        let pricing = PricingService::with_embedded_default().unwrap();
+        let groq = RequestPricing::from_exact(&pricing, "groq", "whisper-large-v3");
+        for capability in [
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::AudioTranslation,
+        ] {
+            let minimum = groq.calculate_time(10.0, &capability).unwrap().total_cost;
+            assert!(minimum > 0.0);
+            assert_eq!(
+                groq.calculate_time(0.1, &capability).unwrap().total_cost,
+                minimum
+            );
+            assert_eq!(
+                groq.calculate_time(20.0, &capability).unwrap().total_cost,
+                minimum * 2.0
+            );
+        }
+        let azure = RequestPricing::from_exact(&pricing, "azure", "whisper-1");
+        assert!(
+            (azure
+                .calculate_time(1.0, &ProviderCapability::AudioTranscription)
+                .unwrap()
+                .total_cost
+                - 0.0001)
+                .abs()
+                < f64::EPSILON
+        );
+    }
+
+    #[test]
     fn speech_time_pricing_selects_the_output_rate() {
         let pricing =
             PricingService::with_embedded_default().expect("embedded pricing should load");

@@ -26,6 +26,7 @@ mod tests {
 
     #[derive(Clone)]
     struct MockAudioState {
+        duration: Option<f64>,
         captured_requests: Arc<Mutex<Vec<CapturedAudioRequest>>>,
     }
 
@@ -38,8 +39,12 @@ mod tests {
 
     impl MockAudioServer {
         async fn start() -> Self {
+            Self::start_with_duration(None).await
+        }
+        async fn start_with_duration(duration: Option<f64>) -> Self {
             let captured_requests = Arc::new(Mutex::new(Vec::new()));
             let state = MockAudioState {
+                duration,
                 captured_requests: Arc::clone(&captured_requests),
             };
             let listener =
@@ -113,7 +118,7 @@ mod tests {
         body: Bytes,
     ) -> HttpResponse {
         capture_request(&state, &request, body);
-        HttpResponse::Ok().json(json!({ "text": "mock translation" }))
+        HttpResponse::Ok().json(json!({ "text": "mock translation", "duration":state.duration }))
     }
 
     async fn mock_audio_speech(
@@ -160,6 +165,13 @@ mod tests {
         base_url: &str,
         models: Vec<String>,
     ) -> litellm_rs::server::state::AppState {
+        build_audio_state_for_provider(base_url, models, "openai").await
+    }
+    async fn build_audio_state_for_provider(
+        base_url: &str,
+        models: Vec<String>,
+        provider: &str,
+    ) -> litellm_rs::server::state::AppState {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = false;
@@ -168,8 +180,8 @@ mod tests {
         config.gateway.storage.redis.enabled = false;
         config.gateway.pricing.source = Some("config/model_prices_extended.json".to_string());
         config.gateway.providers = vec![mock_provider_config(
-            "mock-openai-audio",
-            "openai",
+            &format!("mock-{provider}-audio"),
+            provider,
             "sk-test",
             base_url,
             models,
@@ -434,6 +446,68 @@ mod tests {
             "successful time-priced translation must record spend"
         );
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn groq_translation_settles_returned_duration_with_minimum_and_estimate_fallback() {
+        for duration in [Some(25.0), Some(3.0), Some(0.0), Some(-5.0), None] {
+            let mock = MockAudioServer::start_with_duration(duration).await;
+            let state = build_audio_state_for_provider(
+                &mock.base_url,
+                vec!["whisper-large-v3".into()],
+                "groq",
+            )
+            .await;
+            state.budget_limits.providers.set_provider_limit(
+                "groq",
+                ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+            );
+            let (_, info) = state
+                .pricing
+                .get_model_info_for_provider("groq", "whisper-large-v3")
+                .unwrap();
+            let rate = info.extra["input_cost_per_second"].as_f64().unwrap();
+            assert!(rate > 0.0);
+            let budgets = state.budget_limits.clone();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let boundary = "groq-duration";
+            let req = test::TestRequest::post()
+                .uri("/v1/audio/translations")
+                .insert_header((
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                ))
+                .set_payload(audio_multipart_body(
+                    boundary,
+                    "whisper-large-v3",
+                    "sample.mp3",
+                    &vec![b'a'; 32_000],
+                ))
+                .to_request();
+            let response = test::call_service(&app, req).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value = test::read_body_json(response).await;
+            assert_eq!(body["text"], "mock translation");
+            let spent = budgets
+                .providers
+                .get_provider_usage("groq")
+                .unwrap()
+                .current_spend;
+            let expected_seconds = duration.filter(|d| *d > 0.0).unwrap_or(2.0).max(10.0);
+            assert!(
+                (spent - expected_seconds * rate).abs() < 1e-10,
+                "duration={duration:?}, spent={spent}"
+            );
+            let captured = mock.requests();
+            assert_eq!(captured.len(), 1);
+            assert!(String::from_utf8_lossy(&captured[0].body).contains("verbose_json"));
+            mock.shutdown().await;
+        }
     }
 
     #[tokio::test]

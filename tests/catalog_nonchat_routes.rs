@@ -39,7 +39,12 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
     match req.path() {
         "/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}})),
         "/v1/images/generations" => HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]})),
-        "/v1/audio/speech" => HttpResponse::Ok().insert_header(("content-type","audio/mpeg")).body("test-audio"),
+        "/v1/audio/speech" => {
+            let request: Value = serde_json::from_slice(&body).unwrap();
+            assert!(request.get("speed").is_none_or(|v| !v.is_null()));
+            let mime = if request["response_format"] == "wav" { "audio/wav" } else { "audio/mpeg" };
+            HttpResponse::Ok().insert_header(("content-type", mime)).body("test-audio")
+        },
         "/v1/audio/transcriptions" | "/v1/audio/translations" => HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0})),
         _ => HttpResponse::NotFound().finish(),
     }
@@ -76,12 +81,19 @@ async fn fixture(
     .await
     .unwrap();
     let router = UnifiedRouter::default();
-    router.add_deployment(Deployment::new(
-        "test".into(),
-        provider,
-        "test-model".into(),
-        "public".into(),
-    ));
+    let models = if selector == "groq" {
+        vec!["whisper-large-v3", "canopylabs/orpheus-v1-english"]
+    } else {
+        vec!["test-model"]
+    };
+    for model in models {
+        router.add_deployment(Deployment::new(
+            model.into(),
+            provider.clone(),
+            model.into(),
+            "public".into(),
+        ));
+    }
     (router, seen, handle)
 }
 fn selected(router: &UnifiedRouter, capability: ProviderCapability) -> Provider {
@@ -157,12 +169,22 @@ async fn named_catalog_images_reach_the_verified_endpoint() {
 }
 
 #[tokio::test]
-async fn together_audio_preserves_binary_and_multipart_protocols() {
-    for selector in ["together", "together_ai"] {
+async fn named_audio_preserves_binary_and_multipart_protocols() {
+    for selector in ["together", "together_ai", "groq"] {
         let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let speech_model = if selector == "groq" {
+            "canopylabs/orpheus-v1-english"
+        } else {
+            "test-model"
+        };
+        let whisper_model = if selector == "groq" {
+            "whisper-large-v3"
+        } else {
+            "test-model"
+        };
         let provider = selected(&router, ProviderCapability::TextToSpeech);
         let speech: SpeechRequest = serde_json::from_value(
-            json!({"model":"test-model","input":"hello", "voice":"test-voice"}),
+            json!({"model":speech_model,"input":"hello", "voice":"test-voice"}),
         )
         .unwrap();
         assert_eq!(
@@ -174,7 +196,7 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
             b"test-audio"
         );
         let mut transcription: TranscriptionRequest =
-            serde_json::from_value(json!({"model":"test-model", "language":"en"})).unwrap();
+            serde_json::from_value(json!({"model":whisper_model, "language":"en"})).unwrap();
         transcription.file = b"test-wave-data".to_vec();
         transcription.filename = "test.wav".into();
         let provider = selected(&router, ProviderCapability::AudioTranscription);
@@ -187,7 +209,7 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
             "transcribed"
         );
         let mut translation: TranslationRequest =
-            serde_json::from_value(json!({"model":"test-model"})).unwrap();
+            serde_json::from_value(json!({"model":whisper_model})).unwrap();
         translation.file = b"test-wave-data".to_vec();
         translation.filename = "test.wav".into();
         let provider = selected(&router, ProviderCapability::AudioTranslation);
@@ -203,7 +225,7 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
         assert_eq!(calls.len(), 3);
         assert_eq!(
             serde_json::from_slice::<Value>(&calls[0].1).unwrap()["response_format"],
-            "mp3"
+            if selector == "groq" { "wav" } else { "mp3" }
         );
         for (path, body) in &calls[1..] {
             assert!(path.starts_with("/v1/audio/"));
@@ -217,7 +239,10 @@ async fn together_audio_preserves_binary_and_multipart_protocols() {
                 body.to_ascii_lowercase()
                     .contains("content-type: audio/wav")
             );
-            assert!(body.contains("test-model"));
+            assert!(body.contains(whisper_model));
+            if selector == "groq" {
+                assert!(body.contains("verbose_json"));
+            }
             assert!(body.find("name=\"model\"").unwrap() < body.find("name=\"file\"").unwrap());
         }
         handle.stop(false).await;
@@ -317,5 +342,84 @@ async fn together_pcm_uses_raw_wire_format_and_pcm_response_type() {
         serde_json::from_slice::<Value>(&calls[0].1).unwrap()["response_format"],
         "raw"
     );
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn groq_audio_preserves_errors_and_does_not_advertise_images_or_embeddings() {
+    for status in [StatusCode::BAD_REQUEST, StatusCode::TOO_MANY_REQUESTS] {
+        let (router, _, handle) = fixture("groq", status).await;
+        let speech: SpeechRequest = serde_json::from_value(
+            json!({"model":"canopylabs/orpheus-v1-english","input":"hello","voice":"troy","response_format":"mp3"}),
+        )
+        .unwrap();
+        let error = selected(&router, ProviderCapability::TextToSpeech)
+            .text_to_speech(speech, RequestContext::default())
+            .await
+            .err()
+            .unwrap();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            assert!(matches!(
+                error,
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        } else {
+            assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        }
+        for capability in [
+            ProviderCapability::Embeddings,
+            ProviderCapability::ImageGeneration,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn groq_routing_checks_each_concrete_audio_model() {
+    let (router, upstream, handle) = fixture("groq", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::TextToSpeech);
+    for (model, transcribe, translate, speak) in [
+        ("llama-3.3-70b-versatile", false, false, false),
+        ("whisper-large-v3", true, true, false),
+        ("whisper-large-v3-turbo", true, false, false),
+        ("canopylabs/orpheus-v1-english", false, false, true),
+        ("canopylabs/orpheus-arabic-saudi", false, false, true),
+    ] {
+        let router = UnifiedRouter::default();
+        router.add_deployment(Deployment::new(
+            model.into(),
+            provider.clone(),
+            model.into(),
+            "public".into(),
+        ));
+        for (capability, expected) in [
+            (ProviderCapability::AudioTranscription, transcribe),
+            (ProviderCapability::AudioTranslation, translate),
+            (ProviderCapability::TextToSpeech, speak),
+        ] {
+            assert_eq!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_ok(),
+                expected,
+                "{model} {capability:?}"
+            );
+        }
+        if transcribe || speak {
+            assert!(
+                !provider.supports_capability_for_model(model, &ProviderCapability::ChatCompletion)
+            );
+        }
+    }
+    assert!(upstream.seen.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
