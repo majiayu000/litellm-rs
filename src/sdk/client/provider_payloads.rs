@@ -8,6 +8,12 @@ pub(super) fn build_anthropic_request_body(
     request: &SdkChatRequest,
     model: &str,
 ) -> Result<serde_json::Value> {
+    use crate::core::providers::anthropic::AnthropicClient;
+
+    if AnthropicClient::is_claude_5_protocol_model(model) {
+        let core_request = super::runtime::sdk_request_to_core(model, request.clone())?;
+        AnthropicClient::validate_claude_5_request_shape(&core_request)?;
+    }
     let (system_message, anthropic_messages) = convert_messages_to_anthropic(&request.messages)?;
 
     let mut body = serde_json::json!({
@@ -527,6 +533,53 @@ mod tests {
             matches!(&response.choices[0].message.content,Some(Content::Text(text)) if text=="First second")
         );
         assert_eq!(response.usage.total_tokens, 5);
+    }
+
+    #[test]
+    fn claude5_sdk_requests_enforce_sampling_and_prefill_contract() {
+        for model in [
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-opus-5",
+            "claude-opus-5-5",
+            "claude-sonnet-5",
+            "claude-sonnet-5-5",
+        ] {
+            let mut request = SdkChatRequest {
+                model: model.into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: Some(Content::Text("hello".into())),
+                    name: None,
+                    tool_calls: None,
+                }],
+                options: ChatOptions::default(),
+            };
+            assert!(build_anthropic_request_body(&request, model).is_ok());
+            request.options.temperature = Some(0.5);
+            assert!(matches!(
+                build_anthropic_request_body(&request, model),
+                Err(SDKError::InvalidRequest(_))
+            ));
+            request.options.temperature = Some(1.0);
+            request.options.top_p = Some(0.5);
+            assert!(matches!(
+                build_anthropic_request_body(&request, model),
+                Err(SDKError::InvalidRequest(_))
+            ));
+            request.options.top_p = Some(0.99);
+            assert!(build_anthropic_request_body(&request, model).is_ok());
+            request.messages.push(Message {
+                role: Role::Assistant,
+                content: Some(Content::Text("prefill".into())),
+                name: None,
+                tool_calls: None,
+            });
+            assert!(matches!(
+                build_anthropic_request_body(&request, model),
+                Err(SDKError::InvalidRequest(_))
+            ));
+        }
     }
 
     #[test]

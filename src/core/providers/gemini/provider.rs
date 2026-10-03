@@ -77,6 +77,10 @@ impl GeminiProvider {
         &self,
         request: GeminiNativeRequest,
     ) -> Result<reqwest::Response, ProviderError> {
+        get_gemini_registry()
+            .get_model_spec(&request.model)
+            .filter(|spec| self.surface.includes(spec))
+            .ok_or_else(|| gemini_model_error(format!("Unsupported model: {}", request.model)))?;
         let api_key = self.client.api_key();
         let response = self.client.send_native_request(&request).await?;
         crate::core::providers::gemini_response_or_provider_error(response, api_key).await
@@ -491,6 +495,53 @@ mod native_tests {
         task.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn native_generation_rejects_retired_and_wrong_surface_models_before_network() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        for vertex in [false, true] {
+            let mut config = if vertex {
+                GeminiConfig::new_vertex_ai("test-project", "us-central1")
+            } else {
+                GeminiConfig::new_google_ai("test-key-for-native-model-validation")
+            };
+            config.base_url = format!("http://{}", listener.local_addr().unwrap());
+            config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+            let provider = GeminiProvider::new(config).unwrap();
+            let models = if vertex {
+                vec!["gemini-1.5-flash", "gemini-2.0-flash", "gemini-3.6-flash"]
+            } else {
+                vec!["gemini-1.5-flash", "gemini-2.0-flash", "gemini-test"]
+            };
+            for model in models {
+                for stream in [false, true] {
+                    let error = provider
+                        .gemini_generate_content(GeminiNativeRequest {
+                            api_version: "v1beta".into(),
+                            model: model.into(),
+                            method: if stream {
+                                "streamGenerateContent"
+                            } else {
+                                "generateContent"
+                            },
+                            stream,
+                            body: serde_json::json!({"contents": []}),
+                        })
+                        .await
+                        .unwrap_err();
+                    assert!(
+                        matches!(error, ProviderError::ModelNotFound { .. }),
+                        "{error}"
+                    );
+                }
+            }
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
     async fn error_provider(status: u16, headers: &str, body: &str, key: &str) -> ProviderError {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -512,7 +563,7 @@ mod native_tests {
         let error = provider
             .gemini_generate_content(GeminiNativeRequest {
                 api_version: "v1beta".to_string(),
-                model: "gemini-test".to_string(),
+                model: "gemini-2.5-flash".to_string(),
                 method: "generateContent",
                 stream: false,
                 body: serde_json::json!({}),

@@ -431,6 +431,18 @@ impl ModelUtils {
                 .get_model_spec(local)
                 .is_some();
         }
+        let gemini_local = model.split_once('/').map_or(model, |(prefix, local)| {
+            if prefix.eq_ignore_ascii_case("google") || prefix.eq_ignore_ascii_case("gemini") {
+                local
+            } else {
+                model
+            }
+        });
+        if gemini_local.to_ascii_lowercase().starts_with("gemini") {
+            return crate::core::providers::gemini::models::get_gemini_registry()
+                .get_model_spec(gemini_local)
+                .is_some();
+        }
         let known_providers = [
             "openai",
             "anthropic",
@@ -551,22 +563,12 @@ impl ModelUtils {
                     model_for_match.starts_with(&compatible_model.to_lowercase())
                 })
             }
-        } else if provider.eq_ignore_ascii_case("anthropic") {
+        } else if provider.eq_ignore_ascii_case("anthropic")
+            || provider.eq_ignore_ascii_case("google")
+        {
             compatible_models
                 .iter()
                 .any(|compatible_model| model_for_exact_match == compatible_model)
-        } else if provider.eq_ignore_ascii_case("google") {
-            compatible_models.iter().any(|compatible_model| {
-                let compatible_model = compatible_model.to_lowercase();
-                if matches!(
-                    compatible_model.as_str(),
-                    "gemini-3.7-flash" | "gemini-3.8-flash"
-                ) {
-                    model_for_exact_match == compatible_model
-                } else {
-                    model_for_match.starts_with(&compatible_model)
-                }
-            })
         } else {
             compatible_models.iter().any(|compatible_model| {
                 model_for_match.starts_with(&compatible_model.to_lowercase())

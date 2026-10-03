@@ -54,7 +54,7 @@ fn test_base_model_extraction() {
 fn test_model_validation() {
     assert!(ModelUtils::is_valid_model("gpt-4"));
     assert!(!ModelUtils::is_valid_model("claude-3-opus"));
-    assert!(ModelUtils::is_valid_model("gemini-2.0-flash"));
+    assert!(!ModelUtils::is_valid_model("gemini-2.0-flash"));
     assert!(ModelUtils::is_valid_model("gemini-3.1-pro-preview"));
     assert!(!ModelUtils::is_valid_model("unknown-model-xyz"));
 }
@@ -123,4 +123,23 @@ fn test_recommended_temperature() {
         ModelUtils::get_recommended_temperature("gemini-3.1-pro-preview"),
         0.8
     );
+}
+
+#[test]
+fn gemini_model_helpers_reject_retired_and_unregistered_ids() {
+    for model in [
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-3.7-flash-made-up",
+    ] {
+        for prefix in ["", "google/", "gemini/"] {
+            assert!(!ModelUtils::is_valid_model(&format!("{prefix}{model}")));
+        }
+        assert!(ModelUtils::validate_model_with_provider(model, "google").is_err());
+    }
+    for model in crate::core::providers::gemini::supported_models() {
+        assert!(ModelUtils::is_valid_model(&model), "{model}");
+        assert!(ModelUtils::is_valid_model(&format!("google/{model}")));
+        assert!(ModelUtils::validate_model_with_provider(&model, "google").is_ok());
+    }
 }

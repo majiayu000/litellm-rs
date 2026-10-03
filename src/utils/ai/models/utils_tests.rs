@@ -507,7 +507,7 @@ fn test_is_valid_model_known() {
     assert!(ModelUtils::is_valid_model("claude-opus-4-8"));
     assert!(ModelUtils::is_valid_model("claude-opus-4-6"));
     assert!(ModelUtils::is_valid_model("claude-sonnet-4-5"));
-    assert!(ModelUtils::is_valid_model("gemini-pro"));
+    assert!(!ModelUtils::is_valid_model("gemini-pro"));
     assert!(ModelUtils::is_valid_model("gemini-3.5-flash"));
     assert!(ModelUtils::is_valid_model("gemini-3.1-flash-lite"));
     assert!(ModelUtils::is_valid_model("gemini-2.5-pro"));

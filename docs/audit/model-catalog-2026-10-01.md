@@ -296,6 +296,7 @@ Cloudflare 本次逐型号核验：
 - Vertex 额外传输放行名单中的 1.5/2.0 型号也已移除；旧 ID 在网络调用前返回 ModelNotFound，历史费用查询仍可用。健康探测改用现有 Gemini 3.7 Flash；crate quick start 与 Claude 公共别名工具同步到保留型号。
 - Gemini 2.5 Pro/Flash/Flash-Lite 仍可用。按官方标准文本缓存价修正为 $0.125/$0.03/$0.01 每百万 tokens；媒体按 tokens 计费，移除目录中未经证实的固定每张图/每秒价格。中央价格库仍负责运行时分档、多模态计费，本批不建立第二套计费机制。
 - 历史价格库和历史模型家族分类保持独立，不因取消可调用声明而删除既有历史查询记录。真实供应商网络调用未运行。
+- 后续审查：公共 Gemini 校验改用精确目录；原生 generateContent/streamGenerateContent 在发送前按 Developer/Vertex surface 拒绝退役及不可用型号。SDK Claude 5 请求复用原生参数/prefill 校验，按 [Claude Messages 参数文档](https://platform.claude.com/docs/en/api/http/beta/messages/create) 和 [API primer](https://platform.claude.com/docs/en/claude_api_primer) 保留 InvalidRequest 分类。默认完整 test/check/clippy、格式检查通过（库 7,266 通过、1 忽略）；gateway/sqlite/providers-extra/providers-extended 的 Gemini 226 项、Vertex 254 项及 all-target clippy 通过。新原生测试同时覆盖 JSON/SSE，确认拒绝请求不触发本地 HTTP 连接。
 
 依据（2026-10-03 核对）：[Claude 退役表](https://platform.claude.com/docs/en/about-claude/model-deprecations)、[Claude ID 规范](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions)、[Gemini 退役表](https://ai.google.dev/gemini-api/docs/deprecations)、[Gemini 更新记录](https://ai.google.dev/gemini-api/docs/changelog)、[Vertex 生命周期](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions)、[Gemini 定价](https://ai.google.dev/gemini-api/docs/pricing)。
 
