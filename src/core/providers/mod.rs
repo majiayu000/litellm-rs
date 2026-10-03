@@ -7,6 +7,8 @@ pub mod external;
 pub use external::ExternalProvider;
 // Base infrastructure
 pub mod base;
+#[cfg(feature = "gateway")]
+mod responses_native;
 // Provider modules - alphabetically ordered
 // Tier 1 providers removed in favor of registry/catalog.rs are commented with their tier.
 // Catalog Tier 1: aiml_api, aleph_alpha.
@@ -565,6 +567,34 @@ impl Provider {
             _ => Err(ProviderError::not_supported(
                 "provider",
                 "Gemini native generateContent",
+            )),
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => provider.native_response(body).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses API",
+            )),
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_response_input_tokens(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<u32, ProviderError> {
+        match self {
+            Provider::OpenAI(provider) => provider.native_response_input_tokens(body).await,
+            _ => Err(ProviderError::not_supported(
+                "provider",
+                "Native Responses input token counting",
             )),
         }
     }

@@ -25,7 +25,7 @@ use std::sync::LazyLock;
 
 pub(super) use completion::{
     ChatCompletionBudgetRequest, reserve_chat_completion_budget_with_request_pricing,
-    try_estimate_chat_prompt_tokens,
+    reserve_completion_budget_with_counted_input, try_estimate_chat_prompt_tokens,
 };
 #[cfg(test)]
 pub(super) use completion::{

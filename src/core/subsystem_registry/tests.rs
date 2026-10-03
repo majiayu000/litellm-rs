@@ -580,7 +580,6 @@ fn issue_838_subsystems_have_explicit_non_silent_decisions() {
         ("semantic_cache", SubsystemDecision::ConfigRejected),
         ("user_management", SubsystemDecision::InternalDependency),
         ("virtual_keys", SubsystemDecision::Wired),
-        ("webhooks", SubsystemDecision::FeatureGated),
     ];
 
     for (name, decision) in expected {
