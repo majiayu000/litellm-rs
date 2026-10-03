@@ -197,16 +197,18 @@ def record_sample(report, save, args, process, port, output, prefix, round_index
     def references(stem):
         return {"raw": f"{stem}.json", "memory": f"{stem}.memory.json", "stderr": f"{stem}.stderr.log"}
     sample = {"round": round_index + 1, "implementation": name, "complete": False,
-              "phase": "probe", "warmup": references(f"{prefix}-warmup"), **references(prefix)}
+              "phase": "probe"}
     report["samples"].append(sample)
     save()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
         sample["probe"] = probe(url)
         sample["phase"] = "warmup"
+        sample["warmup"] = references(f"{prefix}-warmup")
         save()
         sample["warmup"].update(measure(args.oha, process, url, args.warmup, args.concurrency, output / f"{prefix}-warmup.json", env))
         sample["phase"] = "measurement"
+        sample.update(references(prefix))
         save()
         sample.update(measure(args.oha, process, url, args.seconds, args.concurrency, output / f"{prefix}.json", env))
         sample.update(complete=True, phase="complete")

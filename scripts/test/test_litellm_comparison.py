@@ -72,7 +72,21 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(sample["phase"], "warmup")
         self.assertEqual(sample["warmup"]["memory"], "round-1-rust-warmup.memory.json")
         self.assertIn("failure", saves[-1]["samples"][0])
-        self.assertIn("raw", saves[0]["samples"][0])
+        self.assertNotIn("raw", saves[0]["samples"][0])
+        self.assertNotIn("raw", sample)
+
+    def test_failed_probe_does_not_reference_unstarted_measurements(self):
+        report = {"samples": []}
+        args = SimpleNamespace(oha="oha", warmup=1, seconds=1, concurrency=1)
+        with patch.object(bench, "probe", side_effect=ValueError("invalid response")), patch.object(bench, "measure") as measure:
+            with self.assertRaisesRegex(ValueError, "invalid response"):
+                bench.record_sample(report, lambda: None, args, None, 1234, Path("/tmp"), "round-1-rust", 0, "rust", {})
+            measure.assert_not_called()
+        sample = report["samples"][0]
+        self.assertEqual(sample["phase"], "probe")
+        self.assertIn("failure", sample)
+        for key in ["warmup", "raw", "memory", "stderr"]:
+            self.assertNotIn(key, sample)
 
     def test_external_cargo_configuration_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
