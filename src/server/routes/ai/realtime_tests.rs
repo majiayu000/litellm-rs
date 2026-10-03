@@ -577,8 +577,8 @@ async fn realtime_2_has_complete_authoritative_audio_cache_rates() {
         .unwrap();
     let rates = Rates::load(&info, None).unwrap();
     assert_eq!(
-        info.extra["cache_read_input_audio_token_cost"],
-        json!(0.0000004)
+        info.extra["cache_read_input_audio_token_cost"].as_f64(),
+        Some(0.0000004)
     );
     assert!(rates.cost(&usage()).unwrap().0 < rates.bound());
 }
