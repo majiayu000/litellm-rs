@@ -584,12 +584,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "DASHSCOPE_API_KEY",
         ),
-        def_chat(
-            "baichuan",
-            "Baichuan",
-            "https://api.baichuan-ai.com/v1",
-            "BAICHUAN_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "baichuan",
+                "Baichuan",
+                "https://api.baichuan-ai.com/v1",
+                "BAICHUAN_API_KEY",
+            )
+        },
         def_chat(
             "minimax",
             "MiniMax",
@@ -634,7 +637,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         def_chat(
             "wandb",
             "Weights & Biases",
-            "https://api.wandb.ai/v1",
+            "https://api.inference.wandb.ai/v1",
             "WANDB_API_KEY",
         ),
         ProviderDefinition {
