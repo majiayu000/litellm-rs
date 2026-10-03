@@ -282,12 +282,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         runtime_path: Some("AppState canonical RuntimeVirtualKeyManager"),
         note: "The virtual-keys runtime facade resolves to the canonical KeyManager used by auth and /v1/keys; storage record types remain in use.",
     },
-    CoreSubsystem {
-        name: "webhooks",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: webhooks"),
-        note: "Webhook library types are excluded from the default build and are not advertised as a gateway runtime capability.",
-    },
 ];
 
 /// Look up the recorded decision for an exported core module.
