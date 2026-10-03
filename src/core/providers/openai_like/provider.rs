@@ -330,7 +330,7 @@ impl OpenAILikeProvider {
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         if matches!(
             self.provider_name.as_str(),
-            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim"
+            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim" | "aiml" | "aiml_api"
         ) && let Some(fields) = body.as_object_mut()
             && let Some(task_type) = fields.remove("task_type")
         {
@@ -385,6 +385,12 @@ impl OpenAILikeProvider {
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
         if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
             usage.entry("completion_tokens").or_insert(Value::from(0));
+            // AIML's embedding schema exposes only total_tokens; embeddings have no output tokens.
+            if matches!(self.provider_name.as_str(), "aiml" | "aiml_api")
+                && let Some(total) = usage.get("total_tokens").and_then(Value::as_u64)
+            {
+                usage.entry("prompt_tokens").or_insert(Value::from(total));
+            }
         }
         serde_json::from_value(value)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))

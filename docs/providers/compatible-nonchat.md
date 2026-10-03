@@ -65,6 +65,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
 
+第十批（#1429，核验 2026-10-03）接入 `aiml_api`/`aiml` 与 `comet_api` 文本 embeddings。AIML 官方响应只给 `usage.total_tokens` 时，按向量无输出 tokens 的语义填入 `prompt_tokens`，不从文本长度推估；已有 `task_type` 映射为其 `input_type`。缺失/无效 usage 仍遵循解析错误合同。CometAPI 默认主机修正为 `https://api.cometapi.com/v1`，Bytez 修正为 `https://api.bytez.com/models/v2/openai/v1`。
+
+AIML 图片响应 schema 不保证当前成功类型必需的 `created`，TTS/STT 使用原生 URL/异步任务；CometAPI 标准图片/音频接口存在，但本批尚未确认其模型计费单位与当前网关字符/秒/图片估算结算相符，保持待适配状态。Bytez 非聊天使用原生 model-run；Poe 多模态 bots 使用聊天内容。逐项证据与限制见 [多模态聚合供应商审计](../audit/multimodal-compatible-nonchat-2026-10-03.md)。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -118,15 +122,15 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `zai` | 待核验；本批未扩展非聊天声明 |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
 | `linkup` | 待核验；本批未扩展非聊天声明 |
-| `poe` | 待核验；本批未扩展非聊天声明 |
+| `poe` | 图片/音频 bots 经 chat/completions 返回内容；未确认标准 embeddings/images/audio 路由，不能互相替代 |
 | `wandb` | 待核验；本批未扩展非聊天声明 |
 | `nanogpt` | embeddings、images/generations、同步 speech/transcriptions；图片 /v1，其他 /api/v1；异步/克隆未接 |
-| `aiml_api` | 待核验；本批未扩展非聊天声明 |
-| `aiml` | 待核验；本批未扩展非聊天声明 |
+| `aiml_api` | 文本 embeddings；total-only usage 规范为输入tokens；图片created缺项、原生/异步语音待适配 |
+| `aiml` | 同 aiml_api（独立选择器共享已验证协议） |
 | `aleph_alpha` | 待核验；本批未扩展非聊天声明 |
 | `anyscale` | 待核验；本批未扩展非聊天声明 |
-| `bytez` | 待核验；本批未扩展非聊天声明 |
-| `comet_api` | 待核验；本批未扩展非聊天声明 |
+| `bytez` | 修正 OpenAI base /models/v2/openai/v1；非聊天原生 model-run 协议及运行时计费待适配 |
+| `comet_api` | 文本 embeddings；修正主机 api.cometapi.com；图片/音频协议存在但计费/usage差异尚待收口 |
 | `compactifai` | 待核验；本批未扩展非聊天声明 |
 | `maritalk` | 待核验；本批未扩展非聊天声明 |
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
