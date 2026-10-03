@@ -308,13 +308,13 @@ impl HttpServer {
         {
             for name in [
                 "x-api-key",
-                "mcp-session-id",
+                "mcp-method",
                 "mcp-protocol-version",
-                "last-event-id",
+                "mcp-name",
             ] {
                 cors = cors.allowed_header(name);
             }
-            cors = cors.expose_headers(["mcp-session-id", "mcp-protocol-version", "retry-after"]);
+            cors = cors.expose_headers(["mcp-protocol-version", "retry-after"]);
         }
 
         cors = cors.max_age(cors_config.max_age as usize);

@@ -1,134 +1,61 @@
 use super::*;
 use crate::core::{
-    mcp::config::{AuthConfig, McpServerConfig},
+    mcp::config::{AuthConfig, McpAuthType, McpServerConfig},
     models::user::types::User,
     net::ProviderEndpointAccess,
 };
-use actix_web::{App, HttpMessage, HttpServer, test};
-use std::sync::Arc;
-
-type Calls = Arc<Mutex<Vec<(String, Value, Option<String>)>>>;
-const COMPRESSED_REPLY: &[u8] = &[
-    31, 139, 8, 0, 0, 0, 0, 0, 2, 19, 171, 86, 202, 42, 206, 207, 43, 42, 72, 86, 178, 82, 50, 210,
-    51, 80, 210, 81, 202, 76, 81, 178, 50, 212, 81, 42, 74, 45, 46, 205, 41, 81, 178, 170, 86, 202,
-    207, 86, 178, 42, 41, 42, 77, 173, 173, 5, 0, 230, 64, 26, 162, 45, 0, 0, 0,
-];
+use actix_web::{App, HttpMessage, HttpServer, http::Method, test};
+use std::sync::{Arc, Mutex};
+type Calls = Arc<Mutex<Vec<(Value, Vec<(String, String)>)>>>;
 async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -> HttpResponse {
     assert_eq!(
         req.headers().get("authorization").unwrap(),
         "Bearer upstream-only-test"
     );
-    if req.method() == Method::DELETE {
-        assert_eq!(
-            req.headers().get("mcp-protocol-version").unwrap(),
-            "2025-11-25"
-        );
-    }
-    let value = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
-    let session = req
+    assert!(!req.headers().contains_key("x-mcp-key"));
+    assert!(!req.headers().contains_key("mcp-session-id"));
+    assert!(!req.headers().contains_key("last-event-id"));
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    let headers = req
         .headers()
-        .get("mcp-session-id")
-        .map(|v| v.to_str().unwrap().to_owned());
-    calls
-        .lock()
-        .unwrap()
-        .push((req.method().to_string(), value.clone(), session.clone()));
-    assert_ne!(
-        req.headers()
-            .get("mcp-protocol-version")
-            .and_then(|v| v.to_str().ok()),
-        Some("gateway-only-sentinel")
-    );
-    if let Some(case) = value
-        .pointer("/params/test_contract")
-        .and_then(Value::as_str)
-    {
-        let version = if case == "long-version" {
-            "x".repeat(65)
-        } else {
-            "2025-11-25".into()
-        };
-        let result = json!({"jsonrpc":"2.0","id":value["id"],"result":{"protocolVersion":version,"capabilities":{},"serverInfo":{"name":"test","version":"1"}}});
-        let mut response = HttpResponse::Ok();
-        response.insert_header(("mcp-session-id", "upstream-session"));
-        if case == "open-sse" {
-            return response.insert_header(("content-type", "text/event-stream")).streaming(async_stream::stream! {
-                let bytes = format!(": heartbeat\r\n\r\ndata: {result}\r\n\r\n").into_bytes();
-                for byte in bytes { yield Ok::<_, std::io::Error>(web::Bytes::from(vec![byte])); }
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                yield Ok(web::Bytes::from_static(b": still open\n\n"));
-            });
-        }
-        if case == "timeout" || case == "cancel" {
-            return response
-                .insert_header(("content-type", "application/json"))
-                .streaming(async_stream::stream! {
-                    yield Ok::<_, std::io::Error>(web::Bytes::from_static(b"{"));
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    yield Ok(web::Bytes::from_static(b"}"));
-                });
-        }
-        if case == "oversize" {
-            return response.body("x".repeat(8192));
-        }
-        if case == "truncated" {
-            return response.body("{invalid");
-        }
-        if case == "rpc-error" {
-            return response.json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"invalid"}}));
-        }
-        return response.json(result);
-    }
-    if value.pointer("/params/test_initialize_error") == Some(&Value::Bool(true)) {
-        return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"unsupported version"}}));
-    }
-    if value.pointer("/params/test_initialize_sse") == Some(&Value::Bool(true)) {
-        let result = json!({"jsonrpc":"2.0","id":value["id"],"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}});
-        return HttpResponse::Ok()
-            .insert_header(("content-type", "Text/Event-Stream"))
-            .insert_header(("mcp-session-id", "upstream-session"))
-            .body(format!("data: {result}\n\n"));
-    }
-    if value.get("method").and_then(Value::as_str) == Some("compressed") {
-        return HttpResponse::Ok()
-            .insert_header(("content-type", "application/json"))
-            .insert_header(("content-encoding", "gzip"))
-            .body(COMPRESSED_REPLY);
-    }
-    if req.method() == Method::GET {
-        assert_eq!(session.as_deref(), Some("upstream-session"));
-        assert_eq!(req.headers().get("last-event-id").unwrap(), "event-1");
-        return HttpResponse::Ok().insert_header(("content-type","text/event-stream")).body("id: event-2\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n");
-    }
-    if req.method() == Method::DELETE {
-        return HttpResponse::NoContent().finish();
-    }
-    let method = value["method"].as_str().unwrap_or("");
-    match method {
-        "initialize" => HttpResponse::Ok().insert_header(("mcp-session-id","upstream-session")).json(json!({"jsonrpc":"2.0","id":value["id"],"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{},"resources":{},"prompts":{}},"serverInfo":{"name":"test","version":"1"}}})),
-        "notifications/initialized" => HttpResponse::Accepted().finish(),
-        "limited" => HttpResponse::TooManyRequests().insert_header(("retry-after","7")).json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32000,"message":"limit"}})),
-        "slow" => {
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_owned()))
+        .collect();
+    calls.lock().unwrap().push((value.clone(), headers));
+    let result = json!({"jsonrpc":"2.0", "id":value["id"], "result":{"echo":value["params"],"ttlMs":1000,"cacheScope":"private"}});
+    match value["method"].as_str().unwrap() {
+        "limited" => HttpResponse::TooManyRequests().insert_header(("retry-after","7")).json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32603,"message":"limit"}})),
+        "redirect" => HttpResponse::Found().insert_header(("location","http://127.0.0.1:1/secret")).body("redirect not followed"),
+        "unsupported" => HttpResponse::NotFound().json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32601,"message":"unknown"}})),
+        "notification/test" => HttpResponse::Accepted().finish(),
+        "input_required" => HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":value["id"],"result":{"resultType":"input_required","inputRequests":[{"id":"sample-1","method":"sampling/createMessage","params":{"messages":[]}}]}})),
+        "subscriptions/listen" => HttpResponse::Ok().insert_header(("content-type","text/event-stream")).body("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":\"subscription-1\"}}}\n\n"),
+        "sse" => HttpResponse::Ok().insert_header(("content-type","text/event-stream")).body(format!("data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}}\n\ndata: {result}\n\n")),
+        "slow" | "idle" => {
             struct Closed(Calls);
-            impl Drop for Closed {
-                fn drop(&mut self) { self.0.lock().unwrap().push(("CLOSED".into(), Value::Null, None)); }
-            }
-            let calls = calls.get_ref().clone();
-            let stream = async_stream::stream! {
-                let _closed = Closed(calls);
+            impl Drop for Closed { fn drop(&mut self) { self.0.lock().unwrap().push((json!({"closed":true}),vec![])); } }
+            let guard = Closed(calls.get_ref().clone());
+            let delay = if value["method"] == "idle" { Duration::from_millis(1500) } else { Duration::from_millis(20) };
+            HttpResponse::Ok().insert_header(("content-type","text/event-stream")).streaming(async_stream::stream! {
+                let _guard = guard;
                 yield Ok::<_, std::io::Error>(web::Bytes::from_static(b"data: {}\n\n"));
                 loop {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    tokio::time::sleep(delay).await;
                     yield Ok(web::Bytes::from_static(b": heartbeat\n\n"));
                 }
-            };
-            HttpResponse::Ok().insert_header(("content-type", "text/event-stream")).streaming(stream)
-        },
-        "tools/call" => HttpResponse::Ok().insert_header(("content-type","text/event-stream")).body(format!("data: {}\n\n",json!({"jsonrpc":"2.0","id":value["id"],"result":{"content":[{"type":"text","text":"done"}]}}))),
-        _ => HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":value["id"],"result":{"echo":value}})),
+            })
+        }
+        _ => HttpResponse::Ok().insert_header(("mcp-session-id","must-not-be-echoed")).json(result),
     }
 }
-async fn fixture(auth: bool) -> (web::Data<AppState>, Calls, actix_web::dev::ServerHandle) {
+async fn fixture(
+    auth: bool,
+) -> (
+    web::Data<AppState>,
+    web::Data<ProviderHttpClient>,
+    Calls,
+    actix_web::dev::ServerHandle,
+) {
     let calls: Calls = Arc::default();
     let server_calls = calls.clone();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -153,9 +80,15 @@ async fn fixture(auth: bool) -> (web::Data<AppState>, Calls, actix_web::dev::Ser
     config.gateway.storage.redis.enabled = false;
     config.gateway.pricing.source = None;
     config.gateway.server.cors.enabled = true;
+    config
+        .gateway
+        .server
+        .cors
+        .allowed_headers
+        .push("mcp-param-region".into());
     config.gateway.server.cors.allowed_origins = vec!["https://mcp.example.test".into()];
     let server = crate::server::http::HttpServer::new(&config).await.unwrap();
-    let mut state = server.state().clone();
+    let state = server.state().clone();
     config.gateway.mcp_servers.insert(
         "docs".into(),
         McpServerConfig::new("docs", &url).with_auth(AuthConfig::bearer("upstream-only-test")),
@@ -164,18 +97,11 @@ async fn fixture(auth: bool) -> (web::Data<AppState>, Calls, actix_web::dev::Ser
     let mut revision = state.pin_runtime().as_ref().clone();
     revision.config = Arc::new(config);
     state.runtime.store(revision);
-    state.mcp_sessions = Arc::new(Sessions {
-        entries: Mutex::default(),
-        reaper_started: AtomicBool::new(false),
-        client: Some(
-            ProviderHttpClient::streaming_no_redirect(
-                ProviderEndpointPolicy::for_base_url(ProviderEndpointAccess::PrivateNetwork, &url)
-                    .unwrap(),
-            )
-            .unwrap(),
-        ),
-    });
-    (web::Data::new(state), calls, handle)
+    let client = ProviderHttpClient::streaming_no_redirect(
+        ProviderEndpointPolicy::for_base_url(ProviderEndpointAccess::PrivateNetwork, &url).unwrap(),
+    )
+    .unwrap();
+    (web::Data::new(state), web::Data::new(client), calls, handle)
 }
 fn user() -> User {
     User::new(
@@ -184,210 +110,42 @@ fn user() -> User {
         "unused".into(),
     )
 }
-fn request(method: &str, session: Option<&str>, user: &User) -> actix_http::Request {
-    let mut req = test::TestRequest::post()
+
+fn message(method: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":1,"method":method,"params":{"name":"original","uri":"test://resource","cursor":"cursor-original","arguments":{"x":1},"_meta":{"io.modelcontextprotocol/protocolVersion":PROTOCOL_VERSION,"io.modelcontextprotocol/clientCapabilities":{}}}})
+}
+fn builder(method: &str) -> test::TestRequest {
+    test::TestRequest::post()
         .uri("/docs/mcp")
         .insert_header(("accept", "application/json, text/event-stream"))
-        .insert_header(("mcp-protocol-version", "2025-11-25"));
-    if let Some(session) = session {
-        req = req.insert_header(("mcp-session-id", session));
-    }
-    let req = req.set_json(json!({"jsonrpc":"2.0","id":1,"method":method,"params":{"cursor":"cursor-original","uri":"test://resource","name":"original","arguments":{"x":1}}})).to_request();
-    req.extensions_mut().insert(user.clone());
+        .insert_header(("mcp-protocol-version", PROTOCOL_VERSION))
+        .insert_header(("mcp-method", method))
+        .insert_header((
+            "mcp-name",
+            if method == "resources/read" {
+                "test://resource"
+            } else {
+                "original"
+            },
+        ))
+        .set_json(message(method))
+}
+fn request(method: &str, owner: &User) -> actix_http::Request {
+    let req = builder(method).to_request();
+    req.extensions_mut().insert(owner.clone());
     req
-}
-#[actix_web::test]
-async fn forwards_tools_resources_prompts_notifications_and_sse() {
-    let (state, calls, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state)
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let user = user();
-    let response = test::call_service(&app, request("initialize", None, &user)).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let token = response
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    assert_ne!(token, "upstream-session");
-    let result: Value = test::read_body_json(response).await;
-    assert_eq!(result["result"]["protocolVersion"], "2025-11-25");
-    for method in [
-        "tools/list",
-        "resources/list",
-        "resources/read",
-        "resources/templates/list",
-        "prompts/list",
-        "prompts/get",
-    ] {
-        let response = test::call_service(&app, request(method, Some(&token), &user)).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value: Value = test::read_body_json(response).await;
-        assert_eq!(value["result"]["echo"]["method"], method);
-        assert_eq!(
-            value["result"]["echo"]["params"]["cursor"],
-            "cursor-original"
-        );
-    }
-    let notification = test::TestRequest::post()
-        .uri("/docs/mcp")
-        .insert_header(("accept", "application/json, text/event-stream"))
-        .insert_header(("mcp-session-id", token.clone()))
-        .set_json(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
-        .to_request();
-    notification.extensions_mut().insert(user.clone());
-    let response = test::call_service(&app, notification).await;
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    assert!(test::read_body(response).await.is_empty());
-    let response = test::call_service(&app, request("tools/call", Some(&token), &user)).await;
-    assert_eq!(
-        response.headers().get("content-type").unwrap(),
-        "text/event-stream"
-    );
-    let body = test::read_body(response).await;
-    assert!(std::str::from_utf8(&body).unwrap().contains("done"));
-    assert_eq!(calls.lock().unwrap().len(), 9);
-    assert!(
-        calls
-            .lock()
-            .unwrap()
-            .iter()
-            .skip(1)
-            .all(|(_, _, s)| s.as_deref() == Some("upstream-session"))
-    );
-    server.stop(true).await;
-}
-#[actix_web::test]
-async fn isolates_sessions_and_forwards_error_resume_and_delete() {
-    let (state, calls, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let owner = user();
-    let response = test::call_service(&app, request("initialize", None, &owner)).await;
-    let token = response
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    drop(test::read_body(response).await);
-    let other = user();
-    let response = test::call_service(&app, request("tools/list", Some(&token), &other)).await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_eq!(calls.lock().unwrap().len(), 1);
-    let response = test::call_service(&app, request("limited", Some(&token), &owner)).await;
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(response.headers().get("retry-after").unwrap(), "7");
-    assert_eq!(
-        test::read_body_json::<Value, _>(response).await["error"]["message"],
-        "limit"
-    );
-    let req = test::TestRequest::get()
-        .uri("/docs/mcp")
-        .insert_header(("accept", "text/event-stream"))
-        .insert_header(("mcp-session-id", token.clone()))
-        .insert_header(("last-event-id", "event-1"))
-        .to_request();
-    req.extensions_mut().insert(owner.clone());
-    let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        std::str::from_utf8(&test::read_body(response).await)
-            .unwrap()
-            .contains("event-2")
-    );
-    let req = test::TestRequest::delete()
-        .insert_header(("mcp-protocol-version", "2025-11-25"))
-        .uri("/docs/mcp")
-        .insert_header(("accept", "text/event-stream"))
-        .insert_header(("mcp-session-id", token.clone()))
-        .to_request();
-    req.extensions_mut().insert(owner.clone());
-    let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(test::read_body(response).await.is_empty());
-    let response = test::call_service(&app, request("tools/list", Some(&token), &owner)).await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(state.mcp_sessions.entries.lock().unwrap().is_empty());
-    server.stop(true).await;
-}
-#[actix_web::test]
-async fn rejects_anonymous_origin_body_and_missing_session_before_upstream() {
-    let (state, calls, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 256)),
-    )
-    .await;
-    let user = user();
-    let req = request("initialize", None, &user);
-    req.extensions_mut().clear();
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let mut req = request("initialize", None, &user);
-    req.headers_mut().insert(
-        actix_web::http::header::ORIGIN,
-        "https://untrusted.test".parse().unwrap(),
-    );
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        test::call_service(&app, request("tools/list", None, &user))
-            .await
-            .status(),
-        StatusCode::BAD_REQUEST
-    );
-    let req = test::TestRequest::post()
-        .uri("/docs/mcp")
-        .insert_header(("accept", "application/json, text/event-stream"))
-        .set_json(json!([{"jsonrpc":"2.0","method":"initialize"}]))
-        .to_request();
-    req.extensions_mut().insert(user.clone());
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::BAD_REQUEST
-    );
-    let req = test::TestRequest::post()
-        .uri("/docs/mcp")
-        .set_payload("x".repeat(1024))
-        .to_request();
-    req.extensions_mut().insert(user);
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::PAYLOAD_TOO_LARGE
-    );
-    assert!(calls.lock().unwrap().is_empty());
-    let app = test::init_service(crate::server::http::HttpServer::create_app(state)).await;
-    let response = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/docs/mcp")
-            .set_json(json!({"jsonrpc":"2.0","method":"initialize","id":1}))
-            .to_request(),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    server.stop(true).await;
 }
 #[actix_web::test]
 async fn rejects_unsupported_gateway_configuration() {
     let config = McpServerConfig::new("docs", "https://1.1.1.1/mcp");
+    let insecure = McpServerConfig::new("docs", "http://example.com/mcp")
+        .with_auth(AuthConfig::bearer("test"));
+    assert!(
+        insecure
+            .validate_http_gateway("docs")
+            .unwrap_err()
+            .contains("HTTPS")
+    );
     assert!(config.validate_http_gateway("docs").is_ok());
     assert!(config.validate_http_gateway("different").is_err());
     let mut other = config.clone();
@@ -416,194 +174,6 @@ async fn rejects_unsupported_gateway_configuration() {
     );
     let other = config.with_header("mcp-session-id", "shared-session");
     assert!(other.validate_http_gateway("docs").is_err());
-}
-
-#[actix_web::test]
-async fn dropping_gateway_stream_closes_upstream_body() {
-    use actix_web::body::MessageBody;
-    let (state, calls, server) = fixture(false).await;
-    let owner = user();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("accept", "application/json, text/event-stream"))
-        .insert_header(("content-type", "application/json"))
-        .to_http_request();
-    req.extensions_mut().insert(owner.clone());
-    let response = proxy(
-        req,
-        web::Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#),
-        state.clone(),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let token = response
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    drop(
-        actix_web::body::to_bytes(response.into_body())
-            .await
-            .unwrap(),
-    );
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("accept", "application/json, text/event-stream"))
-        .insert_header(("content-type", "application/json"))
-        .insert_header(("mcp-session-id", token))
-        .to_http_request();
-    req.extensions_mut().insert(owner);
-    let response = proxy(
-        req,
-        web::Bytes::from_static(br#"{"jsonrpc":"2.0","id":2,"method":"slow"}"#),
-        state,
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let mut body = Box::pin(response.into_body());
-    let chunk = futures::future::poll_fn(|cx| body.as_mut().poll_next(cx))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(chunk, "data: {}\n\n");
-    drop(body);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !calls
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(method, _, _)| method == "CLOSED")
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("upstream body should close after client disconnect");
-    server.stop(true).await;
-}
-
-#[actix_web::test]
-async fn expires_sessions_and_invalidates_changed_accounts() {
-    let (state, calls, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let owner = user();
-    for expired in [true, false] {
-        let response = test::call_service(&app, request("initialize", None, &owner)).await;
-        let token = response
-            .headers()
-            .get("mcp-session-id")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_owned();
-        drop(test::read_body(response).await);
-        if expired {
-            state
-                .mcp_sessions
-                .entries
-                .lock()
-                .unwrap()
-                .get_mut(&token)
-                .unwrap()
-                .expires = Instant::now();
-        } else {
-            let mut revision = state.pin_runtime().as_ref().clone();
-            let mut config = revision.config.as_ref().clone();
-            config.gateway.mcp_servers.get_mut("docs").unwrap().auth =
-                Some(AuthConfig::bearer("changed-upstream-test"));
-            revision.config = Arc::new(config);
-            state.runtime.store(revision);
-        }
-        let response = test::call_service(&app, request("tools/list", Some(&token), &owner)).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-    let runtime = state.pin_runtime();
-    reap_sessions(&state.mcp_sessions, &runtime.config.gateway.mcp_servers).await;
-    assert!(state.mcp_sessions.entries.lock().unwrap().is_empty());
-    let calls = calls.lock().unwrap().clone();
-    assert_eq!(calls.len(), 4);
-    assert_eq!(
-        calls
-            .iter()
-            .filter(|(method, _, _)| method == "DELETE")
-            .count(),
-        2
-    );
-    server.stop(true).await;
-}
-
-#[actix_web::test]
-async fn enforces_key_operation_and_endpoint_restrictions() {
-    use crate::core::models::ApiKey;
-    let (state, calls, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state)
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let user = user();
-    let mut key = ApiKey {
-        metadata: Default::default(),
-        name: "restricted".into(),
-        key_hash: "unused".into(),
-        key_prefix: "test".into(),
-        user_id: Some(user.id()),
-        team_id: None,
-        permissions: vec!["chat".into()],
-        rate_limits: None,
-        expires_at: None,
-        is_active: true,
-        last_used_at: None,
-        usage_stats: Default::default(),
-    };
-    let req = request("initialize", None, &user);
-    req.extensions_mut().insert(key.clone());
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    key.permissions = vec!["mcp.docs".into()];
-    key.metadata.extra.insert(
-        "__core_keys".into(),
-        json!({"permissions":{"allowed_endpoints":["chat"]}}),
-    );
-    let req = request("initialize", None, &user);
-    req.extensions_mut().insert(key.clone());
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert!(calls.lock().unwrap().is_empty());
-    key.metadata.extra.clear();
-    let req = request("initialize", None, &user);
-    req.extensions_mut().insert(key.clone());
-    let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let token = response
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    drop(test::read_body(response).await);
-    key.metadata.id = uuid::Uuid::new_v4();
-    let req = request("tools/list", Some(&token), &user);
-    req.extensions_mut().insert(key);
-    assert_eq!(
-        test::call_service(&app, req).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(calls.lock().unwrap().len(), 1);
-    server.stop(true).await;
 }
 
 #[actix_web::test]
@@ -641,7 +211,7 @@ async fn exported_mcp_configuration_redacts_credentials() {
 async fn production_middleware_accepts_key_with_named_endpoint_permission() {
     use crate::core::models::{ApiKey, user::types::UserStatus};
     use crate::utils::auth::crypto::keys::{extract_api_key_prefix, hash_api_key};
-    let (state, calls, server) = fixture(true).await;
+    let (state, client, calls, server) = fixture(true).await;
     let mut owner = user();
     owner.status = UserStatus::Active;
     let owner = state.storage.db().create_user(&owner).await.unwrap();
@@ -665,7 +235,9 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
         json!({"permissions":{"allowed_endpoints":["/docs/mcp"]}}),
     );
     state.storage.db().create_api_key(&key).await.unwrap();
-    let app = test::init_service(crate::server::http::HttpServer::create_app(state)).await;
+    let app =
+        test::init_service(crate::server::http::HttpServer::create_app(state).app_data(client))
+            .await;
     let preflight = test::TestRequest::default()
         .method(Method::OPTIONS)
         .uri("/docs/mcp")
@@ -673,7 +245,7 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
         .insert_header(("access-control-request-method", "POST"))
         .insert_header((
             "access-control-request-headers",
-            "x-mcp-key,content-type,mcp-session-id,mcp-protocol-version,last-event-id",
+            "x-mcp-key,content-type,mcp-method,mcp-name,mcp-protocol-version,mcp-param-region",
         ))
         .to_request();
     let preflight = test::call_service(&app, preflight).await;
@@ -685,18 +257,20 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
         .insert_header(("origin", "https://mcp.example.test"))
         .insert_header(("x-mcp-key", raw))
         .insert_header(("accept", "application/json, text/event-stream"))
-        .set_json(json!({"jsonrpc":"2.0","method":"initialize","id":1}))
+        .insert_header(("mcp-method", "tools/list"))
+        .insert_header(("mcp-protocol-version", PROTOCOL_VERSION))
+        .set_json(message("tools/list"))
         .to_request();
     let response = test::call_service(&app, req).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().contains_key("mcp-session-id"));
+    assert!(!response.headers().contains_key("mcp-session-id"));
     let exposed = response
         .headers()
         .get("access-control-expose-headers")
         .unwrap()
         .to_str()
         .unwrap();
-    for name in ["mcp-session-id", "mcp-protocol-version", "retry-after"] {
+    for name in ["mcp-protocol-version", "retry-after"] {
         assert!(exposed.contains(name));
     }
     drop(test::read_body(response).await);
@@ -705,304 +279,306 @@ async fn production_middleware_accepts_key_with_named_endpoint_permission() {
 }
 
 #[actix_web::test]
-async fn capacity_is_reserved_before_upstream_and_cancellation_releases_it() {
-    let (state, calls, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    {
-        let mut entries = state.mcp_sessions.entries.lock().unwrap();
-        for index in 0..4096 {
-            entries.insert(
-                index.to_string(),
-                Session {
-                    owner: "other".into(),
-                    binding: vec![],
-                    upstream: None,
-                    protocol_version: None,
-                    expires: Instant::now() + Duration::from_secs(60),
-                    pending: false,
-                    server: Arc::new(McpServerConfig::new("docs", "https://1.1.1.1/mcp")),
-                },
-            );
-        }
-    }
-    let response = test::call_service(&app, request("initialize", None, &user())).await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
-    assert!(calls.lock().unwrap().is_empty());
-    state.mcp_sessions.entries.lock().unwrap().clear();
-    // Cancellation drops the guard even without reaching an HTTP error handler.
-    let sessions = state.mcp_sessions.clone();
-    let future = async {
-        sessions.entries.lock().unwrap().insert(
-            "pending".into(),
-            Session {
-                owner: "other".into(),
-                binding: vec![],
-                upstream: None,
-                protocol_version: None,
-                expires: Instant::now(),
-                pending: true,
-                server: Arc::new(McpServerConfig::new("docs", "https://1.1.1.1/mcp")),
-            },
-        );
-        let _reservation = PendingSession {
-            sessions: sessions.clone(),
-            token: "pending".into(),
-            committed: false,
-        };
-        std::future::pending::<()>().await;
-    };
-    assert!(
-        tokio::time::timeout(Duration::from_millis(1), future)
-            .await
-            .is_err()
-    );
-    assert!(sessions.entries.lock().unwrap().is_empty());
-    server.stop(true).await;
-}
-
-#[actix_web::test]
-async fn accept_handles_repeated_fields_case_and_quality() {
-    let (state, calls, server) = fixture(false).await;
+async fn stateless_first_requests_preserve_native_methods_and_ignore_old_sessions() {
+    let (state, client, calls, handle) = fixture(false).await;
     let app = test::init_service(
         App::new()
             .app_data(state)
+            .app_data(client)
             .configure(|c| configure_routes(c, 4096)),
     )
     .await;
-    let owner = user();
-    for (values, expected) in [
-        (
-            vec!["Application/JSON", "Text/Event-Stream; q=0.5"],
-            StatusCode::OK,
-        ),
-        (
-            vec!["application/json, text/event-stream;q=0"],
-            StatusCode::NOT_ACCEPTABLE,
-        ),
-        (
-            vec!["application/jsonp, text/event-stream"],
-            StatusCode::NOT_ACCEPTABLE,
-        ),
+    for method in [
+        "server/discover",
+        "tools/list",
+        "tools/call",
+        "resources/list",
+        "resources/templates/list",
+        "resources/read",
+        "prompts/list",
+        "prompts/get",
     ] {
-        let mut builder = test::TestRequest::post().uri("/docs/mcp");
-        for value in values {
-            builder = builder.append_header(("accept", value));
-        }
-        let req = builder
-            .set_json(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
+        let req = builder(method)
+            .insert_header(("mcp-session-id", "obsolete"))
+            .insert_header(("last-event-id", "obsolete"))
+            .insert_header(("mcp-param-region", "us-west1"))
             .to_request();
-        req.extensions_mut().insert(owner.clone());
+        req.extensions_mut().insert(user());
         let response = test::call_service(&app, req).await;
-        assert_eq!(response.status(), expected);
-        assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
-        drop(test::read_body(response).await);
+        assert_eq!(response.status(), StatusCode::OK, "{method}");
+        assert!(!response.headers().contains_key("mcp-session-id"));
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["result"]["echo"], message(method)["params"]);
+        assert_eq!(body["result"]["cacheScope"], "private");
     }
-    assert_eq!(calls.lock().unwrap().len(), 1);
-    server.stop(true).await;
-}
-
-#[actix_web::test]
-async fn equivalent_config_reload_preserves_session() {
-    let (state, _, server) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let owner = user();
-    let mut token = None;
-    for reverse in [false, true] {
-        let mut revision = state.pin_runtime().as_ref().clone();
-        let mut config = revision.config.as_ref().clone();
-        let mut headers = HashMap::new();
-        let indexes: Vec<_> = if reverse {
-            (0..32).rev().collect()
-        } else {
-            (0..32).collect()
-        };
-        for index in indexes {
-            headers.insert(format!("x-test-{index}"), index.to_string());
-        }
-        config
-            .gateway
-            .mcp_servers
-            .get_mut("docs")
-            .unwrap()
-            .static_headers = headers;
-        if reverse {
-            let server = config.gateway.mcp_servers.get_mut("docs").unwrap();
-            server.description = Some("changed description".into());
-            server.timeout_ms += 100;
-        }
-        revision.config = Arc::new(config);
-        state.runtime.store(revision);
-        let response = test::call_service(
-            &app,
-            request(
-                if reverse { "tools/list" } else { "initialize" },
-                token.as_deref(),
-                &owner,
-            ),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        if !reverse {
-            token = Some(
-                response
-                    .headers()
-                    .get("mcp-session-id")
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_owned(),
-            );
-        }
-        drop(test::read_body(response).await);
-    }
-    server.stop(true).await;
-}
-
-#[actix_web::test]
-async fn initialize_rpc_errors_do_not_commit_sessions_and_sse_results_do() {
-    let (state, _, handle) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let owner = user();
-    for sse in [false, true] {
-        let req = test::TestRequest::post().uri("/docs/mcp")
-            .insert_header(("accept", "application/json, text/event-stream"))
-            .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"test_initialize_error":!sse,"test_initialize_sse":sse}})).to_request();
-        req.extensions_mut().insert(owner.clone());
-        let response = test::call_service(&app, req).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().contains_key("mcp-session-id"), sse);
-        let bytes = test::read_body(response).await;
-        assert_eq!(
-            state.mcp_sessions.entries.lock().unwrap().len(),
-            usize::from(sse)
-        );
-        if sse {
-            assert!(std::str::from_utf8(&bytes).unwrap().starts_with("data: "));
-        } else {
-            assert_eq!(
-                serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["code"],
-                -32602
-            );
-        }
-    }
-    handle.stop(false).await;
-}
-
-#[actix_web::test]
-async fn one_owner_cannot_fill_global_session_capacity() {
-    let (state, calls, handle) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let owner = user();
-    let response = test::call_service(&app, request("initialize", None, &owner)).await;
-    drop(test::read_body(response).await);
-    {
-        let mut entries = state.mcp_sessions.entries.lock().unwrap();
-        let mut session = entries.values().next().unwrap().clone();
-        session.upstream = None;
-        for index in 1..128 {
-            entries.insert(format!("fixture-{index}"), session.clone());
-        }
-    }
-    assert_eq!(
-        test::call_service(&app, request("initialize", None, &owner))
-            .await
-            .status(),
-        StatusCode::TOO_MANY_REQUESTS
+    let recorded = calls.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 8);
+    assert!(
+        recorded
+            .iter()
+            .all(|(_, headers)| headers.contains(&("mcp-param-region".into(), "us-west1".into())))
     );
-    assert_eq!(calls.lock().unwrap().len(), 1);
-    let response = test::call_service(&app, request("initialize", None, &user())).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    drop(test::read_body(response).await);
     handle.stop(false).await;
 }
 
 #[actix_web::test]
-async fn configured_gateway_credential_header_is_not_forwarded() {
-    let (state, _, handle) = fixture(false).await;
-    let mut revision = state.pin_runtime().as_ref().clone();
-    let mut config = revision.config.as_ref().clone();
-    config.gateway.auth.enable_api_key = true;
-    config.gateway.auth.api_key_header = "MCP-Protocol-Version".into();
-    revision.config = Arc::new(config);
-    state.runtime.store(revision);
+async fn protocol_and_mirrored_headers_are_validated_before_upstream() {
+    let (state, client, calls, handle) = fixture(false).await;
     let app = test::init_service(
         App::new()
             .app_data(state)
+            .app_data(client)
             .configure(|c| configure_routes(c, 4096)),
     )
     .await;
-    let mut req = request("initialize", None, &user());
-    req.headers_mut().insert(
-        actix_web::http::header::HeaderName::from_static("mcp-protocol-version"),
-        "gateway-only-sentinel".parse().unwrap(),
-    );
+    for (header, value) in [
+        ("mcp-method", "tools/list"),
+        ("mcp-protocol-version", "2025-11-25"),
+        ("mcp-name", "wrong"),
+        ("mcp-name", "=?base64?invalid!?="),
+    ] {
+        let req = builder("tools/call")
+            .insert_header((header, value))
+            .to_request();
+        req.extensions_mut().insert(user());
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["code"], -32020);
+        assert_eq!(body["id"], 1);
+    }
+    for header in ["mcp-method", "mcp-protocol-version", "mcp-name"] {
+        let req = builder("tools/call")
+            .append_header((header, "duplicate"))
+            .to_request();
+        req.extensions_mut().insert(user());
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["error"]["code"], -32020);
+    }
+    let mut old = message("tools/list");
+    old["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!("2025-11-25");
+    let req = builder("tools/list")
+        .insert_header(("mcp-protocol-version", "2025-11-25"))
+        .set_json(old)
+        .to_request();
+    req.extensions_mut().insert(user());
     let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    drop(test::read_body(response).await);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["code"], -32022);
+    assert_eq!(
+        body["error"]["data"]["supported"],
+        json!([PROTOCOL_VERSION])
+    );
+    for field in [
+        "io.modelcontextprotocol/protocolVersion",
+        "io.modelcontextprotocol/clientCapabilities",
+    ] {
+        let mut incomplete = message("tools/list");
+        incomplete["params"]["_meta"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        let req = builder("tools/list").set_json(incomplete).to_request();
+        req.extensions_mut().insert(user());
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["error"]["code"], -32602);
+    }
+    let req = test::TestRequest::post()
+        .uri("/docs/mcp")
+        .insert_header(("accept", "application/json, text/event-stream"))
+        .set_json(message("tools/list"))
+        .to_request();
+    req.extensions_mut().insert(user());
+    let body: Value = test::call_and_read_body_json(&app, req).await;
+    assert_eq!(body["error"]["code"], -32020);
+    assert!(calls.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
 
 #[actix_web::test]
-async fn unchanged_encoded_bodies_preserve_encoding_metadata() {
-    let (state, _, handle) = fixture(false).await;
+async fn encoded_names_and_large_numbers_survive_without_precision_loss() {
+    let (state, client, calls, handle) = fixture(false).await;
     let app = test::init_service(
         App::new()
             .app_data(state)
+            .app_data(client)
             .configure(|c| configure_routes(c, 4096)),
     )
     .await;
-    let owner = user();
-    let response = test::call_service(&app, request("initialize", None, &owner)).await;
-    let token = response
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    drop(test::read_body(response).await);
-    let response = test::call_service(&app, request("compressed", Some(&token), &owner)).await;
-    assert_eq!(response.headers().get("content-encoding").unwrap(), "gzip");
-    assert_eq!(test::read_body(response).await.as_ref(), COMPRESSED_REPLY);
+    for name in ["中文工具", " padded ", "=?base64?literal?=", "line\nbreak"] {
+        let mut value = message("tools/call");
+        value["params"]["name"] = json!(name);
+        value["params"]["arguments"] = serde_json::from_str(
+            r#"{"large":184467440737095516170000,"decimal":0.1234567890123456789012345}"#,
+        )
+        .unwrap();
+        let req = builder("tools/call")
+            .insert_header(("mcp-name", format!("=?base64?{}?=", STANDARD.encode(name))))
+            .set_json(&value)
+            .to_request();
+        req.extensions_mut().insert(user());
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["result"]["echo"], value["params"]);
+    }
+    assert_eq!(calls.lock().unwrap().len(), 4);
     handle.stop(false).await;
 }
 
 #[actix_web::test]
-async fn mcp_configuration_rejects_unknown_fields_and_transport_auth_collisions() {
-    let (state, _, handle) = fixture(false).await;
+async fn forwards_mrtr_retries_subscriptions_and_request_scoped_sse() {
+    let (state, client, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let body: Value = test::call_and_read_body_json(&app, request("input_required", &user())).await;
+    assert_eq!(body["result"]["resultType"], "input_required");
+    assert_eq!(
+        body["result"]["inputRequests"][0]["method"],
+        "sampling/createMessage"
+    );
+    let mut retry = message("tools/call");
+    retry["params"]["inputResponses"] = json!([{"id":"sample-1","result":{"model":"test","role":"assistant","content":{"type":"text","text":"answer"}}}]);
+    let req = builder("tools/call").set_json(&retry).to_request();
+    req.extensions_mut().insert(user());
+    let body: Value = test::call_and_read_body_json(&app, req).await;
+    assert_eq!(body["result"]["echo"], retry["params"]);
+    for method in ["subscriptions/listen", "sse"] {
+        let response = test::call_service(&app, request(method, &user())).await;
+        assert_eq!(response.headers().get("x-accel-buffering").unwrap(), "no");
+        let body = test::read_body(response).await;
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.contains(if method == "sse" {
+            "notifications/progress"
+        } else {
+            "io.modelcontextprotocol/subscriptionId"
+        }));
+    }
+    assert_eq!(calls.lock().unwrap().len(), 4);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn upstream_errors_notifications_and_redirect_status_are_preserved() {
+    let (state, client, _, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let response = test::call_service(&app, request("limited", &user())).await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers().get("retry-after").unwrap(), "7");
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["message"], "limit");
+    let response = test::call_service(&app, request("unsupported", &user())).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["code"], -32601);
+    let response = test::call_service(&app, request("redirect", &user())).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(test::read_body(response).await, "redirect not followed");
+    let req = test::TestRequest::post()
+        .uri("/docs/mcp")
+        .insert_header(("accept", "application/json, text/event-stream"))
+        .set_json(json!({"jsonrpc":"2.0","method":"notification/test"}))
+        .to_request();
+    req.extensions_mut().insert(user());
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(test::read_body(response).await.is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn rejects_anonymous_bad_origin_legacy_verbs_and_invalid_envelopes() {
+    let (state, client, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let response = test::call_service(&app, builder("tools/list").to_request()).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    for origin in ["null", "https://evil.example"] {
+        let req = builder("tools/list")
+            .insert_header(("origin", origin))
+            .to_request();
+        req.extensions_mut().insert(user());
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    for verb in [Method::GET, Method::DELETE] {
+        let req = test::TestRequest::default()
+            .method(verb)
+            .uri("/docs/mcp")
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+    }
+    for value in [
+        json!([]),
+        json!({"jsonrpc":"2.0","id":1,"result":{}}),
+        json!({"jsonrpc":"2.0","id":null,"method":"tools/list"}),
+    ] {
+        let req = builder("tools/list").set_json(value).to_request();
+        req.extensions_mut().insert(user());
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["error"]["code"], -32600);
+    }
+    let req = builder("tools/list").set_payload("{").to_request();
+    req.extensions_mut().insert(user());
+    let body: Value = test::call_and_read_body_json(&app, req).await;
+    assert_eq!(body["error"]["code"], -32700);
+    let req = builder("tools/list")
+        .insert_header(("accept", "application/json"))
+        .to_request();
+    req.extensions_mut().insert(user());
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_ACCEPTABLE
+    );
+    let req = builder("tools/list")
+        .insert_header(("content-type", "text/plain"))
+        .to_request();
+    req.extensions_mut().insert(user());
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn configured_credentials_cannot_replace_mirrored_transport_headers() {
+    let (state, _, _, handle) = fixture(false).await;
     let mut gateway = state.pin_runtime().config.gateway.clone();
+    gateway.auth.enable_api_key = true;
     gateway.mcp_servers.get_mut("docs").unwrap().url = "https://example.com/mcp".into();
     for header in [
         "Accept",
-        "Content-Type",
+        "Mcp-Method",
+        "Mcp-Name",
         "MCP-Protocol-Version",
-        "MCP-Session-Id",
-        "Origin",
+        "mCp-PaRaM-tenant",
+        "Mcp-Session-Id",
         "Last-Event-ID",
-        "Accept-Encoding",
     ] {
-        gateway.auth.enable_api_key = true;
         gateway.auth.api_key_header = header.into();
         assert!(
             gateway
@@ -1010,219 +586,155 @@ async fn mcp_configuration_rejects_unknown_fields_and_transport_auth_collisions(
                 .unwrap_err()
                 .contains("conflicts with MCP")
         );
+        let server =
+            McpServerConfig::new("docs", "https://example.com/mcp").with_header(header, "test");
+        assert!(server.validate_http_gateway("docs").is_err());
+        let mut server = McpServerConfig::new("docs", "https://example.com/mcp")
+            .with_auth(AuthConfig::api_key("test"));
+        server.auth.as_mut().unwrap().header_name = Some(header.into());
+        assert!(server.validate_http_gateway("docs").is_err());
     }
-    let mut server =
-        serde_json::to_value(McpServerConfig::new("docs", "https://example.com/mcp")).unwrap();
-    server["static_header"] = json!({"x-token":"test"});
-    assert!(serde_json::from_value::<McpServerConfig>(server).is_err());
-    let mut auth = serde_json::to_value(AuthConfig::bearer("test")).unwrap();
-    auth["header_nam"] = json!("x-token");
-    assert!(serde_json::from_value::<AuthConfig>(auth).is_err());
-    handle.stop(false).await;
-}
-
-#[actix_web::test]
-async fn allocated_sessions_are_reaped_after_initialize_errors_and_cancellation() {
-    let (state, calls, handle) = fixture(false).await;
-    let mut revision = state.pin_runtime().as_ref().clone();
-    let mut config = revision.config.as_ref().clone();
-    config.gateway.server.max_body_size = 4096;
-    config
-        .gateway
-        .mcp_servers
-        .get_mut("docs")
-        .unwrap()
-        .timeout_ms = 200;
-    revision.config = Arc::new(config);
-    state.runtime.store(revision);
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let owner = user();
-    for case in [
-        "oversize",
-        "truncated",
-        "timeout",
-        "long-version",
-        "rpc-error",
-        "cancel",
+    for kind in [
+        McpAuthType::ApiKey,
+        McpAuthType::BearerToken,
+        McpAuthType::Basic,
     ] {
-        let req = test::TestRequest::post().uri("/docs/mcp")
-            .insert_header(("accept", "application/json, text/event-stream"))
-            .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":"2025-11-25","test_contract":case}})).to_request();
-        req.extensions_mut().insert(owner.clone());
-        if case == "cancel" {
-            assert!(
-                tokio::time::timeout(Duration::from_millis(100), test::call_service(&app, req))
-                    .await
-                    .is_err()
-            );
-        } else {
-            let response = test::call_service(&app, req).await;
-            assert_eq!(
-                response.status(),
-                if case == "rpc-error" {
-                    StatusCode::OK
-                } else {
-                    StatusCode::BAD_GATEWAY
-                },
-                "{case}"
-            );
-            assert!(!response.headers().contains_key("mcp-session-id"));
+        for value in [None, Some("".into()), Some("  ".into())] {
+            let mut server = McpServerConfig::new("docs", "https://example.com/mcp")
+                .with_auth(AuthConfig::bearer("test"));
+            let auth = server.auth.as_mut().unwrap();
+            auth.auth_type = kind;
+            auth.value = value;
+            assert!(server.validate_http_gateway("docs").is_err());
         }
-        {
-            let entries = state.mcp_sessions.entries.lock().unwrap();
-            assert_eq!(entries.len(), 1, "{case}");
-            let session = entries.values().next().unwrap();
-            assert!(!session.pending);
-            assert!(session.expires <= Instant::now());
-        }
-        reap_sessions(
-            &state.mcp_sessions,
-            &state.pin_runtime().config.gateway.mcp_servers,
-        )
-        .await;
-        assert!(state.mcp_sessions.entries.lock().unwrap().is_empty());
     }
-    assert_eq!(
-        calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(method, _, _)| method == "DELETE")
-            .count(),
-        6
+    gateway.auth.enable_api_key = false;
+    gateway.auth.enable_jwt = false;
+    assert!(
+        gateway
+            .validate()
+            .unwrap_err()
+            .contains("require API key or JWT")
     );
     handle.stop(false).await;
 }
 
 #[actix_web::test]
-async fn sse_initialize_returns_before_upstream_closes() {
+async fn streams_obey_idle_timeout_and_close_upstream_on_client_disconnect() {
     use actix_web::body::MessageBody;
-    let (state, _, handle) = fixture(false).await;
-    let app = test::init_service(
-        App::new()
-            .app_data(state.clone())
-            .configure(|c| configure_routes(c, 4096)),
-    )
-    .await;
-    let req = test::TestRequest::post().uri("/docs/mcp")
-        .insert_header(("accept", "application/json, text/event-stream"))
-        .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"test_contract":"open-sse"}})).to_request();
-    req.extensions_mut().insert(user());
-    let response = tokio::time::timeout(Duration::from_secs(2), test::call_service(&app, req))
+    for idle_timeout in [0, 1] {
+        let (state, client, calls, handle) = fixture(false).await;
+        let mut revision = state.pin_runtime().as_ref().clone();
+        let mut config = revision.config.as_ref().clone();
+        config.gateway.server.stream_idle_timeout = idle_timeout;
+        revision.config = Arc::new(config);
+        state.runtime.store(revision);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .app_data(client)
+                .configure(|c| configure_routes(c, 4096)),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            request(if idle_timeout == 0 { "slow" } else { "idle" }, &user()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = Box::pin(response.into_body());
+        assert_eq!(
+            futures::future::poll_fn(|cx| body.as_mut().poll_next(cx))
+                .await
+                .unwrap()
+                .unwrap(),
+            "data: {}\n\n"
+        );
+        if idle_timeout == 1 {
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(3),
+                    futures::future::poll_fn(|cx| body.as_mut().poll_next(cx))
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+            );
+        }
+        drop(body);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(value, _)| value["closed"] == true)
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
         .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().contains_key("mcp-session-id"));
-    let mut body = Box::pin(response.into_body());
-    let first = tokio::time::timeout(
-        Duration::from_secs(2),
-        futures::future::poll_fn(|cx| body.as_mut().poll_next(cx)),
-    )
-    .await
-    .unwrap()
-    .unwrap()
-    .unwrap();
-    let text = std::str::from_utf8(&first).unwrap();
-    assert!(text.contains("2025-11-25"));
-    assert!(text.starts_with(": heartbeat"));
-    drop(body);
-    handle.stop(false).await;
+        .expect("upstream body should close");
+        handle.stop(false).await;
+    }
 }
 
 #[actix_web::test]
-async fn canonical_forwarding_preserves_large_and_fractional_numbers() {
-    let (state, calls, handle) = fixture(false).await;
+async fn public_network_policy_blocks_private_targets_before_transport() {
+    let (state, _, calls, handle) = fixture(false).await;
     let app = test::init_service(
         App::new()
             .app_data(state)
             .configure(|c| configure_routes(c, 4096)),
     )
     .await;
-    let owner = user();
-    let response = test::call_service(&app, request("initialize", None, &owner)).await;
-    let token = response
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    let req = test::TestRequest::post().uri("/docs/mcp")
-        .insert_header(("accept", "application/json, text/event-stream"))
-        .insert_header(("content-type", "application/json"))
-        .insert_header(("mcp-session-id", token))
-        .set_payload(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"arguments":{"large":184467440737095516170,"decimal":0.12345678901234567890123456789}}}"#).to_request();
-    req.extensions_mut().insert(owner);
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
-    let calls = calls.lock().unwrap().clone();
-    let args = &calls.last().unwrap().1["params"]["arguments"];
-    assert_eq!(args["large"].to_string(), "184467440737095516170");
     assert_eq!(
-        args["decimal"].to_string(),
-        "0.12345678901234567890123456789"
+        test::call_service(&app, request("tools/list", &user()))
+            .await
+            .status(),
+        StatusCode::BAD_GATEWAY
     );
+    assert!(calls.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
 
 #[actix_web::test]
-async fn mcp_stream_idle_timeout_and_authentication_configuration_are_enforced() {
-    use actix_web::body::MessageBody;
-    for seconds in [1, 0] {
-        let (state, _, handle) = fixture(false).await;
-        let mut revision = state.pin_runtime().as_ref().clone();
-        let mut config = revision.config.as_ref().clone();
-        config.gateway.server.stream_idle_timeout = seconds;
-        revision.config = Arc::new(config);
-        state.runtime.store(revision);
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .configure(|c| configure_routes(c, 4096)),
-        )
-        .await;
-        let req = test::TestRequest::post().uri("/docs/mcp")
-            .insert_header(("accept", "application/json, text/event-stream"))
-            .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"test_contract":"open-sse"}})).to_request();
-        req.extensions_mut().insert(user());
-        let response = test::call_service(&app, req).await;
-        let mut body = Box::pin(response.into_body());
-        futures::future::poll_fn(|cx| body.as_mut().poll_next(cx))
-            .await
-            .unwrap()
-            .unwrap();
-        let next = tokio::time::timeout(
-            Duration::from_secs(2),
-            futures::future::poll_fn(|cx| body.as_mut().poll_next(cx)),
-        )
-        .await;
-        if seconds == 0 {
-            assert!(next.is_err());
-        } else {
-            assert!(next.unwrap().unwrap().is_err());
-        }
-        drop(body);
-        handle.stop(false).await;
+async fn server_permission_and_endpoint_restrictions_block_before_upstream() {
+    use crate::core::models::ApiKey;
+    let (state, client, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for (permission, path) in [("mcp.other", "/docs/mcp"), ("mcp.docs", "/other/mcp")] {
+        let mut key = ApiKey {
+            metadata: Default::default(),
+            name: "restricted".into(),
+            key_hash: "test".into(),
+            key_prefix: "test".into(),
+            user_id: None,
+            team_id: None,
+            permissions: vec![permission.into()],
+            rate_limits: None,
+            expires_at: None,
+            is_active: true,
+            last_used_at: None,
+            usage_stats: Default::default(),
+        };
+        key.metadata.set_extra(
+            "__core_keys",
+            json!({"permissions":{"allowed_endpoints":[path]}}),
+        );
+        let req = builder("tools/list").to_request();
+        req.extensions_mut().insert(key);
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::FORBIDDEN
+        );
     }
-    let mut config = crate::server::valid_test_config();
-    config.gateway.auth.enable_api_key = false;
-    config.gateway.auth.enable_jwt = false;
-    config.gateway.auth.allow_anonymous = true;
-    config.gateway.mcp_servers.insert(
-        "test".into(),
-        McpServerConfig::new("test", "https://tools.example/mcp"),
-    );
-    assert!(
-        config
-            .gateway
-            .validate()
-            .unwrap_err()
-            .contains("require API key or JWT")
-    );
-    config.gateway.mcp_servers.get_mut("test").unwrap().enabled = false;
-    config.gateway.validate().unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
 }

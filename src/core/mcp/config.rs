@@ -111,10 +111,31 @@ impl McpServerConfig {
         {
             return Err("MCP gateway requires a positive timeout; per-server rate limits, OpenAPI generation and client header forwarding are not supported".into());
         }
+        if !self.url.starts_with("https://")
+            && (self
+                .auth
+                .as_ref()
+                .is_some_and(|auth| auth.auth_type != McpAuthType::None)
+                || !self.static_headers.is_empty())
+        {
+            return Err("MCP credentials and static headers require an HTTPS upstream".into());
+        }
         if let Some(auth) = &self.auth
             && auth.auth_type == McpAuthType::OAuth2
         {
             return Err("MCP gateway requires a configured upstream credential; OAuth acquisition is not supported".into());
+        }
+        if let Some(auth) = &self.auth
+            && matches!(
+                auth.auth_type,
+                McpAuthType::ApiKey | McpAuthType::BearerToken | McpAuthType::Basic
+            )
+            && auth
+                .value
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err("MCP upstream authentication requires a nonempty credential".into());
         }
         if let Some(auth) = &self.auth
             && auth.get_header_value().is_some()
@@ -149,8 +170,11 @@ impl McpServerConfig {
                     | "origin"
                     | "mcp-session-id"
                     | "mcp-protocol-version"
+                    | "mcp-method"
+                    | "mcp-name"
                     | "last-event-id"
-            ) {
+            ) || name.as_str().starts_with("mcp-param-")
+            {
                 return Err("MCP upstream headers cannot override transport headers".into());
             }
             reqwest::header::HeaderValue::from_str(value)

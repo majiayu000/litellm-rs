@@ -107,10 +107,12 @@ impl Validate for GatewayConfig {
             server.validate_http_gateway(name)?;
             if server.enabled
                 && self.auth.enable_api_key
-                && [
+                && ([
                     "accept",
                     "content-type",
                     "mcp-protocol-version",
+                    "mcp-method",
+                    "mcp-name",
                     "mcp-session-id",
                     "last-event-id",
                     "origin",
@@ -118,6 +120,11 @@ impl Validate for GatewayConfig {
                 ]
                 .iter()
                 .any(|header| header.eq_ignore_ascii_case(&self.auth.api_key_header))
+                    || self
+                        .auth
+                        .api_key_header
+                        .to_ascii_lowercase()
+                        .starts_with("mcp-param-"))
             {
                 return Err("Gateway API key header conflicts with MCP transport headers".into());
             }

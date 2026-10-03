@@ -1,6 +1,6 @@
 # MCP Streamable HTTP gateway
 
-Build with `gateway,mcp` and configure `gateway.mcp_servers`. A server named `docs` is available at `/docs/mcp`; `/mcp` selects the only enabled server and otherwise requires a named path. The gateway forwards one upstream server per connection; it does not aggregate multiple servers into a synthetic tool list.
+Build with `gateway,mcp` and configure `gateway.mcp_servers`. A server named `docs` is available at `/docs/mcp`; `/mcp` selects the only enabled server and otherwise requires a named path. Each request targets one upstream server. The gateway does not aggregate multiple servers into a synthetic tool list.
 
 ```yaml
 mcp_servers:
@@ -14,18 +14,46 @@ mcp_servers:
       value: YOUR_UPSTREAM_TOKEN
 ```
 
-These fields are inside `gateway`, alongside `providers` and `auth`. Use your deployment's secret-management process for credentials. The upstream URL must resolve to public addresses; outbound DNS and redirects are restricted by the existing network policy. Gateway credentials are consumed by gateway authentication and never forwarded upstream. The upstream credential above is shared by callers allowed to use this configured server.
+These fields are inside `gateway`, alongside `providers` and `auth`. Use your deployment's secret-management process for credentials. Upstream addresses must be public; the existing network policy restricts outbound DNS and disables redirects. Credentials or static upstream headers require HTTPS. Gateway credentials are consumed by gateway authentication and never forwarded upstream. The upstream credential above is shared by callers allowed to use this configured server, so authorization for upstream application resources remains the upstream's responsibility.
 
-Clients send `Authorization: Bearer <gateway JWT>` or `x-api-key: <gateway API key>` on every request. A Bearer value is interpreted as a JWT, not as an API key. Anonymous MCP calls are rejected even when anonymous model calls are enabled. Existing key permissions can restrict a key to `mcp.docs`; `allowed_endpoints`, when configured, must permit the actual path, such as `/docs/mcp`. Existing HTTP/IP/rate-limit middleware also applies. Browser Origin values require an exact entry in `server.cors.allowed_origins`; a wildcard does not grant MCP access.
+Clients send `Authorization: Bearer <gateway JWT>` or `x-api-key: <gateway API key>` on every request. A Bearer value is interpreted as a JWT. Enabled MCP servers require JWT or API-key authentication in configuration; anonymous MCP calls are always rejected. Existing key permissions can restrict a key to `mcp.docs`; `allowed_endpoints`, when configured, must permit the actual path, such as `/docs/mcp`. Existing HTTP/IP/rate-limit middleware also applies. Browser Origin values require an exact entry in `server.cors.allowed_origins`; a wildcard does not grant MCP access. Add any tool-specific `Mcp-Param-*` headers used by browser clients to the existing `server.cors.allowed_headers` list.
 
-Enabled MCP servers require JWT or API-key authentication in gateway configuration. The endpoint proxies POST, GET and DELETE; initialization, notifications, tools, resources, templates, prompts, JSON-RPC errors and SSE bytes are preserved. POST requires JSON and Accept containing both `application/json` and `text/event-stream`; GET requires `text/event-stream`. Send the returned `Mcp-Session-Id` and negotiated `MCP-Protocol-Version` on subsequent requests. Resume GET requests pass `Last-Event-ID` only for sessionful upstream servers. Upstream HTTP status and Retry-After are preserved. Header acquisition is bounded by `timeout_ms`; SSE remains open until either peer closes or `server.stream_idle_timeout` seconds pass without an upstream chunk (zero disables this idle bound). Dropping a client body closes the corresponding upstream body.
+The gateway supports **MCP 2026-07-28** with stateless POST requests. There is no initialize handshake, transport session, standalone GET stream or DELETE operation. GET/DELETE return 405. Obsolete `Mcp-Session-Id` and `Last-Event-ID` headers are ignored and never forwarded or echoed. Requests can move between gateway instances without MCP transport affinity.
 
-Sessions are bound to the authenticated key (or user for JWT), server and configured upstream account. The gateway replaces upstream session IDs with random gateway IDs. Sessions expire after one hour; successful DELETE or upstream 404 removes them. There are at most 4,096 process-local sessions. Restarting requires reinitialization. Multiple gateway replicas require session affinity; cross-replica session persistence is not implemented. Shared upstream credentials still imply a shared upstream account: gateway session isolation does not implement the upstream application's resource authorization.
+Every JSON-RPC request must carry matching HTTP/body metadata:
 
-This route supports Streamable HTTP, not legacy HTTP+SSE, stdio or WebSocket MCP transports. It does not acquire OAuth credentials, forward arbitrary client headers, generate tools from OpenAPI, apply per-tool permissions, or meter external tool charges. Unsupported configuration fields are rejected. Model-call content guardrails and token budgets do not inspect or meter opaque MCP messages. The separate `core::mcp::McpGateway` library client still has its older JSON transport contract.
+```http
+POST /docs/mcp
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: get_weather
+```
 
-References: [MCP Streamable HTTP specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [LiteLLM endpoint and authentication reference](https://docs.litellm.ai/docs/mcp_config_reference).
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "get_weather",
+    "arguments": {"location": "Seattle"},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {"name": "example", "version": "1.0"}
+    }
+  }
+}
+```
 
-Expired sessions and sessions invalidated by URL/credential/header changes are reaped every five seconds using their original upstream credentials. The gateway attempts DELETE with at most 32 concurrent cleanup calls and a five-second maximum per attempt, then releases local capacity. Upstreams that reject DELETE or cannot be reached must provide their own expiration; cleanup failure is logged without credentials. Pending initializations keep their reserved slots. If headers allocate an upstream session but initialization fails or is cancelled, the same reaper attempts cleanup before releasing capacity. Before negotiation completes, that best-effort DELETE uses the requested protocol version (or the missing-version transport default); the upstream may still require its own expiration.
+`Mcp-Name` mirrors `params.name` for tools/call and prompts/get, or `params.uri` for resources/read. Non-ASCII, control characters, surrounding whitespace and literal Base64 sentinel strings use the specification's `=?base64?…?=` encoding. Missing/mismatched/duplicate standard headers return HTTP 400 with JSON-RPC -32020. Missing required request metadata returns -32602; unsupported versions return -32022 with the supported version list. Client info is optional. Tool-specific `Mcp-Param-*` headers pass unchanged to the upstream, which knows their schema and validates them. Configured gateway and upstream credentials cannot use these reserved header names or prefix.
 
-The 4096-session global bound also limits each authenticated owner to 128 sessions (429 on that owner limit). Only a successful JSON/SSE InitializeResult commits a session; application-level initialization errors preserve the upstream error; allocated upstream sessions are queued for cleanup. Initialization is buffered within the configured body/time bounds until the matching InitializeResult arrives. For SSE, complete events are inspected incrementally; the result and remaining stream are forwarded immediately without waiting for upstream EOF. Negotiated version strings are limited to 64 bytes. Transport forwarding excludes the configured gateway credential header. Upstream requests ask for identity encoding; unchanged response bodies retain Content-Encoding metadata.
+Native discovery, tools, resources, templates and prompts retain their request/result fields, including pagination, `ttlMs`/`cacheScope`, and multi-round-trip `input_required` results and `inputResponses`. `subscriptions/listen` uses a POST response stream. JSON-RPC notifications from extensions are forwarded; the core specification defines no client notifications over this transport and does not impose request metadata headers on notification POSTs. The gateway preserves upstream HTTP statuses, JSON-RPC errors and Retry-After.
+
+SSE bytes are passed through with `X-Accel-Buffering: no`. Upstream header acquisition is bounded by `timeout_ms`; finite response bodies have a further `timeout_ms` deadline. SSE remains open until either peer closes or `server.stream_idle_timeout` seconds pass without an upstream chunk (zero disables this idle bound). Dropping a client response closes its upstream body. Responses are not stored in a shared HTTP cache. Upstream requests ask for identity encoding; unchanged bodies retain Content-Encoding metadata.
+
+This route does not implement earlier MCP protocol versions, stdio or WebSocket transports, OAuth acquisition, arbitrary client-header forwarding, tools generated from OpenAPI, per-tool permissions, or billing for external tool charges. Unsupported configuration options are rejected. Model-call content guardrails and token budgets do not inspect or meter opaque MCP messages. The separate `core::mcp::McpGateway` library client still has its older JSON transport contract and is not used by this HTTP endpoint.
+
+References: [MCP 2026-07-28 Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http), [per-request protocol metadata](https://modelcontextprotocol.io/specification/2026-07-28/basic/index), [LiteLLM endpoint and authentication reference](https://docs.litellm.ai/docs/mcp_config_reference).
