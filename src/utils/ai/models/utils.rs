@@ -565,6 +565,7 @@ impl ModelUtils {
             }
         } else if provider.eq_ignore_ascii_case("anthropic")
             || provider.eq_ignore_ascii_case("google")
+            || provider.eq_ignore_ascii_case("cohere")
         {
             compatible_models
                 .iter()
@@ -629,11 +630,7 @@ impl ModelUtils {
                 .map(|spec| spec.model_info.id.clone())
                 .collect(),
             "google" => crate::core::providers::gemini::supported_models(),
-            "cohere" => vec![
-                "command-a-03-2025".to_string(),
-                "command-r-08-2024".to_string(),
-                "command-r-plus-08-2024".to_string(),
-            ],
+            "cohere" => crate::core::providers::cohere::supported_chat_models(),
             "mistral" => vec![
                 "mistral-tiny".to_string(),
                 "mistral-small".to_string(),
