@@ -79,6 +79,22 @@ const OOBABOOGA_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
 ];
+const ZHIPU_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+    ProviderCapability::TextToSpeech,
+];
+const ZAI_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::ImageGeneration,
+];
 const GALADRIEL_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -87,6 +103,7 @@ const GALADRIEL_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
 ];
+
 const FEATHERLESS_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -95,6 +112,7 @@ const FEATHERLESS_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::TextToSpeech,
 ];
+
 const NANOGPT_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -105,6 +123,7 @@ const NANOGPT_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::AudioTranscription,
     ProviderCapability::TextToSpeech,
 ];
+
 const EMBEDDING_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
@@ -580,18 +599,24 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.moonshot.cn/v1",
             "MOONSHOT_API_KEY",
         ),
-        def_chat(
-            "dashscope",
-            "Dashscope",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "DASHSCOPE_API_KEY",
-        ),
-        def_chat(
-            "qwen",
-            "Qwen",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "DASHSCOPE_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "dashscope",
+                "Dashscope",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "DASHSCOPE_API_KEY",
+            )
+        },
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "qwen",
+                "Qwen",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "DASHSCOPE_API_KEY",
+            )
+        },
         ProviderDefinition {
             capabilities: EMBEDDING_CATALOG_CAPABILITIES,
             ..def_chat(
@@ -625,13 +650,19 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
                 "MIMO_API_KEY",
             )
         },
-        def_chat(
-            "zhipu",
-            "Zhipu AI",
-            "https://open.bigmodel.cn/api/paas/v4",
-            "ZHIPU_API_KEY",
-        ),
-        def_chat("zai", "ZAI", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
+        ProviderDefinition {
+            capabilities: ZHIPU_CAPABILITIES,
+            ..def_chat(
+                "zhipu",
+                "Zhipu AI",
+                "https://open.bigmodel.cn/api/paas/v4",
+                "ZHIPU_API_KEY",
+            )
+        },
+        ProviderDefinition {
+            capabilities: ZAI_CAPABILITIES,
+            ..def_chat("zai", "ZAI", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY")
+        },
         // ===== Group 1e: Other OpenAI-compatible =====
         ProviderDefinition {
             capabilities: LEMONADE_CAPABILITIES,
@@ -723,12 +754,15 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://chat.maritaca.ai/api",
             "MARITALK_API_KEY",
         ),
-        def_chat(
-            "siliconflow",
-            "SiliconFlow",
-            "https://api.siliconflow.cn/v1",
-            "SILICONFLOW_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_chat(
+                "siliconflow",
+                "SiliconFlow",
+                "https://api.siliconflow.cn/v1",
+                "SILICONFLOW_API_KEY",
+            )
+        },
         def_chat("yi", "Yi", "https://api.lingyiwanwu.com/v1", "YI_API_KEY"),
         def_chat(
             "lambda_ai",
