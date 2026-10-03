@@ -58,7 +58,8 @@ pub use images::{image_edits, image_generations, image_variations};
 pub use models::{get_model, list_models};
 pub use moderations::create_moderation;
 pub use rerank::rerank;
-mod responses_native;
+pub(crate) mod responses_native;
+pub(crate) mod responses_settlement;
 pub use responses::{cancel_response, delete_response, get_response, list_response_input_items};
 pub use responses_native::create_response;
 
@@ -283,7 +284,7 @@ pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
         return Some("models");
     }
     if normalized == "/v1/responses" || normalized.starts_with("/v1/responses/") {
-        return Some("responses");
+        return Some("chat");
     }
     if normalized == "/v1/batches" || normalized.starts_with("/v1/batches/") {
         return Some("batches");

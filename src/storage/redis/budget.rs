@@ -1,7 +1,8 @@
 //! Single-key Lua budget lease operations (cluster-safe: `KEYS[1]` only).
 //!
 //! Expiry and period reset release the lease's authority over budget counters.
-//! Finishing an absent lease is a no-op; historical cost recording is independent.
+//! Ordinary lease completion is a no-op when absent. Durable Responses settlement
+//! uses its own receipt and can account for an already-expired lease exactly once.
 
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -111,6 +112,29 @@ if op == 'reserve' then
     'l:' .. lease_id,
     tostring(amount) .. ':' .. tostring(now + ttl) .. ':' .. tostring(epoch)
   )
+  return {1, committed, outstanding}
+end
+
+-- Durable Responses retries may arrive after the reservation expires. Keep the
+-- receipt with the budget counter; SQL acknowledges only after this atomic step.
+if op == 'settle_response' then
+  local receipt = 'r:' .. ARGV[7]
+  if redis.call('HEXISTS', KEYS[1], receipt) == 1 then
+    return {0, committed, outstanding}
+  end
+  local actual = tonumber(ARGV[5]) or 0
+  local field = 'l:' .. ARGV[7]
+  local lease = redis.call('HGET', KEYS[1], field)
+  if lease then
+    local amount, _, lease_epoch = string.match(lease, '^(%d+):(%d+):(%-?%d+)$')
+    if tonumber(lease_epoch) == epoch then
+      outstanding = math.max(0, outstanding - (tonumber(amount) or 0))
+    end
+    redis.call('HDEL', KEYS[1], field)
+  end
+  committed = committed + actual
+  write_state(committed, outstanding, epoch)
+  redis.call('HSET', KEYS[1], receipt, actual)
   return {1, committed, outstanding}
 end
 
@@ -296,6 +320,31 @@ impl RedisPool {
             key,
             BudgetLeaseArgs {
                 op: "settle",
+                now_ms,
+                period_epoch,
+                amount: reserved,
+                max_or_actual_or_force: actual,
+                seed_committed: 0,
+                lease_id,
+                ttl_ms: 0,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn budget_settle_response(
+        &self,
+        key: &str,
+        reserved: i64,
+        actual: i64,
+        period_epoch: i64,
+        lease_id: &str,
+        now_ms: i64,
+    ) -> Result<BudgetLeaseState> {
+        self.invoke_budget_lease(
+            key,
+            BudgetLeaseArgs {
+                op: "settle_response",
                 now_ms,
                 period_epoch,
                 amount: reserved,

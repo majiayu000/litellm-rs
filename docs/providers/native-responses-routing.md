@@ -51,8 +51,8 @@ cannot establish account entitlement or successful paid provider inference.
 | `openai.gpt-6-astra` | Mantle `/openai/v1/responses`, exact model preserved, `us-east-1` or `us-west-2` |
 | `openai.gpt-oss-{20b,120b}-1:0` | Mantle `/v1/responses`, official wire ID `openai.gpt-oss-{20b,120b}`; intersect the model card's Regions with published Mantle endpoint Regions |
 
-Runtime does not accept `background=true` or server-side tools. Gateway F05
-currently enforces stateless creation (`store=false`) for all providers. Account
+Runtime does not accept `background=true` or server-side tools. The F07 stack enables persistent lifecycle only for native OpenAI; Copilot and
+Bedrock still require `store=false` and `background=false`. Account
 entitlement and current AWS profile permissions remain upstream checks. Arbitrary
 ARNs, invented profile prefixes and unreviewed model IDs do not gain Responses
 support. Other Bedrock catalog models retain their existing non-Responses APIs.
@@ -76,3 +76,61 @@ not imply a zero token price: existing `unpriced_model_policy` remains in force
 (default reject). Operators need their own verified price configuration or the
 existing explicit `allow_unpriced` policy; endpoint support is still checked
 against the authenticated account catalog.
+
+
+## F07: durable background accounting
+
+Decision: adapt the existing SQL storage and budget backends, with one dedicated
+`response_settlements` table. [LiteLLM's documented background poller](https://github.com/BerriAI/litellm-docs/blob/main/docs/response_api.md)
+also retains pending responses and retrieves terminal usage independently of
+client GETs. Its general managed-object/enterprise polling infrastructure is not
+adopted: this gateway already owns SQL, deployment binding, pricing snapshots and
+Redis leases. [OpenAI background mode](https://developers.openai.com/api/docs/guides/background)
+allows polling existing response IDs and documents roughly ten-minute retention
+when `store=true` is not explicitly requested.
+
+The gateway writes a billing intent **before** POST, including the selected
+account/deployment digest, frozen price metadata and budget lease IDs. It binds
+the upstream response ID as soon as a valid JSON response or `response.created`
+frame is stored. No prompt, output or credential is copied into the billing row.
+Deleting/expiring response content never deletes the billing obligation.
+
+On normal completion the creating worker freezes observed terminal usage before
+releasing its SQL recovery lease, so a later upstream deletion cannot erase a
+known charge. After
+a process stops, another instance picks up the abandoned intent at the existing
+nine-minute dispatch deadline. Startup recovery scans at most 32 due records per
+cycle, bounds each GET to 20 seconds, and never repeats POST. It uses the original
+price metadata even if the live catalog has changed. Provider/model settlement
+runs idempotently in Redis; API-key usage and its receipt commit together in one
+SQL transaction. SQL completion is acknowledged only after those backend steps.
+Redis and SQL are separate systems; this is retry-safe reconciliation, not a
+cross-database atomic transaction. Backend failures retain pending obligations.
+
+Supported deployment combinations:
+
+- Shared enabled SQL with no provider/model limits: native OpenAI background and
+  API-key usage accounting, including replica takeover and restart recovery.
+- Shared SQL plus the existing Redis backend: also supports enabled provider/model
+  limits. The Redis dataset must be persisted and shared; deleting it discards
+  the budget counters and idempotency receipts it owns.
+- Process-local provider/model limits, or an API key referencing an in-process
+  `budget_id`: rejected before upstream dispatch. This change does not introduce
+  a persistent API-key budget subsystem or claim that local limits span replicas.
+
+If a dispatch's response ID or trustworthy terminal usage cannot be recovered,
+`outcome=reserved_unknown` retains the conservative reservation amount separately.
+It commits that amount only to provider/model budget protection; API-key actual
+cost and token usage remain zero and its unpriced-request counter is incremented.
+This unresolved amount is **not verified supplier spend**. No request is replayed
+to try to resolve it. Response content TTL and billing evidence retention differ:
+SQL settlement rows and Redis receipts are retained, with no automatic pruning
+in this change. External callback delivery after a crash is not replayed.
+
+Validation includes SQL write-failure rollback, two instances reopening shared
+SQLite and recovering a pre-existing dispatch with frozen pricing, duplicate
+acknowledgement retry, deleted/expired content isolation, public API-key creation
+with `api.chat` through auth middleware, and local real-Redis lease-expiry/retry
+checks. Recovery fixtures simulate the durable crash boundary; they do not claim
+that a paid upstream process was exercised or killed. Responses creation and its
+lifecycle share the existing `api.chat` permission.

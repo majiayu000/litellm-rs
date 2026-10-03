@@ -9,7 +9,7 @@ use crate::server::guardrails::{self, GuardrailDecisionSink};
 use crate::server::routes::ai::execution::StreamingDeploymentLease;
 use crate::utils::error::gateway_error::GatewayError;
 
-pub(super) fn is_terminal(status: &str) -> bool {
+pub(in crate::server::routes::ai) fn is_terminal(status: &str) -> bool {
     matches!(status, "completed" | "incomplete" | "failed" | "cancelled")
 }
 
@@ -22,6 +22,10 @@ pub(super) async fn response(
     already_stored: bool,
     facts: Option<crate::core::request_ledger::SharedRequestLedgerFacts>,
 ) -> Result<HttpResponse, GatewayError> {
+    let durable_id = call
+        .storage
+        .as_ref()
+        .and_then(|storage| storage.settlement_id.clone());
     let sink = GuardrailDecisionSink::from_state(
         &state,
         Some(&call.model),
@@ -49,18 +53,20 @@ pub(super) async fn response(
     let (initial, native_provider) = match prepared {
         Ok(value) => value,
         Err(error) => {
-            settle(
-                &state,
-                &context,
-                &call.provider,
-                &call.model,
-                call.pricing,
-                None,
-                call.reservation,
-                call.key_reservation,
-                facts,
-            )
-            .await;
+            if durable_id.is_none() {
+                settle(
+                    &state,
+                    &context,
+                    &call.provider,
+                    &call.model,
+                    call.pricing,
+                    None,
+                    call.reservation,
+                    call.key_reservation,
+                    facts,
+                )
+                .await;
+            }
             call.callback.fail(error.to_string(), "background_error");
             // A local storage/guardrail failure is not an upstream health failure.
             lease.finish_success(0);
@@ -94,18 +100,26 @@ pub(super) async fn response(
             ))
         });
         let usage = result.as_ref().ok().and_then(response_usage);
-        settle(
-            &state,
-            &context,
-            &provider,
-            &model,
-            pricing,
-            usage.as_ref(),
-            reservation,
-            key_reservation,
-            facts,
-        )
-        .await;
+        if let Some(id) = durable_id {
+            if let Err(error) =
+                super::super::responses_settlement::submit_usage(&state, &id, usage.as_ref()).await
+            {
+                tracing::error!(%error, "Response settlement remains pending for recovery");
+            }
+        } else {
+            settle(
+                &state,
+                &context,
+                &provider,
+                &model,
+                pricing,
+                usage.as_ref(),
+                reservation,
+                key_reservation,
+                facts,
+            )
+            .await;
+        }
         // GET/cancel/delete on another replica cannot cancel this settlement owner.
         lease.finish_success(
             usage

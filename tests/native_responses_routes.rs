@@ -733,7 +733,6 @@ async fn previous_response_cannot_bypass_new_guardrails_for_stored_context() {
 
 #[tokio::test]
 async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
-    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
     use litellm_rs::core::types::context::RequestContext;
     for cancel in [false, true] {
         let dir = tempfile::tempdir().unwrap();
@@ -746,10 +745,6 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
             );
         })
         .await;
-        state.budget_limits.models.set_model_limit(
-            "gpt-4o-mini",
-            ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
-        );
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state.clone()))
@@ -769,13 +764,7 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         assert_eq!(response.status(), StatusCode::OK);
         let value: Value = test::read_body_json(response).await;
         assert_eq!(value["status"], "queued");
-        let reserved = state
-            .budget_limits
-            .models
-            .get_model_usage("gpt-4o-mini")
-            .unwrap();
-        assert!(reserved.current_spend > 0.0);
-        assert_eq!(reserved.request_count, 0);
+        assert!(!settlement_row(&state).await.complete);
         // Closing the creating HTTP service does not stop the background settlement.
         drop(app);
         let second = litellm_rs::server::HttpServer::new(state.config().as_ref())
@@ -805,15 +794,7 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
             let value: Value = test::call_and_read_body_json(&app, req).await;
             assert_eq!(value["status"], "queued");
         }
-        assert_eq!(
-            state
-                .budget_limits
-                .models
-                .get_model_usage("gpt-4o-mini")
-                .unwrap()
-                .request_count,
-            0
-        );
+        assert_eq!(u8::from(settlement_row(&state).await.complete), 0);
         if cancel {
             let req = test::TestRequest::post()
                 .uri("/v1/responses/resp_native/cancel")
@@ -829,14 +810,7 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if state
-                    .budget_limits
-                    .models
-                    .get_model_usage("gpt-4o-mini")
-                    .unwrap()
-                    .request_count
-                    == 1
-                {
+                if u8::from(settlement_row(&state).await.complete) == 1 {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -844,12 +818,10 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         })
         .await
         .unwrap();
-        let settled = state
-            .budget_limits
-            .models
-            .get_model_usage("gpt-4o-mini")
-            .unwrap();
-        assert!(settled.current_spend > 0.0 && settled.current_spend < reserved.current_spend);
+        let settled = settlement_row(&state).await;
+        assert_eq!(settled.outcome, "actual");
+        assert!(settled.cost.unwrap() > 0.0);
+        assert_eq!(settled.tokens, 15);
         for _ in 0..3 {
             let req = test::TestRequest::get()
                 .uri("/v1/responses/resp_native")
@@ -862,15 +834,7 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
                 if cancel { "cancelled" } else { "completed" }
             );
         }
-        assert_eq!(
-            state
-                .budget_limits
-                .models
-                .get_model_usage("gpt-4o-mini")
-                .unwrap()
-                .request_count,
-            1
-        );
+        assert_eq!(u8::from(settlement_row(&state).await.complete), 1);
         assert_eq!(upstream.seen.lock().unwrap().len(), 1);
         handle.stop(false).await;
     }
@@ -879,7 +843,16 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
 #[tokio::test]
 async fn native_background_store_false_keeps_only_temporary_handle_metadata() {
     use litellm_rs::core::types::context::RequestContext;
-    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.storage.database.enabled = true;
+        config.gateway.storage.database.auto_migrate = true;
+        config.gateway.storage.database.url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("temporary.db").display()
+        );
+    })
+    .await;
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state.clone()))
@@ -947,7 +920,6 @@ async fn native_background_store_false_keeps_only_temporary_handle_metadata() {
 
 #[tokio::test]
 async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
-    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
     use litellm_rs::core::types::context::RequestContext;
     for store in [true, false] {
         let dir = tempfile::tempdir().unwrap();
@@ -960,10 +932,6 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
             );
         })
         .await;
-        state.budget_limits.models.set_model_limit(
-            "gpt-4o-mini",
-            ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
-        );
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state.clone()))
@@ -983,15 +951,7 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
         assert_eq!(response.status(), StatusCode::OK);
         let wire = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
         assert!(wire.contains("id: 0\nevent: response.created"), "{wire}");
-        assert_eq!(
-            state
-                .budget_limits
-                .models
-                .get_model_usage("gpt-4o-mini")
-                .unwrap()
-                .request_count,
-            0
-        );
+        assert_eq!(u8::from(settlement_row(&state).await.complete), 0);
         drop(app);
         let second = litellm_rs::server::HttpServer::new(state.config().as_ref())
             .await
@@ -1027,14 +987,7 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if state
-                    .budget_limits
-                    .models
-                    .get_model_usage("gpt-4o-mini")
-                    .unwrap()
-                    .request_count
-                    == 1
-                {
+                if u8::from(settlement_row(&state).await.complete) == 1 {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1053,15 +1006,179 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
                 .count(),
             3
         );
-        assert_eq!(
-            state
-                .budget_limits
-                .models
-                .get_model_usage("gpt-4o-mini")
-                .unwrap()
-                .request_count,
-            1
-        );
+        assert_eq!(u8::from(settlement_row(&state).await.complete), 1);
         handle.stop(false).await;
     }
+}
+
+async fn settlement_row(
+    state: &AppState,
+) -> litellm_rs::storage::database::entities::response_settlement::Model {
+    use sea_orm::EntityTrait;
+    litellm_rs::storage::database::entities::response_settlement::Entity::find()
+        .one(state.storage.database.connection())
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn background_rejects_process_local_budgets_before_dispatch() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    use litellm_rs::core::types::context::RequestContext;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.storage.database.enabled = true;
+        config.gateway.storage.database.auto_migrate = true;
+        config.gateway.storage.database.url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("limits.db").display()
+        );
+    })
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["background"] = json!(true);
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut().insert(
+        RequestContext::new()
+            .with_user_id("alice")
+            .with_api_key_budget(uuid::Uuid::new_v4()),
+    );
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    state.budget_limits.models.set_model_limit(
+        "gpt-4o-mini",
+        ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(&body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    assert!(!response.status().is_success());
+    let value: Value = test::read_body_json(response).await;
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Redis")
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn publicly_created_chat_key_can_use_native_responses_and_usage_is_durable() {
+    use litellm_rs::core::models::user::types::{User, UserStatus};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.storage.database.enabled = true;
+        config.gateway.storage.database.auto_migrate = true;
+        config.gateway.storage.database.url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("key-usage.db").display()
+        );
+        config.gateway.auth.enable_api_key = true;
+        config.gateway.auth.allow_anonymous = false;
+    })
+    .await;
+    let mut owner = User::new(
+        "response-owner".into(),
+        "response-owner@example.com".into(),
+        "unused-test-hash".into(),
+    );
+    owner.status = UserStatus::Active;
+    state.storage.database.create_user(&owner).await.unwrap();
+    // The public creation API validates api.chat; no hand-inserted api.responses permission.
+    let (key, token) = state
+        .auth
+        .api_key()
+        .create_key(
+            Some(owner.metadata.id),
+            None,
+            "responses".into(),
+            vec!["api.chat".into()],
+        )
+        .await
+        .unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["background"] = json!(true);
+    body["store"] = json!(true);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses")
+            .insert_header(("authorization", format!("ApiKey {token}")))
+            .set_json(&body)
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let bytes = test::read_body(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    upstream.background_state.store(2, Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !settlement_row(&state).await.complete {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let before = state
+        .storage
+        .database
+        .find_api_key_by_id(key.metadata.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .usage_stats;
+    assert_eq!(before.total_requests, 1);
+    assert_eq!(before.total_tokens, 15);
+    assert!(before.total_cost > 0.0);
+    for _ in 0..2 {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/v1/responses/resp_native")
+                .insert_header(("authorization", format!("ApiKey {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let after = state
+        .storage
+        .database
+        .find_api_key_by_id(key.metadata.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .usage_stats;
+    assert_eq!(after.total_requests, before.total_requests);
+    assert_eq!(after.total_cost, before.total_cost);
+    handle.stop(false).await;
 }
