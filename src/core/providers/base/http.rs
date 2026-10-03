@@ -483,6 +483,7 @@ mod tests {
             for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy"] { expected.push((std::path::PathBuf::from(path), method)); }
         }
         expected.push((std::path::PathBuf::from("core/providers/responses_native.rs"), "execute_streaming_get_preserving_endpoint_policy"));
+        expected.push((std::path::PathBuf::from("core/providers/openai/client.rs"), "execute_request_preserving_endpoint_policy"));
         expected.sort(); assert_eq!(callers, expected);
     }
 

@@ -316,6 +316,27 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request
         .max_completion_tokens
         .or(request.max_tokens)
         .map(|tokens| tokens.saturating_mul(request.n.unwrap_or(1)));
+    reserve_completion_budget_with_counted_input(
+        request_pricing,
+        pricing_config,
+        budget_limits,
+        budget_provider,
+        budget_model,
+        prompt_tokens,
+        max_output_tokens,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) fn reserve_completion_budget_with_counted_input(
+    request_pricing: &super::pricing::RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    budget_provider: &str,
+    budget_model: &str,
+    prompt_tokens: u32,
+    max_output_tokens: Option<u32>,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
     let estimate = match request_pricing.estimate_completion(prompt_tokens, max_output_tokens) {
         Ok(estimate) => estimate,
         Err(error) => {

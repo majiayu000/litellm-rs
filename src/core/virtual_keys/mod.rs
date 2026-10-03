@@ -2,7 +2,6 @@
 //!
 //! This module provides comprehensive virtual key management for the LiteLLM proxy.
 
-mod manager;
 mod requests;
 mod types;
 
@@ -10,11 +9,6 @@ mod types;
 mod tests;
 
 // Re-export all public types
-#[deprecated(
-    since = "0.6.0",
-    note = "use core::keys::KeyManager; the duplicate VirtualKeyManager is scheduled for removal in 0.7.0"
-)]
-pub use manager::VirtualKeyManager;
 pub use requests::{CreateKeyRequest, UpdateKeyRequest};
 pub use types::{KeyGenerationSettings, Permission, RateLimitState, RateLimits, VirtualKey};
 
