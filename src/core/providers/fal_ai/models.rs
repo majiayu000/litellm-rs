@@ -49,7 +49,7 @@ pub struct FalAIModel {
     pub name: String,
     /// Model description
     pub description: String,
-    /// Fixed cost per image in USD; None for dimension-dependent pricing.
+    /// Fixed cost per image in USD; None when pricing needs additional request facts.
     pub cost_per_image: Option<f64>,
     /// Supported image sizes
     pub supported_sizes: Vec<String>,
@@ -116,108 +116,80 @@ impl FalAIModelRegistry {
     pub fn new() -> Self {
         let mut models = HashMap::new();
 
-        // Flux models
-        models.insert(
-            "fal-ai/flux/schnell".to_string(),
-            FalAIModel::new(
-                "fal-ai/flux/schnell",
-                "Flux Schnell",
-                "Fast high-quality image generation",
-                0.003,
-            ),
-        );
-
-        models.insert(
-            "fal-ai/flux-pro/v1.1".to_string(),
-            FalAIModel::new(
+        // Official endpoint schemas and pricing cards, reviewed 2026-10-03.
+        // None means the tariff needs facts unavailable to token-only pricing.
+        let entries = [
+            ("fal-ai/flux/schnell", "Flux Schnell", None, 4, false, false),
+            (
                 "fal-ai/flux-pro/v1.1",
                 "Flux Pro v1.1",
-                "Professional quality image generation",
-                0.05,
-            )
-            .with_prompt_enhancement(),
-        );
-
-        models.insert(
-            "fal-ai/flux-pro/v1.1-ultra".to_string(),
-            FalAIModel::new(
+                None,
+                4,
+                false,
+                true,
+            ),
+            (
                 "fal-ai/flux-pro/v1.1-ultra",
                 "Flux Pro v1.1 Ultra",
-                "Ultra high-quality image generation",
-                0.06,
-            )
-            .with_prompt_enhancement(),
-        );
-
-        // Stable Diffusion models
-        models.insert(
-            "fal-ai/stable-diffusion-v3-medium".to_string(),
-            FalAIModel::new(
+                None,
+                4,
+                true,
+                true,
+            ),
+            (
                 "fal-ai/stable-diffusion-v3-medium",
                 "Stable Diffusion 3 Medium",
-                "Stable Diffusion 3 medium quality",
-                0.035,
+                Some(0.035),
+                4,
+                false,
+                false,
             ),
-        );
-
-        // Recraft model
-        models.insert(
-            "fal-ai/recraft/v3/text-to-image".to_string(),
-            FalAIModel::new(
+            (
                 "fal-ai/recraft/v3/text-to-image",
                 "Recraft V3",
-                "High-quality artistic image generation",
-                0.04,
+                None,
+                1,
+                false,
+                false,
             ),
-        );
-
-        // Imagen 4
-        models.insert(
-            "fal-ai/imagen4/preview".to_string(),
-            FalAIModel::new(
-                "fal-ai/imagen4/preview",
-                "Imagen 4 Preview",
-                "Google Imagen 4 preview model",
-                0.04,
-            ),
-        );
-
-        // Ideogram
-        models.insert(
-            "fal-ai/ideogram/v3".to_string(),
-            FalAIModel::new(
-                "fal-ai/ideogram/v3",
-                "Ideogram V3",
-                "Ideogram text-to-image model",
-                0.08,
-            ),
-        );
-
-        // BRIA models
-        models.insert(
-            "fal-ai/bria/text-to-image/hd".to_string(),
-            FalAIModel::new(
+            ("fal-ai/ideogram/v3", "Ideogram V3", None, 8, false, false),
+            (
                 "fal-ai/bria/text-to-image/hd",
                 "BRIA HD",
-                "BRIA high-definition image generation",
-                0.02,
+                None,
+                4,
+                true,
+                false,
             ),
-        );
-
-        // First-party fal model cards, reviewed 2026-10-01.
-        for (id, name, fixed_cost) in [
-            ("fal-ai/recraft/v4/text-to-image", "Recraft V4", Some(0.04)),
+            (
+                "fal-ai/recraft/v4/text-to-image",
+                "Recraft V4",
+                Some(0.04),
+                1,
+                false,
+                false,
+            ),
             (
                 "fal-ai/recraft/v4/pro/text-to-image",
                 "Recraft V4 Pro",
                 Some(0.25),
+                1,
+                false,
+                false,
             ),
-            ("fal-ai/flux-2-pro", "FLUX.2 Pro", None),
-            ("fal-ai/flux-2-flex", "FLUX.2 Flex", None),
-            ("ideogram/v4", "Ideogram V4", None),
-        ] {
+            ("fal-ai/flux-2-pro", "FLUX.2 Pro", None, 1, false, false),
+            ("fal-ai/flux-2-flex", "FLUX.2 Flex", None, 1, false, false),
+            ("ideogram/v4", "Ideogram V4", None, 4, false, false),
+        ];
+        for (id, name, fixed_cost, max_images, aspect_ratio_only, enhance_prompt) in entries {
             let mut model = FalAIModel::new(id, name, "Text-to-image generation", 0.0);
             model.cost_per_image = fixed_cost;
+            model.max_images = max_images;
+            model.supports_prompt_enhancement = enhance_prompt;
+            if aspect_ratio_only {
+                // These endpoints accept a ratio, not pixel sizes or presets.
+                model.supported_sizes.clear();
+            }
             models.insert(id.to_string(), model);
         }
 
@@ -241,10 +213,7 @@ impl FalAIModelRegistry {
 
     /// Get cost per image for a model
     pub fn get_cost_per_image(&self, model_id: &str) -> Option<f64> {
-        self.models
-            .get(model_id)
-            .map(|m| m.cost_per_image)
-            .unwrap_or(Some(0.0))
+        self.models.get(model_id).and_then(|m| m.cost_per_image)
     }
 
     /// Register a custom model
@@ -347,7 +316,7 @@ mod tests {
     #[test]
     fn test_model_registry_cost() {
         let registry = FalAIModelRegistry::new();
-        let cost = registry.get_cost_per_image("fal-ai/flux/schnell");
+        let cost = registry.get_cost_per_image("fal-ai/stable-diffusion-v3-medium");
         assert!(cost.unwrap() > 0.0);
     }
 
@@ -355,7 +324,7 @@ mod tests {
     fn test_model_registry_unknown() {
         let registry = FalAIModelRegistry::new();
         assert!(!registry.is_supported("unknown-model"));
-        assert_eq!(registry.get_cost_per_image("unknown-model"), Some(0.0));
+        assert_eq!(registry.get_cost_per_image("unknown-model"), None);
     }
 
     #[test]
