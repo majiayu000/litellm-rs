@@ -12,6 +12,29 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             .contains("forbidden-first-id")
     );
     let body: Value = serde_json::from_slice(&body).unwrap();
+    if let Some(case) = body
+        .pointer("/params/metadata/test_media")
+        .and_then(Value::as_str)
+    {
+        let value = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","status":{"state":"TASK_STATE_COMPLETED"}}}});
+        let mut response = HttpResponse::Ok();
+        if case == "plain" {
+            response.insert_header(("content-type", "text/plain"));
+        }
+        return response.body(value.to_string());
+    }
+    if body.pointer("/params/metadata/test_bom") == Some(&Value::Bool(true)) {
+        let first = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","status":{"state":"TASK_STATE_WORKING"}}}});
+        let last = json!({"jsonrpc":"2.0","id":body["id"],"result":{"statusUpdate":{"taskId":"task-1","contextId":"late-context","status":{"state":"TASK_STATE_COMPLETED"}}}});
+        let bytes = format!("\u{feff}data: {first}\n\ndata: {last}\n\n").into_bytes();
+        return HttpResponse::Ok()
+            .content_type("text/event-stream")
+            .streaming(futures::stream::iter(
+                bytes
+                    .into_iter()
+                    .map(|b| Ok::<_, std::io::Error>(web::Bytes::from(vec![b]))),
+            ));
+    }
     if let Some(result) = body.pointer("/params/metadata/test_result") {
         return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":result}));
     }
@@ -876,7 +899,6 @@ async fn stream_identity_and_finite_response_contracts_fail_closed() {
     for (method, case) in [
         ("SendStreamingMessage", "json-result"),
         ("SubscribeToTask", "json-result"),
-        ("SendMessage", "message-no-context"),
     ] {
         let mut params = if method == "SubscribeToTask" {
             json!({"id":"task-1"})
@@ -1112,4 +1134,62 @@ async fn credentials_require_encrypted_upstream_transport() {
         agent.url = "https://example.com/rpc".into();
         agent.validate_http_gateway("test").unwrap();
     }
+}
+
+#[actix_web::test]
+async fn optional_task_context_and_split_sse_bom_are_supported() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let mut params = message();
+    params["metadata"] = json!({"test_contract":"message-no-context"});
+    assert_eq!(
+        test::call_service(&app, request("SendMessage", params, &owner))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    for method in ["SendMessage", "GetTask", "CancelTask"] {
+        let task = json!({"id":"task-1","status":{"state":"TASK_STATE_WORKING"}});
+        let mut params = if method == "SendMessage" {
+            message()
+        } else {
+            json!({"id":"task-1"})
+        };
+        params["metadata"] =
+            json!({"test_result":if method == "SendMessage" {json!({"task":task})} else {task}});
+        let response = test::call_service(&app, request(method, params, &owner)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let mut params = message();
+    params["metadata"] = json!({"test_bom":true});
+    let response = test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = test::read_body(response).await;
+    assert!(String::from_utf8_lossy(&bytes).contains("TASK_STATE_COMPLETED"));
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn successful_finite_response_requires_json_media_type() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for media in ["plain", "missing"] {
+        let mut params = message();
+        params["metadata"] = json!({"test_media":media});
+        let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+    handle.stop(false).await;
 }

@@ -116,7 +116,9 @@ impl TaskOwners {
             .map_err(|_| "Invalid A2A task identifier")?;
         let context =
             identifier(object.get("contextId")).map_err(|_| "Invalid A2A context identifier")?;
-        if context.is_none() || (kind != "message" && task.is_none()) {
+        if (matches!(kind, "statusUpdate" | "artifactUpdate") && context.is_none())
+            || (kind != "message" && task.is_none())
+        {
             return Err("Missing A2A task/context identifiers");
         }
         if matches!(kind, "task" | "statusUpdate")
@@ -150,7 +152,8 @@ impl TaskOwners {
             return Err("Invalid A2A artifact");
         }
         if expected_task.is_some_and(|expected| task != Some(expected))
-            || expected_context.is_some_and(|expected| context != Some(expected))
+            || expected_context
+                .is_some_and(|expected| context.is_some_and(|actual| actual != expected))
         {
             return Err("A2A response changed task/context");
         }
@@ -605,6 +608,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             let mut buffer = Vec::new();
             let mut scan_from = 0;
             let mut task_seen = false;
+            let mut first_frame = true;
             let mut completed = false;
             let mut expected_task = task.clone();
             let mut expected_context = context.clone();
@@ -622,6 +626,8 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                     if end > limit { Err(actix_web::error::ErrorBadGateway("A2A event too large"))?; }
                     let frame: Vec<_> = buffer.drain(..end).collect();
                     let text = std::str::from_utf8(&frame).map_err(|_| actix_web::error::ErrorBadGateway("Invalid A2A event encoding"))?;
+                    let text = if first_frame { text.strip_prefix('\u{feff}').unwrap_or(text) } else { text };
+                    first_frame = false;
                     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                     let data = normalized.lines().filter_map(|line| line.strip_prefix("data:").map(|s| s.strip_prefix(' ').unwrap_or(s))).collect::<Vec<_>>().join("\n");
                     if !data.is_empty() {
@@ -646,15 +652,18 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                         }
                         if let Some(initial) = value.pointer("/result/task") {
                             let initial_task = identifier(initial.get("id")).ok().flatten().ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A task identifier"))?;
-                            let initial_context = identifier(initial.get("contextId")).ok().flatten().ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A context identifier"))?;
+                            let initial_context = identifier(initial.get("contextId")).map_err(|_| actix_web::error::ErrorBadGateway("Invalid A2A context identifier"))?;
                             if expected_task.as_deref().is_some_and(|id| id != initial_task)
-                                || expected_context.as_deref().is_some_and(|id| id != initial_context) {
+                                || expected_context.as_deref().is_some_and(|id| initial_context.is_some_and(|actual| id != actual)) {
                                 Err(actix_web::error::ErrorBadGateway("A2A response changed task/context"))?;
                             }
                             expected_task = Some(initial_task.to_owned());
-                            expected_context = Some(initial_context.to_owned());
+                            if let Some(context) = initial_context { expected_context = Some(context.to_owned()); }
                         }
                         owners.observe(&binding, &principal, &value, expected_task.as_deref(), expected_context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
+                        if expected_context.is_none() {
+                            expected_context = value.get("result").and_then(|result| result.get("statusUpdate").or_else(|| result.get("artifactUpdate"))).and_then(|event| event.get("contextId")).and_then(Value::as_str).map(str::to_owned);
+                        }
                         if terminal {
                             completed = true;
                             buffer.clear();
@@ -671,6 +680,24 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             if !buffer.is_empty() || !completed { Err(actix_web::error::ErrorBadGateway("A2A stream ended before a final response"))?; }
         };
         return response.streaming::<_, actix_web::Error>(events);
+    }
+    if status.is_success()
+        && !upstream
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|s| {
+                s.split(';')
+                    .next()
+                    .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+            })
+    {
+        return error(
+            StatusCode::BAD_GATEWAY,
+            id,
+            -32006,
+            "A2A response requires application/json",
+        );
     }
     let read = async {
         let mut bytes = Vec::new();
@@ -736,7 +763,6 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 && result.get("task").is_none()
                 && result.get("message").is_none()
                 && identifier(result.get("id")).ok().flatten().is_some()
-                && identifier(result.get("contextId")).ok().flatten().is_some()
                 && result.get("status").is_some_and(Value::is_object)
         };
         if !valid {
