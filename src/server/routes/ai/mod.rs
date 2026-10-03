@@ -235,6 +235,7 @@ pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
     let normalized = path.trim_end_matches('/');
 
     if normalized == "/v1/chat/completions"
+        || normalized == "/v1/messages"
         || (normalized.starts_with("/v1/engines/") && normalized.ends_with("/chat/completions"))
         || (normalized.starts_with("/openai/deployments/")
             && normalized.ends_with("/chat/completions"))
@@ -282,9 +283,6 @@ pub(crate) fn operation_for_path(path: &str) -> Option<&'static str> {
             return Some("chat");
         }
         return Some("models");
-    }
-    if normalized == "/v1/messages" {
-        return Some("messages");
     }
     if normalized == "/v1/responses" || normalized.starts_with("/v1/responses/") {
         return Some("responses");

@@ -441,7 +441,7 @@ async fn messages_real_auth_middleware_enforces_key_token_policy_and_uses_provid
         key_prefix: extract_api_key_prefix(raw_key),
         user_id: Some(user.id()),
         team_id: None,
-        permissions: vec!["messages".into()],
+        permissions: vec!["api.chat".into()],
         rate_limits: None,
         expires_at: None,
         is_active: true,
@@ -643,5 +643,71 @@ async fn malformed_native_token_count_never_starts_generation() {
     }
     assert!(upstream.seen.lock().unwrap().is_empty());
     assert_eq!(upstream.counted.lock().unwrap().len(), 4);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn web_tool_budget_includes_repeated_context_and_search_fees() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    for kind in ["web_search_20260209", "web_fetch_20260209"] {
+        let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+        state.budget_limits.models.set_model_limit(
+            "claude-opus-5",
+            ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let mut body = request(false);
+        body["tools"] = json!([{ "type": kind, "name": if kind.starts_with("web_search") {"web_search"} else {"web_fetch"}, "max_uses": 2 }]);
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/messages")
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn web_tools_require_bounds_and_preserve_bounded_wire_requests() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["tools"] = json!([{ "type": "web_search_20260209", "name": "web_search" }]);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(&body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    body["tools"][0]["max_uses"] = json!(3);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(&body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(upstream.seen.lock().unwrap()[0].0["tools"], body["tools"]);
     handle.stop(false).await;
 }

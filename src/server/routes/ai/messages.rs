@@ -4,6 +4,7 @@ use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::pricing_service::PricingUsage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::request_ledger::SharedRequestLedgerFacts;
+use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
 use crate::core::types::{
     context::RequestContext,
     model::ProviderCapability,
@@ -57,7 +58,7 @@ async fn create(
         && !super::context::check_permission(
             super::context::get_authenticated_user(req).as_ref(),
             super::context::get_authenticated_api_key(req).as_ref(),
-            "messages",
+            "chat",
         )
     {
         return Err(GatewayError::Auth("Unauthorized".into()));
@@ -169,7 +170,13 @@ async fn create(
                                 "Invalid input_tokens count",
                             )
                         })?;
-                    let estimated_usage = reservation_usage(&body, input_tokens, max_tokens)?;
+                    let context_limit = native
+                        .models()
+                        .iter()
+                        .find(|info| info.id == model)
+                        .map(|info| info.max_context_length);
+                    let estimated_usage =
+                        reservation_usage(&body, input_tokens, max_tokens, context_limit)?;
                     let limits = state.budgeted.budget_limits();
                     let (response, reservations) = state
                         .budgeted
@@ -308,7 +315,65 @@ fn token_count_body(body: &Value) -> Value {
     Value::Object(count)
 }
 
-fn reservation_usage(body: &Value, input: u32, output: u32) -> Result<PricingUsage, ProviderError> {
+fn reservation_usage(
+    body: &Value,
+    mut input: u32,
+    output: u32,
+    context_limit: Option<u32>,
+) -> Result<PricingUsage, ProviderError> {
+    let mut searches = 0_u32;
+    let mut tool_turns = 0_u32;
+    for tool in body
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let kind = tool.get("type").and_then(Value::as_str).unwrap_or_default();
+        if kind.starts_with("web_search_") || kind.starts_with("web_fetch_") {
+            let uses = tool
+                .get("max_uses")
+                .and_then(Value::as_u64)
+                .and_then(|uses| u32::try_from(uses).ok())
+                .ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "anthropic",
+                        "Native web tools require an explicit max_uses budget bound",
+                    )
+                })?;
+            tool_turns = tool_turns.checked_add(uses).ok_or_else(|| {
+                ProviderError::invalid_request(
+                    "anthropic",
+                    "Web tool budget bound exceeds supported range",
+                )
+            })?;
+            if kind.starts_with("web_search_") {
+                searches = searches.checked_add(uses).ok_or_else(|| {
+                    ProviderError::invalid_request(
+                        "anthropic",
+                        "Web search budget bound exceeds supported range",
+                    )
+                })?;
+            }
+        }
+    }
+    if tool_turns > 0 {
+        let context = context_limit.filter(|limit| *limit > 0).ok_or_else(|| {
+            ProviderError::not_supported(
+                "anthropic",
+                "Web tool budget requires a verified model context limit",
+            )
+        })?;
+        input = context
+            .checked_mul(tool_turns)
+            .and_then(|tokens| input.checked_add(tokens))
+            .ok_or_else(|| {
+                ProviderError::invalid_request(
+                    "anthropic",
+                    "Web tool token reservation exceeds supported range",
+                )
+            })?;
+    }
     fn cache_ttl(value: &Value) -> u8 {
         match value {
             Value::Array(values) => values.iter().map(cache_ttl).max().unwrap_or(0),
@@ -342,6 +407,7 @@ fn reservation_usage(body: &Value, input: u32, output: u32) -> Result<PricingUsa
     Ok(PricingUsage {
         prompt_tokens: input,
         completion_tokens: output,
+        web_search_requests: Some(searches),
         total_tokens: input.checked_add(output).ok_or_else(|| {
             ProviderError::invalid_request("anthropic", "Token count exceeds supported range")
         })?,
