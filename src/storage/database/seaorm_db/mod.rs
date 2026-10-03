@@ -11,6 +11,7 @@ mod connection;
 mod provider_config_ops;
 mod request_ledger_ops;
 mod response_ops;
+mod response_settlement_ops;
 mod routing_policy_ops;
 mod runtime_config_ops;
 mod team_repository;

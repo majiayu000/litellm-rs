@@ -286,3 +286,6 @@ pub fn init_global_budget_manager(config: BudgetManagerConfig) {
 pub fn get_global_budget_manager() -> Option<Arc<BudgetManager>> {
     GLOBAL_BUDGET_MANAGER.get().cloned()
 }
+
+#[cfg(feature = "gateway")]
+pub(crate) use provider_reservations::ResponseBudgetLeases;

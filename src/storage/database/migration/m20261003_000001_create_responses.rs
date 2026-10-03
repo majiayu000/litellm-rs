@@ -9,6 +9,116 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(ResponseSettlements::Table)
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Id)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Owner)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ResponseSettlements::ApiKeyId).uuid().null())
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Provider)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Model)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::DeploymentId)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::DeploymentBinding)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::ResponseId)
+                            .string()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::PricingJson)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::LeasesJson)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Reserved)
+                            .double()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ResponseSettlements::Cost).double().null())
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Tokens)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Outcome)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::KeySettled)
+                            .boolean()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Complete)
+                            .boolean()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Deadline)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::NextAttempt)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::LeaseUntil)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ResponseSettlements::Revision)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_response_settlements_pending")
+                    .table(ResponseSettlements::Table)
+                    .col(ResponseSettlements::Complete)
+                    .col(ResponseSettlements::NextAttempt)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
                     .table(Responses::Table)
                     .col(
                         ColumnDef::new(Responses::Id)
@@ -45,6 +155,9 @@ impl MigrationTrait for Migration {
     }
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
+            .drop_table(Table::drop().table(ResponseSettlements::Table).to_owned())
+            .await?;
+        manager
             .drop_table(Table::drop().table(Responses::Table).to_owned())
             .await
     }
@@ -62,6 +175,31 @@ enum Responses {
     Background,
     Status,
     ExpiresAt,
+    LeaseUntil,
+    Revision,
+}
+
+#[derive(DeriveIden)]
+enum ResponseSettlements {
+    Table,
+    Id,
+    Owner,
+    ApiKeyId,
+    Provider,
+    Model,
+    DeploymentId,
+    DeploymentBinding,
+    ResponseId,
+    PricingJson,
+    LeasesJson,
+    Reserved,
+    Cost,
+    Tokens,
+    Outcome,
+    KeySettled,
+    Complete,
+    Deadline,
+    NextAttempt,
     LeaseUntil,
     Revision,
 }

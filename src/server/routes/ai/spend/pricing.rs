@@ -193,7 +193,19 @@ impl RequestPricing {
                     "time pricing is unavailable for '{provider}/{resolved}'"
                 ))
             })?;
-        let total_cost = total_time_seconds * rate;
+        // Groq bills each Whisper request for at least ten seconds, including
+        // translation. Apply once here for both reservation and final settlement.
+        // https://console.groq.com/docs/speech-to-text
+        let billed_seconds = if provider == "groq"
+            && matches!(
+                surface,
+                ProviderCapability::AudioTranscription | ProviderCapability::AudioTranslation
+            ) {
+            total_time_seconds.max(10.0)
+        } else {
+            total_time_seconds
+        };
+        let total_cost = billed_seconds * rate;
         let (input_cost, output_cost) = match direction {
             TimePricingDirection::Input => (total_cost, 0.0),
             TimePricingDirection::Output => (0.0, total_cost),
@@ -403,6 +415,12 @@ pub(in crate::server::routes::ai) fn pricing_identity_for_provider(
     model: &str,
     surface: ProviderCapability,
 ) -> (String, String) {
+    if surface == ProviderCapability::Responses
+        && let Provider::Bedrock(bedrock) = provider
+        && let Some((pricing_provider, wire_model)) = bedrock.responses_pricing_identity(model)
+    {
+        return (pricing_provider.to_string(), wire_model);
+    }
     let provider_name = provider.name();
     let mut provider_candidates = vec![provider_name.to_string()];
 

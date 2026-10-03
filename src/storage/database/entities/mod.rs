@@ -40,3 +40,6 @@ pub mod runtime_config;
 
 /// Responses API records with owner and deployment binding.
 pub mod response;
+
+/// Durable native Responses settlement intents.
+pub mod response_settlement;

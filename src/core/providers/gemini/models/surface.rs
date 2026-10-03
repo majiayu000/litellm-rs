@@ -245,7 +245,7 @@ mod tests {
                     .any(|model| model.id == experimental_id)
             );
             assert!(
-                experimental_vertex_models
+                !experimental_vertex_models
                     .iter()
                     .any(|model| model.id == experimental_id)
             );

@@ -8,12 +8,13 @@ use crate::server::guardrails::{self, GuardrailDecisionSink};
 use crate::storage::database::{Database, entities::response::Model as ResponseRecord};
 use crate::utils::error::gateway_error::GatewayError;
 
-pub(super) struct NativeResponseStorage {
-    owner: String,
+pub(in crate::server::routes::ai) struct NativeResponseStorage {
+    pub(in crate::server::routes::ai) owner: String,
     input_json: String,
-    deployment: String,
-    binding: String,
+    pub(in crate::server::routes::ai) deployment: String,
+    pub(in crate::server::routes::ai) binding: String,
     record: Option<ResponseRecord>,
+    pub(in crate::server::routes::ai) settlement_id: Option<String>,
     background: bool,
     retain_content: bool,
 }
@@ -30,6 +31,7 @@ impl NativeResponseStorage {
             deployment,
             binding,
             record: None,
+            settlement_id: None,
             background: input.get("background") == Some(&Value::Bool(true)),
             retain_content: input.get("store") != Some(&Value::Bool(false)),
         }
@@ -47,6 +49,9 @@ impl NativeResponseStorage {
             .ok_or_else(|| {
                 ProviderError::response_parsing("responses", "Stored response is missing its ID")
             })?;
+        if let Some(settlement_id) = &self.settlement_id {
+            database.bind_response_settlement(settlement_id, id).await?;
+        }
         let status = value.get("status").and_then(Value::as_str).ok_or_else(|| {
             ProviderError::response_parsing("responses", "Stored response is missing its status")
         })?;
@@ -212,7 +217,7 @@ fn append_input(items: &mut Vec<Value>, value: Option<&Value>) {
     }
 }
 
-pub(super) fn bound_provider(
+pub(in crate::server::routes::ai) fn bound_provider(
     state: &AppState,
     record: &ResponseRecord,
 ) -> Result<Provider, GatewayError> {
@@ -326,7 +331,9 @@ pub(in crate::server::routes::ai) async fn lifecycle(
 }
 
 /// Bound both successful create/poll bodies, including providers that omit Content-Length.
-pub(super) async fn read_json(response: &mut reqwest::Response) -> Result<Value, GatewayError> {
+pub(in crate::server::routes::ai) async fn read_json(
+    response: &mut reqwest::Response,
+) -> Result<Value, GatewayError> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()

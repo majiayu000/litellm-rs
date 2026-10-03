@@ -20,6 +20,37 @@ mod time_pricing_tests {
     }
 
     #[test]
+    fn groq_whisper_minimum_applies_to_transcription_and_translation() {
+        let pricing = PricingService::with_embedded_default().unwrap();
+        let groq = RequestPricing::from_exact(&pricing, "groq", "whisper-large-v3");
+        for capability in [
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::AudioTranslation,
+        ] {
+            let minimum = groq.calculate_time(10.0, &capability).unwrap().total_cost;
+            assert!(minimum > 0.0);
+            assert_eq!(
+                groq.calculate_time(0.1, &capability).unwrap().total_cost,
+                minimum
+            );
+            assert_eq!(
+                groq.calculate_time(20.0, &capability).unwrap().total_cost,
+                minimum * 2.0
+            );
+        }
+        let azure = RequestPricing::from_exact(&pricing, "azure", "whisper-1");
+        assert!(
+            (azure
+                .calculate_time(1.0, &ProviderCapability::AudioTranscription)
+                .unwrap()
+                .total_cost
+                - 0.0001)
+                .abs()
+                < f64::EPSILON
+        );
+    }
+
+    #[test]
     fn speech_time_pricing_selects_the_output_rate() {
         let pricing =
             PricingService::with_embedded_default().expect("embedded pricing should load");
@@ -534,4 +565,61 @@ mod pricing_identity_tests {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn bedrock_responses_pricing_follows_the_native_endpoint_and_wire_model() {
+    use crate::core::providers::bedrock::{BedrockConfig, BedrockProvider};
+    let pricing = Arc::new(PricingService::with_embedded_default().unwrap());
+    let provider = Provider::Bedrock(
+        BedrockProvider::new(BedrockConfig {
+            aws_access_key_id: "AKIATEST123456789012".into(),
+            aws_secret_access_key: "local-test-secret".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    for (model, expected_provider, expected_model) in [
+        (
+            "openai.gpt-6-sol",
+            "bedrock_mantle",
+            "bedrock_mantle/openai.gpt-6-sol",
+        ),
+        (
+            "openai.gpt-oss-120b-1:0",
+            "bedrock_mantle",
+            "bedrock_mantle/openai.gpt-oss-120b",
+        ),
+        (
+            "global.openai.gpt-6-sol",
+            "bedrock_converse",
+            "global.openai.gpt-6-sol",
+        ),
+    ] {
+        let request =
+            request_pricing_for_provider(&pricing, &provider, model, ProviderCapability::Responses)
+                .unwrap();
+        assert_eq!(
+            request.priced_parts(),
+            Some((expected_provider, expected_model))
+        );
+    }
+    let mantle = request_pricing_for_provider(
+        &pricing,
+        &provider,
+        "openai.gpt-6-sol",
+        ProviderCapability::Responses,
+    )
+    .unwrap();
+    let global = request_pricing_for_provider(
+        &pricing,
+        &provider,
+        "global.openai.gpt-6-sol",
+        ProviderCapability::Responses,
+    )
+    .unwrap();
+    let usage = PricingUsage::new(1000, 1000);
+    assert!((mantle.calculate_usage(&usage).unwrap().total_cost - 0.0132).abs() < 1e-10);
+    assert!((global.calculate_usage(&usage).unwrap().total_cost - 0.012).abs() < 1e-10);
 }

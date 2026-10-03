@@ -101,9 +101,43 @@ impl Provider {
                         .get_model_registry()
                         .supports_capability(model, capability)
             }
+            Provider::OpenAILike(provider) if provider.name() == "groq" => {
+                let model = provider.config().get_effective_model(model);
+                // Groq's Whisper Turbo cannot translate; Orpheus is speech-only.
+                // https://console.groq.com/docs/speech-to-text
+                // https://console.groq.com/docs/text-to-speech/orpheus
+                match capability {
+                    ProviderCapability::AudioTranscription => matches!(
+                        model.as_str(),
+                        "whisper-large-v3" | "whisper-large-v3-turbo"
+                    ),
+                    ProviderCapability::AudioTranslation => model == "whisper-large-v3",
+                    ProviderCapability::TextToSpeech => matches!(
+                        model.as_str(),
+                        "canopylabs/orpheus-v1-english" | "canopylabs/orpheus-arabic-saudi"
+                    ),
+                    _ => {
+                        !matches!(
+                            model.as_str(),
+                            "whisper-large-v3"
+                                | "whisper-large-v3-turbo"
+                                | "canopylabs/orpheus-v1-english"
+                                | "canopylabs/orpheus-arabic-saudi"
+                        ) && LLMProvider::supports_capability(provider, capability)
+                    }
+                }
+            }
             Provider::OpenAILike(provider) if provider.name() == "xai" => {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
+            }
+            Provider::External(provider) => {
+                provider.as_ref().capabilities().contains(capability)
+                    && provider
+                        .as_ref()
+                        .models()
+                        .iter()
+                        .any(|info| info.id == model && info.capabilities.contains(capability))
             }
             Provider::Enterprise(provider) => {
                 LLMProvider::supports_model(provider, model)
@@ -136,6 +170,10 @@ impl Provider {
                 if capability == &ProviderCapability::GeminiGenerateContent =>
             {
                 openai_like_provider_supports_gemini(provider.name())
+            }
+            #[cfg(feature = "gateway")]
+            Provider::Bedrock(provider) if capability == &ProviderCapability::Responses => {
+                provider.supports_responses_model(model)
             }
             Provider::Voyage(provider) => provider.supports_capability_for_model(model, capability),
             _ => self.supports_capability(capability),

@@ -72,6 +72,8 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
 
 
 class MockOpenAIServer(ThreadingHTTPServer):
+    # The default backlog of five can reject a 64-connection load-generator burst.
+    request_queue_size = 256
     daemon_threads = True
     allow_reuse_address = True
 

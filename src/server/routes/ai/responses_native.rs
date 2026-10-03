@@ -18,7 +18,7 @@ use crate::utils::error::gateway_error::GatewayError;
 
 use super::{budgeted, openai_errors, spend};
 #[path = "responses_native_background.rs"]
-mod background;
+pub(super) mod background;
 #[path = "responses_native_lifecycle.rs"]
 pub(super) mod lifecycle;
 #[path = "responses_native_stream.rs"]
@@ -99,7 +99,7 @@ async fn create_native(
         && !super::context::check_permission(
             super::context::get_authenticated_user(req).as_ref(),
             super::context::get_authenticated_api_key(req).as_ref(),
-            if compact { "responses" } else { "chat" },
+            "chat",
         )
     {
         return Err(GatewayError::Auth("Unauthorized".into()));
@@ -130,6 +130,16 @@ async fn create_native(
         Some(Value::Bool(value)) => *value,
         _ => return Err(GatewayError::validation("background must be a boolean")),
     };
+    if background && context.api_key_budget_id().is_some() {
+        return Err(GatewayError::validation(
+            "Background Responses cannot use an in-process API key budget; persistent key usage remains supported",
+        ));
+    }
+    if background && !state.config().gateway.storage.database.enabled {
+        return Err(GatewayError::validation(
+            "Background Responses require an enabled shared SQL database",
+        ));
+    }
     if (store || background) && owner.is_none() {
         return Err(GatewayError::validation(
             "Stored or background Responses require authentication; anonymous requests must use store=false and background=false",
@@ -219,7 +229,7 @@ async fn create_native(
                     // This projection is only for the token reservation. The native wire body
                     // never passes through the chat transformer, including tools and reasoning.
                     let budget_request = budget_request(&body, &model);
-                    let storage = if store || background {
+                    let mut storage = if store || background {
                         let binding = provider.native_response_binding().ok_or_else(|| {
                             ProviderError::not_supported("responses", "Stored native responses")
                         })?;
@@ -240,7 +250,7 @@ async fn create_native(
                     };
                     let limits = state.budgeted.budget_limits();
                     let started = tokio::time::Instant::now();
-                    let (response, reservations) = state
+                    let (reservations, _) = state
                         .budgeted
                         .for_selected_with_api_key_budget(
                             provider_name.clone(),
@@ -248,35 +258,46 @@ async fn create_native(
                             context.api_key_budget_id(),
                             budgeted::ApiKeyBudgetPolicy::FromProviderReservation,
                         )
-                        .reserve_call(
-                            |_| {
-                                spend::reserve_chat_completion_budget_with_request_pricing(
-                                    &pricing,
-                                    &state.config().gateway.pricing,
-                                    &limits,
-                                    &provider_name,
-                                    &model,
-                                    spend::ChatCompletionBudgetRequest::from(&budget_request)
-                                        .with_retained_prompt_tokens(retained_prompt_tokens),
-                                )
-                            },
-                            || {
-                                callback.begin_provider_execution_with_pricing(
-                                    &provider_name,
-                                    &model,
-                                    pricing.clone(),
-                                );
-                                async move {
-                                    if compact {
-                                        provider.compact_response(body).await
-                                    } else {
-                                        provider.native_response(body).await
-                                    }
-                                }
-                            },
+                        .reserve_for_call(|_| {
+                            spend::reserve_chat_completion_budget_with_request_pricing(
+                                &pricing,
+                                &state.config().gateway.pricing,
+                                &limits,
+                                &provider_name,
+                                &model,
+                                spend::ChatCompletionBudgetRequest::from(&budget_request)
+                                    .with_retained_prompt_tokens(retained_prompt_tokens),
+                            )
+                        })?;
+                    let (mut reservation, key_reservation) = reservations.into_parts();
+                    if background {
+                        super::responses_settlement::prepare(
+                            state,
+                            &context,
+                            storage.as_mut().expect("background storage checked above"),
+                            &provider_name,
+                            &model,
+                            &pricing,
+                            reservation.as_ref(),
                         )
-                        .await?;
-                    let (reservation, key_reservation) = reservations.into_parts();
+                        .await
+                        .map_err(|error| {
+                            ProviderError::configuration("responses", error.to_string())
+                        })?;
+                        if let Some(reservation) = reservation.take() {
+                            reservation.detach_response();
+                        }
+                    }
+                    callback.begin_provider_execution_with_pricing(
+                        &provider_name,
+                        &model,
+                        pricing.clone(),
+                    );
+                    let response = if compact {
+                        provider.compact_response(body).await?
+                    } else {
+                        provider.native_response(body).await?
+                    };
                     Ok(NativeCall {
                         callback,
                         response,
@@ -491,7 +512,7 @@ fn budget_image_parts(value: &mut Value, parts: &mut Vec<ContentPart>) {
     }
 }
 
-fn response_usage(value: &Value) -> Option<Usage> {
+pub(super) fn response_usage(value: &Value) -> Option<Usage> {
     let usage = value.get("usage")?;
     let input = usage.get("input_tokens")?.as_u64()?;
     let output = usage.get("output_tokens")?.as_u64()?;

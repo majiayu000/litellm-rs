@@ -90,18 +90,29 @@ pub(super) fn response(
             return;
         }
         // A disconnect or malformed usage never releases a possibly consumed reservation.
-        settle(
-            &state,
-            &context,
-            &provider,
-            &model,
-            pricing,
-            usage.as_ref(),
-            reservation,
-            key_reservation,
-            facts,
-        )
-        .await;
+        if let Some(id) = storage
+            .as_ref()
+            .and_then(|storage| storage.settlement_id.as_ref())
+        {
+            if let Err(error) =
+                super::super::responses_settlement::submit_usage(&state, id, usage.as_ref()).await
+            {
+                tracing::error!(%error, "Response stream settlement remains pending for recovery");
+            }
+        } else {
+            settle(
+                &state,
+                &context,
+                &provider,
+                &model,
+                pricing,
+                usage.as_ref(),
+                reservation,
+                key_reservation,
+                facts,
+            )
+            .await;
+        }
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
             lease.finish_failure(&error);
