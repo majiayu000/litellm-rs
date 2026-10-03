@@ -66,7 +66,7 @@ pub mod ollama;
 pub mod oci;
 pub mod openai;
 pub mod openai_like;
-// Catalog Tier 1: openrouter, ovhcloud, perplexity, poe, qwen.
+// Catalog Tier 1: openrouter, ovhcloud, poe, qwen.
 #[cfg(feature = "providers-extended")]
 #[path = "black_forest_labs/mod.rs"]
 pub mod bfl;

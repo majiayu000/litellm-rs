@@ -199,6 +199,12 @@ advanced types have been removed on the development branch.
 
 ## Provider Support
 
+Perplexity's old Sonar Chat Completions endpoint retired on 2026-09-27. The
+`perplexity` / `perplexity-ai` / `pplx` selectors are not currently dispatchable;
+the replacement Agent API requires a native protocol adapter. Historical prices
+remain available and do not establish callable models. See the
+[retirement audit](docs/audit/perplexity-sonar-retirement-2026-10-03.md).
+
 Providers are organised into two tiers (see [CLAUDE.md → Provider Tiers](./CLAUDE.md#provider-tiers) for the engineering definition).
 
 - **Tier 1 — catalog-only**: OpenAI-compatible endpoints declared as data in [`src/core/providers/registry/catalog.rs`](./src/core/providers/registry/catalog.rs). Routed through `OpenAILikeProvider`. Always available (no cargo feature required). The runtime supports chat and streaming plus explicitly verified embeddings, images and audio capabilities for selected providers; see [compatible non-chat support](docs/providers/compatible-nonchat.md). Capability declarations do not imply that every model supports every endpoint.
@@ -283,7 +289,7 @@ All entries below route through `OpenAILikeProvider`. Chat and streaming use the
 
 **Cloud (`Bearer` auth via env var):**
 
-`groq`, `ai21`, `huggingface`, `baseten`, `together`, `together_ai`, `fireworks`, `fireworks_ai`, `perplexity`, `cerebras`, `openrouter`, `deepinfra`, `deepseek`, `novita`, `nvidia_nim`, `nebius`, `nscale`, `hyperbolic`, `featherless`, `galadriel`, `sambanova`, `heroku`, `friendliai`, `xai`, `moonshot`, `dashscope`, `qwen`, `baichuan`, `minimax`, `volcengine`, `xiaomi_mimo`, `zhipu`, `zai`, `lemonade`, `linkup`, `poe`, `wandb`, `nanogpt`, `aiml_api`, `aiml`, `aleph_alpha`, `anyscale`, `bytez`, `comet_api`, `compactifai`, `maritalk`, `siliconflow`, `yi`, `lambda_ai`, `ovhcloud`
+`groq`, `ai21`, `huggingface`, `baseten`, `together`, `together_ai`, `fireworks`, `fireworks_ai`, `cerebras`, `openrouter`, `deepinfra`, `deepseek`, `novita`, `nvidia_nim`, `nebius`, `nscale`, `hyperbolic`, `featherless`, `galadriel`, `sambanova`, `heroku`, `friendliai`, `xai`, `moonshot`, `dashscope`, `qwen`, `baichuan`, `minimax`, `volcengine`, `xiaomi_mimo`, `zhipu`, `zai`, `lemonade`, `linkup`, `poe`, `wandb`, `nanogpt`, `aiml_api`, `aiml`, `aleph_alpha`, `anyscale`, `bytez`, `comet_api`, `compactifai`, `maritalk`, `siliconflow`, `yi`, `lambda_ai`, `ovhcloud`
 
 **Local (no API key):**
 
