@@ -30,6 +30,49 @@ pub(crate) async fn send(
         pool.execute_request_preserving_endpoint_policy(&url, HttpMethod::POST, headers, Some(body))
             .await?
     };
+    check_status(response, provider).await
+}
+
+pub(crate) async fn lifecycle(
+    pool: &GlobalPoolManager,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    response_id: &str,
+    method: HttpMethod,
+    suffix: Option<&str>,
+    query: &str,
+) -> Result<reqwest::Response, ProviderError> {
+    let mut url = url::Url::parse(api_base)
+        .map_err(|_| ProviderError::invalid_request("responses", "Invalid upstream base URL"))?;
+    {
+        let mut path = url.path_segments_mut().map_err(|_| {
+            ProviderError::invalid_request("responses", "Invalid upstream base URL")
+        })?;
+        path.pop_if_empty().push("responses").push(response_id);
+        if let Some(suffix) = suffix {
+            path.push(suffix);
+        }
+    }
+    url.set_query((!query.is_empty()).then_some(query));
+    let streaming = matches!(method, HttpMethod::GET)
+        && suffix.is_none()
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "stream" && value == "true");
+    let response = if streaming {
+        pool.execute_streaming_get_preserving_endpoint_policy(url.as_str(), headers, "responses")
+            .await?
+    } else {
+        pool.execute_request_preserving_endpoint_policy(url.as_str(), method, headers, None)
+            .await?
+    };
+    check_status(response, "responses").await
+}
+
+async fn check_status(
+    response: reqwest::Response,
+    provider: &'static str,
+) -> Result<reqwest::Response, ProviderError> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
