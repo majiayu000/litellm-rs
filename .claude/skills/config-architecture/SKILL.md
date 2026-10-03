@@ -69,7 +69,7 @@ router:                      # strategy, circuit_breaker, load_balancer
 storage:                     # database, redis, vector_db
 auth:                        # enable_jwt, enable_api_key, jwt_secret, rbac, allow_anonymous
 monitoring:                  # metrics, tracing, health, callbacks
-cache:                       # deterministic response cache (+ semantic_cache flag)
+cache:                       # deterministic response cache
 rate_limit:                  # token bucket strategy, redis_failure_mode
 guardrails:                  # content safety; prompt-injection protection on by default
 ip_access:                   # allowlist/blocklist; empty/default rules allow all

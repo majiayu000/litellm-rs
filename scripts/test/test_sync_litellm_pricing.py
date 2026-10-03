@@ -1050,6 +1050,16 @@ class OfficialPricingRegressionTests(unittest.TestCase):
             },
         )
 
+    def test_anthropic_geo_overlay_preserves_fast_prices_and_does_not_add_callable_models(self) -> None:
+        patched = sync.apply_official_overrides(self.catalog, self.catalog)
+        for model in sync.ANTHROPIC_GEO_PRICING_MODELS:
+            self.assertEqual(patched[model]["provider_specific_entry"]["us"], 1.1)
+            original = self.catalog[model].get("provider_specific_entry", {})
+            for key, rate in original.items():
+                if key != "us":
+                    self.assertEqual(patched[model]["provider_specific_entry"][key], rate)
+        self.assertNotIn("us", patched.get("claude-haiku-4-5-20251001", self.catalog["claude-haiku-4-5-20251001"]).get("provider_specific_entry", {}))
+
     def test_issue_1212_and_1223_gemini_promo_exact_ids(self) -> None:
         expected = {
             "input_cost_per_token": 0.00000075,

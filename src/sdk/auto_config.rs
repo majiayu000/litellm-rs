@@ -55,14 +55,13 @@ impl AutoConfig {
             "cohere" => ProviderType::Cohere,
             "mistral" => ProviderType::Mistral,
             "groq" => ProviderType::OpenAI, // Groq also uses OpenAI compatible API
-            "perplexity" => ProviderType::OpenAI,
             "together" => ProviderType::OpenAI,
             "fireworks" => ProviderType::OpenAI,
             "deepinfra" => ProviderType::OpenAI,
             "anyscale" => ProviderType::OpenAI,
             _ => {
                 return Err(SDKError::ConfigError(
-                    format!("Unsupported provider: '{}'. Supported providers: openai, anthropic, openrouter, azure, google, cohere, mistral, groq, perplexity, together, fireworks, deepinfra, anyscale", provider_prefix)
+                    format!("Unsupported provider: '{}'. Supported providers: openai, anthropic, openrouter, azure, google, cohere, mistral, groq, together, fireworks, deepinfra, anyscale", provider_prefix)
                 ));
             }
         };
@@ -150,11 +149,6 @@ impl AutoConfig {
                 "https://api.groq.com/openai/v1",
                 vec![]
             ),
-            "perplexity" => (
-                "PERPLEXITY_API_KEY",
-                "https://api.perplexity.ai",
-                vec![]
-            ),
             "together" => (
                 "TOGETHER_API_KEY", 
                 "https://api.together.ai/v1",
@@ -216,7 +210,6 @@ impl AutoConfig {
             "cohere" => "Cohere".to_string(),
             "mistral" => "Mistral AI".to_string(),
             "groq" => "Groq".to_string(),
-            "perplexity" => "Perplexity AI".to_string(),
             "together" => "Together AI".to_string(),
             "fireworks" => "Fireworks AI".to_string(),
             "deepinfra" => "DeepInfra".to_string(),
@@ -236,7 +229,7 @@ impl AutoConfig {
     pub fn supported_providers() -> Vec<&'static str> {
         vec![
             "openai", "anthropic", "openrouter", "azure", "google", 
-            "cohere", "mistral", "groq", "perplexity", "together",
+            "cohere", "mistral", "groq", "together",
             "fireworks", "deepinfra", "anyscale"
         ]
     }

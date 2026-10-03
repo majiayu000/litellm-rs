@@ -14,9 +14,6 @@ pub struct EnterpriseConfig {
     /// Enable audit logging
     #[serde(default)]
     pub audit_logging: bool,
-    /// Enable advanced analytics
-    #[serde(default)]
-    pub advanced_analytics: bool,
 }
 
 impl EnterpriseConfig {
@@ -30,9 +27,6 @@ impl EnterpriseConfig {
         }
         if other.audit_logging {
             self.audit_logging = true;
-        }
-        if other.advanced_analytics {
-            self.advanced_analytics = true;
         }
         self
     }
@@ -155,7 +149,6 @@ mod tests {
         assert!(!config.enabled);
         assert!(config.sso.is_none());
         assert!(!config.audit_logging);
-        assert!(!config.advanced_analytics);
     }
 
     #[test]
@@ -164,11 +157,9 @@ mod tests {
             enabled: true,
             sso: None,
             audit_logging: true,
-            advanced_analytics: true,
         };
         assert!(config.enabled);
         assert!(config.audit_logging);
-        assert!(config.advanced_analytics);
     }
 
     #[test]
@@ -185,7 +176,6 @@ mod tests {
             enabled: true,
             sso: Some(sso),
             audit_logging: true,
-            advanced_analytics: false,
         };
         assert!(config.sso.is_some());
         assert_eq!(config.sso.as_ref().unwrap().provider, "okta");
@@ -197,25 +187,21 @@ mod tests {
             enabled: true,
             sso: None,
             audit_logging: true,
-            advanced_analytics: true,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["enabled"], true);
         assert_eq!(json["audit_logging"], true);
-        assert_eq!(json["advanced_analytics"], true);
     }
 
     #[test]
     fn test_enterprise_config_deserialization() {
         let json = r#"{
             "enabled": true,
-            "audit_logging": true,
-            "advanced_analytics": false
+            "audit_logging": true
         }"#;
         let config: EnterpriseConfig = serde_json::from_str(json).unwrap();
         assert!(config.enabled);
         assert!(config.audit_logging);
-        assert!(!config.advanced_analytics);
     }
 
     #[test]
@@ -225,7 +211,6 @@ mod tests {
             enabled: true,
             sso: None,
             audit_logging: false,
-            advanced_analytics: false,
         };
         let merged = base.merge(other);
         assert!(merged.enabled);
@@ -245,7 +230,6 @@ mod tests {
             enabled: false,
             sso: Some(sso),
             audit_logging: false,
-            advanced_analytics: false,
         };
         let merged = base.merge(other);
         assert!(merged.sso.is_some());
@@ -258,7 +242,6 @@ mod tests {
             enabled: false,
             sso: None,
             audit_logging: true,
-            advanced_analytics: false,
         };
         let merged = base.merge(other);
         assert!(merged.audit_logging);
@@ -270,7 +253,6 @@ mod tests {
             enabled: true,
             sso: None,
             audit_logging: true,
-            advanced_analytics: true,
         };
         let cloned = config.clone();
         assert_eq!(config.enabled, cloned.enabled);

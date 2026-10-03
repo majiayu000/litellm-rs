@@ -205,14 +205,13 @@ async fn missing_text_provider_chat_stream_and_error_contracts() {
 async fn catalog_text_provider_wire_ids_remain_lossless() {
     let cases = [
         ("meta_llama", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
-        ("perplexity", "sonar"),
         ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
         (
             "fireworks",
             "accounts/fireworks/models/llama-v3p3-70b-instruct",
         ),
         ("groq", "llama-3.3-70b-versatile"),
-        ("cerebras", "llama3.1-8b"),
+        ("cerebras", "gpt-oss-120b"),
         ("sambanova", "Meta-Llama-3.1-8B-Instruct"),
         ("deepinfra", "meta-llama/Meta-Llama-3.1-70B-Instruct"),
     ];
@@ -414,4 +413,26 @@ async fn ollama_factory_requires_providers_extended() {
     assert!(matches!(error, ProviderError::NotImplemented { .. }));
     assert_eq!(error.provider(), "ollama");
     assert!(error.to_string().contains("providers-extended"));
+}
+
+#[tokio::test]
+async fn retired_perplexity_chat_selectors_fail_before_transport() {
+    for selector in ["perplexity", "perplexity-ai", "pplx"] {
+        assert!(!crate::core::providers::factory::is_provider_selector_supported(selector));
+        let result = crate::core::providers::create_provider(
+            crate::config::models::provider::ProviderConfig {
+                name: "retired-sonar".into(),
+                provider_type: selector.into(),
+                api_key: "fake-key".into(),
+                models: vec!["sonar".into()],
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::core::providers::ProviderError::NotImplemented { .. })
+        ));
+    }
+    assert!(crate::core::providers::registry::get_definition("perplexity").is_none());
 }

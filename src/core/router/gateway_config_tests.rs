@@ -9,7 +9,7 @@ mod matrix {
         "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
         "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
         "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "PERPLEXITY_API_KEY", "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
+        "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
         "BASETEN_API_KEY",
     ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
@@ -153,7 +153,7 @@ mod matrix {
         Case { name: "catalog-primary", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY","primary"),("XIAOMI_API_KEY","alternate")], selected: Some("primary"), shadowed: &["alternate"] },
         Case { name: "catalog-alternate", selector: "xiaomi_mimo", top: "", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","alternate")], selected: Some("alternate"), shadowed: &[] },
         Case { name: "catalog-blank", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","")], selected: None, shadowed: &[] },
-        Case { name: "catalog-alias-pplx", selector: "pplx", top: "", settings: &[], env: &[("PERPLEXITY_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-alias-ai21", selector: "ai21-chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },

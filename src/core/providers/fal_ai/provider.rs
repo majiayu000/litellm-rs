@@ -87,7 +87,7 @@ impl FalAIProvider {
                 max_output_length: None,
                 supports_streaming: false,
                 supports_tools: false,
-                supports_multimodal: true,
+                supports_multimodal: false,
                 input_cost_per_1k_tokens: None,
                 output_cost_per_1k_tokens: None,
                 currency: "USD".to_string(),
@@ -163,30 +163,67 @@ impl FalAIProvider {
         &self,
         request: &ImageGenerationRequest,
     ) -> Result<Value, ProviderError> {
-        let mut body = serde_json::json!({
-            "prompt": request.prompt,
-            "output_format": self.config.output_format,
-            "sync_mode": self.config.sync_mode,
-        });
-
-        if let Some(n) = request.n {
+        let model_id = request.model.as_deref().unwrap_or("fal-ai/flux/schnell");
+        let model = self
+            .model_registry
+            .get(model_id)
+            .ok_or_else(|| ProviderError::model_not_found("fal_ai", model_id))?;
+        let n = request.n.unwrap_or(1);
+        if n == 0 || n > model.max_images {
+            return Err(ProviderError::invalid_request(
+                "fal_ai",
+                format!("{model_id} supports 1..={} images", model.max_images),
+            ));
+        }
+        let mut body = serde_json::json!({"prompt": request.prompt});
+        if model.max_images > 1 {
+            // BRIA defaults to four upstream; OpenAI-compatible omission means one.
             body["num_images"] = serde_json::json!(n);
         }
-
         if let Some(size) = &request.size {
-            let image_size = super::models::ImageSize::from_openai_size(size);
-            body["image_size"] = serde_json::to_value(image_size)
-                .map_err(|e| ProviderError::invalid_request("fal_ai", e.to_string()))?;
+            if model.supported_sizes.is_empty() {
+                return Err(ProviderError::not_supported(
+                    "fal_ai",
+                    "This endpoint accepts aspect_ratio, not an exact pixel size",
+                ));
+            }
+            let (width, height) = size
+                .split_once('x')
+                .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+                .filter(|(w, h)| *w > 0 && *h > 0)
+                .ok_or_else(|| {
+                    ProviderError::invalid_request("fal_ai", "size must be positive WIDTHxHEIGHT")
+                })?;
+            body["image_size"] = serde_json::json!({"width": width, "height": height});
         }
-
-        if let Some(format) = &request.response_format {
-            let output_format = match format.as_str() {
-                "b64_json" | "url" => "jpeg",
-                f => f,
-            };
-            body["output_format"] = serde_json::json!(output_format);
+        // Recraft's text-to-image schemas expose neither of these transport options.
+        let recraft = matches!(
+            model_id,
+            "fal-ai/recraft/v3/text-to-image"
+                | "fal-ai/recraft/v4/text-to-image"
+                | "fal-ai/recraft/v4/pro/text-to-image"
+        );
+        if !recraft {
+            body["sync_mode"] = serde_json::json!(self.config.sync_mode);
         }
-
+        if let Some(format) = request.response_format.as_deref()
+            && format != "url"
+        {
+            return Err(ProviderError::not_supported(
+                "fal_ai",
+                "Only response_format=url is supported",
+            ));
+        }
+        if !recraft
+            && !matches!(
+                model_id,
+                "fal-ai/bria/text-to-image/hd"
+                    | "fal-ai/stable-diffusion-v3-medium"
+                    | "fal-ai/ideogram/v3"
+            )
+        {
+            body["output_format"] = serde_json::json!(self.config.output_format);
+        }
         Ok(body)
     }
 
@@ -245,8 +282,12 @@ impl LLMProvider for FalAIProvider {
         &self.supported_models
     }
 
-    fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        super::models::SUPPORTED_OPENAI_PARAMS
+    fn get_supported_openai_params(&self, model: &str) -> &'static [&'static str] {
+        match self.model_registry.get(model) {
+            None => &[],
+            Some(model) if model.supported_sizes.is_empty() => &["n", "response_format"],
+            Some(_) => super::models::SUPPORTED_OPENAI_PARAMS,
+        }
     }
 
     async fn map_openai_params(
@@ -368,9 +409,12 @@ impl LLMProvider for FalAIProvider {
         _input_tokens: u32,
         _output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // For image generation, cost is per image not per token
+        if !self.model_registry.is_supported(model) {
+            return Err(ProviderError::model_not_found("fal_ai", model));
+        }
+        // A unit image price is available only when the official tariff is fixed.
         self.model_registry.get_cost_per_image(model).ok_or_else(||
-            ProviderError::not_supported("fal_ai", "This model requires image dimensions and quality for pricing; token counts cannot determine its cost"))
+            ProviderError::not_supported("fal_ai", "This model requires image dimensions, rendering mode, style, or generation count for pricing; token counts cannot determine its cost"))
     }
 }
 
@@ -410,7 +454,17 @@ mod tests {
     #[tokio::test]
     async fn current_image_models_do_not_claim_flat_megapixel_costs() {
         let provider = FalAIProvider::new(FalAIConfig::with_api_key("test-key")).unwrap();
-        for model in ["fal-ai/flux-2-pro", "fal-ai/flux-2-flex", "ideogram/v4"] {
+        for model in [
+            "fal-ai/flux-2-pro",
+            "fal-ai/flux-2-flex",
+            "ideogram/v4",
+            "fal-ai/flux/schnell",
+            "fal-ai/flux-pro/v1.1",
+            "fal-ai/flux-pro/v1.1-ultra",
+            "fal-ai/ideogram/v3",
+            "fal-ai/recraft/v3/text-to-image",
+            "fal-ai/bria/text-to-image/hd",
+        ] {
             assert!(provider.models().iter().any(|m| m.id == model));
             assert!(provider.calculate_cost(model, 0, 0).await.is_err());
         }
@@ -421,6 +475,153 @@ mod tests {
                 .unwrap(),
             0.04
         );
+    }
+
+    fn image_request(model: &str) -> ImageGenerationRequest {
+        ImageGenerationRequest {
+            prompt: "a bird".into(),
+            model: Some(model.into()),
+            n: None,
+            size: None,
+            quality: None,
+            response_format: None,
+            style: None,
+            user: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_models_do_not_route_or_price_as_free() {
+        let provider = FalAIProvider::new(FalAIConfig::with_api_key("test-key")).unwrap();
+        let wrapped = crate::core::providers::Provider::FalAI(provider.clone());
+        for id in ["fal-ai/imagen4/preview", "unknown-model"] {
+            assert!(
+                !wrapped.supports_capability_for_model(id, &ProviderCapability::ImageGeneration)
+            );
+            assert!(matches!(
+                provider.calculate_cost(id, 0, 0).await,
+                Err(ProviderError::ModelNotFound { .. })
+            ));
+            assert!(matches!(
+                provider
+                    .image_generation(image_request(id), RequestContext::default())
+                    .await,
+                Err(ProviderError::ModelNotFound { .. })
+            ));
+        }
+        assert!(wrapped.supports_capability_for_model(
+            "fal-ai/flux/schnell",
+            &ProviderCapability::ImageGeneration
+        ));
+        assert!(!wrapped.supports_capability_for_model(
+            "fal-ai/flux/schnell",
+            &ProviderCapability::ChatCompletion
+        ));
+    }
+
+    #[test]
+    fn model_specific_image_arguments_fail_explicitly() {
+        let provider = FalAIProvider::new(FalAIConfig::with_api_key("test-key")).unwrap();
+        for id in [
+            "fal-ai/recraft/v3/text-to-image",
+            "fal-ai/recraft/v4/text-to-image",
+            "fal-ai/recraft/v4/pro/text-to-image",
+            "fal-ai/flux-2-pro",
+            "fal-ai/flux-2-flex",
+        ] {
+            let mut request = image_request(id);
+            request.n = Some(2);
+            assert!(provider.build_image_request_body(&request).is_err());
+        }
+        for id in ["fal-ai/flux-pro/v1.1-ultra", "fal-ai/bria/text-to-image/hd"] {
+            let mut request = image_request(id);
+            request.size = Some("1024x1024".into());
+            assert!(provider.build_image_request_body(&request).is_err());
+        }
+        let mut request = image_request("fal-ai/flux/schnell");
+        for n in [0, 5] {
+            request.n = Some(n);
+            assert!(provider.build_image_request_body(&request).is_err());
+        }
+        request.n = None;
+        for size in ["invalid", "0x1024"] {
+            request.size = Some(size.into());
+            assert!(provider.build_image_request_body(&request).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn http_image_requests_follow_endpoint_schemas() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut bodies = Vec::new();
+            for _ in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0; 4096];
+                let (header_end, length) = loop {
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap())
+                            })
+                            .unwrap();
+                        break (end + 4, length);
+                    }
+                };
+                while bytes.len() < header_end + length {
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+                bodies.push(
+                    serde_json::from_slice::<Value>(&bytes[header_end..header_end + length])
+                        .unwrap(),
+                );
+                let body = r#"{"images":[{"url":"https://example.com/image.webp"}]}"#;
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            bodies
+        });
+        let mut config = FalAIConfig::with_api_key("test-key");
+        config.base.api_base = Some(format!("http://{address}"));
+        let provider = FalAIProvider::new(config).unwrap();
+        for id in [
+            "fal-ai/recraft/v4/text-to-image",
+            "fal-ai/bria/text-to-image/hd",
+            "fal-ai/flux/schnell",
+            "fal-ai/ideogram/v3",
+        ] {
+            let mut request = image_request(id);
+            if id == "fal-ai/flux/schnell" {
+                request.size = Some("1792x1024".into());
+            }
+            if id == "fal-ai/ideogram/v3" {
+                request.n = Some(8);
+            }
+            let response = provider
+                .image_generation(request, RequestContext::default())
+                .await
+                .unwrap();
+            assert_eq!(response.data.len(), 1);
+        }
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies[0], serde_json::json!({"prompt":"a bird"}));
+        assert_eq!(bodies[1]["num_images"], 1);
+        assert!(bodies[1].get("output_format").is_none());
+        assert_eq!(
+            bodies[2]["image_size"],
+            serde_json::json!({"width":1792,"height":1024})
+        );
+        assert_eq!(bodies[3]["num_images"], 8);
     }
 
     #[test]
@@ -522,7 +723,7 @@ mod tests {
     fn test_supported_openai_params() {
         let config = FalAIConfig::with_api_key("test-key");
         let provider = FalAIProvider::new(config).unwrap();
-        let params = provider.get_supported_openai_params("any-model");
+        let params = provider.get_supported_openai_params("fal-ai/flux/schnell");
         assert!(params.contains(&"n"));
         assert!(params.contains(&"size"));
         assert!(params.contains(&"response_format"));
@@ -533,7 +734,9 @@ mod tests {
         let config = FalAIConfig::with_api_key("test-key");
         let provider = FalAIProvider::new(config).unwrap();
 
-        let cost = provider.calculate_cost("fal-ai/flux/schnell", 0, 0).await;
+        let cost = provider
+            .calculate_cost("fal-ai/stable-diffusion-v3-medium", 0, 0)
+            .await;
         assert!(cost.is_ok());
         assert!(cost.unwrap() > 0.0);
     }
@@ -571,7 +774,7 @@ mod tests {
         let provider = FalAIProvider::new(config)?;
         let request = ImageGenerationRequest {
             prompt: "restricted model".to_string(),
-            model: Some("fal-ai/restricted".to_string()),
+            model: Some("fal-ai/flux/schnell".to_string()),
             n: None,
             size: None,
             quality: None,
@@ -637,11 +840,14 @@ mod tests {
         assert_eq!(body["num_images"], 2);
         assert_eq!(body["output_format"], "png");
         assert_eq!(body["sync_mode"], false);
-        assert_eq!(body["image_size"], "square_hd");
+        assert_eq!(
+            body["image_size"],
+            serde_json::json!({"width":1024,"height":1024})
+        );
     }
 
     #[test]
-    fn test_build_image_request_body_response_format_overrides_default() {
+    fn test_build_image_request_body_url_preserves_configured_encoding() {
         let mut config = FalAIConfig::with_api_key("test-key");
         config.output_format = "png".to_string();
         let provider = FalAIProvider::new(config).unwrap();
@@ -659,7 +865,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(body["output_format"], "jpeg");
+        assert_eq!(body["output_format"], "png");
     }
 
     #[test]
