@@ -323,6 +323,20 @@ impl OpenAILikeProvider {
         &self,
         mut request: EmbeddingRequest,
     ) -> Result<EmbeddingResponse, OpenAILikeError> {
+        if matches!(
+            self.provider_name.as_str(),
+            "siliconflow" | "dashscope" | "qwen"
+        ) && request.encoding_format.as_deref() == Some("base64")
+        {
+            return Err(ProviderError::invalid_request(
+                match self.provider_name.as_str() {
+                    "siliconflow" => "siliconflow",
+                    "dashscope" => "dashscope",
+                    _ => "qwen",
+                },
+                "This gateway supports only float embeddings for this provider",
+            ));
+        }
         request.model = self.rewrite_request_model(&request.model);
         let url = format!("{}/embeddings", self.config.get_api_base());
         let headers = self.get_request_headers();
@@ -429,6 +443,11 @@ impl OpenAILikeProvider {
             usage.entry("prompt_tokens").or_insert(Value::from(total));
         }
         if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
+            if !usage.contains_key("prompt_tokens")
+                && let Some(total) = usage.get("total_tokens").cloned()
+            {
+                usage.insert("prompt_tokens".into(), total);
+            }
             usage.entry("completion_tokens").or_insert(Value::from(0));
         }
         serde_json::from_value(value)
@@ -457,10 +476,15 @@ impl OpenAILikeProvider {
         };
         let url = format!("{image_base}/images/generations");
         let headers = self.get_request_headers();
-        let body = Some(
-            serde_json::to_value(&request)
-                .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?,
-        );
+        let mut body = serde_json::to_value(&request)
+            .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        if matches!(self.provider_name.as_str(), "zhipu" | "zai")
+            && let Some(fields) = body.as_object_mut()
+            && let Some(user) = fields.remove("user")
+        {
+            fields.insert("user_id".into(), user);
+        }
+        let body = Some(body);
 
         let response = self
             .pool_manager
@@ -1009,7 +1033,9 @@ impl LLMProvider for OpenAILikeProvider {
         _context: RequestContext,
     ) -> Result<SpeechResponse, ProviderError> {
         request.model = self.rewrite_request_model(&request.model);
-        if self.provider_name == "groq" && request.response_format.is_none() {
+        if matches!(self.provider_name.as_str(), "groq" | "zhipu")
+            && request.response_format.is_none()
+        {
             request.response_format = Some("wav".into());
         }
         let together_pcm = matches!(self.provider_name.as_str(), "together" | "together_ai")

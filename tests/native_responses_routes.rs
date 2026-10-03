@@ -60,6 +60,24 @@ async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResp
     HttpResponse::Ok().json(data.output.lock().unwrap().clone())
 }
 
+async fn upstream_compact(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResponse {
+    data.seen.lock().unwrap().push(body.clone());
+    if data.status != StatusCode::OK {
+        return HttpResponse::build(data.status)
+            .insert_header(("retry-after", "9"))
+            .json(json!({"error":{"message":"capacity unavailable"}}));
+    }
+    let mut value = data.output.lock().unwrap().clone();
+    value["id"] = json!("resp_compacted");
+    value["object"] = json!("response.compaction");
+    value["output"] = json!([{"type":"compaction","id":"cmp_native","encrypted_content":"opaque==","future_compaction_field":true}]);
+    value.as_object_mut().unwrap().remove("status");
+    if body["invalid_upstream_usage"] == true {
+        value["usage"] = Value::Null;
+    }
+    HttpResponse::Ok().json(value)
+}
+
 async fn upstream_lifecycle(data: web::Data<Upstream>, req: HttpRequest) -> HttpResponse {
     data.lifecycle_calls
         .lock()
@@ -129,6 +147,7 @@ async fn fixture(
         App::new()
             .app_data(web::Data::new(data.clone()))
             .route("/v1/responses", web::post().to(upstream))
+            .route("/v1/responses/compact", web::post().to(upstream_compact))
             .route("/v1/responses/input_tokens", web::post().to(count_upstream))
             .route("/v1/responses/{id}", web::get().to(upstream_lifecycle))
             .route("/v1/responses/{id}", web::delete().to(upstream_lifecycle))
@@ -171,6 +190,242 @@ async fn fixture(
 
 fn request(stream: bool) -> Value {
     json!({"model":"gpt-4o-mini","input":"Hello","stream":stream,"store":false,"service_tier":"default","tools":[{"type":"function","name":"weather","parameters":{"type":"object","properties":{}}},{"type":"custom","name":"calculator"}],"reasoning":{"effort":"low"},"include":["reasoning.encrypted_content"],"future_request_field":{"preserved":true},"max_output_tokens":16})
+}
+
+fn cache_write_pricing(state: &AppState, output_bound: Value) {
+    state.pricing.add_custom_model(
+        "gpt-4o-mini".into(),
+        serde_json::from_value(json!({
+            "litellm_provider":"openai", "mode":"chat", "max_output_tokens":output_bound,
+            "input_cost_per_token":0.000001, "output_cost_per_token":0.00002,
+            "cache_read_input_token_cost":0.0000001, "cache_creation_input_token_cost":0.00000125
+        }))
+        .unwrap(),
+    );
+}
+
+#[tokio::test]
+async fn compact_reserves_model_output_and_cache_writes_before_generation() {
+    use litellm_rs::core::{
+        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        types::context::RequestContext,
+    };
+    // 0.02 catches the old 100-output-token allowance; 0.024 fits the model
+    // output bound plus ordinary input, but not the provider's cache-write rate.
+    for scope in ["provider", "model", "key"] {
+        for limit in [0.02, 0.024] {
+            let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+            cache_write_pricing(&state, json!(500));
+            let mut context = RequestContext::new();
+            match scope {
+                "provider" => state.budget_limits.providers.set_provider_limit(
+                    "native-test",
+                    ProviderLimitConfig::new(limit, ResetPeriod::Monthly),
+                ),
+                "model" => state.budget_limits.models.set_model_limit(
+                    "gpt-4o-mini",
+                    ModelLimitConfig::new(limit, ResetPeriod::Monthly),
+                ),
+                _ => {
+                    let budget = state
+                        .budget_manager
+                        .create_budget(
+                            BudgetScope::ApiKey("compact-test".into()),
+                            BudgetConfig::new("compact bound", limit),
+                        )
+                        .await
+                        .unwrap();
+                    context = context.with_api_key_budget(budget.id.parse().unwrap());
+                }
+            }
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let req = test::TestRequest::post().uri("/v1/responses/compact").set_json(json!({"model":"gpt-4o-mini","input":[{"type":"compaction","encrypted_content":"opaque=="}]})).to_request();
+            req.extensions_mut().insert(context);
+            let response = test::call_service(&app, req).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYMENT_REQUIRED,
+                "{scope}/{limit}"
+            );
+            assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
+            assert!(upstream.seen.lock().unwrap().is_empty());
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn compact_settles_cache_write_usage_in_provider_model_and_key_budgets() {
+    use litellm_rs::core::{
+        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        keys::CreateKeyConfig,
+        types::context::RequestContext,
+    };
+    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    cache_write_pricing(&state, json!(500));
+    upstream.output.lock().unwrap()["usage"]["input_tokens_details"]["cache_write_tokens"] =
+        json!(5);
+    state.budget_limits.providers.set_provider_limit(
+        "native-test",
+        ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    state.budget_limits.models.set_model_limit(
+        "gpt-4o-mini",
+        ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    let scope = BudgetScope::ApiKey("compact-settlement".into());
+    let budget = state
+        .budget_manager
+        .create_budget(scope.clone(), BudgetConfig::new("compact settlement", 1.0))
+        .await
+        .unwrap();
+    let (key_id, _) = state
+        .key_manager
+        .generate_key(CreateKeyConfig {
+            name: "compact-cache-write".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let req = test::TestRequest::post()
+        .uri("/v1/responses/compact")
+        .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+        .to_request();
+    req.extensions_mut().insert(
+        RequestContext::new()
+            .with_api_key(key_id)
+            .with_api_key_budget(budget.id.parse().unwrap()),
+    );
+    let response = test::call_service(&app, req).await;
+    let status = response.status();
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(
+        value["usage"]["input_tokens_details"]["cache_write_tokens"],
+        5
+    );
+    let expected = 3.0 * 0.000001 + 4.0 * 0.0000001 + 5.0 * 0.00000125 + 3.0 * 0.00002;
+    for actual in [
+        state
+            .budget_limits
+            .providers
+            .get_provider_usage("native-test")
+            .unwrap()
+            .current_spend,
+        state
+            .budget_limits
+            .models
+            .get_model_usage("gpt-4o-mini")
+            .unwrap()
+            .current_spend,
+        state.budget_manager.get_current_spend(&scope),
+        state
+            .key_manager
+            .get_usage_stats(key_id)
+            .await
+            .unwrap()
+            .total_cost,
+    ] {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn compact_rejects_unknown_output_bounds_and_invalid_cache_write_usage() {
+    for (bound, written, status) in [
+        (Value::Null, json!(5), StatusCode::BAD_REQUEST),
+        (json!(500), json!(9), StatusCode::BAD_GATEWAY),
+        (json!(500), json!(-1), StatusCode::BAD_GATEWAY),
+        (json!(500), json!(1.5), StatusCode::BAD_GATEWAY),
+        (json!(500), json!(u64::MAX), StatusCode::BAD_GATEWAY),
+    ] {
+        let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+        cache_write_pricing(&state, bound);
+        upstream.output.lock().unwrap()["usage"]["input_tokens_details"]["cache_write_tokens"] =
+            written;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses/compact")
+                .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            upstream.seen.lock().unwrap().len(),
+            usize::from(status == StatusCode::BAD_GATEWAY)
+        );
+        handle.stop(false).await;
+    }
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn compact_skips_higher_priority_non_openai_responses_deployments() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.router.strategy =
+            litellm_rs::core::router::config::RoutingStrategy::PriorityBased;
+        config.gateway.providers[0].priority = 1;
+    })
+    .await;
+    let router = state.unified_router();
+    let provider =
+        litellm_rs::core::providers::github_copilot::GitHubCopilotProvider::new(Default::default())
+            .await
+            .unwrap();
+    router.add_deployment(litellm_rs::core::router::deployment::Deployment::new(
+        "copilot-test".into(),
+        litellm_rs::core::providers::Provider::GitHubCopilot(provider),
+        "gpt-4o-mini".into(),
+        "gpt-4o-mini".into(),
+    ));
+    let copilot = router.get_deployment("copilot-test").unwrap();
+    assert!(
+        copilot
+            .provider
+            .capabilities()
+            .contains(&litellm_rs::core::types::model::ProviderCapability::Responses)
+    );
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses/compact")
+            .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    assert_eq!(copilot.state.total_requests.load(Ordering::Relaxed), 0);
+    handle.stop(false).await;
 }
 
 #[tokio::test]
@@ -230,15 +485,17 @@ async fn native_auth_fails_before_upstream() {
             .configure(litellm_rs::server::routes::ai::configure_routes),
     )
     .await;
-    let response = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/responses")
-            .set_json(request(false))
-            .to_request(),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    for path in ["/v1/responses", "/v1/responses/compact"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(path)
+                .set_json(request(false))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
     assert!(upstream.seen.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
@@ -1035,6 +1292,188 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
     }
 }
 
+#[tokio::test]
+async fn compact_preserves_encrypted_items_and_settles_once_without_storage() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    state.budget_limits.models.set_model_limit(
+        "gpt-4o-mini",
+        ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
+    );
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let body = json!({"model":"gpt-4o-mini","service_tier":"default","input":[{"type":"compaction","id":"cmp_old","encrypted_content":"opaque-old=="},{"role":"user","content":"Hello"}],"instructions":"Keep facts","future_field":{"preserve":true}});
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses/compact")
+            .set_json(&body)
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["object"], "response.compaction");
+    assert_eq!(value["output"][0]["encrypted_content"], "opaque==");
+    assert_eq!(value["output"][0]["future_compaction_field"], true);
+    assert!(value.get("status").is_none());
+    assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
+    assert_eq!(upstream.seen.lock().unwrap().as_slice(), &[body]);
+    assert!(upstream.lifecycle_calls.lock().unwrap().is_empty());
+    let expected = 8.0 * 0.00000015 + 4.0 * 0.000000075 + 3.0 * 0.0000006;
+    let spend = state
+        .budget_limits
+        .models
+        .get_model_usage("gpt-4o-mini")
+        .unwrap();
+    assert!((spend.current_spend - expected).abs() < 1e-12, "{spend:?}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn compact_rejects_streaming_and_unenforceable_token_limits_before_dispatch() {
+    use litellm_rs::core::types::context::RequestContext;
+    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    for field in ["stream", "background", "store", "max_output_tokens"] {
+        let mut body = json!({"model":"gpt-4o-mini","input":"Hello"});
+        body[field] = json!(true);
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses/compact")
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{field}");
+    }
+    let req = test::TestRequest::post()
+        .uri("/v1/responses/compact")
+        .set_json(json!({"model":"gpt-4o-mini","input":"Hello"}))
+        .to_request();
+    let mut context = RequestContext::new();
+    context.set_api_key_max_tokens_per_request(8);
+    req.extensions_mut().insert(context);
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn compact_preserves_rate_limit_and_rejects_malformed_success() {
+    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        let (state, upstream, handle) = fixture(status, |_| {}).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/responses/compact")
+                .set_json(
+                    json!({"model":"gpt-4o-mini","input":"Hello","invalid_upstream_usage":true}),
+                )
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            if status == StatusCode::OK {
+                StatusCode::BAD_GATEWAY
+            } else {
+                status
+            }
+        );
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            assert_eq!(response.headers().get("retry-after").unwrap(), "9");
+        }
+        if status == StatusCode::OK {
+            assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        } else {
+            // Pre-response HTTP rate limits keep the router's configured retries.
+            assert!(!upstream.seen.lock().unwrap().is_empty());
+        }
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn compact_previous_response_is_owner_bound_and_does_not_create_a_handle() {
+    use litellm_rs::core::types::context::RequestContext;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.storage.database.enabled = true;
+        config.gateway.storage.database.auto_migrate = true;
+        config.gateway.storage.database.url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("compact.db").display()
+        );
+    })
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["store"] = json!(true);
+    let req = test::TestRequest::post()
+        .uri("/v1/responses")
+        .set_json(body)
+        .to_request();
+    req.extensions_mut()
+        .insert(RequestContext::new().with_user_id("alice"));
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _: Value = test::read_body_json(response).await;
+    for (owner, expected) in [("bob", StatusCode::NOT_FOUND), ("alice", StatusCode::OK)] {
+        let req = test::TestRequest::post().uri("/v1/responses/compact").set_json(json!({"model":"gpt-4o-mini","previous_response_id":"resp_native","input":"Keep going"})).to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_user_id(owner));
+        let response = test::call_service(&app, req).await;
+        let status = response.status();
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(status, expected, "{owner}: {value}");
+    }
+    let now = chrono::Utc::now().timestamp();
+    assert!(
+        state
+            .storage
+            .database
+            .owned_response("resp_compacted", "user:alice", now)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .storage
+            .database
+            .owned_response("resp_native", "user:alice", now)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 2);
+    handle.stop(false).await;
+}
+
 async fn settlement_row(
     state: &AppState,
 ) -> litellm_rs::storage::database::entities::response_settlement::Model {
@@ -1204,6 +1643,26 @@ async fn publicly_created_chat_key_can_use_native_responses_and_usage_is_durable
         .usage_stats;
     assert_eq!(after.total_requests, before.total_requests);
     assert_eq!(after.total_cost, before.total_cost);
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses/compact")
+            .insert_header(("authorization", format!("ApiKey {token}")))
+            .set_json(json!({"model":"gpt-4o-mini","input":"Compact this conversation"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = test::read_body(response).await;
+    let usage = state
+        .storage
+        .database
+        .find_api_key_by_id(key.metadata.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .usage_stats;
+    assert_eq!(usage.total_requests, 2);
     handle.stop(false).await;
 }
 

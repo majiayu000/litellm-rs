@@ -33,6 +33,609 @@
     { "name": "Models", "description": "Configured model discovery" }
   ],
   "paths": {
+    "/v1/responses/compact": {
+      "post": {
+        "operationId": "compactResponse",
+        "summary": "Compact native Responses conversation",
+        "description": "OpenAI native compact endpoint. Stateless; encrypted output is passed unchanged. Previous response handles require the same owner and upstream deployment. Keys with per-request output token caps are rejected because the upstream compact protocol has no output-limit parameter. Gateway content checks cannot decrypt opaque context.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeCompactionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Compacted conversation and billed usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeCompactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}:generateContent": {
+      "post": {
+        "operationId": "v1_generateContent",
+        "summary": "Gemini native generateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}:streamGenerateContent": {
+      "post": {
+        "operationId": "v1_streamGenerateContent",
+        "summary": "Gemini native streamGenerateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response or SSE stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/v1beta/models/{model}:generateContent": {
+      "post": {
+        "operationId": "v1beta_generateContent",
+        "summary": "Gemini native generateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/v1beta/models/{model}:streamGenerateContent": {
+      "post": {
+        "operationId": "v1beta_streamGenerateContent",
+        "summary": "Gemini native streamGenerateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response or SSE stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/gemini/v1/models/{model}:generateContent": {
+      "post": {
+        "operationId": "gemini_v1_generateContent",
+        "summary": "Gemini native generateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/gemini/v1/models/{model}:streamGenerateContent": {
+      "post": {
+        "operationId": "gemini_v1_streamGenerateContent",
+        "summary": "Gemini native streamGenerateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response or SSE stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/gemini/v1beta/models/{model}:generateContent": {
+      "post": {
+        "operationId": "gemini_v1beta_generateContent",
+        "summary": "Gemini native generateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
+    "/gemini/v1beta/models/{model}:streamGenerateContent": {
+      "post": {
+        "operationId": "gemini_v1beta_streamGenerateContent",
+        "summary": "Gemini native streamGenerateContent",
+        "description": "Existing native Gemini route. Uses gateway authentication and configured upstream credentials. Gateway errors use the shared OpenAI error envelope; this route does not accept a Google API key as a substitute for gateway authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeminiNativeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider-native Gemini response or SSE stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAIError"
+          },
+          "default": {
+            "$ref": "#/components/responses/OpenAIError"
+          }
+        }
+      }
+    },
     "/v1/chat/completions": {
       "post": {
         "operationId": "createChatCompletion",
@@ -717,6 +1320,104 @@
       }
     },
     "schemas": {
+      "NativeCompactionRequest": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "input": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            ]
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "previous_response_id": {
+            "type": "string"
+          },
+          "prompt_cache_key": {
+            "type": "string"
+          },
+          "service_tier": {
+            "type": "string",
+            "enum": ["default"]
+          }
+        }
+      },
+      "NativeCompactionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "output",
+          "usage"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "const": "response.compaction"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "output": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ResponseUsage"
+          }
+        }
+      },
+      "GeminiNativeRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "contents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "systemInstruction": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "generationConfig": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
       "OpenAIErrorResponse": {
         "type": "object",
         "required": ["error"],
@@ -841,7 +1542,8 @@
         "type": "object",
         "required": ["cached_tokens"],
         "properties": {
-          "cached_tokens": { "type": "integer", "minimum": 0 }
+          "cached_tokens": { "type": "integer", "minimum": 0 },
+          "cache_write_tokens": { "type": "integer", "minimum": 0 }
         },
         "additionalProperties": false
       },

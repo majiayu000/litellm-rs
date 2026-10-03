@@ -32,17 +32,18 @@ cargo run --bin gateway --features sqlite
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --bin gateway --features sqlite
+cargo install litellm-rs --version 0.7.0 --locked --bin gateway --features sqlite
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/main/config/gateway.dev.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.7.0/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
 The development config starts without provider credentials or auth secrets and
 uses the local `vllm` catalog provider. Use
 `config/gateway.yaml.example` for production-style deployments with real
-provider keys and auth enabled. Default features include SQLite storage, which
-satisfies the gateway binary's `storage` requirement.
+provider keys and auth enabled. The explicit `sqlite` feature enables the storage needed by the gateway binary.
+The registry install above intentionally uses the matching published 0.7.0 config;
+new parity routes remain unreleased until their artifact verification is recorded.
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
@@ -160,7 +161,7 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/ip_access` | wire | Configured allow/block rules run as an outer Actix middleware and short-circuit before downstream side effects; empty/default rules allow all. |
 | `core/mcp` | feature-gated | `gateway,mcp` mounts authenticated Streamable HTTP at `/{server_name}/mcp` (`/mcp` for one enabled server). See [MCP gateway](docs/gateway/mcp.md) for configuration and stateless transport limits. Responses API MCP descriptors pass through independently. |
 | `core/a2a` | experimental-gate | Opt-in `gateway,a2a` exposes authenticated A2A 1.0 agent cards, messages, task queries/cancellation and SSE. Task ownership is process-local; see [A2A gateway](docs/gateway/a2a.md). |
-| `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
+| `core/realtime` | feature-gated | `gateway,websockets` mounts the [manual OpenAI Realtime gateway](docs/gateway/realtime.md); the deprecated library client remains separate. |
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. Domain records and async batch helpers remain; the unreachable `BatchProcessor` has been removed. |

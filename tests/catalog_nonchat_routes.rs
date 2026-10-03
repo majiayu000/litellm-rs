@@ -22,6 +22,7 @@ struct Upstream {
     status: StatusCode,
     auth: bool,
     error_message: Arc<Mutex<String>>,
+    image_url: bool,
     total_only: bool,
 }
 async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>) -> HttpResponse {
@@ -43,33 +44,21 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
     }
     let path = req
         .path()
+        .replace("/api/paas/v4", "/v1")
+        .replace("/compatible-mode/v1", "/v1")
         .replace("/api/v1", "/v1")
         .replace("/v3/openai", "/v1")
         .replace("/api/v3", "/v1");
     match path.as_str() {
-        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => {
-            let usage = if state.total_only {
-                json!({"total_tokens":2})
-            } else {
-                json!({"prompt_tokens":2,"total_tokens":2})
-            };
-            HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":usage}))
-        }
-        "/v1/images/generations" => {
-            HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]}))
-        }
+        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage": if state.total_only || req.path().starts_with("/compatible-mode/v1") { json!({"total_tokens":2}) } else { json!({"prompt_tokens":2,"total_tokens":2}) }})),
+        "/v1/images/generations" => HttpResponse::Ok().json(if state.image_url { json!({"created":1,"data":[{"url":"https://example.test/generated.png"}]}) } else { json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]}) }),
         "/v1/audio/speech" => {
             let request: Value = serde_json::from_slice(&body).unwrap();
             assert!(request.get("speed").is_none_or(|v| !v.is_null()));
-            let mime = if request["response_format"] == "wav" {
-                "audio/wav"
-            } else {
-                "audio/mpeg"
-            };
-            HttpResponse::Ok()
-                .insert_header(("content-type", mime))
-                .body("test-audio")
-        }
+            let mime = match request["response_format"].as_str() { Some("wav") => "audio/wav", Some("pcm" | "raw") => "audio/pcm", _ => "audio/mpeg" };
+            HttpResponse::Ok().insert_header(("content-type", mime)).body("test-audio")
+        },
+        "/v1/audio/transcriptions" | "/v1/audio/translations" => HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0})),
         "/v1/stt" => {
             let multipart = String::from_utf8_lossy(&body);
             if multipart.contains("bad-response") {
@@ -77,9 +66,6 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
             } else {
                 HttpResponse::Ok().json(json!({"text":"transcribed", "language":"en", "duration":1.25, "words":[{"text":"transcribed","start":0.0,"end":1.25}]}))
             }
-        }
-        "/v1/audio/transcriptions" | "/v1/audio/translations" => {
-            HttpResponse::Ok().json(json!({"text":"transcribed", "duration":1.0}))
         }
         _ => HttpResponse::NotFound().finish(),
     }
@@ -92,6 +78,7 @@ async fn fixture(
         seen: Arc::default(),
         status,
         error_message: Arc::new(Mutex::new("upstream unavailable".into())),
+        image_url: matches!(selector, "zhipu" | "zai"),
         total_only: matches!(selector, "aiml" | "aiml_api"),
         auth: !matches!(
             selector,
@@ -130,6 +117,8 @@ async fn fixture(
                 "docker_model_runner" => "/engines/llama.cpp/v1",
                 "nanogpt" => "/api/v1",
                 "novita" => "/v3/openai",
+                "zhipu" | "zai" => "/api/paas/v4",
+                "dashscope" | "qwen" => "/compatible-mode/v1",
                 "volcengine" => "/api/v3",
                 _ => "/v1",
             }
@@ -881,8 +870,189 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
     use actix_web::test;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
     use litellm_rs::server::middleware::AuthMiddleware;
-    let (router, upstream, handle) = fixture("vllm", StatusCode::OK).await;
-    let provider = selected(&router, ProviderCapability::Embeddings);
+    for selector in ["vllm", "dashscope", "qwen"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let provider = selected(&router, ProviderCapability::Embeddings);
+        let Provider::OpenAILike(provider) = provider else {
+            panic!("catalog provider")
+        };
+        let mut config = litellm_rs::Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+            selector,
+            selector,
+            if selector == "vllm" { "" } else { "test-key" },
+            &provider.config().get_api_base(),
+            vec!["test-model".into()],
+        )];
+        let state = litellm_rs::server::HttpServer::new(&config)
+            .await
+            .unwrap()
+            .state()
+            .clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .wrap(AuthMiddleware)
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let request = || {
+            test::TestRequest::post()
+                .uri("/v1/embeddings")
+                .set_json(json!({"model":"test-model","input":"hello"}))
+                .to_request()
+        };
+        let response = test::call_service(&app, request()).await;
+        assert!(!response.status().is_success());
+        let error: Value = test::read_body_json(response).await;
+        assert!(
+            error.to_string().to_lowercase().contains("pricing"),
+            "{error}"
+        );
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        let (_, mut price) = state
+            .pricing
+            .get_model_info_for_provider("openai", "text-embedding-3-small")
+            .unwrap();
+        price.litellm_provider = selector.into();
+        price.input_cost_per_token = Some(0.1);
+        state.pricing.add_custom_model("test-model".into(), price);
+        state.budget_limits.providers.set_provider_limit(
+            selector,
+            ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+        );
+        assert_eq!(
+            test::call_service(&app, request()).await.status(),
+            StatusCode::PAYMENT_REQUIRED
+        );
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        state.budget_limits.providers.set_provider_limit(
+            selector,
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let response = test::call_service(&app, request()).await;
+        let status = response.status();
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        let spend = state
+            .budget_limits
+            .providers
+            .get_provider_usage(selector)
+            .unwrap()
+            .current_spend;
+        assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn chinese_embeddings_preserve_native_bases_and_float_usage() {
+    for selector in ["dashscope", "qwen", "zhipu", "siliconflow"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request =
+            serde_json::from_value(json!({"model":"test-model","input":["你好"]})).unwrap();
+        let response = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.total_tokens, 2);
+        assert_eq!(usage.prompt_tokens, 2);
+        assert_eq!(usage.completion_tokens, 0);
+        let expected = match selector {
+            "zhipu" => "/api/paas/v4/embeddings",
+            "dashscope" | "qwen" => "/compatible-mode/v1/embeddings",
+            _ => "/v1/embeddings",
+        };
+        assert_eq!(upstream.seen.lock().unwrap()[0].0, expected);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn chinese_base64_embeddings_are_rejected_before_dispatch() {
+    for selector in ["siliconflow", "dashscope", "qwen"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request = serde_json::from_value(
+            json!({"model":"test-model","input":"hello","encoding_format":"base64"}),
+        )
+        .unwrap();
+        let error = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::InvalidRequest { .. }));
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn zhipu_and_zai_images_preserve_url_responses() {
+    for selector in ["zhipu", "zai"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request = serde_json::from_value(
+            json!({"model":"test-model","prompt":"山水","size":"1280x1280","quality":"hd","user":"user-123"}),
+        )
+        .unwrap();
+        let response = selected(&router, ProviderCapability::ImageGeneration)
+            .create_images(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.data[0].url.as_deref(),
+            Some("https://example.test/generated.png")
+        );
+        let (path, body) = upstream.seen.lock().unwrap()[0].clone();
+        assert_eq!(path, "/api/paas/v4/images/generations");
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["size"], "1280x1280");
+        assert_eq!(body["quality"], "hd");
+        assert_eq!(body["user_id"], "user-123");
+        assert!(body.get("user").is_none());
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn zhipu_speech_uses_wav_and_preserves_explicit_formats() {
+    let (router, upstream, handle) = fixture("zhipu", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::TextToSpeech);
+    for format in [None, Some("pcm")] {
+        let request = serde_json::from_value(
+            json!({"model":"glm-tts","input":"你好","voice":"tongtong","response_format":format}),
+        )
+        .unwrap();
+        let response = provider
+            .text_to_speech(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(response.audio, b"test-audio");
+        let calls = upstream.seen.lock().unwrap();
+        let (path, body) = calls.last().unwrap();
+        assert_eq!(path, "/api/paas/v4/audio/speech");
+        assert_eq!(
+            serde_json::from_slice::<Value>(body).unwrap()["response_format"],
+            format.unwrap_or("wav")
+        );
+    }
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn zhipu_speech_requires_prices_and_settles_unicode_characters() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("zhipu", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::TextToSpeech);
     let Provider::OpenAILike(provider) = provider else {
         panic!("catalog provider")
     };
@@ -893,9 +1063,9 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
     config.gateway.storage.database.enabled = false;
     config.gateway.storage.redis.enabled = false;
     config.gateway.providers = vec![provider_fixtures::mock_provider_config(
-        "vllm",
-        "vllm",
-        "",
+        "zhipu",
+        "zhipu",
+        "test-key",
         &provider.config().get_api_base(),
         vec!["test-model".into()],
     )];
@@ -913,8 +1083,8 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
     .await;
     let request = || {
         test::TestRequest::post()
-            .uri("/v1/embeddings")
-            .set_json(json!({"model":"test-model","input":"hello"}))
+            .uri("/v1/audio/speech")
+            .set_json(json!({"model":"test-model","input":"你好","voice":"tongtong"}))
             .to_request()
     };
     let response = test::call_service(&app, request()).await;
@@ -927,37 +1097,112 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
     assert!(upstream.seen.lock().unwrap().is_empty());
     let (_, mut price) = state
         .pricing
-        .get_model_info_for_provider("openai", "text-embedding-3-small")
+        .get_model_info_for_provider("openai", "tts-1")
         .unwrap();
-    price.litellm_provider = "vllm".into();
-    price.input_cost_per_token = Some(0.1);
+    price.litellm_provider = "zhipu".into();
+    price.input_cost_per_token = None;
+    price.output_cost_per_token = None;
+    price.input_cost_per_character = Some(0.1);
+    price.output_cost_per_character = None;
     state.pricing.add_custom_model("test-model".into(), price);
-    state
-        .budget_limits
-        .providers
-        .set_provider_limit("vllm", ProviderLimitConfig::new(0.01, ResetPeriod::Monthly));
+    state.budget_limits.providers.set_provider_limit(
+        "zhipu",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
     assert_eq!(
         test::call_service(&app, request()).await.status(),
         StatusCode::PAYMENT_REQUIRED
     );
     assert!(upstream.seen.lock().unwrap().is_empty());
     state.budget_limits.providers.set_provider_limit(
-        "vllm",
+        "zhipu",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
     let response = test::call_service(&app, request()).await;
     let status = response.status();
-    let body: Value = test::read_body_json(response).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let body = test::read_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body.as_ref(), b"test-audio");
     assert_eq!(upstream.seen.lock().unwrap().len(), 1);
     let spend = state
         .budget_limits
         .providers
-        .get_provider_usage("vllm")
+        .get_provider_usage("zhipu")
         .unwrap()
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
     handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn chinese_nonchat_errors_and_unverified_operations_fail_closed() {
+    for selector in ["dashscope", "qwen", "zhipu", "zai", "siliconflow"] {
+        for status in [StatusCode::BAD_REQUEST, StatusCode::TOO_MANY_REQUESTS] {
+            let (router, _, handle) = fixture(selector, status).await;
+            let error = if selector == "zai" {
+                selected(&router, ProviderCapability::ImageGeneration)
+                    .create_images(
+                        serde_json::from_value(json!({"model":"test-model","prompt":"test"}))
+                            .unwrap(),
+                        RequestContext::default(),
+                    )
+                    .await
+                    .unwrap_err()
+            } else {
+                selected(&router, ProviderCapability::Embeddings)
+                    .create_embeddings(embedding_request(), RequestContext::default())
+                    .await
+                    .unwrap_err()
+            };
+            if status == StatusCode::BAD_REQUEST {
+                assert!(matches!(
+                    error,
+                    ProviderError::InvalidRequest { .. }
+                        | ProviderError::ApiError { status: 400, .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    ProviderError::RateLimit {
+                        retry_after: Some(7),
+                        ..
+                    }
+                ));
+            }
+            for capability in [
+                ProviderCapability::AudioTranscription,
+                ProviderCapability::AudioTranslation,
+                ProviderCapability::ImageEdit,
+            ] {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability("public", &capability)
+                        .is_err()
+                );
+            }
+            if selector != "zhipu" {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability(
+                            "public",
+                            &ProviderCapability::TextToSpeech
+                        )
+                        .is_err()
+                );
+            }
+            if selector == "zai" {
+                assert!(
+                    router
+                        .select_deployment_lease_for_capability(
+                            "public",
+                            &ProviderCapability::Embeddings
+                        )
+                        .is_err()
+                );
+            }
+            handle.stop(false).await;
+        }
+    }
 }
 
 #[tokio::test]
@@ -1195,154 +1440,54 @@ async fn aggregator_errors_and_unverified_operations_fail_closed() {
 }
 
 #[tokio::test]
-async fn xai_native_transcription_maps_upload_words_and_upstream_errors() {
-    for status in [
-        StatusCode::OK,
-        StatusCode::UNAUTHORIZED,
-        StatusCode::TOO_MANY_REQUESTS,
-        StatusCode::BAD_GATEWAY,
-    ] {
-        let (router, upstream, handle) = fixture("xai", status).await;
-        let provider = selected(&router, ProviderCapability::AudioTranscription);
-        for capability in [
-            ProviderCapability::ChatCompletion,
-            ProviderCapability::AudioTranslation,
-            ProviderCapability::TextToSpeech,
-        ] {
-            assert!(
-                router
-                    .select_deployment_lease_for_capability("public", &capability)
-                    .is_err()
-            );
-        }
-        assert!(!provider.supports_capability_for_model(
-            "grok-voice-transcribe-1.0",
-            &ProviderCapability::AudioTranscription
-        ));
-        let request = TranscriptionRequest {
-            model: "xai/grok-voice-transcribe-2.0".into(),
-            file: vec![1, 2],
-            filename: "sample.wav".into(),
-            language: Some("en".into()),
-            prompt: None,
-            response_format: Some("verbose_json".into()),
-            temperature: None,
-            timestamp_granularities: Some(vec!["word".into()]),
-        };
-        let result = provider
-            .audio_transcription(request, RequestContext::default())
-            .await;
-        if status == StatusCode::OK {
-            let response = result.unwrap();
-            assert_eq!(response.duration, Some(1.25));
-            assert_eq!(response.words.unwrap()[0].word, "transcribed");
-        } else if status == StatusCode::TOO_MANY_REQUESTS {
-            assert!(matches!(
-                result.unwrap_err(),
-                ProviderError::RateLimit {
-                    retry_after: Some(7),
-                    ..
-                }
-            ));
-        } else {
-            assert!(result.is_err());
-        }
-        let calls = upstream.seen.lock().unwrap().clone();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "/v1/stt");
-        let body = String::from_utf8_lossy(&calls[0].1);
-        assert!(body.contains("grok-voice-transcribe-2.0"));
-        assert!(!body.contains("xai/grok"));
-        assert!(body.find("name=\"language\"").unwrap() < body.find("name=\"file\"").unwrap());
-        assert!(!body.contains("response_format"));
-        handle.stop(false).await;
-    }
-}
-
-#[tokio::test]
-async fn xai_transcription_rejects_unsupported_options_and_malformed_success() {
-    let (router, upstream, handle) = fixture("xai", StatusCode::OK).await;
-    let provider = selected(&router, ProviderCapability::AudioTranscription);
-    let mut request = TranscriptionRequest {
-        model: "grok-voice-transcribe-2.0".into(),
-        file: vec![1, 2],
-        filename: "sample.wav".into(),
-        language: None,
-        prompt: Some("unsupported".into()),
-        response_format: None,
-        temperature: None,
-        timestamp_granularities: None,
-    };
+async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
+    let definition = litellm_rs::core::providers::registry::get_definition("wandb").unwrap();
+    assert_eq!(definition.base_url, "https://api.inference.wandb.ai/v1");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpServer::new(|| App::new().route("/v1/chat/completions", web::post().to(|req: HttpRequest| async move {
+        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer test-key");
+        assert_eq!(req.headers().get("openai-project").unwrap(), "test-team/test-project");
+        HttpResponse::Ok().json(json!({"id":"chat-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}))
+    }))).workers(1).listen(listener).unwrap().run();
+    let handle = server.handle();
+    tokio::spawn(server);
+    let mut config = provider_fixtures::mock_provider_config(
+        "wandb",
+        "wandb",
+        "test-key",
+        &format!("http://{address}/v1"),
+        vec!["test-model".into()],
+    );
+    config.settings.insert(
+        "custom_headers".into(),
+        json!({"OpenAI-Project":"test-team/test-project"}),
+    );
+    let provider = create_provider(config).await.unwrap();
+    let router = UnifiedRouter::default();
+    router.add_deployment(Deployment::new(
+        "wandb-test".into(),
+        provider,
+        "test-model".into(),
+        "public".into(),
+    ));
     assert!(
-        provider
-            .audio_transcription(request.clone(), RequestContext::default())
-            .await
+        router
+            .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
             .is_err()
     );
-    assert!(upstream.seen.lock().unwrap().is_empty());
-    request.prompt = None;
-    request.language = Some("bad-response".into());
-    assert!(
-        provider
-            .audio_transcription(request, RequestContext::default())
-            .await
-            .is_err()
-    );
-    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
-    handle.stop(false).await;
-}
-#[tokio::test]
-async fn compactifai_whisper_routes_only_to_transcription_and_preserves_errors() {
-    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
-        let (router, upstream, handle) = fixture("compactifai", status).await;
-        let provider = selected(&router, ProviderCapability::ChatCompletion);
-        let router = UnifiedRouter::default();
-        let model = "cai-whisper-large-v3-turbo-slim";
-        router.add_deployment(Deployment::new(
-            model.into(),
-            provider,
-            model.into(),
-            "public".into(),
-        ));
-        for capability in [
-            ProviderCapability::ChatCompletion,
-            ProviderCapability::AudioTranslation,
-            ProviderCapability::TextToSpeech,
-            ProviderCapability::Embeddings,
-        ] {
-            assert!(
-                router
-                    .select_deployment_lease_for_capability("public", &capability)
-                    .is_err()
-            );
-        }
-        let request = TranscriptionRequest {
-            model: model.into(),
-            file: vec![1, 2],
-            filename: "sample.wav".into(),
-            language: None,
-            prompt: None,
-            response_format: None,
-            temperature: None,
-            timestamp_granularities: None,
-        };
-        let result = selected(&router, ProviderCapability::AudioTranscription)
-            .audio_transcription(request, RequestContext::default())
-            .await;
-        if status == StatusCode::OK {
-            assert_eq!(result.unwrap().duration, Some(1.0));
-        } else {
-            assert!(matches!(
-                result.unwrap_err(),
-                ProviderError::RateLimit {
-                    retry_after: Some(7),
-                    ..
-                }
-            ));
-        }
-        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
-        handle.stop(false).await;
-    }
+    let response = selected(&router, ProviderCapability::ChatCompletion)
+        .chat_completion(
+            serde_json::from_value(
+                json!({"model":"test-model","messages":[{"role":"user","content":"hello"}]}),
+            )
+            .unwrap(),
+            RequestContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.usage.unwrap().total_tokens, 2);
+    handle.stop(true).await;
 }
 #[tokio::test]
 async fn baichuan_embeddings_preserve_wire_usage_and_errors() {
@@ -1552,56 +1697,6 @@ async fn baichuan_balance_429_is_quota_and_rate_429_preserves_retry_after() {
     handle.stop(false).await;
 }
 #[tokio::test]
-async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
-    let definition = litellm_rs::core::providers::registry::get_definition("wandb").unwrap();
-    assert_eq!(definition.base_url, "https://api.inference.wandb.ai/v1");
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = HttpServer::new(|| App::new().route("/v1/chat/completions", web::post().to(|req: HttpRequest| async move {
-        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer test-key");
-        assert_eq!(req.headers().get("openai-project").unwrap(), "test-team/test-project");
-        HttpResponse::Ok().json(json!({"id":"chat-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}))
-    }))).workers(1).listen(listener).unwrap().run();
-    let handle = server.handle();
-    tokio::spawn(server);
-    let mut config = provider_fixtures::mock_provider_config(
-        "wandb",
-        "wandb",
-        "test-key",
-        &format!("http://{address}/v1"),
-        vec!["test-model".into()],
-    );
-    config.settings.insert(
-        "custom_headers".into(),
-        json!({"OpenAI-Project":"test-team/test-project"}),
-    );
-    let provider = create_provider(config).await.unwrap();
-    let router = UnifiedRouter::default();
-    router.add_deployment(Deployment::new(
-        "wandb-test".into(),
-        provider,
-        "test-model".into(),
-        "public".into(),
-    ));
-    assert!(
-        router
-            .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
-            .is_err()
-    );
-    let response = selected(&router, ProviderCapability::ChatCompletion)
-        .chat_completion(
-            serde_json::from_value(
-                json!({"model":"test-model","messages":[{"role":"user","content":"hello"}]}),
-            )
-            .unwrap(),
-            RequestContext::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.usage.unwrap().total_tokens, 2);
-    handle.stop(true).await;
-}
-#[tokio::test]
 async fn volcengine_embeddings_preserve_wire_usage_and_errors() {
     for status in [
         StatusCode::OK,
@@ -1755,6 +1850,59 @@ async fn volcengine_embedding_string_is_sent_as_one_item_array() {
     let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
     assert_eq!(body["input"], json!(["hello"]));
     handle.stop(false).await;
+}
+#[tokio::test]
+async fn compactifai_whisper_routes_only_to_transcription_and_preserves_errors() {
+    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        let (router, upstream, handle) = fixture("compactifai", status).await;
+        let provider = selected(&router, ProviderCapability::ChatCompletion);
+        let router = UnifiedRouter::default();
+        let model = "cai-whisper-large-v3-turbo-slim";
+        router.add_deployment(Deployment::new(
+            model.into(),
+            provider,
+            model.into(),
+            "public".into(),
+        ));
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::AudioTranslation,
+            ProviderCapability::TextToSpeech,
+            ProviderCapability::Embeddings,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        let request = TranscriptionRequest {
+            model: model.into(),
+            file: vec![1, 2],
+            filename: "sample.wav".into(),
+            language: None,
+            prompt: None,
+            response_format: None,
+            temperature: None,
+            timestamp_granularities: None,
+        };
+        let result = selected(&router, ProviderCapability::AudioTranscription)
+            .audio_transcription(request, RequestContext::default())
+            .await;
+        if status == StatusCode::OK {
+            assert_eq!(result.unwrap().duration, Some(1.0));
+        } else {
+            assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        handle.stop(false).await;
+    }
 }
 #[tokio::test]
 async fn multimodal_aggregator_embeddings_normalize_authoritative_usage() {
@@ -1958,5 +2106,102 @@ async fn aiml_embeddings_require_prices_and_obey_gateway_budgets() {
         .unwrap()
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+#[tokio::test]
+async fn xai_native_transcription_maps_upload_words_and_upstream_errors() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::UNAUTHORIZED,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::BAD_GATEWAY,
+    ] {
+        let (router, upstream, handle) = fixture("xai", status).await;
+        let provider = selected(&router, ProviderCapability::AudioTranscription);
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::AudioTranslation,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        assert!(!provider.supports_capability_for_model(
+            "grok-voice-transcribe-1.0",
+            &ProviderCapability::AudioTranscription
+        ));
+        let request = TranscriptionRequest {
+            model: "xai/grok-voice-transcribe-2.0".into(),
+            file: vec![1, 2],
+            filename: "sample.wav".into(),
+            language: Some("en".into()),
+            prompt: None,
+            response_format: Some("verbose_json".into()),
+            temperature: None,
+            timestamp_granularities: Some(vec!["word".into()]),
+        };
+        let result = provider
+            .audio_transcription(request, RequestContext::default())
+            .await;
+        if status == StatusCode::OK {
+            let response = result.unwrap();
+            assert_eq!(response.duration, Some(1.25));
+            assert_eq!(response.words.unwrap()[0].word, "transcribed");
+        } else if status == StatusCode::TOO_MANY_REQUESTS {
+            assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        } else {
+            assert!(result.is_err());
+        }
+        let calls = upstream.seen.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "/v1/stt");
+        let body = String::from_utf8_lossy(&calls[0].1);
+        assert!(body.contains("grok-voice-transcribe-2.0"));
+        assert!(!body.contains("xai/grok"));
+        assert!(body.find("name=\"language\"").unwrap() < body.find("name=\"file\"").unwrap());
+        assert!(!body.contains("response_format"));
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn xai_transcription_rejects_unsupported_options_and_malformed_success() {
+    let (router, upstream, handle) = fixture("xai", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::AudioTranscription);
+    let mut request = TranscriptionRequest {
+        model: "grok-voice-transcribe-2.0".into(),
+        file: vec![1, 2],
+        filename: "sample.wav".into(),
+        language: None,
+        prompt: Some("unsupported".into()),
+        response_format: None,
+        temperature: None,
+        timestamp_granularities: None,
+    };
+    assert!(
+        provider
+            .audio_transcription(request.clone(), RequestContext::default())
+            .await
+            .is_err()
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    request.prompt = None;
+    request.language = Some("bad-response".into());
+    assert!(
+        provider
+            .audio_transcription(request, RequestContext::default())
+            .await
+            .is_err()
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
     handle.stop(false).await;
 }

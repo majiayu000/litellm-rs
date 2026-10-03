@@ -361,10 +361,26 @@ impl PricingSnapshot {
             &model_info,
             &full_usage,
         )?;
+        // OpenAI can implicitly write uncached input at a higher rate. Other
+        // providers require explicit cache intent; ordinary requests retain their
+        // existing admission estimate instead of assuming unrequested writes.
+        let cache_write = if crate::core::pricing::normalize_pricing_provider(provider) == "openai"
+        {
+            let mut cache_write_usage = full_usage;
+            cache_write_usage.cache_creation_tokens = Some(input_tokens);
+            super::usage_cost::calculate_usage_cost_with_maximum_rates(
+                provider,
+                &resolved_model,
+                &model_info,
+                &cache_write_usage,
+            )?
+        } else {
+            full.clone()
+        };
         Ok(PricingCostEstimate {
             min_cost: input.total_cost,
-            max_cost: full.total_cost,
-            input_cost: input.input_cost,
+            max_cost: full.total_cost.max(cache_write.total_cost),
+            input_cost: input.input_cost.max(cache_write.cache_cost),
             estimated_output_cost: full.output_cost,
             currency: full.currency,
         })

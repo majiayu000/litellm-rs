@@ -429,7 +429,7 @@ impl Router {
                 continue;
             };
 
-            if let Some(hold) =
+            if let Ok(hold) =
                 self.try_reserve_deployment(&deployment, &resolved_name, estimated_tokens)
             {
                 self.provider_selected_count.fetch_add(1, Relaxed);
@@ -472,15 +472,21 @@ impl Router {
         deployment: &Deployment,
         expected_model: &str,
         estimated_tokens: u64,
-    ) -> Option<Option<AdmissionHold>> {
+    ) -> Result<Option<AdmissionHold>, RouterError> {
         if deployment.model_name != expected_model {
-            return None;
+            return Err(RouterError::DeploymentNotFound(deployment.id.clone()));
         }
 
         let hold = match self.admission.reserve(deployment, estimated_tokens) {
             AdmissionReserve::Skipped => None,
+            #[cfg(feature = "gateway")]
+            AdmissionReserve::Denied => {
+                return Err(RouterError::RateLimitExceeded(expected_model.into()));
+            }
             #[cfg(any(feature = "gateway", test))]
-            AdmissionReserve::Denied => return None,
+            AdmissionReserve::Unavailable => {
+                return Err(RouterError::NoAvailableDeployment(expected_model.into()));
+            }
             #[cfg(feature = "gateway")]
             AdmissionReserve::Granted(hold) => Some(hold),
         };
@@ -511,12 +517,12 @@ impl Router {
         };
 
         if local_ok {
-            Some(hold)
+            Ok(hold)
         } else {
             if let Some(hold) = hold {
                 self.admission.cancel(&hold);
             }
-            None
+            Err(RouterError::RateLimitExceeded(expected_model.into()))
         }
     }
 
@@ -535,6 +541,48 @@ impl Router {
             None,
             estimated_tokens,
         )
+    }
+
+    #[cfg(all(feature = "gateway", feature = "websockets"))]
+    pub(crate) fn select_pinned_response_lease(
+        &self,
+        deployment: &Deployment,
+        estimated_tokens: u64,
+    ) -> Result<DeploymentLease, RouterError> {
+        let snapshot = self.load_routing_snapshot();
+        let current = snapshot
+            .deployments
+            .get(&deployment.id)
+            .filter(|current| std::ptr::eq(current.as_ref(), deployment))
+            .ok_or_else(|| RouterError::DeploymentNotFound(deployment.id.clone()))?;
+        if !self.deployment_is_selectable(current) {
+            return Err(RouterError::NoAvailableDeployment(
+                deployment.model_name.clone(),
+            ));
+        }
+        let minute = current.state.minute_counters(current_timestamp());
+        if current
+            .config
+            .rpm_limit
+            .is_some_and(|limit| minute.rpm >= limit)
+            || current
+                .config
+                .tpm_limit
+                .is_some_and(|limit| minute.tpm >= limit)
+        {
+            return Err(RouterError::RateLimitExceeded(
+                deployment.model_name.clone(),
+            ));
+        }
+        let hold =
+            self.try_reserve_deployment(current, &deployment.model_name, estimated_tokens)?;
+        self.provider_selected_count.fetch_add(1, Relaxed);
+        self.strategy_used_count.fetch_add(1, Relaxed);
+        Ok(DeploymentLease::new(
+            current.clone(),
+            self.admission.clone(),
+            hold,
+        ))
     }
 
     /// Release a deployment after request completion

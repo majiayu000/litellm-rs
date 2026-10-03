@@ -1,6 +1,7 @@
 name: CI Release Profile and Disabled Modules
 
 on:
+  workflow_dispatch:
   workflow_call:
     outputs:
       features:
@@ -48,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      RELEASE_FEATURES: postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation
+      RELEASE_FEATURES: postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gateway_test
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: test-secret-key-for-ci

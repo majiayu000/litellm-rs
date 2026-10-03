@@ -29,6 +29,7 @@ const VALID_PERMISSIONS: &[&str] = &[
     "api.chat",
     "api.embeddings",
     "api.images",
+    "api.realtime",
     "api_keys.read",
     "api_keys.write",
     "api_keys.delete",

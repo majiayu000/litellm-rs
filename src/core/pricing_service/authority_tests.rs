@@ -23,6 +23,43 @@ fn test_model_info(provider: &str) -> LiteLLMModelInfo {
 }
 
 #[test]
+fn implicit_cache_write_reservation_is_scoped_to_openai() {
+    let service = PricingService::new(None);
+    for provider in ["openai", "anthropic"] {
+        let model = format!("cache-intent-{provider}");
+        let mut info = test_model_info(provider);
+        info.extra.insert(
+            "cache_creation_input_token_cost".into(),
+            serde_json::json!(0.00002),
+        );
+        service.add_custom_model(model.clone(), info);
+        let estimate = service
+            .snapshot()
+            .estimate_loaded_completion_cost_for_provider(provider, &model, 1000, Some(100))
+            .unwrap();
+        let expected = if provider == "openai" { 0.023 } else { 0.013 };
+        assert!(
+            (estimate.max_cost - expected).abs() < 1e-12,
+            "{provider}: {estimate:?}"
+        );
+        assert!((estimate.min_cost - 0.01).abs() < 1e-12);
+        let observed = service
+            .calculate_loaded_usage_cost_for_provider(
+                provider,
+                &model,
+                &PricingUsage {
+                    prompt_tokens: 1000,
+                    completion_tokens: 100,
+                    cache_creation_tokens: Some(1000),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!((observed.total_cost - 0.023).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn provider_aware_authority_uses_loaded_custom_model() {
     let service = PricingService::new(None);
     service.add_custom_model(

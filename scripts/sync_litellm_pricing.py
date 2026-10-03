@@ -181,6 +181,7 @@ OFFICIAL_OVERRIDE_PATCHES: dict[str, dict[str, Any]] = {
         "source": OPENAI_SOURCE,
     },
     "gpt-realtime-2": {
+        "cache_read_input_audio_token_cost": 0.0000004,
         "input_cost_per_token": 0.000004,
         "output_cost_per_token": 0.000024,
         **OPENAI_REALTIME2_LIMITS,

@@ -34,8 +34,10 @@ pub(crate) enum AdmissionBackend {
 
 pub(crate) enum AdmissionReserve {
     Skipped,
-    #[cfg(any(feature = "gateway", test))]
+    #[cfg(feature = "gateway")]
     Denied,
+    #[cfg(any(feature = "gateway", test))]
+    Unavailable,
     #[cfg(feature = "gateway")]
     Granted(AdmissionHold),
 }
@@ -75,7 +77,7 @@ impl AdmissionBackend {
                     deployment_id = %deployment.id,
                     "deployment admission backend unavailable; failing closed"
                 );
-                AdmissionReserve::Denied
+                AdmissionReserve::Unavailable
             }
             #[cfg(feature = "gateway")]
             Self::Redis { pool, lease_ttl_ms } => {
@@ -105,7 +107,7 @@ impl AdmissionBackend {
                     .await
                 }) {
                     Ok(state) => state,
-                    Err(_) => return AdmissionReserve::Denied,
+                    Err(_) => return AdmissionReserve::Unavailable,
                 };
                 if !state.allowed {
                     return AdmissionReserve::Denied;

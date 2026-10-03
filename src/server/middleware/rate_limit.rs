@@ -245,6 +245,19 @@ fn gateway_fallback_store() -> Arc<DashMap<String, KeyTracker>> {
         .clone()
 }
 
+/// Apply the same authenticated identity and limiter to billable socket events.
+#[cfg(feature = "websockets")]
+pub(crate) async fn enforce_socket_request_rate(
+    context: &RequestContext,
+    requests_per_minute: u32,
+) -> Result<(), u64> {
+    let key = client_key_from_context(context).ok_or(60u64)?;
+    check_rate_limit_key(&key, requests_per_minute, &gateway_fallback_store())
+        .await
+        .map(|_| ())
+        .map_err(|rejection| rejection.retry_after)
+}
+
 pub(super) async fn reserve_rate_limit_for_auth_attempt(
     req: &ServiceRequest,
     requests_per_minute: u32,

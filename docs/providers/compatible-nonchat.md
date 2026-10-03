@@ -63,6 +63,12 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 官方协议与剩余限制见 [云供应商非聊天审计](../audit/cloud-compatible-nonchat-2026-10-03.md)。Baseten 专用 BEI、Friendli 专用 embeddings/images、HF 原生多任务接口不能从兼容聊天地址推断可用。Friendli serverless 转写虽有兼容路径，其用量按 input/output tokens 表达，当前音频路由按秒计费，故仍需明确适配。Heroku 图片的 aspect_ratio/output_format 也尚未映射，不扩大支持声明。本批本地 HTTP 覆盖真实 factory/Router、请求映射、400/429、缺价拒绝、预算不足和实际 usage 结算；没有付费实调。
 
+中国供应商批次（#1420，核验 2026-10-03）：`dashscope/qwen`、`zhipu`、`siliconflow` 接入文本 embeddings，`zhipu/zai` 接入同步图片生成，`zhipu` 接入按输入字符计费的 GLM-TTS。沿用各选择器的官方 base 和现有显式配置；DashScope 新 workspace 域名可用原配置指定，旧域名官方仍支持。
+
+智谱语音未指定格式时显式发送 WAV，显式 PCM 保留；仅非流式单声音合成，不包含克隆。Zhipu 与 Z.AI 图片的标准 `user` 字段分别按各自官方协议映射为 `user_id`，其 6–128 字符约束由上游校验。图片仅同步调用，保留上游 URL，不冒充下载后的二进制；size/quality 等按模型协议校验。向量只验证文本输入/浮点结果；SiliconFlow 的 `encoding_format: "base64"` 在发送前明确拒绝，当前响应类型只表示浮点向量。图像/音频输入不等于生成能力，国内智谱与国际 Z.AI 也不互相推导能力。定价缺失仍拒绝；官方人民币价格没有自动转换成美元价格。
+
+[逐选择器审计与限制](../audit/chinese-compatible-nonchat-2026-10-03.md) 记录原始官方链接及哈希。GLM-ASR 按输入 token 计费，当前音频网关按秒计量，故没有提前挂载；SiliconFlow 图片的 `images/timings` 返回以及音频模型的计费差异仍需专门适配。本批 HTTP 测试覆盖原生路径前缀、向量用量、URL 图片、WAV/PCM 请求、400/429、未支持操作拒绝与中文字符预算结算。未运行供应商付费请求。
+
 第七批（#1422，核验 2026-10-03）接入 Novita 文本 embeddings、Featherless 文本 embeddings/同步语音、Galadriel embeddings/图片生成，以及 NanoGPT embeddings/图片生成/同步语音/转写。NanoGPT 默认地址修正为 `https://api.nano-gpt.com/api/v1`；图片按官方协议使用同一主机的 `/v1/images/generations`。显式 base 以 `/api/v1` 结尾时，图片使用相邻 `/v1`；其他自定义 base 保持原路径。
 
 所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
@@ -122,14 +128,14 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `infinity` | 文本 embeddings；默认根路径 /embeddings；移除原来虚假的聊天声明；图像/音频 embedding 待扩展输入 |
 | `oobabooga` | embeddings、images/generations；依赖已加载模型；音频转写源实现异常待上游确认 |
 | `moonshot` | 核对当前官方模型/端点目录；未确认独立 embeddings/images/audio，图像/视频理解不等于生成 |
-| `dashscope` | 待核验；本批未扩展非聊天声明 |
-| `qwen` | 待核验；本批未扩展非聊天声明 |
+| `dashscope` | 文本 embeddings；v3/v4按区域/模型限制，multimodal/sparse 不在兼容协议内；其他原生图片/音频待适配 |
+| `qwen` | 同 dashscope；使用原区域 key/base，workspace域名可由既有配置指定 |
 | `baichuan` | 官方已索引标准文本 embeddings 协议；账户可用性未实调，输入 ≤512 tokens/批量 ≤16，固定1024维 |
 | `minimax` | 修默认 OpenAI base 为 api.minimax.io/v1；ASR /speech_to_text、TTS /t2a_v2、图片原生 JSON 待独立适配 |
 | `volcengine` | 文本 embeddings（/api/v3），单字符串转数组；多模态向量/Seedream图片参数及部分失败、音频另待适配 |
 | `xiaomi_mimo` | 官方 TTS/ASR 经 chat/completions 音频契约；通用 /audio/* 尚未适配，embeddings/images 未确认 |
-| `zhipu` | 待核验；本批未扩展非聊天声明 |
-| `zai` | 待核验；本批未扩展非聊天声明 |
+| `zhipu` | 文本 embeddings、同步 images/generations、GLM-TTS WAV/PCM；ASR token计费未接；不含异步图片/克隆/streaming |
+| `zai` | 同步 images/generations；GLM-ASR token计费未接，未从国内zhipu推断embedding/TTS |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
 | `linkup` | 当前官方为 Search/Fetch/Research/Tasks/Extract；无兼容非聊天证据，旧 chat 声明待 F10 复核；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `poe` | 图片/音频 bots 经 chat/completions 返回内容；未确认标准 embeddings/images/audio 路由，不能互相替代 |
@@ -143,7 +149,7 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `comet_api` | 文本 embeddings；修正主机 api.cometapi.com；图片/音频协议存在但计费/usage差异尚待收口 |
 | `compactifai` | Whisper 转写；一分钟最低计费同时用于预留/结算，其他模型不因此获得音频能力；见下方 |
 | `maritalk` | 官方明确无自身 embeddings，推荐第三方 DeepInfra；图片/音频协议未确认 |
-| `siliconflow` | 待核验；本批未扩展非聊天声明 |
+| `siliconflow` | 文本 embeddings；图片 images/timings 与当前通用response不同，音频计费待核验，不先声明 |
 | `yi` | 官方页面/RSC 只确认聊天资料，独立 embeddings/images/audio 未确认 |
 | `lambda_ai` | 官方确认共享推理于 2025-09-25 退役，交 F10 #1373 清理；不扩非聊天能力；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |

@@ -51,7 +51,24 @@ impl OpenAIProvider {
     #[cfg(feature = "gateway")]
     pub(crate) async fn native_response(
         &self,
+        body: Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.native_response_operation(body, false).await
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn compact_response(
+        &self,
+        body: Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        self.native_response_operation(body, true).await
+    }
+
+    #[cfg(feature = "gateway")]
+    async fn native_response_operation(
+        &self,
         mut body: Value,
+        compact: bool,
     ) -> Result<reqwest::Response, ProviderError> {
         let model = body
             .get("model")
@@ -79,6 +96,15 @@ impl OpenAIProvider {
         body["model"] = Value::String(wire_model);
         // Reserve standard rates regardless of project priority-tier defaults.
         body["service_tier"] = Value::String("default".into());
+        if compact {
+            return super::super::responses_native::compact(
+                &self.pool_manager,
+                &self.config.get_api_base(),
+                self.get_request_headers(),
+                body,
+            )
+            .await;
+        }
         super::super::responses_native::send(
             &self.pool_manager,
             &self.config.get_api_base(),

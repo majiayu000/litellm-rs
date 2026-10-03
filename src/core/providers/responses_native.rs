@@ -33,6 +33,19 @@ pub(crate) async fn send(
     check_status(response, provider).await
 }
 
+pub(crate) async fn compact(
+    pool: &GlobalPoolManager,
+    api_base: &str,
+    headers: Vec<HeaderPair>,
+    body: Value,
+) -> Result<reqwest::Response, ProviderError> {
+    let url = format!("{}/responses/compact", api_base.trim_end_matches('/'));
+    let response = pool
+        .execute_request_preserving_endpoint_policy(&url, HttpMethod::POST, headers, Some(body))
+        .await?;
+    check_status(response, "openai").await
+}
+
 pub(crate) async fn lifecycle(
     pool: &GlobalPoolManager,
     api_base: &str,

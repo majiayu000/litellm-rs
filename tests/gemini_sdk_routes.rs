@@ -30,6 +30,65 @@ mod tests {
     mod runtime_provider_tests;
 
     #[tokio::test]
+    async fn documented_gemini_paths_are_live() {
+        let mock = MockGeminiServer::launch().await;
+        let state = build_test_state(vec![gemini_provider(
+            "gemini",
+            &mock.base_url,
+            vec!["gemini-3.1-flash-lite".into()],
+        )])
+        .await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let contract: Value =
+            serde_json::from_str(include_str!("../docs/openapi/inference.json")).unwrap();
+        let paths: Vec<_> = contract["paths"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| {
+                path.contains(":generateContent") || path.contains(":streamGenerateContent")
+            })
+            .collect();
+        assert_eq!(paths.len(), 8);
+        for (path, operation) in paths {
+            let uri = path.replace("{model}", "gemini-3.1-flash-lite");
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri(&uri)
+                    .set_json(gemini_body())
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            assert!(
+                operation["post"]["responses"]["200"]["content"]
+                    .get(content_type)
+                    .is_some(),
+                "{uri}: undocumented {content_type}"
+            );
+            let bytes = test::read_body(response).await;
+            assert!(!bytes.is_empty());
+        }
+        assert_eq!(mock.requests().len(), 8);
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn gemini_sdk_routes_without_provider_fail_closed() {
         let state = build_test_state(Vec::new()).await;
         let app = test::init_service(

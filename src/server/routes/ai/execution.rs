@@ -42,6 +42,17 @@ impl StreamingDeploymentLease {
     }
 
     pub(super) fn finish_success(mut self, tokens_used: u64) {
+        self.complete_response(tokens_used, None);
+    }
+
+    pub(super) fn complete_response(&mut self, tokens_used: u64, error: Option<&ProviderError>) {
+        if let Some(error) = error {
+            self.complete_failure(error, tokens_used);
+            return;
+        }
+        if self.finalized {
+            return;
+        }
         let latency_us = self.started_at.elapsed().as_micros() as u64;
         self.router
             .record_success_for_deployment(&self.deployment, tokens_used, latency_us);
@@ -51,7 +62,21 @@ impl StreamingDeploymentLease {
         self.release();
     }
 
-    pub(super) fn finish_failure(mut self, error: &ProviderError) {
+    pub(super) fn finish_failure(self, error: &ProviderError) {
+        self.finish_failure_with_tokens(error, 0);
+    }
+
+    pub(super) fn finish_failure_with_tokens(mut self, error: &ProviderError, tokens_used: u64) {
+        self.complete_failure(error, tokens_used);
+    }
+
+    fn complete_failure(&mut self, error: &ProviderError, tokens_used: u64) {
+        if tokens_used > 0 {
+            self.deployment.record_partial_tokens(tokens_used);
+            if let Some(hold) = self.hold.take() {
+                self.admission.settle(&hold, tokens_used);
+            }
+        }
         // Mid-stream failures cannot be retried. Preserve fail-fast cooldowns
         // for rate limits and deterministic misconfiguration, while routing
         // ordinary transient failures through the counted breaker path.
@@ -65,6 +90,107 @@ impl StreamingDeploymentLease {
         self.router
             .record_failure_with_reason_for_deployment(&self.deployment, cooldown_reason);
         self.release();
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn record_provider_event_failure(&mut self, error: &ProviderError) {
+        let inferred = infer_cooldown_reason(error);
+        let reason = match inferred {
+            CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
+                inferred
+            }
+            _ => CooldownReason::ConsecutiveFailures,
+        };
+        self.router
+            .record_failure_with_reason_for_deployment(&self.deployment, reason);
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn refresh_realtime_deployment(
+        &mut self,
+        router: Arc<UnifiedRouter>,
+    ) -> Result<(), ProviderError> {
+        let deployment = router.get_deployment(&self.deployment.id).ok_or_else(|| {
+            ProviderError::configuration(
+                "openai",
+                "Realtime deployment was removed or disabled; reconnect",
+            )
+        })?;
+        if Arc::ptr_eq(&router, &self.router) && Arc::ptr_eq(&deployment, &self.deployment) {
+            return Ok(());
+        }
+        let changed = || {
+            ProviderError::configuration(
+                "openai",
+                "Realtime deployment configuration changed; reconnect",
+            )
+        };
+        let (Provider::OpenAI(previous), Provider::OpenAI(current)) =
+            (&self.deployment.provider, &deployment.provider)
+        else {
+            return Err(changed());
+        };
+        if deployment.model != self.deployment.model
+            || deployment.model_name != self.deployment.model_name
+            || serde_json::to_value(&previous.config).map_err(|_| changed())?
+                != serde_json::to_value(&current.config).map_err(|_| changed())?
+        {
+            return Err(changed());
+        }
+        // Transport/account/model are unchanged. Admission and health now belong
+        // to the live router, including its current RPM/TPM/parallel policy.
+        self.release();
+        self.router = router;
+        self.deployment = deployment;
+        Ok(())
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn begin_response(&mut self, estimated_tokens: u64) -> Result<(), ProviderError> {
+        // The handshake and each generation are separate admission boundaries.
+        // Idle sockets do not hold a generation's parallel-request slot.
+        self.release();
+        let mut selected = self
+            .router
+            .select_pinned_response_lease(&self.deployment, estimated_tokens)
+            .map_err(router_error_to_provider_error)?;
+        (self.admission, self.hold) = selected.take_admission();
+        let _ = selected.into_deployment_id();
+        self.started_at = Instant::now();
+        self.finalized = false;
+        Ok(())
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn finish_neutral(&mut self, tokens_used: u64) {
+        if tokens_used > 0 {
+            self.deployment.record_partial_tokens(tokens_used);
+        }
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle(&hold, tokens_used);
+        }
+        self.release();
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn cancel_response(&mut self) {
+        self.release();
+    }
+
+    #[cfg(feature = "websockets")]
+    pub(super) fn finish_interrupted(&mut self, tokens_used: u64, error: Option<&ProviderError>) {
+        if self.finalized {
+            return;
+        }
+        self.deployment.record_interrupted_usage(tokens_used);
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle(&hold, tokens_used);
+        }
+        if let Some(error) = error {
+            self.complete_failure(error, 0);
+        } else {
+            self.release();
+        }
     }
 
     pub(super) fn deployment_id(&self) -> &str {
@@ -496,10 +622,13 @@ where
                 }
 
                 let cooldown_reason = infer_cooldown_reason(&err);
-                router.record_failure_with_reason_for_deployment(
-                    deployment_lease.deployment(),
-                    cooldown_reason,
-                );
+                // Local caller policy errors do not describe provider health.
+                if !matches!(err, ProviderError::InvalidRequest { .. }) {
+                    router.record_failure_with_reason_for_deployment(
+                        deployment_lease.deployment(),
+                        cooldown_reason,
+                    );
+                }
                 drop(deployment_lease);
                 return Err(GatewayError::Provider(err));
             }
