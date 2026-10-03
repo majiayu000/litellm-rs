@@ -31,6 +31,29 @@ spec.loader.exec_module(sync)
 
 
 class SyncPricingTests(unittest.TestCase):
+    def test_ark_unknown_prices_do_not_reappear_from_upstream_zero_rows(self) -> None:
+        catalog = json.loads(CATALOG_PATH.read_text())
+        legacy = {key: dict(row) for key, row in catalog.items() if isinstance(row, dict)}
+        keys = ('doubao-embedding', 'doubao-embedding-large', 'doubao-embedding-large-text-240915', 'doubao-embedding-large-text-250515', 'doubao-embedding-text-240715')
+        for key in keys:
+            legacy[key]["input_cost_per_token"] = 0.0
+            legacy[key]["output_cost_per_token"] = 0.0
+        refreshed = {key: dict(row) for key, row in legacy.items()}
+        for key in keys:
+            refreshed[key]["max_input_tokens"] = 8192
+            refreshed[key]["output_vector_size"] = 2048
+            refreshed[key]["description"] = "updated upstream metadata"
+        patched = sync.apply_official_overrides(refreshed, legacy)
+        for key in keys:
+            self.assertEqual(patched[key]["litellm_provider"], "volcengine")
+            self.assertEqual(patched[key]["mode"], "embedding")
+            for field in ("max_input_tokens", "output_vector_size", "description"):
+                self.assertEqual(patched[key][field], refreshed[key][field])
+            for field in ("input_cost_per_token", "output_cost_per_token"):
+                self.assertNotIn(field, patched[key])
+                self.assertNotIn(field, catalog[key])
+        self.assertEqual(sync.apply_official_overrides(refreshed, patched), patched)
+
     def test_deepseek_pro_qualified_and_bare_limits_match_official_contract(self) -> None:
         catalog = json.loads(CATALOG_PATH.read_text())
         for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
@@ -944,11 +967,11 @@ class CatalogAuthorityTests(unittest.TestCase):
         self.assertEqual(authority["_metadata"]["total_entry_count"], len(prices))
         # Scheduled imports may add pending rows, but cannot change reviewed ones.
         # Retirement review #1373 moved 20 entries to historical pricing only.
-        self.assertEqual(target_counts["callable"], 151)
-        self.assertEqual(target_counts["pricing_only"], 429)
-        self.assertGreaterEqual(target_counts["unreviewed"], 76)
-        # Importing prices must not invent endpoint/capability contracts. The
-        # reviewed ledger now carries the per-model native endpoint matrix.
+        # Azure moved one callable alias and five pending rows to pricing-only.
+        self.assertEqual(target_counts["callable"], 150)
+        self.assertEqual(target_counts["pricing_only"], 435)
+        self.assertGreaterEqual(target_counts["unreviewed"], 71)
+        # Preserve the reviewed Responses endpoint contracts after the merge.
         expected_contracts = sorted(
             (entry["provider"], entry["pricing_key"])
             for entry in decisions["entries"]
