@@ -787,7 +787,7 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         let value: Value = test::read_body_json(response).await;
         assert_eq!(value["status"], "queued");
         assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
-        assert!((settlement_row(&state).await.reserved_amount - 0.0018096).abs() < 1e-10);
+        assert!((settlement_row(&state).await.reserved - 0.0018096).abs() < 1e-10);
         assert!(!settlement_row(&state).await.complete);
         // Closing the creating HTTP service does not stop the background settlement.
         drop(app);
