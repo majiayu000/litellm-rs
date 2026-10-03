@@ -29,7 +29,7 @@ Validation: `python -m unittest discover -s scripts/test -p test_litellm_compari
 
 References: [LiteLLM configuration](https://docs.litellm.ai/docs/proxy/configs), [LiteLLM CLI](https://docs.litellm.ai/docs/proxy/cli), [oha 1.16.0](https://github.com/hatoo/oha/releases/tag/v1.16.0).
 
-The first diagnostic run on 2026-10-03 (source `4682f4f8`) was rejected as comparison evidence: pausing the sampler left only ten seconds of RSS observations in the first 60-second baseline, and the unpriced Rust fixture wrote errors per request. Its raw artifacts remain at `/tmp/litellm-comparison-20261003`; the corrected run must use a new directory and complete without interruption.
+The first diagnostic run on 2026-10-03 (source `4682f4f8`) was rejected as comparison evidence: pausing the sampler left only ten seconds of RSS observations in the first 60-second baseline, and the unpriced Rust fixture wrote errors per request. Its raw artifacts remain at `/tmp/litellm-comparison-20261003`; the corrected run below used a new directory and completed without any sampling interruption.
 
 ## Recorded run: 2026-10-03
 
