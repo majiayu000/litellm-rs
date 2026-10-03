@@ -21,6 +21,7 @@ struct Upstream {
     seen: RecordedCalls,
     status: StatusCode,
     auth: bool,
+    error_message: Arc<Mutex<String>>,
 }
 async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>) -> HttpResponse {
     assert_eq!(
@@ -37,7 +38,7 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
     if state.status != StatusCode::OK {
         return HttpResponse::build(state.status)
             .insert_header(("retry-after", "7"))
-            .json(json!({"error":{"message":"upstream unavailable"}}));
+            .json(json!({"error":{"message":state.error_message.lock().unwrap().clone()}}));
     }
     let path = req
         .path()
@@ -64,6 +65,7 @@ async fn fixture(
     let seen = Upstream {
         seen: Arc::default(),
         status,
+        error_message: Arc::new(Mutex::new("upstream unavailable".into())),
         auth: !matches!(
             selector,
             "lm_studio"
@@ -1368,4 +1370,211 @@ async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
         .unwrap();
     assert_eq!(response.usage.unwrap().total_tokens, 2);
     handle.stop(true).await;
+}
+#[tokio::test]
+async fn baichuan_embeddings_preserve_wire_usage_and_errors() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::BAD_REQUEST,
+        StatusCode::TOO_MANY_REQUESTS,
+    ] {
+        let (router, upstream, handle) = fixture("baichuan", status).await;
+        let request =
+            serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":["hello"]}))
+                .unwrap();
+        let result = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await;
+        match status {
+            StatusCode::OK => {
+                let response = result.unwrap();
+                assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+                assert_eq!(response.usage.unwrap().total_tokens, 2);
+                let calls = upstream.seen.lock().unwrap();
+                assert_eq!(calls[0].0, "/v1/embeddings");
+                let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+                assert_eq!(body["model"], "Baichuan-Text-Embedding");
+                assert_eq!(body["input"], json!(["hello"]));
+            }
+            StatusCode::BAD_REQUEST => assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::InvalidRequest { .. } | ProviderError::ApiError { status: 400, .. }
+            )),
+            _ => assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            )),
+        }
+        for capability in [
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn baichuan_embeddings_require_prices_and_obey_gateway_budgets() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("baichuan", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("catalog provider")
+    };
+    let mut config = litellm_rs::Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+        "baichuan",
+        "baichuan",
+        "test-key",
+        &provider.config().get_api_base(),
+        vec!["test-model".into()],
+    )];
+    let state = litellm_rs::server::HttpServer::new(&config)
+        .await
+        .unwrap()
+        .state()
+        .clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::post()
+            .uri("/v1/embeddings")
+            .set_json(json!({"model":"test-model","input":"hello"}))
+            .to_request()
+    };
+    let response = test::call_service(&app, request()).await;
+    assert!(!response.status().is_success());
+    let error: Value = test::read_body_json(response).await;
+    assert!(
+        error.to_string().to_lowercase().contains("pricing"),
+        "{error}"
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let (_, mut price) = state
+        .pricing
+        .get_model_info_for_provider("openai", "text-embedding-3-small")
+        .unwrap();
+    price.litellm_provider = "baichuan".into();
+    price.input_cost_per_token = Some(0.1);
+    state.pricing.add_custom_model("test-model".into(), price);
+    state.budget_limits.providers.set_provider_limit(
+        "baichuan",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    assert_eq!(
+        test::call_service(&app, request()).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    state.budget_limits.providers.set_provider_limit(
+        "baichuan",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let response = test::call_service(&app, request()).await;
+    let status = response.status();
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("baichuan")
+        .unwrap()
+        .current_spend;
+    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn baichuan_rejects_truncated_batches_before_dispatch() {
+    let (router, upstream, handle) = fixture("baichuan", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    for input in [json!(vec!["text"; 17]), json!([])] {
+        let request =
+            serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":input}))
+                .unwrap();
+        assert!(matches!(
+            provider
+                .create_embeddings(request, RequestContext::default())
+                .await
+                .unwrap_err(),
+            ProviderError::InvalidRequest { .. }
+        ));
+    }
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let request =
+        serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":vec!["text"; 16]}))
+            .unwrap();
+    provider
+        .create_embeddings(request, RequestContext::default())
+        .await
+        .unwrap();
+    let calls = upstream.seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+    assert_eq!(body["input"].as_array().unwrap().len(), 16);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn baichuan_balance_429_is_quota_and_rate_429_preserves_retry_after() {
+    use litellm_rs::utils::error::CanonicalError;
+    let (router, upstream, handle) = fixture("baichuan", StatusCode::TOO_MANY_REQUESTS).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    for (message, quota) in [
+        ("Insufficient account balance, please recharge", true),
+        ("Rate limit", false),
+    ] {
+        *upstream.error_message.lock().unwrap() = message.into();
+        let request =
+            serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":"text"}))
+                .unwrap();
+        let error = provider
+            .create_embeddings(request, RequestContext::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.canonical_retryable(), !quota);
+        if quota {
+            assert!(
+                matches!(error, ProviderError::QuotaExceeded { .. }),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    error,
+                    ProviderError::RateLimit {
+                        retry_after: Some(7),
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+        }
+    }
+    assert_eq!(upstream.seen.lock().unwrap().len(), 2);
+    handle.stop(false).await;
 }

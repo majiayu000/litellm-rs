@@ -71,6 +71,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 SambaStack，默认 SambaCloud 选择器不扩展能力。Hyperbolic 当前文档站转向 GPU 租用，托管推理非聊天协议仍未确认；这不是已退役的证据。详细官方来源和剩余差异见 [原生协议边界审计](../audit/native-compatible-nonchat-2026-10-03.md)。
 
+第八批（#1425，核验 2026-10-03）沿用现有传输接入百川文本 embeddings，官方端点为 `https://api.baichuan-ai.com/v1/embeddings`。官方已索引协议限定 `Baichuan-Text-Embedding`、每条最多 512 tokens、批次最多 16 条、固定 1024 维；超过 16 条的批次在发送前拒绝，避免上游静默截断；仅发送文本字符串或文本数组。余额不足的官方 429 映射为不可重试 QuotaExceeded，限流 429 保留 Retry-After。当前直接文档页面仅显示申请体验外壳，未实调账户可用性，不据此新增静态 callable 型号或价格。使用已获访问权限的真实模型配置和正确价格。
+
+本批同时核验 Moonshot、DeepSeek、Xiaomi MiMo、Yi、Maritalk。MiMo 的 TTS/ASR 官方确实存在，但经聊天请求/响应中的音频协议，需要独立适配后才能挂到网关 `/audio/*`；Maritaca 官方明确推荐其他供应商的 embeddings。未确认端点保持不声明，详见 [区域供应商审计](../audit/regional-compatible-nonchat-2026-10-03.md)。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -89,7 +93,7 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `cerebras` | 官方 OpenAPI 仅列 chat/completions；独立 embeddings/images/audio 未确认 |
 | `openrouter` | embeddings；其他待核验 |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
-| `deepseek` | 待核验；本批未扩展非聊天声明 |
+| `deepseek` | 核对当前官方 API；Responses/文件/视觉是独立范围，未确认 embeddings/images/audio |
 | `novita` | 文本 embeddings；原生异步图片及 MiniMax 音频协议仍待适配 |
 | `nvidia_nim` | embeddings；其他待核验 |
 | `nebius` | embeddings；图片协议差异待适配 |
@@ -113,13 +117,13 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `xinference` | embeddings、images/generations、audio/speech/transcriptions/translations；须启动相应模型 UID |
 | `infinity` | 文本 embeddings；默认根路径 /embeddings；移除原来虚假的聊天声明；图像/音频 embedding 待扩展输入 |
 | `oobabooga` | embeddings、images/generations；依赖已加载模型；音频转写源实现异常待上游确认 |
-| `moonshot` | 待核验；本批未扩展非聊天声明 |
+| `moonshot` | 核对当前官方模型/端点目录；未确认独立 embeddings/images/audio，图像/视频理解不等于生成 |
 | `dashscope` | 待核验；本批未扩展非聊天声明 |
 | `qwen` | 待核验；本批未扩展非聊天声明 |
-| `baichuan` | 待核验；本批未扩展非聊天声明 |
+| `baichuan` | 官方已索引标准文本 embeddings 协议；账户可用性未实调，输入 ≤512 tokens/批量 ≤16，固定1024维 |
 | `minimax` | 修默认 OpenAI base 为 api.minimax.io/v1；ASR /speech_to_text、TTS /t2a_v2、图片原生 JSON 待独立适配 |
 | `volcengine` | 文本 embeddings（/api/v3），单字符串转数组；多模态向量/Seedream图片参数及部分失败、音频另待适配 |
-| `xiaomi_mimo` | 待核验；本批未扩展非聊天声明 |
+| `xiaomi_mimo` | 官方 TTS/ASR 经 chat/completions 音频契约；通用 /audio/* 尚未适配，embeddings/images 未确认 |
 | `zhipu` | 待核验；本批未扩展非聊天声明 |
 | `zai` | 待核验；本批未扩展非聊天声明 |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
@@ -134,9 +138,9 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `bytez` | 待核验；本批未扩展非聊天声明 |
 | `comet_api` | 待核验；本批未扩展非聊天声明 |
 | `compactifai` | 已核验 ASR 协议；一分钟最低计费待预留/结算适配，暂不声明；其余独立非聊天未确认；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
-| `maritalk` | 待核验；本批未扩展非聊天声明 |
+| `maritalk` | 官方明确无自身 embeddings，推荐第三方 DeepInfra；图片/音频协议未确认 |
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
-| `yi` | 待核验；本批未扩展非聊天声明 |
+| `yi` | 官方页面/RSC 只确认聊天资料，独立 embeddings/images/audio 未确认 |
 | `lambda_ai` | 官方确认共享推理于 2025-09-25 退役，交 F10 #1373 清理；不扩非聊天能力；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
