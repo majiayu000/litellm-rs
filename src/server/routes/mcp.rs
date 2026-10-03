@@ -15,9 +15,59 @@ use actix_web::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 const PROTOCOL_VERSION: &str = "2026-07-28";
+
+/// Active HTTP requests only; entries disappear when their last body is dropped.
+#[derive(Default)]
+pub(crate) struct Inflight {
+    owners: Mutex<HashMap<String, usize>>,
+}
+struct RequestPermit {
+    inflight: Arc<Inflight>,
+    owner: String,
+}
+impl Inflight {
+    fn acquire(self: &Arc<Self>, owner: String) -> Result<RequestPermit, HttpResponse> {
+        let mut owners = self.owners.lock().map_err(|_| {
+            transport_error(StatusCode::SERVICE_UNAVAILABLE, "MCP admission unavailable")
+        })?;
+        if owners.get(&owner).copied().unwrap_or(0) >= 128 {
+            return Err(transport_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "MCP caller concurrency limit reached",
+            ));
+        }
+        if owners.values().sum::<usize>() >= 4096 {
+            return Err(transport_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "MCP request capacity reached",
+            ));
+        }
+        *owners.entry(owner.clone()).or_default() += 1;
+        Ok(RequestPermit {
+            inflight: self.clone(),
+            owner,
+        })
+    }
+}
+impl Drop for RequestPermit {
+    fn drop(&mut self) {
+        if let Ok(mut owners) = self.inflight.owners.lock()
+            && let Some(count) = owners.get_mut(&self.owner)
+        {
+            *count -= 1;
+            if *count == 0 {
+                owners.remove(&self.owner);
+            }
+        }
+    }
+}
 
 fn rpc_error(status: StatusCode, id: &Value, code: i32, message: &str) -> HttpResponse {
     HttpResponse::build(status)
@@ -253,6 +303,20 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     if let Some(error) = validate_request(&req, &message) {
         return error;
     }
+    let owner = match (key.as_ref(), user.as_ref()) {
+        (Some(key), _) => format!("key:{}", key.metadata.id),
+        (_, Some(user)) => format!("user:{}", user.id()),
+        _ => {
+            return transport_error(
+                StatusCode::UNAUTHORIZED,
+                "MCP requires gateway authentication",
+            );
+        }
+    };
+    let permit = match state.mcp_inflight.acquire(owner) {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
     let request_id = message.get("id").cloned().unwrap_or(Value::Null);
     let fail = |status, message| rpc_error(status, &request_id, -32603, message);
     let client =
@@ -340,6 +404,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     // SSE is long-lived; finite bodies instead share one absolute body deadline.
     let deadline = tokio::time::Instant::now() + response_timeout;
     let stream = async_stream::try_stream! {
+        let _permit = permit;
         loop {
             let next = if event_stream && idle_timeout_secs == 0 {
                 upstream.chunk().await

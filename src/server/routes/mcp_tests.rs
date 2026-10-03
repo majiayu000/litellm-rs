@@ -31,6 +31,11 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
         "input_required" => HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":value["id"],"result":{"resultType":"input_required","inputRequests":[{"id":"sample-1","method":"sampling/createMessage","params":{"messages":[]}}]}})),
         "subscriptions/listen" => HttpResponse::Ok().insert_header(("content-type","text/event-stream")).body("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":\"subscription-1\"}}}\n\n"),
         "sse" => HttpResponse::Ok().insert_header(("content-type","text/event-stream")).body(format!("data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}}\n\ndata: {result}\n\n")),
+        "stalled-json" => HttpResponse::Ok().insert_header(("content-type","application/json")).streaming(async_stream::stream! {
+            yield Ok::<_, std::io::Error>(web::Bytes::from_static(b"{"));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            yield Ok(web::Bytes::from_static(b"}"));
+        }),
         "slow" | "idle" => {
             struct Closed(Calls);
             impl Drop for Closed { fn drop(&mut self) { self.0.lock().unwrap().push((json!({"closed":true}),vec![])); } }
@@ -736,5 +741,83 @@ async fn server_permission_and_endpoint_restrictions_block_before_upstream() {
         );
     }
     assert!(calls.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn active_request_limits_release_on_unread_body_drop_and_error() {
+    let (state, client, calls, handle) = fixture(false).await;
+    let owner = user();
+    let principal = format!("user:{}", owner.id());
+    let permits = (0..128)
+        .map(|_| state.mcp_inflight.acquire(principal.clone()).unwrap())
+        .collect::<Vec<_>>();
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    assert_eq!(
+        test::call_service(&app, request("tools/list", &owner))
+            .await
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    drop(permits);
+    let response = test::call_service(&app, request("tools/list", &owner)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.mcp_inflight.owners.lock().unwrap()[&principal], 1);
+    drop(response);
+    assert!(state.mcp_inflight.owners.lock().unwrap().is_empty());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn finite_body_deadline_releases_admission_and_url_userinfo_is_rejected() {
+    for auth in [false, true] {
+        let mut config = McpServerConfig::new("docs", "https://user:secret@example.com/mcp");
+        if auth {
+            config.auth = Some(AuthConfig::bearer("test"));
+        }
+        assert!(
+            config
+                .validate_http_gateway("docs")
+                .unwrap_err()
+                .contains("userinfo")
+        );
+    }
+    let (state, client, _, handle) = fixture(false).await;
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    config
+        .gateway
+        .mcp_servers
+        .get_mut("docs")
+        .unwrap()
+        .timeout_ms = 100;
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .app_data(client)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let response = test::call_service(&app, request("stalled-json", &user())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            actix_web::body::to_bytes(response.into_body())
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
+    assert!(state.mcp_inflight.owners.lock().unwrap().is_empty());
     handle.stop(false).await;
 }

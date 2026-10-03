@@ -111,6 +111,12 @@ impl McpServerConfig {
         {
             return Err("MCP gateway requires a positive timeout; per-server rate limits, OpenAPI generation and client header forwarding are not supported".into());
         }
+        let url = reqwest::Url::parse(&self.url).map_err(|_| "Invalid MCP upstream URL")?;
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(
+                "Configure MCP credentials in auth or static_headers, not URL userinfo".into(),
+            );
+        }
         if !self.url.starts_with("https://")
             && (self
                 .auth
