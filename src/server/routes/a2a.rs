@@ -83,7 +83,13 @@ impl TaskOwners {
         expected_context: Option<&str>,
         reservation: Option<&mut TaskReservation>,
     ) -> Result<(), &'static str> {
-        if value.get("error").is_some() {
+        if let Some(error) = value.get("error") {
+            if value.get("result").is_some()
+                || error.get("code").and_then(Value::as_i64).is_none()
+                || error.get("message").and_then(Value::as_str).is_none()
+            {
+                return Err("Invalid A2A error response");
+            }
             return Ok(());
         }
         let result = value.get("result").ok_or("Missing A2A result")?;
@@ -311,7 +317,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         );
     }
     let query_version = url::form_urlencoded::parse(req.query_string().as_bytes())
-        .find(|(name, _)| name == "A2A-Version")
+        .find(|(name, _)| name.eq_ignore_ascii_case("A2A-Version"))
         .map(|(_, value)| value.into_owned());
     let version = req
         .headers()
@@ -457,7 +463,15 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         )
         .json(&value);
     // Extensions remain opaque, but cannot change the configured upstream endpoint/account.
-    if let Some(value) = req.headers().get("a2a-extensions") {
+    if !(runtime.config.gateway.auth.enable_api_key
+        && runtime
+            .config
+            .gateway
+            .auth
+            .api_key_header
+            .eq_ignore_ascii_case("a2a-extensions"))
+        && let Some(value) = req.headers().get("a2a-extensions")
+    {
         request = request.header("a2a-extensions", value.as_bytes());
     }
     let mut reservation = if send {
@@ -522,14 +536,15 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             return error(
                 StatusCode::BAD_GATEWAY,
                 id,
-                -32603,
+                -32006,
                 "Unexpected A2A event stream",
             );
         }
         let events = async_stream::try_stream! {
             let mut buffer = Vec::new();
             let mut scan_from = 0;
-            while let Some(chunk) = upstream.chunk().await.map_err(|_| actix_web::error::ErrorBadGateway("A2A stream interrupted"))? {
+            let mut task_seen = false;
+            'events: while let Some(chunk) = upstream.chunk().await.map_err(|_| actix_web::error::ErrorBadGateway("A2A stream interrupted"))? {
                 buffer.extend_from_slice(&chunk);
                 while let Some(end) = event_boundary(&buffer, scan_from) {
                     scan_from = 0;
@@ -543,7 +558,23 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                         if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || value.get("id") != Some(&id) {
                             Err(actix_web::error::ErrorBadGateway("A2A response ID mismatch"))?;
                         }
+                        let mut terminal = value.get("error").is_some();
+                        if !terminal {
+                            let result = value.get("result").ok_or_else(|| actix_web::error::ErrorBadGateway("Missing A2A stream result"))?;
+                            let variants = ["task", "message", "statusUpdate", "artifactUpdate"].iter().filter(|key| result.get(**key).is_some()).count();
+                            if variants != 1 || (!task_seen && result.get("task").is_none() && result.get("message").is_none())
+                                || (task_seen && (result.get("task").is_some() || result.get("message").is_some())) {
+                                Err(actix_web::error::ErrorBadGateway("Invalid A2A stream sequence"))?;
+                            }
+                            terminal = result.get("message").is_some();
+                            task_seen = true;
+                        }
                         owners.observe(&binding, &principal, &value, task.as_deref(), context.as_deref(), reservation.as_mut()).map_err(actix_web::error::ErrorBadGateway)?;
+                        if terminal {
+                            buffer.clear();
+                            yield web::Bytes::from(frame);
+                            break 'events;
+                        }
                     }
                     yield web::Bytes::from(frame);
                 }
@@ -571,7 +602,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             return error(
                 StatusCode::BAD_GATEWAY,
                 id,
-                -32603,
+                -32006,
                 "Invalid or incomplete A2A response",
             );
         }
@@ -585,7 +616,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             return error(
                 StatusCode::BAD_GATEWAY,
                 id,
-                -32603,
+                -32006,
                 "Invalid A2A response JSON",
             );
         }
@@ -594,7 +625,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         return error(
             StatusCode::BAD_GATEWAY,
             id,
-            -32603,
+            -32006,
             "A2A response ID mismatch",
         );
     }
@@ -606,7 +637,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         context.as_deref(),
         reservation.as_mut(),
     ) {
-        return error(StatusCode::BAD_GATEWAY, id, -32603, message);
+        return error(StatusCode::BAD_GATEWAY, id, -32006, message);
     }
     response.body(bytes)
 }

@@ -74,6 +74,7 @@ pastey = "0.2.2"
 
 # HTTP client
 http = "1.4"
+mime = { version = "0.3", optional = true }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
 
 # Serialization and deserialization
@@ -224,7 +225,7 @@ tracing = ["dep:tracing-subscriber"]
 
 # Default-off protocol and platform experiments. These features expose library
 # modules only; they do not mount gateway routes by themselves.
-a2a = []
+a2a = ["dep:mime"]
 mcp = []
 webhooks = []
 user-management = ["storage"]

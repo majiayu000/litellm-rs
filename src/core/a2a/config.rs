@@ -209,6 +209,16 @@ impl AgentConfig {
         {
             return Err("A2A HTTP gateway requires an A2A agent and positive timeout; provider adapters, agent billing/limits and push notifications are not supported".into());
         }
+        for media in self
+            .capabilities
+            .input_types
+            .iter()
+            .chain(&self.capabilities.output_types)
+        {
+            media
+                .parse::<mime::Mime>()
+                .map_err(|_| "A2A input/output modes must be valid media types")?;
+        }
         for (name, value) in &self.headers {
             let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| "Invalid A2A header name")?;
@@ -349,8 +359,16 @@ impl AgentCapabilities {
             multi_turn: true,
             file_attachments: true,
             max_input_length: None,
-            input_types: vec!["text".to_string(), "image".to_string()],
-            output_types: vec!["text".to_string(), "image".to_string()],
+            input_types: vec![
+                "text/plain".to_string(),
+                "image/png".to_string(),
+                "image/jpeg".to_string(),
+            ],
+            output_types: vec![
+                "text/plain".to_string(),
+                "image/png".to_string(),
+                "image/jpeg".to_string(),
+            ],
         }
     }
 
@@ -363,8 +381,8 @@ impl AgentCapabilities {
             multi_turn: false,
             file_attachments: false,
             max_input_length: None,
-            input_types: vec!["text".to_string()],
-            output_types: vec!["text".to_string()],
+            input_types: vec!["text/plain".to_string()],
+            output_types: vec!["text/plain".to_string()],
         }
     }
 }

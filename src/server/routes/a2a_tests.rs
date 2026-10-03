@@ -12,6 +12,23 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             .contains("forbidden-first-id")
     );
     let body: Value = serde_json::from_slice(&body).unwrap();
+    if body.pointer("/params/metadata/test_bad_envelope") == Some(&Value::Bool(true)) {
+        return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"error":null,"result":{"task":{"id":"orphan","contextId":"orphan-context"}}}));
+    }
+    if body.pointer("/params/metadata/test_bad_stream") == Some(&Value::Bool(true)) {
+        let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"statusUpdate":{"taskId":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}});
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "text/event-stream"))
+            .body(format!("data: {event}\n\n"));
+    }
+    if body.pointer("/params/metadata/test_direct_message") == Some(&Value::Bool(true)) {
+        let event = json!({"jsonrpc":"2.0","id":body["id"],"result":{"message":{"messageId":"direct-reply","role":"ROLE_AGENT","parts":[{"text":"done"}]}}});
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "text/event-stream"))
+            .body(format!(
+                "data: {event}\n\ndata: {{\"unexpected-extra-event\":true}}\n\n"
+            ));
+    }
     if body.pointer("/params/metadata/test_big_error") == Some(&Value::Bool(true)) {
         return HttpResponse::TooManyRequests().body("x".repeat(1024));
     }
@@ -438,6 +455,10 @@ async fn config_validation_and_export_do_not_expose_agent_credentials() {
         .insert("test".into(), agent.clone());
     let exported = config.to_json().unwrap();
     assert!(!exported.contains("sentinel"));
+    agent.capabilities.input_types = vec!["text".into()];
+    assert!(agent.validate_http_gateway("test").is_err());
+    agent.capabilities = crate::core::a2a::config::AgentCapabilities::minimal();
+    agent.validate_http_gateway("test").unwrap();
     agent.cost_per_request = Some(1.0);
     assert!(agent.validate_http_gateway("test").is_err());
     agent.cost_per_request = None;
@@ -582,7 +603,7 @@ async fn accepts_query_version_and_forwards_authorized_json_only() {
     .await;
     let owner = user();
     let req = test::TestRequest::post()
-        .uri("/a2a/test?A2A-Version=1.0")
+        .uri("/a2a/test?a2a-version=1.0")
         .set_json(json!({"jsonrpc":"2.0","id":1,"method":"SendMessage","params":message()}))
         .to_request();
     req.extensions_mut().insert(owner.clone());
@@ -628,5 +649,42 @@ async fn error_bodies_obey_size_and_time_bounds() {
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn invalid_envelopes_and_stream_sequences_release_reservations() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let mut params = message();
+    params["metadata"] = json!({"test_bad_envelope":true});
+    let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(body["error"]["code"], -32006);
+    let mut params = message();
+    params["metadata"] = json!({"test_bad_stream":true});
+    let response = test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+    assert!(
+        actix_web::body::to_bytes(response.into_body())
+            .await
+            .is_err()
+    );
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+    assert!(state.a2a_tasks.entries.lock().unwrap().is_empty());
+    let mut params = message();
+    params["metadata"] = json!({"test_direct_message":true});
+    let response = test::call_service(&app, request("SendStreamingMessage", params, &owner)).await;
+    let body = test::read_body(response).await;
+    let text = std::str::from_utf8(&body).unwrap();
+    assert!(text.contains("direct-reply"));
+    assert!(!text.contains("unexpected-extra-event"));
+    assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
     handle.stop(false).await;
 }
