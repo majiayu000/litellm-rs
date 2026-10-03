@@ -183,6 +183,22 @@ pub(super) async fn connect(
     Ok(response)
 }
 
+fn upstream_event_error(value: &Value) -> ProviderError {
+    let status = match value["error"]["type"].as_str() {
+        Some("rate_limit_error") => 429,
+        Some("authentication_error") => 401,
+        Some("permission_error") => 403,
+        Some("invalid_request_error") => 400,
+        _ => 500,
+    };
+    ProviderError::api_error("openai", status, value["error"].to_string())
+}
+
+fn manual_session(value: &Value) -> bool {
+    value.pointer("/session/audio/input/turn_detection") == Some(&Value::Null)
+        && value.pointer("/session/audio/input/transcription") == Some(&Value::Null)
+}
+
 async fn initialize_upstream(
     upstream: &mut Upstream,
     rates: &Rates,
@@ -193,15 +209,18 @@ async fn initialize_upstream(
         .wire_output_limit(rates.max_output)
         .map_err(|message| ProviderError::invalid_request("openai", message))?;
     let initialize = async {
-        upstream.send(Message::Text(json!({"type":"session.update","session":{"type":"realtime","tools":[],"max_output_tokens":output_limit,"audio":{"input":{"turn_detection":null,"transcription":null}}}}).to_string().into())).await.map_err(|_| "Realtime initialization write failed")?;
+        upstream.send(Message::Text(json!({"type":"session.update","session":{"type":"realtime","tools":[],"max_output_tokens":output_limit,"audio":{"input":{"turn_detection":null,"transcription":null}}}}).to_string().into())).await.map_err(|_| ProviderError::network("openai", "Realtime initialization write failed"))?;
         let mut initial = Vec::new();
         while let Some(event) = upstream.next().await {
-            match event.map_err(|_| "Realtime initialization interrupted")? {
+            match event.map_err(|_| {
+                ProviderError::network("openai", "Realtime initialization interrupted")
+            })? {
                 Message::Text(text) => {
-                    let value: Value = serde_json::from_str(&text)
-                        .map_err(|_| "Malformed Realtime initialization")?;
+                    let value: Value = serde_json::from_str(&text).map_err(|_| {
+                        ProviderError::network("openai", "Malformed Realtime initialization")
+                    })?;
                     if value["type"] == "error" {
-                        return Err("Upstream rejected manual Realtime configuration");
+                        return Err(upstream_event_error(&value));
                     }
                     if matches!(
                         value["type"].as_str(),
@@ -210,42 +229,53 @@ async fn initialize_upstream(
                         .as_str()
                         .is_some_and(|model| model != wire_model)
                     {
-                        return Err(
+                        return Err(ProviderError::network(
+                            "openai",
                             "Upstream Realtime session model does not match the selected deployment",
-                        );
+                        ));
                     }
                     let ready = value["type"] == "session.updated";
                     if ready
-                        && (value.pointer("/session/audio/input/turn_detection")
-                            != Some(&Value::Null)
-                            || value.pointer("/session/audio/input/transcription")
-                                != Some(&Value::Null)
+                        && (!manual_session(&value)
                             || value["session"]["max_output_tokens"] != output_limit)
                     {
-                        return Err("Upstream did not enforce manual Realtime configuration");
+                        return Err(ProviderError::network(
+                            "openai",
+                            "Upstream did not enforce manual Realtime configuration",
+                        ));
                     }
                     initial.push(text.to_string());
                     if ready {
                         return Ok(initial);
                     }
                     if initial.len() >= 8 {
-                        return Err("Unexpected Realtime initialization events");
+                        return Err(ProviderError::network(
+                            "openai",
+                            "Unexpected Realtime initialization events",
+                        ));
                     }
                 }
                 Message::Ping(bytes) => {
-                    upstream
-                        .send(Message::Pong(bytes))
-                        .await
-                        .map_err(|_| "Realtime initialization pong failed")?;
+                    upstream.send(Message::Pong(bytes)).await.map_err(|_| {
+                        ProviderError::network("openai", "Realtime initialization pong failed")
+                    })?;
                 }
-                _ => return Err("Unexpected Realtime initialization frame"),
+                _ => {
+                    return Err(ProviderError::network(
+                        "openai",
+                        "Unexpected Realtime initialization frame",
+                    ));
+                }
             }
         }
-        Err("Realtime initialization closed")
+        Err(ProviderError::network(
+            "openai",
+            "Realtime initialization closed",
+        ))
     };
     match tokio::time::timeout(timeout, initialize).await {
         Ok(Ok(initial)) => Ok(initial),
-        Ok(Err(message)) => Err(ProviderError::network("openai", message)),
+        Ok(Err(error)) => Err(error),
         Err(_) => Err(ProviderError::network(
             "openai",
             "Realtime initialization timeout",
@@ -389,6 +419,7 @@ fn prepare_event(
         .as_str()
         .ok_or("Realtime event type is required")?;
     let creates = kind == "response.create";
+    let creates_item = kind == "conversation.item.create";
     if creates && active {
         return Err("Only one Realtime response may be active");
     }
@@ -417,7 +448,7 @@ fn prepare_event(
             {
                 options.insert(
                     "max_output_tokens".into(),
-                    rates.wire_output_limit(rates.max_output)?,
+                    rates.wire_output_limit(rates.model_max_output)?,
                 );
             }
             if !creates && options.get("type").is_some_and(|v| v != "realtime") {
@@ -446,15 +477,15 @@ fn prepare_event(
                 .get("max_output_tokens")
                 .map(|v| {
                     if v == "inf" {
-                        return Ok(rates.max_output as u64);
+                        return Ok(rates.model_max_output as u64);
                     }
                     v.as_u64()
                         .filter(|limit| *limit <= 4096)
                         .ok_or("max_output_tokens must be an integer from 1 to 4096 or inf")
                 })
                 .transpose()?
-                .unwrap_or(rates.max_output as u64);
-            if limit == 0 || limit > rates.max_output as u64 {
+                .unwrap_or(rates.model_max_output as u64);
+            if limit == 0 || limit > rates.model_max_output as u64 {
                 return Err("Realtime output limit exceeds model or key policy");
             }
         }
@@ -472,16 +503,21 @@ fn prepare_event(
             );
         }
     }
-    fn has_image(value: &Value) -> bool {
-        match value {
-            Value::Object(map) => {
-                map.get("type").is_some_and(|v| v == "input_image") || map.values().any(has_image)
-            }
-            Value::Array(values) => values.iter().any(has_image),
-            _ => false,
-        }
-    }
-    if has_image(value) {
+    let image_content = |item: &Value| {
+        item["content"]
+            .as_array()
+            .is_some_and(|parts| parts.iter().any(|part| part["type"] == "input_image"))
+    };
+    let has_image = if creates_item {
+        image_content(&value["item"])
+    } else if creates {
+        value["response"]["input"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(image_content))
+    } else {
+        false
+    };
+    if has_image {
         return Err("Realtime image input is not yet metered by this gateway");
     }
     Ok(creates)
@@ -548,7 +584,7 @@ async fn relay(
                             let rate_policy = &current_runtime.config.gateway.rate_limit;
                             let requests_per_minute = rate_policy.enabled.then(|| rate_policy.effective_rpm());
                             let mut key_rpm = requests_per_minute;
-                            let mut output_limit = rates.max_output;
+                            let mut output_limit = rates.model_max_output;
                             if let Some(token) = &jwt_token {
                                 let authenticated = state.auth.authenticate(crate::auth::AuthMethod::Jwt(token.clone()), context.clone()).await.map_err(|_| "Realtime user reauthorization unavailable")?;
                                 if !authenticated.success || !context::check_permission(authenticated.user.as_ref(), None, "realtime") {
@@ -590,8 +626,10 @@ async fn relay(
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":"Realtime request rate exceeded","retry_after":retry_after}}).to_string(), timeout).await?;
                                 continue;
                             }
+                            lease.refresh_realtime_deployment(current_runtime.unified_router.clone()).map_err(|error| error.redacted().to_string())?;
                             if let Err(error) = lease.begin_response(1) {
-                                send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":error.to_string()}}).to_string(), timeout).await?;
+                                let kind = if matches!(error, ProviderError::RateLimit { .. }) { "rate_limit_error" } else { "server_error" };
+                                send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.redacted().to_string()}}).to_string(), timeout).await?;
                                 continue;
                             }
                             match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output) {
@@ -630,21 +668,20 @@ async fn relay(
                         if value["type"] == "error" && pending_session_update.as_deref().is_some_and(|id| Some(id) == value["error"]["event_id"].as_str()) {
                             pending_session_update = None;
                             if value["error"]["type"] != "invalid_request_error" {
-                                let status = match value["error"]["type"].as_str() {
-                                    Some("rate_limit_error") => 429,
-                                    Some("authentication_error") => 401,
-                                    Some("permission_error") => 403,
-                                    _ => 500,
-                                };
-                                lease.record_provider_event_failure(&ProviderError::api_error("openai", status, value["error"].to_string()));
+
+                                lease.record_provider_event_failure(&upstream_event_error(&value));
                             }
                         }
                         if value["type"] == "session.updated" {
+                            if !manual_session(&value) {
+                                failure = true;
+                                return Err("Upstream did not enforce manual Realtime configuration".into());
+                            }
                             pending_session_update = None;
                             if let Some(limit) = value["session"]["max_output_tokens"].as_u64().and_then(|limit| u32::try_from(limit).ok()) {
-                                session_output_limit = limit.min(rates.max_output);
+                                session_output_limit = limit.min(rates.model_max_output);
                             } else if value["session"]["max_output_tokens"] == "inf" {
-                                session_output_limit = rates.max_output;
+                                session_output_limit = rates.model_max_output;
                             }
                         } else if value["type"] == "response.created" {
                             if pending.is_none() || response_id.is_some() { failure = true; return Err("Unreserved upstream Realtime response".into()); }
@@ -686,13 +723,8 @@ async fn relay(
                             if value["error"]["type"] == "invalid_request_error" {
                                 lease.finish_interrupted(0, None);
                             } else {
-                                let status = match value["error"]["type"].as_str() {
-                                    Some("rate_limit_error") => 429,
-                                    Some("authentication_error") => 401,
-                                    Some("permission_error") => 403,
-                                    _ => 500,
-                                };
-                                lease.finish_interrupted(0, Some(&ProviderError::api_error("openai", status, value["error"].to_string())));
+
+                                lease.finish_interrupted(0, Some(&upstream_event_error(&value)));
                             }
                             response_event_id = None;
                             tokens = 0;

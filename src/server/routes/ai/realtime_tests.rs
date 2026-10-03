@@ -73,6 +73,7 @@ async fn upstream(
             .text(json!({"type":"session.created","session":{"id":"session-1","model":"gpt-realtime-mini-mapped"}}).to_string())
             .await
             .unwrap();
+        let mut session_state = json!({});
         while let Some(Ok(event)) = stream.next().await {
             match event {
                 actix_ws::Message::Text(text) => {
@@ -94,9 +95,32 @@ async fn upstream(
                                 let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":value["event_id"],"message":"mock invalid voice"}}).to_string()).await;
                                 continue;
                             }
+                            fn merge_session(target: &mut Value, patch: &Value) {
+                                if let (Some(target), Some(patch)) =
+                                    (target.as_object_mut(), patch.as_object())
+                                {
+                                    for (name, value) in patch {
+                                        merge_session(
+                                            target.entry(name.clone()).or_insert(Value::Null),
+                                            value,
+                                        );
+                                    }
+                                } else {
+                                    *target = patch.clone();
+                                }
+                            }
+                            merge_session(&mut session_state, &value["session"]);
+                            if value["session"]["instructions"] == "unsafe-vad" {
+                                session_state["audio"]["input"]["turn_detection"] =
+                                    json!({"type":"server_vad"});
+                            }
+                            if value["session"]["instructions"] == "unsafe-transcription" {
+                                session_state["audio"]["input"]["transcription"] =
+                                    json!({"model":"whisper-1"});
+                            }
                             if session
                                 .text(
-                                    json!({"type":"session.updated","session":value["session"]})
+                                    json!({"type":"session.updated","session":session_state})
                                         .to_string(),
                                 )
                                 .await
@@ -213,6 +237,10 @@ async fn fixture_with_config(
             .route(
                 "/mismatch-updated/v1/realtime",
                 web::get().to(mismatched_session_model),
+            )
+            .route(
+                "/init-{kind}/v1/realtime",
+                web::get().to(rejected_initialization),
             )
             .route(
                 "/broken/v1/realtime",
@@ -941,6 +969,11 @@ async fn rejected_initialization(
     payload: web::Payload,
     calls: web::Data<Calls>,
 ) -> actix_web::Result<HttpResponse> {
+    let kind = req
+        .match_info()
+        .get("kind")
+        .unwrap_or("server_error")
+        .to_owned();
     let (response, mut session, mut input) = actix_ws::handle(&req, payload)?;
     actix_web::rt::spawn(async move {
         if let Some(Ok(actix_ws::Message::Text(_))) = input.next().await {
@@ -950,7 +983,7 @@ async fn rejected_initialization(
                 .push(json!({"initialization_rejected":true}));
             let _ = session
                 .text(
-                    json!({"type":"error","error":{"type":"server_error","message":"bad backend"}})
+                    json!({"type":"error","error":{"type":kind,"message":"bad backend"}})
                         .to_string(),
                 )
                 .await;
@@ -2582,6 +2615,305 @@ async fn precreation_error_survives_failed_budget_settlement() {
     assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
     assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
     drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn live_routing_rejects_changed_transport_before_generation() {
+    for change in ["disabled", "removed", "credential", "endpoint", "mapping"] {
+        let (state, url, raw, calls, handles) = fixture().await;
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        next_json(&mut socket).await;
+        let mut next = (*state.config()).clone();
+        let provider = &mut next.gateway.providers[0];
+        match change {
+            "disabled" => provider.enabled = false,
+            "removed" => {
+                let mut replacement = provider.clone();
+                replacement.name = "replacement-openai".into();
+                next.gateway.providers = vec![replacement];
+            }
+            "credential" => provider.api_key = "sk-rotated-test-key".into(),
+            "endpoint" => provider.base_url = Some("http://127.0.0.1:1/v1".into()),
+            "mapping" => {
+                provider.settings.insert(
+                    "model_mappings".into(),
+                    json!({"gpt-realtime-mini":"other-model"}),
+                );
+            }
+            _ => unreachable!(),
+        }
+        state.apply_runtime(next).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        let error = next_json(&mut socket).await;
+        assert_eq!(error["type"], "error", "{change}");
+        assert_eq!(error["error"]["type"], "server_error", "{change}");
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|event| event["type"] != "response.create"),
+            "{change}"
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn live_routing_applies_current_provider_rpm_and_tpm() {
+    for limit in ["rpm", "tpm"] {
+        let (state, url, raw, calls, handles) = fixture().await;
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        next_json(&mut socket).await;
+        let mut next = (*state.config()).clone();
+        if limit == "rpm" {
+            next.gateway.providers[0].rpm = 1;
+        } else {
+            next.gateway.providers[0].tpm = 1;
+        }
+        state.apply_runtime(next).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            next_json(&mut socket).await;
+        }
+        socket
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            next_json(&mut socket).await["error"]["type"],
+            "rate_limit_error",
+            "{limit}"
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event["type"] == "response.create")
+                .count(),
+            1,
+            "{limit}"
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn initialization_errors_keep_status_and_immediate_cooldown() {
+    for (kind, status) in [
+        ("authentication_error", 401),
+        ("permission_error", 403),
+        ("rate_limit_error", 429),
+    ] {
+        let (state, url, raw, _, handles) = fixture_with_config(|config| {
+            let base = config.gateway.providers[0].base_url.as_mut().unwrap();
+            *base = base.replace("/v1", &format!("/init-{kind}/v1"));
+        })
+        .await;
+        let result = reqwest::Client::new()
+            .get(url.replace("ws://", "http://"))
+            .header("x-api-key", &raw)
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(result.status().as_u16(), status, "{kind}");
+        let router = state.pin_runtime().unified_router.clone();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        assert!(deployment.is_in_cooldown(), "{kind}");
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn live_key_output_cap_increases_allow_explicit_larger_responses() {
+    for new_limit in [Some(128), None] {
+        let (state, url, raw, calls, handles) = fixture().await;
+        let (mut key, _) = state
+            .auth
+            .api_key()
+            .verify_key(&raw)
+            .await
+            .unwrap()
+            .unwrap();
+        key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":64,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+        state.storage.db().update_api_key(&key).await.unwrap();
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        assert_eq!(
+            next_json(&mut socket).await["session"]["max_output_tokens"],
+            64
+        );
+        key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":new_limit,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+        state.storage.db().update_api_key(&key).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({"type":"response.create","response":{"max_output_tokens":128}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            next_json(&mut socket).await;
+        }
+        assert_eq!(next_json(&mut socket).await["type"], "response.done");
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|event| event["type"] == "response.create")
+                .unwrap()["response"]["max_output_tokens"],
+            128
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn acknowledged_updates_must_keep_manual_audio_mode() {
+    for instructions in ["unsafe-vad", "unsafe-transcription"] {
+        let (_, url, raw, calls, handles) = fixture().await;
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        next_json(&mut socket).await;
+        socket
+            .send(Message::Text(
+                json!({"type":"session.update","session":{"instructions":instructions}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let error = next_json(&mut socket).await;
+        assert_eq!(error["type"], "error");
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|event| event["type"] != "response.create")
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn only_protocol_content_parts_are_image_input() {
+    let rates = rates();
+    for mut event in [
+        json!({"type":"response.create","response":{"metadata":{"type":"input_image"}}}),
+        json!({"type":"session.update","session":{"tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"kind":{"type":"input_image"}}}}]}}),
+        json!({"type":"conversation.item.create","item":{"type":"function_call_output","output":"{\"type\":\"input_image\"}"}}),
+    ] {
+        assert!(prepare_event(&mut event, &rates, false, "pinned", "wire").is_ok());
+    }
+    for mut event in [
+        json!({"type":"conversation.item.create","item":{"type":"message","content":[{"type":"input_image","image_url":"data:image/png;base64,aA=="}]}}),
+        json!({"type":"response.create","response":{"input":[{"type":"message","content":[{"type":"input_image","image_url":"data:image/png;base64,aA=="}]}]}}),
+    ] {
+        assert!(prepare_event(&mut event, &rates, false, "pinned", "wire").is_err());
+    }
+}
+
+#[actix_web::test]
+async fn admission_cooldown_is_an_outage_not_a_customer_rate_limit() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let mut socket = client(&url, &raw).await;
+    next_json(&mut socket).await;
+    next_json(&mut socket).await;
+    let router = state.pin_runtime().unified_router.clone();
+    let id = router.get_deployments_for_model("gpt-realtime-mini")[0].clone();
+    router.record_failure_with_reason(&id, crate::core::router::error::CooldownReason::AuthError);
+    socket
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    let error = next_json(&mut socket).await;
+    assert_eq!(error["error"]["type"], "server_error");
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|event| event["type"] != "response.create")
+    );
+    drop(socket);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn admission_backend_failure_keeps_unavailable_classification() {
+    use crate::core::router::deployment::Deployment;
+    use crate::core::router::{RouterError, UnifiedRouter};
+    let (state, _, _, _, handles) = fixture().await;
+    let live = state.pin_runtime().unified_router.clone();
+    let source = live
+        .get_deployment(&live.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    let router = UnifiedRouter::default().with_unavailable_admission();
+    let mut deployment = Deployment::new(
+        source.id.clone(),
+        source.provider.clone(),
+        source.model.clone(),
+        source.model_name.clone(),
+    );
+    deployment.config.rpm_limit = Some(1);
+    router.add_deployment(deployment);
+    let deployment = router.get_deployment(&source.id).unwrap();
+    assert!(matches!(
+        router.select_pinned_response_lease(&deployment, 1),
+        Err(RouterError::NoAvailableDeployment(_))
+    ));
+    assert_eq!(
+        deployment
+            .state
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
     for handle in handles {
         handle.stop(false).await;
     }

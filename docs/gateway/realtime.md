@@ -128,3 +128,16 @@ Session updates are serialized: clients must wait for session.updated (or the co
 The optional usage contract is verified against the [official Realtime SDK types](https://github.com/openai/openai-node/blob/master/src/resources/realtime/realtime.ts); missing optional data is not fabricated as metered usage. Model identity validation does not establish vendor account/model availability. No new configuration or compatibility alias table is added.
 
 Runtime policy updates also apply to existing sockets: enabling content guardrails blocks new responses. Correlated provider-side session update errors penalize deployment health; invalid client updates remain neutral. The official numeric output limit is 1–4096; model-maximum output above this range uses `inf` on the wire while reserving and enforcing the resolved model maximum internally. A key cap above 4096 but below that maximum cannot be represented by the upstream contract and is rejected, rather than sending an invalid numeric value or exceeding the key cap.
+
+2026-10-04 follow-up acceptance: each generation rebinds the selected deployment
+ID to the current runtime router. Removed/disabled deployments or changed OpenAI
+transport/account/model configuration close the socket before generation; unchanged
+transport uses the new router's current health and RPM/TPM/parallel admission.
+Current key output caps are applied to the catalog model maximum, so explicit
+larger responses can use raised or removed key caps without reconnecting. Omitted
+response caps still inherit the last acknowledged session setting. Both initial
+and later complete session acknowledgments must retain disabled input VAD and
+transcription. Image checks inspect protocol input content only, not arbitrary
+metadata or function schemas. Initialization errors retain upstream status and
+cooldown classification; admission backend/health outages report server errors,
+while actual RPM/TPM/parallel denials report rate limits.

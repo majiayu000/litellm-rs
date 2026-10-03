@@ -106,6 +106,46 @@ impl StreamingDeploymentLease {
     }
 
     #[cfg(feature = "websockets")]
+    pub(super) fn refresh_realtime_deployment(
+        &mut self,
+        router: Arc<UnifiedRouter>,
+    ) -> Result<(), ProviderError> {
+        let deployment = router.get_deployment(&self.deployment.id).ok_or_else(|| {
+            ProviderError::configuration(
+                "openai",
+                "Realtime deployment was removed or disabled; reconnect",
+            )
+        })?;
+        if Arc::ptr_eq(&router, &self.router) && Arc::ptr_eq(&deployment, &self.deployment) {
+            return Ok(());
+        }
+        let changed = || {
+            ProviderError::configuration(
+                "openai",
+                "Realtime deployment configuration changed; reconnect",
+            )
+        };
+        let (Provider::OpenAI(previous), Provider::OpenAI(current)) =
+            (&self.deployment.provider, &deployment.provider)
+        else {
+            return Err(changed());
+        };
+        if deployment.model != self.deployment.model
+            || deployment.model_name != self.deployment.model_name
+            || serde_json::to_value(&previous.config).map_err(|_| changed())?
+                != serde_json::to_value(&current.config).map_err(|_| changed())?
+        {
+            return Err(changed());
+        }
+        // Transport/account/model are unchanged. Admission and health now belong
+        // to the live router, including its current RPM/TPM/parallel policy.
+        self.release();
+        self.router = router;
+        self.deployment = deployment;
+        Ok(())
+    }
+
+    #[cfg(feature = "websockets")]
     pub(super) fn begin_response(&mut self, estimated_tokens: u64) -> Result<(), ProviderError> {
         // The handshake and each generation are separate admission boundaries.
         // Idle sockets do not hold a generation's parallel-request slot.

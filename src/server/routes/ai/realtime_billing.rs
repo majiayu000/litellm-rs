@@ -13,7 +13,7 @@ pub(super) struct Rates {
     output: [f64; 2],
     pub max_input: u32,
     pub max_output: u32,
-    model_max_output: u32,
+    pub model_max_output: u32,
 }
 impl Rates {
     pub fn load(info: &LiteLLMModelInfo, output_limit: Option<u32>) -> Result<Self, String> {
@@ -70,7 +70,8 @@ impl Rates {
                 .into_iter()
                 .chain(self.cached)
                 .fold(0.0, f64::max)
-            + max_output.min(self.max_output) as f64 * self.output.into_iter().fold(0.0, f64::max)
+            + max_output.min(self.model_max_output) as f64
+                * self.output.into_iter().fold(0.0, f64::max)
     }
     pub fn cost(&self, usage: &Value, max_output: u32) -> Result<Option<(f64, u64)>, String> {
         // Optional usage cannot establish exact modality pricing. Known limits
@@ -80,7 +81,7 @@ impl Rates {
             .is_some_and(|v| v > self.max_input as u64)
             || usage["output_tokens"]
                 .as_u64()
-                .is_some_and(|v| v > max_output.min(self.max_output) as u64)
+                .is_some_and(|v| v > max_output.min(self.model_max_output) as u64)
             || usage["input_token_details"]["image_tokens"]
                 .as_u64()
                 .is_some_and(|v| v != 0)
