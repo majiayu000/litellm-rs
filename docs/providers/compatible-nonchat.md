@@ -10,9 +10,9 @@
 | `together` / `together_ai` | embeddings、images/generations、audio/speech、audio/transcriptions、audio/translations | `https://api.together.ai/v1` |
 | `deepinfra` | embeddings、images/generations | `https://api.deepinfra.com/v1/openai` |
 | `fireworks` / `fireworks_ai` | embeddings | `https://api.fireworks.ai/inference/v1` |
-| `openrouter` | embeddings | `https://openrouter.ai/api/v1` |
-| `nebius` | embeddings | `https://api.tokenfactory.nebius.com/v1` |
-| `nvidia_nim` | embeddings | `https://integrate.api.nvidia.com/v1` |
+| `openrouter` | embeddings；已确认独立 Image/TTS/STT 合同，原生输入及实际媒体计费尚待适配；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
+| `nebius` | embeddings；图片 width/height 与 data/id 响应待适配，独立音频未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
+| `nvidia_nim` | embeddings；图片为另一 genai 主机/路径，音频为独立 Speech NIM 部署，默认 base 不扩声明；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `lm_studio` | embeddings | `http://localhost:1234/v1` |
 
 在现有 `providers[].models` 中配置该供应商的真实模型 ID，再请求对应网关接口。表中的能力是传输协议范围，不表示每个模型都能执行全部任务：所选模型、账户权限和可用性仍由供应商约束。不支持的 capability 在路由阶段拒绝；上游模型/参数错误保留错误类型，429 的 Retry-After 秒数继续传递给重试链路。已有显式自定义价格和预算检查继续生效，缺价不会自动视为免费。
@@ -79,16 +79,16 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `baseten` | 已核验：embeddings 属专用 BEI 部署 /sync/v1，默认 Model APIs base 未确认该能力；图片/音频为独立部署协议，未接入 |
 | `together` | embeddings/images/audio |
 | `together_ai` | 同 together |
-| `fireworks` | embeddings；图片原生路径待适配 |
+| `fireworks` | embeddings；图片原生路径待适配，独立 ASR/TTS 当前合同未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `fireworks_ai` | 同 fireworks |
 | `perplexity`（已移出目录） | Sonar 聊天端点已退役，具名选择器在构造阶段拒绝；[F10 审核证据](../audit/perplexity-sonar-retirement-2026-10-03.md)。Agent/Responses、搜索与 embeddings 不因此自动获得支持，仍待各自核验/适配 |
 | `cerebras` | 官方 OpenAPI 仅列 chat/completions；独立 embeddings/images/audio 未确认 |
-| `openrouter` | embeddings；其他待核验 |
+| `openrouter` | embeddings；已确认独立 Image/TTS/STT 合同，原生输入及实际媒体计费尚待适配；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
 | `deepseek` | 待核验；本批未扩展非聊天声明 |
 | `novita` | 文本 embeddings；原生异步图片及 MiniMax 音频协议仍待适配 |
-| `nvidia_nim` | embeddings；其他待核验 |
-| `nebius` | embeddings；图片协议差异待适配 |
+| `nvidia_nim` | embeddings；图片为另一 genai 主机/路径，音频为独立 Speech NIM 部署，默认 base 不扩声明；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
+| `nebius` | embeddings；图片 width/height 与 data/id 响应待适配，独立音频未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `nscale` | embeddings；图片像素计价未接入，能力暂不声明；官方 .com base，模型/图片退役窗口见 cloud 审计 |
 | `hyperbolic` | 待核验；本批未扩展非聊天声明 |
 | `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
@@ -100,7 +100,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `v0` | 待核验；本批未扩展非聊天声明 |
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
 | `github` | 待核验；本批未扩展非聊天声明 |
-| `xai` | 待核验；本批未扩展非聊天声明 |
+| `xai` | 已确认原生 images、/tts、/stt；请求/响应与计费尚待接入，未确认独立 embeddings；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
 | `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |
 | `lm_studio` | 文本 embeddings；当前官方端点清单未确认图片生成/独立音频协议，不扩展声明 |
