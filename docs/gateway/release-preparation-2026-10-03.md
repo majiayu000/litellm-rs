@@ -83,3 +83,14 @@ for a direct build of the real declared targets without a second dummy source tr
   be reported skipped when credentials are absent, not reported published.
 - Verify Homebrew's actual formula/binary update separately from a successful job
   that may skip. Only then record F18 completion in the parity tracker.
+
+## Starting the publisher after a bot-created tag
+
+The version-bump workflow pushes with GITHUB_TOKEN. GitHub documents that such
+pushes [do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+The existing Release workflow now also accepts workflow_dispatch. After the
+reviewed candidate has actually been tagged, run the publisher explicitly on
+that tag, for example `gh workflow run release.yml --ref v0.8.0`. This is an
+example future version, not a statement that the tag exists or publication ran.
+The existing tag/package-version check rejects a branch ref or mismatched tag.
+No alternate publication pipeline or new credential is introduced.
