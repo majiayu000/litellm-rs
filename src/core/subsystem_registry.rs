@@ -187,7 +187,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "mcp",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: mcp"),
-        note: "Opt-in authenticated Streamable HTTP proxy for configured servers; process-local caller-bound sessions require affinity.",
+        note: "Opt-in authenticated stateless Streamable HTTP proxy for configured servers; requests can move between instances.",
     },
     CoreSubsystem {
         name: "models",

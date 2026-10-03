@@ -184,7 +184,7 @@ async fn rejects_unsupported_gateway_configuration() {
         collision
             .validate_http_gateway("docs")
             .unwrap_err()
-            .contains("one MCP")
+            .contains("only once")
     );
     let other = config.with_header("mcp-session-id", "shared-session");
     assert!(other.validate_http_gateway("docs").is_err());

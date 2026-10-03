@@ -146,15 +146,7 @@ impl McpServerConfig {
         {
             return Err("MCP upstream authentication requires a nonempty credential".into());
         }
-        if let Some(auth) = &self.auth
-            && auth.get_header_value().is_some()
-            && self
-                .static_headers
-                .keys()
-                .any(|name| name.eq_ignore_ascii_case(auth.get_header_name()))
-        {
-            return Err("Configure one MCP authentication header".into());
-        }
+        let mut header_names = std::collections::HashSet::new();
         for (name, value) in self
             .static_headers
             .iter()
@@ -167,6 +159,9 @@ impl McpServerConfig {
         {
             let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| "Invalid MCP header name")?;
+            if !header_names.insert(name.clone()) {
+                return Err("Configure each MCP upstream header only once".into());
+            }
             if matches!(
                 name.as_str(),
                 "host"
@@ -581,6 +576,35 @@ mod tests {
         assert!(config.auth.is_some());
         assert_eq!(config.timeout_ms, 5000);
         assert_eq!(config.description.as_deref(), Some("GitHub MCP Server"));
+    }
+
+    #[test]
+    fn gateway_rejects_case_insensitive_duplicate_headers() {
+        let mut config =
+            McpServerConfig::new("test", "https://1.1.1.1/mcp").with_transport(Transport::Http);
+        config
+            .static_headers
+            .insert("X-Api-Key".into(), "first".into());
+        config
+            .static_headers
+            .insert("x-api-key".into(), "second".into());
+        assert!(
+            config
+                .validate_http_gateway("test")
+                .unwrap_err()
+                .contains("only once")
+        );
+        config.static_headers.remove("X-Api-Key");
+        assert!(config.validate_http_gateway("test").is_ok());
+        let mut auth = AuthConfig::api_key("third");
+        auth.header_name = Some("X-API-KEY".into());
+        config.auth = Some(auth);
+        assert!(
+            config
+                .validate_http_gateway("test")
+                .unwrap_err()
+                .contains("only once")
+        );
     }
 
     #[test]
