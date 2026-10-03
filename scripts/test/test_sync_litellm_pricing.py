@@ -31,6 +31,15 @@ spec.loader.exec_module(sync)
 
 
 class SyncPricingTests(unittest.TestCase):
+    def test_deepseek_pro_qualified_and_bare_limits_match_official_contract(self) -> None:
+        catalog = json.loads(CATALOG_PATH.read_text())
+        for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
+            row = catalog[key]
+            self.assertEqual(row["max_input_tokens"], 1_048_576)
+            self.assertEqual(row["max_output_tokens"], 393_216)
+            self.assertFalse(row["supports_vision"])
+            self.assertEqual(sync.OFFICIAL_OVERRIDE_PATCHES[key]["max_output_tokens"], 393_216)
+
     def test_rejects_mutable_or_mismatched_source_identity(self) -> None:
         with self.assertRaisesRegex(SystemExit, "immutable raw GitHub URL"):
             sync.validate_source_identity(
@@ -1052,6 +1061,16 @@ class OfficialPricingRegressionTests(unittest.TestCase):
                 "cache_creation_input_token_cost_above_1hr": 0.000004,
             },
         )
+
+    def test_anthropic_geo_overlay_preserves_fast_prices_and_does_not_add_callable_models(self) -> None:
+        patched = sync.apply_official_overrides(self.catalog, self.catalog)
+        for model in sync.ANTHROPIC_GEO_PRICING_MODELS:
+            self.assertEqual(patched[model]["provider_specific_entry"]["us"], 1.1)
+            original = self.catalog[model].get("provider_specific_entry", {})
+            for key, rate in original.items():
+                if key != "us":
+                    self.assertEqual(patched[model]["provider_specific_entry"][key], rate)
+        self.assertNotIn("us", patched.get("claude-haiku-4-5-20251001", self.catalog["claude-haiku-4-5-20251001"]).get("provider_specific_entry", {}))
 
     def test_issue_1212_and_1223_gemini_promo_exact_ids(self) -> None:
         expected = {

@@ -194,7 +194,7 @@ async fn test_provider_has_current_audio_and_aya_models() {
     let provider = CohereProvider::with_api_key("key").await.unwrap();
     let models = provider.models();
 
-    assert!(models.iter().any(|m| m.id == "cohere-transcribe-03-2026"));
+    assert!(!models.iter().any(|m| m.id == "cohere-transcribe-03-2026"));
     assert!(models.iter().any(|m| m.id == "tiny-aya-global"));
     assert!(models.iter().any(|m| m.id == "tiny-aya-earth"));
     assert!(models.iter().any(|m| m.id == "tiny-aya-fire"));
@@ -590,4 +590,87 @@ fn test_chat_map_params() {
     assert_eq!(mapped["p"], json!(0.95));
     assert_eq!(mapped["stop_sequences"], json!(["END"]));
     assert_eq!(mapped["max_tokens"], json!(200));
+}
+
+#[cfg(feature = "gateway")]
+#[actix_web::test]
+async fn current_cohere_models_reach_their_native_http_endpoints() {
+    use crate::core::net::ProviderEndpointAccess;
+    use crate::core::types::context::RequestContext;
+    use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpServer::new(|| App::new().default_service(web::post().to(
+        |request: HttpRequest, body: web::Json<serde_json::Value>| async move {
+            assert_eq!(request.headers().get("authorization").unwrap(), "Bearer local-cohere-test");
+            let response = match request.path() {
+                "/v2/chat" => {
+                    assert_eq!(body["model"], "command-a-03-2025");
+                    json!({"id":"chat-local", "message":{"content":[{"type":"text","text":"ok"}]}, "finish_reason":"COMPLETE", "usage":{"tokens":{"input_tokens":1,"output_tokens":1}}})
+                }
+                "/v2/embed" => {
+                    assert_eq!(body["model"], "embed-v4.0");
+                    json!({"embeddings":{"float":[[0.1,0.2]]},"meta":{"billed_units":{"input_tokens":1}}})
+                }
+                "/v1/rerank" => {
+                    assert_eq!(body["model"], "rerank-v4.0-pro");
+                    json!({"id":"rerank-local","results":[{"index":0,"relevance_score":0.9}],"meta":{"billed_units":{"search_units":1}}})
+                }
+                path => panic!("unexpected Cohere endpoint: {path}"),
+            };
+            HttpResponse::Ok().json(response)
+        }
+    ))).workers(1).listen(listener).unwrap().run();
+    let handle = server.handle();
+    actix_web::rt::spawn(server);
+    let mut config =
+        CohereConfig::new("local-cohere-test").with_api_base(format!("http://{address}"));
+    config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+    let provider = CohereProvider::new(config).await.unwrap();
+    let chat = provider
+        .chat_completion(
+            ChatRequest {
+                model: "command-a-03-2025".into(),
+                messages: vec![ChatMessage {
+                    role: MessageRole::User,
+                    content: Some(MessageContent::Text("hello".into())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            RequestContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(chat.id, "chat-local");
+    let embed = provider
+        .embeddings(
+            EmbeddingRequest {
+                model: "embed-v4.0".into(),
+                input: EmbeddingInput::Text("hello".into()),
+                user: None,
+                encoding_format: None,
+                dimensions: None,
+                task_type: None,
+                truncation: None,
+            },
+            RequestContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(embed.data.len(), 1);
+    let rerank = provider
+        .rerank(RerankRequest {
+            model: "rerank-v4.0-pro".into(),
+            query: "hello".into(),
+            documents: vec![RerankDocument::Text("hello".into())],
+            top_n: None,
+            return_documents: None,
+            max_chunks_per_doc: None,
+            rank_fields: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(rerank.results.len(), 1);
+    handle.stop(false).await;
 }

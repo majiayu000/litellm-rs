@@ -76,6 +76,110 @@ impl AnthropicClient {
         self.config.allows_unknown_model_image_input(model)
     }
 
+    /// Preserve the Anthropic wire protocol for SDK-compatible gateway calls.
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_messages(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+    ) -> Result<Response, ProviderError> {
+        self.native_message_request(body, version, beta, false)
+            .await
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn native_count_tokens(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+    ) -> Result<Response, ProviderError> {
+        self.native_message_request(body, version, beta, true).await
+    }
+
+    #[cfg(feature = "gateway")]
+    async fn native_message_request(
+        &self,
+        body: Value,
+        version: Option<String>,
+        beta: Option<String>,
+        count_tokens: bool,
+    ) -> Result<Response, ProviderError> {
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if self.uses_compatible_model_allow_list() {
+            if !self.allows_unknown_model(model) {
+                return Err(ProviderError::model_not_found("anthropic", model));
+            }
+        } else if super::models::get_anthropic_registry()
+            .get_model_spec(model)
+            .is_none()
+            && !self.allows_unknown_model(model)
+        {
+            return Err(ProviderError::model_not_found("anthropic", model));
+        }
+        let mut headers = self.get_request_headers();
+        if let Some(version) = version {
+            headers.retain(|(name, _)| !name.eq_ignore_ascii_case("anthropic-version"));
+            headers.push(header("anthropic-version", version));
+        }
+        if let Some(beta) = beta {
+            let mut values = headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+                .map(|(_, value)| value.to_string())
+                .collect::<Vec<_>>();
+            values.push(beta);
+            headers.retain(|(name, _)| !name.eq_ignore_ascii_case("anthropic-beta"));
+            headers.push(header("anthropic-beta", values.join(",")));
+        }
+        let client = if body.get("stream") == Some(&Value::Bool(true)) {
+            &self.streaming_client
+        } else {
+            &self.http_client
+        };
+        let path = if count_tokens {
+            "/v1/messages/count_tokens"
+        } else {
+            "/v1/messages"
+        };
+        let url = format!("{}{path}", self.config.base_url.trim_end_matches('/'));
+        let request = client.request_preserving_endpoint_policy(reqwest::Method::POST, &url)?;
+        let response = timeout(
+            Duration::from_secs(self.config.request_timeout),
+            apply_provider_headers(request.json(&body), headers).send(),
+        )
+        .await
+        .map_err(|_| ProviderError::timeout("anthropic", "Messages response header timeout"))?
+        .map_err(|error| client.map_preserved_request_error(error))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok());
+        let text = read_streaming_error_body(response)
+            .await
+            .unwrap_or_else(|_| "Failed to read Messages error body".into());
+        if status.as_u16() == 429 && retry_after.is_some() {
+            return Err(ProviderError::rate_limit_with_retry(
+                "anthropic",
+                text,
+                retry_after,
+            ));
+        }
+        // Keep the native error envelope in the existing provider error payload.
+        // HTTP facts still drive retries and health; the native route restores
+        // the upstream type/message instead of serializing Display prefixes.
+        Err(ProviderError::api_error("anthropic", status.as_u16(), text))
+    }
+
     /// Request
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
         let tool_name_map = self.anthropic_tool_name_map_for_request(&request)?;
