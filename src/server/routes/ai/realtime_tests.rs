@@ -22,7 +22,7 @@ fn rates() -> Rates {
 #[actix_web::test]
 async fn modality_cache_cost_and_conservative_bound() {
     let rates = rates();
-    let (cost, tokens) = rates.cost(&usage(), rates.max_output).unwrap();
+    let (cost, tokens) = rates.cost(&usage(), rates.max_output).unwrap().unwrap();
     let expected = 10.0 * 0.0000006
         + 15.0 * 0.00001
         + 10.0 * 0.00000006
@@ -35,7 +35,7 @@ async fn modality_cache_cost_and_conservative_bound() {
     let mut invalid = usage();
     invalid["input_token_details"]["cached_tokens_details"]["audio_tokens"] = json!(500);
     assert!(rates.cost(&invalid, rates.max_output).is_err());
-    assert!(rates.cost(&json!({}), rates.max_output).is_err());
+    assert!(rates.cost(&json!({}), rates.max_output).unwrap().is_none());
 }
 #[actix_web::test]
 async fn explicit_manual_scope_and_output_policy() {
@@ -70,7 +70,7 @@ async fn upstream(
     let calls = calls.get_ref().clone();
     actix_web::rt::spawn(async move {
         session
-            .text(json!({"type":"session.created","session":{"id":"session-1"}}).to_string())
+            .text(json!({"type":"session.created","session":{"id":"session-1","model":"gpt-realtime-mini-mapped"}}).to_string())
             .await
             .unwrap();
         while let Some(Ok(event)) = stream.next().await {
@@ -100,6 +100,9 @@ async fn upstream(
                         }
                         "response.create" => {
                             if value["response"]["metadata"]["reject"] == true {
+                                if value["response"]["metadata"]["delay_rejection"] == true {
+                                    tokio::time::sleep(Duration::from_millis(150)).await;
+                                }
                                 let _ = session.text(json!({"type":"error","error":{"type":value["response"]["metadata"].get("reject_type").and_then(Value::as_str).unwrap_or("invalid_request_error"),"event_id":value["event_id"],"message":"mock rejection"}}).to_string()).await;
                                 continue;
                             }
@@ -196,6 +199,14 @@ async fn fixture_with_config(
         App::new()
             .app_data(web::Data::new(copy.clone()))
             .route("/v1/realtime", web::get().to(upstream))
+            .route(
+                "/mismatch-created/v1/realtime",
+                web::get().to(mismatched_session_model),
+            )
+            .route(
+                "/mismatch-updated/v1/realtime",
+                web::get().to(mismatched_session_model),
+            )
             .route(
                 "/broken/v1/realtime",
                 web::get().to(rejected_initialization),
@@ -312,7 +323,11 @@ async fn gateway_websocket_preserves_events_and_records_modality_cost() {
     ] {
         assert_eq!(next_json(&mut client).await["type"], event);
     }
-    let cost = rates().cost(&usage(), rates().max_output).unwrap().0;
+    let cost = rates()
+        .cost(&usage(), rates().max_output)
+        .unwrap()
+        .unwrap()
+        .0;
     assert!(
         (state
             .budget_limits
@@ -527,11 +542,15 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         .settle(
             &state,
             None,
-            Some(rates().cost(&usage(), rates().max_output).unwrap()),
+            Some(rates().cost(&usage(), rates().max_output).unwrap().unwrap()),
         )
         .await
         .unwrap();
-    let expected = rates().cost(&usage(), rates().max_output).unwrap().0;
+    let expected = rates()
+        .cost(&usage(), rates().max_output)
+        .unwrap()
+        .unwrap()
+        .0;
     assert!((state.budget_manager.get_current_spend(&scope) - expected).abs() < 1e-9);
     let pending = Pending::reserve(
         &state,
@@ -681,7 +700,9 @@ async fn realtime_2_has_complete_authoritative_audio_cache_rates() {
         info.extra["cache_read_input_audio_token_cost"].as_f64(),
         Some(0.0000004)
     );
-    assert!(rates.cost(&usage(), rates.max_output).unwrap().0 < rates.bound(rates.max_output));
+    assert!(
+        rates.cost(&usage(), rates.max_output).unwrap().unwrap().0 < rates.bound(rates.max_output)
+    );
 }
 
 #[actix_web::test]
@@ -823,7 +844,11 @@ async fn only_matching_precreation_errors_consume_the_reservation() {
             .get_provider_usage("openai")
             .unwrap()
             .current_spend
-            - rates().cost(&usage(), rates().max_output).unwrap().0)
+            - rates()
+                .cost(&usage(), rates().max_output)
+                .unwrap()
+                .unwrap()
+                .0)
             .abs()
             < 1e-10
     );
@@ -1381,6 +1406,14 @@ async fn precreation_provider_errors_affect_deployment_health() {
             u64::from(kind != "invalid_request_error"),
             "{kind}"
         );
+        assert_eq!(
+            deployment
+                .state
+                .rpm_current
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "{kind}"
+        );
         if matches!(kind, "rate_limit_error" | "authentication_error") {
             assert!(deployment.is_in_cooldown(), "{kind}");
         }
@@ -1675,7 +1708,7 @@ async fn completed_responses_survive_failed_budget_settlement() {
         .await
         .unwrap()
         .unwrap();
-    let (cost, tokens) = rates().cost(&usage(), rates().max_output).unwrap();
+    let (cost, tokens) = rates().cost(&usage(), rates().max_output).unwrap().unwrap();
     assert_eq!(stored.usage_stats.total_tokens, tokens);
     assert!((stored.usage_stats.total_cost - cost).abs() < 1e-12);
     let router = state.pin_runtime().unified_router.clone();
@@ -1859,7 +1892,16 @@ async fn configured_realtime_provider_budgets_reject_and_settle_to_the_same_iden
         .get_provider_usage("prod-openai")
         .unwrap()
         .current_spend;
-    assert!((spend - rates().cost(&usage(), rates().max_output).unwrap().0).abs() < 1e-12);
+    assert!(
+        (spend
+            - rates()
+                .cost(&usage(), rates().max_output)
+                .unwrap()
+                .unwrap()
+                .0)
+            .abs()
+            < 1e-12
+    );
     assert!(
         state
             .budget_limits
@@ -1975,9 +2017,9 @@ async fn provider_rejected_creates_consume_local_rpm_without_health_penalty() {
 }
 
 #[actix_web::test]
-async fn cancellations_without_modality_usage_keep_native_terminal_and_neutral_health() {
-    for status in ["cancelled", "incomplete"] {
-        for usage in ["absent", "no-details"] {
+async fn optional_usage_preserves_native_terminal_status_and_health() {
+    for status in ["cancelled", "incomplete", "completed", "failed"] {
+        for usage in ["absent", "no-details", "valid"] {
             let (state, url, raw, _, handles) = fixture().await;
             let mut client = client(&url, &raw).await;
             next_json(&mut client).await;
@@ -1994,11 +2036,23 @@ async fn cancellations_without_modality_usage_keep_native_terminal_and_neutral_h
                 .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
                 .unwrap();
             use std::sync::atomic::Ordering;
-            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                deployment.state.fail_requests.load(Ordering::Relaxed),
+                u64::from(status == "failed")
+            );
+            assert_eq!(
+                deployment.state.success_requests.load(Ordering::Relaxed),
+                u64::from(status == "completed")
+            );
             assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
             assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
-            assert!(
-                deployment.state.tpm_current.load(Ordering::Relaxed) >= rates().max_input as u64
+            assert_eq!(
+                deployment.state.tpm_current.load(Ordering::Relaxed),
+                if usage == "valid" {
+                    60
+                } else {
+                    rates().max_input as u64 + rates().max_output as u64
+                }
             );
             assert!(!deployment.is_in_cooldown());
             client
@@ -2147,5 +2201,160 @@ async fn terminal_usage_cannot_exceed_the_effective_response_output_cap() {
         for handle in handles {
             handle.stop(false).await;
         }
+    }
+}
+
+async fn mismatched_session_model(
+    req: HttpRequest,
+    payload: web::Payload,
+) -> actix_web::Result<HttpResponse> {
+    let created_mismatch = req.path().contains("mismatch-created");
+    let (response, mut session, mut input) = actix_ws::handle(&req, payload)?;
+    actix_web::rt::spawn(async move {
+        let model = if created_mismatch {
+            "other-model"
+        } else {
+            "gpt-realtime-mini-mapped"
+        };
+        let _ = session
+            .text(json!({"type":"session.created","session":{"model":model}}).to_string())
+            .await;
+        if let Some(Ok(actix_ws::Message::Text(text))) = input.next().await {
+            let mut value: Value = serde_json::from_str(&text).unwrap();
+            value["type"] = json!("session.updated");
+            value["session"]["model"] = json!("other-model");
+            let _ = session.text(value.to_string()).await;
+        }
+    });
+    Ok(response)
+}
+
+#[actix_web::test]
+async fn reported_session_model_mismatch_is_rejected_before_client_upgrade() {
+    for path in ["mismatch-created", "mismatch-updated"] {
+        let (_, url, raw, _, handles) = fixture_with_config(|config| {
+            let provider = &mut config.gateway.providers[0];
+            provider.base_url = Some(
+                provider
+                    .base_url
+                    .as_ref()
+                    .unwrap()
+                    .replace("/v1", &format!("/{path}/v1")),
+            );
+        })
+        .await;
+        let mut request = url.as_str().into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("x-api-key", raw.parse().unwrap());
+        let parsed = url::Url::parse(&url).unwrap();
+        let tcp =
+            tokio::net::TcpStream::connect((parsed.host_str().unwrap(), parsed.port().unwrap()))
+                .await
+                .unwrap();
+        let error = tokio_tungstenite::client_async(request, tcp)
+            .await
+            .unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+            panic!("expected HTTP upgrade rejection")
+        };
+        assert_ne!(response.status().as_u16(), 101);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn open_socket_uses_reloaded_gateway_default_rpm() {
+    let (state, url, raw, calls, handles) = fixture_with_config(|c| {
+        c.gateway.rate_limit.enabled = false;
+    })
+    .await;
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    let mut next = (*state.config()).clone();
+    next.gateway.rate_limit.enabled = true;
+    next.gateway.rate_limit.requests_per_minute = Some(1);
+    state.apply_runtime(next).await.unwrap();
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        next_json(&mut client).await;
+    }
+    assert_eq!(next_json(&mut client).await["type"], "response.done");
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "rate_limit_error"
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|v| v["type"] == "response.create")
+            .count(),
+        1
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn precreation_error_survives_failed_budget_settlement() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client.send(Message::Text(json!({"type":"response.create","response":{"metadata":{"reject":true,"delay_rejection":true}}}).to_string().into())).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|v| v["type"] == "response.create")
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    state
+        .budget_limits
+        .providers
+        .budgets
+        .get_mut("openai")
+        .unwrap()
+        .current_spend = f64::NAN;
+    let error = next_json(&mut client).await;
+    assert_eq!(error["error"]["type"], "invalid_request_error");
+    assert_eq!(error["error"]["message"], "mock rejection");
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    use std::sync::atomic::Ordering;
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
     }
 }

@@ -60,7 +60,52 @@ impl Rates {
                 .fold(0.0, f64::max)
             + max_output.min(self.max_output) as f64 * self.output.into_iter().fold(0.0, f64::max)
     }
-    pub fn cost(&self, usage: &Value, max_output: u32) -> Result<(f64, u64), String> {
+    pub fn cost(&self, usage: &Value, max_output: u32) -> Result<Option<(f64, u64)>, String> {
+        // Optional usage cannot establish exact modality pricing. Known limits
+        // still apply before selecting the conservative settlement fallback.
+        if usage["input_tokens"]
+            .as_u64()
+            .is_some_and(|v| v > self.max_input as u64)
+            || usage["output_tokens"]
+                .as_u64()
+                .is_some_and(|v| v > max_output.min(self.max_output) as u64)
+            || usage["input_token_details"]["image_tokens"]
+                .as_u64()
+                .is_some_and(|v| v != 0)
+        {
+            return Err("Realtime usage exceeds reserved text/audio scope".into());
+        }
+        if usage.is_null() {
+            return Ok(None);
+        }
+        if !usage.is_object() {
+            return Err("Invalid realtime usage object".into());
+        }
+        let missing = |pointer| usage.pointer(pointer).is_none_or(Value::is_null);
+        if [
+            "/input_tokens",
+            "/output_tokens",
+            "/total_tokens",
+            "/input_token_details/text_tokens",
+            "/input_token_details/audio_tokens",
+            "/input_token_details/cached_tokens",
+            "/output_token_details/text_tokens",
+            "/output_token_details/audio_tokens",
+        ]
+        .into_iter()
+        .any(missing)
+            || (usage["input_token_details"]["cached_tokens"]
+                .as_u64()
+                .is_some_and(|v| v > 0)
+                && [
+                    "/input_token_details/cached_tokens_details/text_tokens",
+                    "/input_token_details/cached_tokens_details/audio_tokens",
+                ]
+                .into_iter()
+                .any(missing))
+        {
+            return Ok(None);
+        }
         let count = |v: &Value| {
             v.as_u64()
                 .ok_or_else(|| "Missing or invalid realtime usage".to_string())
@@ -87,18 +132,11 @@ impl Rates {
         let input_total = count(&usage["input_tokens"])?;
         let output_total = count(&usage["output_tokens"])?;
         let total = count(&usage["total_tokens"])?;
-        if input_total > self.max_input as u64
-            || output_total > max_output.min(self.max_output) as u64
-            || i[0].checked_add(i[1]) != Some(input_total)
+        if i[0].checked_add(i[1]) != Some(input_total)
             || o[0].checked_add(o[1]) != Some(output_total)
             || c[0].checked_add(c[1]) != Some(count(&input["cached_tokens"])?)
             || input_total.checked_add(output_total) != Some(total)
             || c.iter().zip(i).any(|(cached, input)| *cached > input)
-            || input
-                .get("image_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                != 0
         {
             return Err("Realtime usage exceeds reserved text/audio scope".into());
         }
@@ -109,7 +147,7 @@ impl Rates {
                     + o[n] as f64 * self.output[n]
             })
             .sum();
-        Ok((cost, total))
+        Ok(Some((cost, total)))
     }
 }
 

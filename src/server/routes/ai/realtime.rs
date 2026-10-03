@@ -66,12 +66,6 @@ pub(super) async fn connect(
         crate::auth::AuthMethod::Jwt(token) => Some(token),
         _ => None,
     };
-    let requests_per_minute = runtime
-        .config
-        .gateway
-        .rate_limit
-        .enabled
-        .then(|| runtime.config.gateway.rate_limit.effective_rpm());
     if runtime.guardrails.is_enabled() {
         return Ok(denied(
             "Realtime does not implement configured content guardrails",
@@ -134,7 +128,13 @@ pub(super) async fn connect(
                 };
                 let timeout = openai.config.base.timeout_duration();
                 let mut upstream = open_upstream(openai, &model, max_size).await?;
-                let initial = initialize_upstream(&mut upstream, &rates, timeout).await?;
+                let initial = initialize_upstream(
+                    &mut upstream,
+                    &rates,
+                    &openai.config.get_model_mapping(&model),
+                    timeout,
+                )
+                .await?;
                 Ok((
                     upstream,
                     rates,
@@ -174,7 +174,6 @@ pub(super) async fn connect(
             model,
             lease,
             timeout,
-            requests_per_minute,
             query.model.clone(),
             wire_model,
             jwt_token,
@@ -187,6 +186,7 @@ pub(super) async fn connect(
 async fn initialize_upstream(
     upstream: &mut Upstream,
     rates: &Rates,
+    wire_model: &str,
     timeout: Duration,
 ) -> Result<Vec<String>, ProviderError> {
     let initialize = async {
@@ -199,6 +199,17 @@ async fn initialize_upstream(
                         .map_err(|_| "Malformed Realtime initialization")?;
                     if value["type"] == "error" {
                         return Err("Upstream rejected manual Realtime configuration");
+                    }
+                    if matches!(
+                        value["type"].as_str(),
+                        Some("session.created" | "session.updated")
+                    ) && value["session"]["model"]
+                        .as_str()
+                        .is_some_and(|model| model != wire_model)
+                    {
+                        return Err(
+                            "Upstream Realtime session model does not match the selected deployment",
+                        );
                     }
                     let ready = value["type"] == "session.updated";
                     if ready
@@ -490,7 +501,6 @@ async fn relay(
     model: String,
     mut lease: super::execution::StreamingDeploymentLease,
     timeout: Duration,
-    requests_per_minute: Option<u32>,
     public_model: String,
     wire_model: String,
     jwt_token: Option<String>,
@@ -521,6 +531,9 @@ async fn relay(
                             Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"invalid_request_error","message":message,"event_id":value.get("event_id")}}).to_string(), timeout).await?; continue; }
                         };
                         if creates {
+                            let current_runtime = state.pin_runtime();
+                            let rate_policy = &current_runtime.config.gateway.rate_limit;
+                            let requests_per_minute = rate_policy.enabled.then(|| rate_policy.effective_rpm());
                             let mut key_rpm = requests_per_minute;
                             let mut output_limit = rates.max_output;
                             if let Some(token) = &jwt_token {
@@ -614,24 +627,20 @@ async fn relay(
                             let usage = rates.cost(&value["response"]["usage"], reservation.max_output);
                             match usage {
                                 Ok(usage) => {
-                                    tokens = usage.1;
-                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), Some(usage)).await {
-                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = usage.0, "Realtime completed response budget settlement failed");
+                                    tokens = usage.map_or(tokens, |(_, tokens)| tokens);
+                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), usage).await {
+                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
                                     }
-                                    let provider_failed = value["response"]["status"] == "failed"
+                                    let status = value["response"]["status"].as_str();
+                                    let provider_failed = status == Some("failed")
                                         && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
                                     if provider_failed {
-                                        lease.complete_response(tokens, Some(&ProviderError::api_error("openai", 500, value["response"]["status_details"]["error"].to_string())));
+                                        lease.finish_interrupted(tokens, Some(&ProviderError::api_error("openai", 500, value["response"]["status_details"]["error"].to_string())));
+                                    } else if matches!(status, Some("cancelled" | "incomplete" | "failed")) {
+                                        lease.finish_interrupted(tokens, None);
                                     } else {
                                         lease.complete_response(tokens, None);
                                     }
-                                }
-                                Err(error) if matches!(value["response"]["status"].as_str(), Some("cancelled" | "incomplete")) => {
-                                    tracing::warn!(%error, %provider, %model, "Realtime terminal response has no trustworthy modality usage; retaining conservative reservation");
-                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), None).await {
-                                        tracing::error!(%error, %provider, %model, "Realtime terminal fallback settlement failed");
-                                    }
-                                    lease.finish_interrupted(tokens, None);
                                 }
                                 Err(error) => { failure = true; return Err(error); }
                             }
@@ -641,7 +650,11 @@ async fn relay(
                         } else if value["type"] == "error" && pending.is_some() && response_id.is_none()
                             && response_event_id.as_deref() == value["error"]["event_id"].as_str() {
                             // No trusted usage accompanies this error; retain the documented reservation fallback.
-                            if let Some(reservation) = pending.take() { reservation.settle(&state, context.api_key_id(), None).await?; }
+                            if let Some(reservation) = pending.take()
+                                && let Err(error) = reservation.settle(&state, context.api_key_id(), None).await
+                            {
+                                tracing::error!(%error, %provider, %model, "Realtime pre-creation error settlement failed");
+                            }
                             if value["error"]["type"] == "invalid_request_error" {
                                 lease.finish_interrupted(0, None);
                             } else {
@@ -651,7 +664,7 @@ async fn relay(
                                     Some("permission_error") => 403,
                                     _ => 500,
                                 };
-                                lease.complete_response(0, Some(&ProviderError::api_error("openai", status, value["error"].to_string())));
+                                lease.finish_interrupted(0, Some(&ProviderError::api_error("openai", status, value["error"].to_string())));
                             }
                             response_event_id = None;
                             tokens = 0;
