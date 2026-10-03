@@ -218,8 +218,9 @@ pub mod anthropic_thinking {
 pub mod deepseek_thinking {
     use super::*;
 
-    /// DeepSeek thinking models
+    /// Thinking formats, including historical/self-hosted R1; not a callable catalog.
     const DEEPSEEK_THINKING_MODELS: &[&str] = &[
+        "deepseek-flash",
         "deepseek-v4-flash",
         "deepseek-v4-pro",
         "deepseek-r1",
@@ -260,7 +261,8 @@ pub mod deepseek_thinking {
                 // The canonical V4 IDs (`deepseek-v4-flash`, `deepseek-v4-pro`)
                 // default to thinking enabled but support an optional
                 // non-thinking mode, so they are not always-on.
-                thinking_always_on: !model_lower.contains("deepseek-v4"),
+                thinking_always_on: !model_lower.contains("deepseek-v4")
+                    && !model_lower.contains("deepseek-flash"),
             }
         } else {
             ThinkingCapabilities::unsupported()
@@ -268,8 +270,19 @@ pub mod deepseek_thinking {
     }
 
     /// Transform thinking config for DeepSeek
-    pub fn transform_config(config: &ThinkingConfig, _model: &str) -> Result<Value, ProviderError> {
+    pub fn transform_config(config: &ThinkingConfig, model: &str) -> Result<Value, ProviderError> {
         let mut params = serde_json::Map::new();
+
+        if model
+            .rsplit('/')
+            .next()
+            .is_some_and(|id| id.eq_ignore_ascii_case("deepseek-flash"))
+        {
+            params.insert(
+                "thinking".into(),
+                serde_json::json!({"type": if config.enabled { "enabled" } else { "disabled" }}),
+            );
+        }
 
         // DeepSeek uses reasoning_effort
         if let Some(effort) = &config.effort {
