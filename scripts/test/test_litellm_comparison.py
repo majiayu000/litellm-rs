@@ -110,6 +110,13 @@ class ComparisonTests(unittest.TestCase):
     def test_cpu_model_records_host_processor(self):
         self.assertTrue(bench.cpu_model())
 
+    def test_linux_arm_cpu_identity_preserves_heterogeneous_parts(self):
+        cpuinfo = "processor : 0\nCPU implementer : 0x41\nCPU part : 0xd40\nCPU revision : 1\n\nprocessor : 1\nCPU implementer : 0x41\nCPU part : 0xd41\nCPU revision : 2\n"
+        with patch.object(bench.platform, "system", return_value="Linux"), patch.object(Path, "read_text", return_value=cpuinfo), patch.object(bench.platform, "processor", return_value=""):
+            identities = json.loads(bench.cpu_model())
+        self.assertEqual([cpu["CPU part"] for cpu in identities], ["0xd40", "0xd41"])
+        self.assertTrue(all(cpu["CPU implementer"] == "0x41" for cpu in identities))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -178,9 +178,18 @@ def cpu_model() -> str:
     if platform.system() == "Darwin":
         return command(["sysctl", "-n", "machdep.cpu.brand_string"])
     if platform.system() == "Linux":
-        for line in Path("/proc/cpuinfo").read_text().splitlines():
-            if line.startswith(("model name", "Hardware")):
-                return line.split(":", 1)[1].strip()
+        processors = []
+        fields = {"model name", "Hardware", "CPU implementer", "CPU architecture", "CPU variant", "CPU part", "CPU revision"}
+        for block in Path("/proc/cpuinfo").read_text().split("\n\n"):
+            identity = {}
+            for line in block.splitlines():
+                key, separator, value = line.partition(":")
+                if separator and key.strip() in fields:
+                    identity[key.strip()] = value.strip()
+            if identity and identity not in processors:
+                processors.append(identity)
+        if processors:
+            return json.dumps(processors, sort_keys=True)
     return platform.processor() or "unavailable"
 
 
