@@ -71,6 +71,10 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 AIML 图片响应 schema 不保证当前成功类型必需的 `created`，TTS/STT 使用原生 URL/异步任务；CometAPI 标准图片/音频接口存在，但本批尚未确认其模型计费单位与当前网关字符/秒/图片估算结算相符，保持待适配状态。Bytez 非聊天使用原生 model-run；Poe 多模态 bots 使用聊天内容。逐项证据与限制见 [多模态聚合供应商审计](../audit/multimodal-compatible-nonchat-2026-10-03.md)。
 
+第九批（#1427，核验 2026-10-03）接入火山方舟文本 embeddings：使用现有 `/api/v3` base，按官方协议把单字符串输入规范为单元素数组，保留批量文本与浮点响应。模型或 Endpoint ID 由已有配置指定；多模态 `/embeddings/multimodal` 仍是独立协议。MiniMax 的 OpenAI 默认地址修正为 `https://api.minimax.io/v1`；它的原生图片/语音协议没有因此自动获得支持。
+
+SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 SambaStack，默认 SambaCloud 选择器不扩展能力。Hyperbolic 当前文档站转向 GPU 租用，托管推理非聊天协议仍未确认；这不是已退役的证据。详细官方来源和剩余差异见 [原生协议边界审计](../audit/native-compatible-nonchat-2026-10-03.md)。
+
 第八批（#1425，核验 2026-10-03）沿用现有传输接入百川文本 embeddings，官方端点为 `https://api.baichuan-ai.com/v1/embeddings`。官方已索引协议限定 `Baichuan-Text-Embedding`、每条最多 512 tokens、批次最多 16 条、固定 1024 维；超过 16 条的批次在发送前拒绝，避免上游静默截断；仅发送文本字符串或文本数组。余额不足的官方 429 映射为不可重试 QuotaExceeded，限流 429 保留 Retry-After。当前直接文档页面仅显示申请体验外壳，未实调账户可用性，不据此新增静态 callable 型号或价格。使用已获访问权限的真实模型配置和正确价格。
 
 本批同时核验 Moonshot、DeepSeek、Xiaomi MiMo、Yi、Maritalk。MiMo 的 TTS/ASR 官方确实存在，但经聊天请求/响应中的音频协议，需要独立适配后才能挂到网关 `/audio/*`；Maritaca 官方明确推荐其他供应商的 embeddings。未确认端点保持不声明，详见 [区域供应商审计](../audit/regional-compatible-nonchat-2026-10-03.md)。
@@ -87,28 +91,28 @@ AIML 图片响应 schema 不保证当前成功类型必需的 `created`，TTS/ST
 | `baseten` | 已核验：embeddings 属专用 BEI 部署 /sync/v1，默认 Model APIs base 未确认该能力；图片/音频为独立部署协议，未接入 |
 | `together` | embeddings/images/audio |
 | `together_ai` | 同 together |
-| `fireworks` | embeddings；图片原生路径待适配 |
+| `fireworks` | embeddings；图片原生路径待适配，独立 ASR/TTS 当前合同未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `fireworks_ai` | 同 fireworks |
 | `perplexity`（已移出目录） | Sonar 聊天端点已退役，具名选择器在构造阶段拒绝；[F10 审核证据](../audit/perplexity-sonar-retirement-2026-10-03.md)。Agent/Responses、搜索与 embeddings 不因此自动获得支持，仍待各自核验/适配 |
 | `cerebras` | 官方 OpenAPI 仅列 chat/completions；独立 embeddings/images/audio 未确认 |
-| `openrouter` | embeddings；其他待核验 |
+| `openrouter` | embeddings；已确认独立 Image/TTS/STT 合同，原生输入及实际媒体计费尚待适配；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
 | `deepseek` | 核对当前官方 API；Responses/文件/视觉是独立范围，未确认 embeddings/images/audio |
 | `novita` | 文本 embeddings；原生异步图片及 MiniMax 音频协议仍待适配 |
-| `nvidia_nim` | embeddings；其他待核验 |
-| `nebius` | embeddings；图片协议差异待适配 |
+| `nvidia_nim` | embeddings；图片为另一 genai 主机/路径，音频为独立 Speech NIM 部署，默认 base 不扩声明；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
+| `nebius` | embeddings；图片 width/height 与 data/id 响应待适配，独立音频未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `nscale` | embeddings；图片像素计价未接入，能力暂不声明；官方 .com base，模型/图片退役窗口见 cloud 审计 |
-| `hyperbolic` | 待核验；本批未扩展非聊天声明 |
+| `hyperbolic` | 旧文档现跳 GPU 租用新站，未找到当前托管推理非聊天协议；保持未确认，不凭重定向断言退役 |
 | `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
 | `galadriel` | 官方 OpenAPI 的 embeddings、images/generations；须配置实际可用模型，未实调账户目录 |
-| `sambanova` | 待核验；本批未扩展非聊天声明 |
+| `sambanova` | 当前官方 embeddings/Whisper 仅 SambaStack，公共云未开放；旧日文云端点说明不可当现行证据 |
 | `heroku` | 文本 embeddings；float→raw、HTTP input_type→上游 input_type；须模型 add-on 对应 URL/key；图片参数待适配 |
 | `friendliai` | 已核验：serverless 转写按 tokens 用量，与当前音频秒计费不同，未接入；dedicated embeddings/images 不在默认 base |
 | `meta_llama` | 待核验；本批未扩展非聊天声明 |
 | `v0` | 待核验；本批未扩展非聊天声明 |
 | `amazon_nova` | 待核验；本批未扩展非聊天声明 |
 | `github` | 待核验；本批未扩展非聊天声明 |
-| `xai` | 待核验；本批未扩展非聊天声明 |
+| `xai` | 已确认原生 images、/tts、/stt；请求/响应与计费尚待接入，未确认独立 embeddings；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
 | `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
 | `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |
 | `lm_studio` | 文本 embeddings；当前官方端点清单未确认图片生成/独立音频协议，不扩展声明 |
@@ -121,8 +125,8 @@ AIML 图片响应 schema 不保证当前成功类型必需的 `created`，TTS/ST
 | `dashscope` | 待核验；本批未扩展非聊天声明 |
 | `qwen` | 待核验；本批未扩展非聊天声明 |
 | `baichuan` | 官方已索引标准文本 embeddings 协议；账户可用性未实调，输入 ≤512 tokens/批量 ≤16，固定1024维 |
-| `minimax` | 待核验；本批未扩展非聊天声明 |
-| `volcengine` | 待核验；本批未扩展非聊天声明 |
+| `minimax` | 修默认 OpenAI base 为 api.minimax.io/v1；ASR /speech_to_text、TTS /t2a_v2、图片原生 JSON 待独立适配 |
+| `volcengine` | 文本 embeddings（/api/v3），单字符串转数组；多模态向量/Seedream图片参数及部分失败、音频另待适配 |
 | `xiaomi_mimo` | 官方 TTS/ASR 经 chat/completions 音频契约；通用 /audio/* 尚未适配，embeddings/images 未确认 |
 | `zhipu` | 待核验；本批未扩展非聊天声明 |
 | `zai` | 待核验；本批未扩展非聊天声明 |
