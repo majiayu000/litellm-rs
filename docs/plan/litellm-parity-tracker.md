@@ -20,10 +20,10 @@
 | F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 进行中 | [#1380](https://github.com/majiayu000/litellm-rs/issues/1380)；原生 JSON/SSE、鉴权与密钥令牌限制、原生 HTTP/流式错误、内容检查和累计用量已接入；[草稿 PR #1381](https://github.com/majiayu000/litellm-rs/pull/1381)；13 项路由测试、5 项 OpenAPI 契约测试、缓存 TTL/搜索费用测试，以及默认全量 test/check/clippy、gateway/sqlite clippy 通过；新增原生 count_tokens 预估图片/文档/工具输入，并按最贵请求 TTL 预留冷缓存写入费；15 项 Messages 路由测试通过；托管工具非令牌费用、工具循环新增输入及特殊费率仍未全部覆盖，暂不标为完成 |
 | F09 | P2 | Responses compact 与 Gemini 文档覆盖 | 接通 /v1/responses/compact；Gemini 已有 generateContent/streamGenerateContent 路由，补 OpenAPI 覆盖并复核现有鉴权/流式/用量测试 | 待验收 | [#1382](https://github.com/majiayu000/litellm-rs/issues/1382)；compact 已复用原生传输、鉴权、费用与 previous_response_id 部署/账户绑定；4 项压缩定向测试通过；Gemini OpenAPI 的 8 个路径均已实际请求通过；23 项原生 Responses、29 项 Gemini 路由和 5 项 OpenAPI 契约测试通过；默认全量 test/check/clippy 及 gateway/sqlite clippy 通过；[草稿 PR #1383](https://github.com/majiayu000/litellm-rs/pull/1383)；依赖 #1379，等待 CI 与审查 |
 | F10 | P1 | 模型退役与目录一致性 | 去除已退役模型的可调用声明；优先修 Cloudflare；复核全部现有静态供应商目录、示例、价格和能力来源 | 进行中 | [#1373](https://github.com/majiayu000/litellm-rs/issues/1373)；首批 OpenAI/Azure、Cloudflare、Copilot、Bedrock 已合并 [#1376](https://github.com/majiayu000/litellm-rs/pull/1376)（`42ba2b2a`）。Mistral 批次 [#1396](https://github.com/majiayu000/litellm-rs/pull/1396) 已合并（`ea7d9414`）：修正六个 Ministral 3 视觉条目和 3B 上下文，保留五个日期快照；74 项 Mistral 测试、默认完整检查和扩展特性 clippy 通过。[PR #1385](https://github.com/majiayu000/litellm-rs/pull/1385) 清理 Anthropic/Gemini 退役或未核实型号及别名，保留历史价格；修正 Gemini 缓存价格、区域/全球健康探测与受限网络策略。Anthropic 校验和能力直接使用现行目录，SDK 保留 thinking 块后的全部文本。默认完整 test/check/clippy（7260 项库测试）、234 项 Vertex、128 项 Gemini 及扩展 clippy 已通过；最新 124 项模型工具、244 项 SDK 测试和默认 all-target clippy 通过。本轮补齐 Gemini helper/原生 JSON/SSE 型号拒绝及 Claude 5 SDK 参数校验；默认全量检查通过（7266 项库测试、1 忽略），扩展 Gemini 226 项、Vertex 254 项及特性 clippy 通过。提交 `b745bb9d` 的 15 项 CI 全绿、review 清零，已合并 `680e70cd`；其余静态目录仍需逐项复核；基线见 [逐条目录基线](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/audit/model-catalog-2026-10-01.entries.json)。 |
-| F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 进行中 | 复核更正：通用 `openai_compatible` 已有 embeddings/images/audio 实现；30 项定向单测以及 embeddings、图片编辑/变体 HTTP 测试通过；`support_matrix.rs` 是旧适配器矩阵，不代表当前运行时。[#1386](https://github.com/majiayu000/litellm-rs/issues/1386)；Together/DeepInfra/Fireworks 已按官方矩阵扩展既有能力声明，11 项 HTTP/路由测试、12 项 catalog 和 85 项 provider 测试通过；默认完整 test/check/clippy 与 gateway/sqlite clippy 通过；[PR #1389](https://github.com/majiayu000/litellm-rs/pull/1389) 已合并（`c5bf4c19`），CI 全绿且 review 已解决；其余具名供应商尚待核验，范围见 [已合并范围文档](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/providers/compatible-nonchat.md)。  第二批 [#1398](https://github.com/majiayu000/litellm-rs/issues/1398) / [PR #1399](https://github.com/majiayu000/litellm-rs/pull/1399) 补 Groq 语音合成/转写/翻译、WAV 默认值和十秒最低计费；12 项协议路由与 3 项计费测试、默认完整 test/check/clippy 和 gateway/sqlite all-target clippy 通过；其余具名供应商继续核验。 Groq 审查补具体音频模型路由及翻译真实时长结算；13 项协议/路由测试、13 项音频网关测试（含时长缺失/无效回退和十秒下限）与 gateway/sqlite all-target clippy 通过，提交 `05585aec` 的 15 项 CI 全部通过、review 已解决；已合并 [#1399](https://github.com/majiayu000/litellm-rs/pull/1399)（`d6ab3e72`）。其余供应商待核验。 |
+| F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 进行中 | 复核更正：通用 `openai_compatible` 已有 embeddings/images/audio 实现；30 项定向单测以及 embeddings、图片编辑/变体 HTTP 测试通过；`support_matrix.rs` 是旧适配器矩阵，不代表当前运行时。[#1386](https://github.com/majiayu000/litellm-rs/issues/1386)；Together/DeepInfra/Fireworks 已按官方矩阵扩展既有能力声明，11 项 HTTP/路由测试、12 项 catalog 和 85 项 provider 测试通过；默认完整 test/check/clippy 与 gateway/sqlite clippy 通过；[PR #1389](https://github.com/majiayu000/litellm-rs/pull/1389) 已合并（`c5bf4c19`），CI 全绿且 review 已解决；其余具名供应商尚待核验，范围见 [已合并范围文档](https://github.com/majiayu000/litellm-rs/blob/d6ab3e723e047254d8208cbfdc2800a7016db1ed/docs/providers/compatible-nonchat.md)。  第二批 [#1398](https://github.com/majiayu000/litellm-rs/issues/1398) / [PR #1399](https://github.com/majiayu000/litellm-rs/pull/1399) 补 Groq 语音合成/转写/翻译、WAV 默认值和十秒最低计费；12 项协议路由与 3 项计费测试、默认完整 test/check/clippy 和 gateway/sqlite all-target clippy 通过；其余具名供应商继续核验。 Groq 审查补具体音频模型路由及翻译真实时长结算；13 项协议/路由测试、13 项音频网关测试（含时长缺失/无效回退和十秒下限）与 gateway/sqlite all-target clippy 通过，提交 `05585aec` 的 15 项 CI 全部通过、review 已解决；已合并 [#1399](https://github.com/majiayu000/litellm-rs/pull/1399)（`d6ab3e72`）。其余供应商待核验。 |
 | F12 | P2 | 自定义供应商注册 | 外部实现可通过公开 API 注册并被路由，无须修改内部 Provider 枚举；覆盖构造、能力、错误和流式测试 | 完成 | [#1384](https://github.com/majiayu000/litellm-rs/issues/1384)；外部接口已接入现有 Provider/Deployment/Router，all-features 编译通过；4 项外部集成测试通过（注册/路由、模型能力、流式错误、未实现能力/缺价）；默认完整测试/check/clippy、gateway/sqlite/扩展 provider clippy 均通过（默认库 7,217 项通过、1 项忽略）；已提交 [PR #1387](https://github.com/majiayu000/litellm-rs/pull/1387)；审查补充健康检查回调路由回归；全部 CI 通过、review 已解决，已合并 `f24aa58f` |
-| F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 待验收 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)；已按 MCP 2026-07-28 改为无状态 POST，删除旧初始化/会话与后台回收器。逐请求版本/方法/名称校验、Base64 名称、MRTR/订阅 SSE、原生字段与高精度数值、服务器/端点权限、Origin/凭据隔离、HTTPS/受限出站及断流测试通过。15 项最新路由测试、gateway/sqlite/mcp 完整测试（9710 项库测试通过、1 忽略，集成/doc 通过）及最新特性 all-target clippy 通过；此前默认完整检查通过。补齐每调用者 128/全局 4096 并发限制、有限响应体绝对超时与 URL 内嵌凭据拒绝，断流/超时释放配额均通过测试。最新提交 15 项 CI 全绿，但 7 条 review 线程未解决；URL userinfo 拒绝已存在，须按当前代码核实线程，其余阻断见下方清单；不包含旧协议、OAuth 获取、多服务器聚合或外部工具费用，详见 [当前 PR 范围文档](https://github.com/majiayu000/litellm-rs/blob/fe818688e6fccc23a1f78c35efe890ed19bc4ec8/docs/gateway/mcp.md)。 当前提交 `fe818688`。 |
-| F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 待验收 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)；A2A 1.0 JSON-RPC 五方法、卡片、权限/归属、容量及 SSE 已接通。最新审查补 Task/Message 变体身份与必填字段、活动任务提前 EOF 拒绝、ROLE_USER 校验、带凭据上游强制 HTTPS；取消任务不再受旧库专有开关限制。28 项路由测试及 gateway/sqlite/a2a all-target clippy 通过，此前 132 项 core 和默认完整检查通过；最新提交 15 项 CI 全绿，6 条 review 线程未解决。进程内归属需实例亲和，不含 push/list/扩展卡片或代理费用计量，详见 [当前 PR 范围文档](https://github.com/majiayu000/litellm-rs/blob/36c4426145177cb8fc7327f9cee81d7359fee2af/docs/gateway/a2a.md)。 补齐 Task/Message 可选 contextId、后续事件 context 固定、跨帧 SSE BOM 及有限响应 JSON 类型；28 项路由测试与特性 clippy 通过。 当前提交 `36c44261`。 |
+| F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 待验收 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)；已按 MCP 2026-07-28 改为无状态 POST，删除旧初始化/会话与后台回收器。逐请求版本/方法/名称校验、Base64 名称、MRTR/订阅 SSE、原生字段与高精度数值、服务器/端点权限、Origin/凭据隔离、HTTPS/受限出站及断流测试通过。15 项最新路由测试、gateway/sqlite/mcp 完整测试（9710 项库测试通过、1 忽略，集成/doc 通过）及最新特性 all-target clippy 通过；此前默认完整检查通过。补齐每调用者 128/全局 4096 并发限制、有限响应体绝对超时与 URL 内嵌凭据拒绝，断流/超时释放配额均通过测试。提交 `ef9fd55f` 的 15 项 CI 全绿且原 7 条 review 已解决。后续 `63a6c466` 补静态/认证请求头大小写去重并清理过时 session affinity 声明；19 项路由与新增配置回归、默认完整检查、gateway/sqlite/mcp 全量测试及 clippy 通过；2 条后续 review 已解决，等待最新 CI；不包含旧协议、OAuth 获取、多服务器聚合或外部工具费用，详见 [当前 PR 范围文档](https://github.com/majiayu000/litellm-rs/blob/63a6c466/docs/gateway/mcp.md)。 当前提交 `63a6c466`。 |
+| F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 待验收 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)；A2A 1.0 JSON-RPC 五方法、卡片、权限/归属、容量及 SSE 已接通。最新审查补 Task/Message 变体身份与必填字段、活动任务提前 EOF 拒绝、ROLE_USER 校验、带凭据上游强制 HTTPS；取消任务不再受旧库专有开关限制。28 项路由测试及 gateway/sqlite/a2a all-target clippy 通过，此前 132 项 core 和默认完整检查通过；后续 `c3bd992f` 修复 task/context 关联、状态枚举、错误分类、卡片版本协商与公开权限创建；32 项路由、默认完整检查、gateway/sqlite/a2a 完整测试和 clippy 通过，原 6 条 review 已解决。当前又有卡片版本、body timeout 和受限发现审查，正在修复/核验，尚未合并。进程内归属需实例亲和，不含 push/list/扩展卡片或代理费用计量，详见 [当前 PR 范围文档](https://github.com/majiayu000/litellm-rs/blob/36c4426145177cb8fc7327f9cee81d7359fee2af/docs/gateway/a2a.md)。 补齐 Task/Message 可选 contextId、后续事件 context 固定、跨帧 SSE BOM 及有限响应 JSON 类型；28 项路由测试与特性 clippy 通过。 已推送提交 `c3bd992f`；原文档链接保留为历史范围参考。 |
 | F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 进行中 | [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) 已立项。此前台账记录了 OpenAI WebSocket 传输的 3 项测试、3 项分项用量测试、51 项价格同步测试及特性 clippy；但尚无实现 PR 或不可变提交链接，本次不能独立核验这些记录。先找回实现及日志，再补公开路由、鉴权、预算、双向事件和完整验证；main 尚无公开 Realtime 网关路由。 |
 | F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 待开始 | 依赖对应功能完成；尚无本项专属 issue/PR。执行前搜索现有工作并补建 issue；逐项核对 README、subsystem_registry、feature 和发布特性，不作无关架构重写。 |
 | F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 完成 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395) 已于 2026-10-03 合并（`cb76a186`）。同机、同上游、4 workers、并发 64 的三轮对照及直连基线共 9 个样本零请求错误；原始数据/环境/限制随报告提交。12 项运行器行为测试、14 项现有 benchmark 契约测试、默认完整 Rust 检查及全部 CI 通过，审查线程已解决。结果仅适用于报告中的本地模拟负载，不宣称通用倍数，见 [已合并报告](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison.md)及[原始证据包](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison-20261003.json.gz)。 |
@@ -78,9 +78,9 @@ main `cb76a186` 的 [CI Main Full](https://github.com/majiayu000/litellm-rs/acti
 关联 issue #1373；先修已有 #1385，再继续尚未核验的静态目录。
 
 - [x] 在 #1385 原分支整合 main 并解决冲突，保留 #1376 和 #1396 已合并修正；已合并 `680e70cd`。
-- [ ] 修复 Gemini 公共模型校验仍按前缀接受退役 ID 的路径，补当前模型接受、退役模型拒绝回归。
-- [ ] 在 Gemini 原生 generateContent/streamGenerateContent 路由中验证实际供应商目录和模型 surface，证明退役模型不会发往上游。
-- [ ] 核对 Anthropic SDK 与直接 provider 对当前模型的参数约束，补采样、thinking 和 prefill 的一致性回归；以供应商官方资料为依据处理 review。
+- [x] 修复 Gemini 公共模型校验仍按前缀接受退役 ID 的路径，补当前模型接受、退役模型拒绝回归。
+- [x] 在 Gemini 原生 generateContent/streamGenerateContent 路由中验证实际供应商目录和模型 surface，证明退役模型不会发往上游。
+- [x] 核对 Anthropic SDK 与直接 provider 对当前模型的参数约束，补采样、thinking 和 prefill 的一致性回归；以供应商官方资料为依据处理 review。
 - [ ] 以现有逐条目录基线枚举剩余静态供应商；每项记录官方来源、审核日期、可调用结论和未确认原因。deprecated 与已退役分开，历史价格不自动恢复 callable。
 - [ ] 同步受影响的示例、别名、能力、上下文和价格；未证实支持的能力不新增声明。每批实现沿用对应 issue，保存验证和 PR。
 - [ ] 全部静态目录审核完毕、各入口一致且相关 PR 验收后，才将 F10 标为完成；保留账户/区域及真实调用未验证限制。
@@ -89,24 +89,24 @@ main `cb76a186` 的 [CI Main Full](https://github.com/majiayu000/litellm-rs/acti
 
 关联 #1388 / #1391。范围保持 MCP 2026-07-28 Streamable HTTP；不追加旧协议兼容、OAuth 获取、多服务器聚合或外部工具计费。
 
-- [ ] 对照最新代码验证 URL userinfo 拒绝已生效，保留回归并处理对应审查线程。
-- [ ] 处理 URL query 携带凭据时的 HTTPS 边界，以及畸形 URL 导出时未脱敏的问题；测试使用虚构凭据。
-- [ ] 在 id-less 通知提前返回前处理已移除的初始化方法，验证旧初始化通知不会误转发。
-- [ ] 请求 ID 只接受字符串或整数，覆盖小数和 null 拒绝；对照[官方基础协议](https://modelcontextprotocol.io/specification/2026-07-28/basic/index)。
-- [ ] 处理读取请求体早于并发准入的问题，选择最小可行的准入或读取超时修复，覆盖慢请求体和释放配额。
-- [ ] 打通公开 API-key 创建到 mcp.<server> 路由授权的最小权限链路，覆盖正确服务器允许、其他服务器拒绝。
+- [x] 对照最新代码验证 URL userinfo 拒绝已生效，保留回归并处理对应审查线程。
+- [x] 处理 URL query 携带凭据时的 HTTPS 边界，以及畸形 URL 导出时未脱敏的问题；测试使用虚构凭据。
+- [x] 在 id-less 通知提前返回前处理已移除的初始化方法，验证旧初始化通知不会误转发。
+- [x] 请求 ID 只接受字符串或整数，覆盖小数和 null 拒绝；对照[官方基础协议](https://modelcontextprotocol.io/specification/2026-07-28/basic/index)。
+- [x] 处理读取请求体早于并发准入的问题，选择最小可行的准入或读取超时修复，覆盖慢请求体和释放配额。
+- [x] 打通公开 API-key 创建到 mcp.<server> 路由授权的最小权限链路，覆盖正确服务器允许、其他服务器拒绝。
 - [ ] 跑当前提交的路由、特性测试及 clippy，确认发现/调用、资源/提示词、MRTR、SSE、鉴权、超时和断连仍成立；解决所有有效 review 后合并并记录范围。
 
 ## F14 A2A 验收收尾
 
 关联 #1392 / #1393。首批保持现有五方法与 Agent Card；进程内归属、实例亲和、无代理费用计量等限制继续明确记录。
 
-- [ ] 保存并验证 task 与 context 的关联，覆盖同一调用者拥有两个上下文但提交错误配对的拒绝场景。
-- [ ] 按协议定义验证 TaskState，覆盖非法状态和终态 SSE 关闭；避免未知状态被当成执行中。
-- [ ] 核对 Content-Type 错误、已知但未支持的方法、push 方法与未知方法的错误区别，保留原生上游错误语义。
-- [ ] 核对 Agent Card 的 A2A-Version header/query 协商，补不支持版本及缺失版本的协议测试。
-- [ ] 对照 [A2A 1.0 JSON-RPC 规范](https://a2a-protocol.org/v1.0.0/specification/#95-error-handling) 处理 ErrorInfo 审查：区分 SHOULD 和 MUST，不把其他绑定的要求直接套到 JSON-RPC；保留解释和最终处理结果。
-- [ ] 复核公开密钥创建入口能否配置文档中的 a2a.<agent> 权限；如有同类集成缺口，在现有 PR 内修复并补最小权限回归。
+- [x] 保存并验证 task 与 context 的关联，覆盖同一调用者拥有两个上下文但提交错误配对的拒绝场景。
+- [x] 按协议定义验证 TaskState，覆盖非法状态和终态 SSE 关闭；避免未知状态被当成执行中。
+- [x] 核对 Content-Type 错误、已知但未支持的方法、push 方法与未知方法的错误区别，保留原生上游错误语义。
+- [x] 核对 Agent Card 的 A2A-Version header/query 协商，补不支持版本及缺失版本的协议测试。
+- [x] 对照 [A2A 1.0 JSON-RPC 规范](https://a2a-protocol.org/v1.0.0/specification/#95-error-handling) 处理 ErrorInfo 审查：区分 SHOULD 和 MUST，不把其他绑定的要求直接套到 JSON-RPC；保留解释和最终处理结果。
+- [x] 复核公开密钥创建入口能否配置文档中的 a2a.<agent> 权限；如有同类集成缺口，在现有 PR 内修复并补最小权限回归。
 - [ ] 完成当前提交路由/特性验证并解决有效 review；合并后在 F18 单独检查发行特性是否包含 a2a，不以 all-features 编译代替发行验收。
 
 ## F05 至 F07 原生 Responses
@@ -148,7 +148,7 @@ main `cb76a186` 的 [CI Main Full](https://github.com/majiayu000/litellm-rs/acti
 - [ ] 将具名 registry 选择器逐项列入现有 compatible-nonchat 文档，记录已验证能力、官方协议路径及尚未核验范围，不能用聊天兼容性推断其他端点。
 - [ ] 核对剩余 embeddings/images/audio 能力；仅同协议、同 base 的能力复用现有通路，原生专用路径单独判断是否属于本项必要实现。
 - [ ] 每批覆盖 factory → Router → 实际 HTTP，以及模型级能力、JSON/二进制/multipart、状态/Retry-After、用量和预算；不支持能力须明确拒绝。
-- [ ] 保留 Groq 具体音频模型路由、WAV 默认、真实时长结算及十秒下限回归；缺价不视为免费。
+- [x] 保留 Groq 具体音频模型路由、WAV 默认、真实时长结算及十秒下限回归；缺价不视为免费。
 - [ ] 逐批登记剩余供应商的核验结论和限制；只有整个约定范围核验完毕才关闭 F11，不以单个批次 issue 关闭代替完成。
 
 ## F15 Realtime
@@ -203,3 +203,5 @@ main `cb76a186` 的 [CI Main Full](https://github.com/majiayu000/litellm-rs/acti
 - 2026-10-03 12:20：用户授权三路并行执行；#1390 清单已推送并整合 main，#1399 已核验后合并。MCP #1391、目录 #1385 在各自 worktree 修复；Responses 后台恢复正在检查预算持久性边界。
 
 - 2026-10-03 13:10：#1385 最新提交 `b745bb9d` 的 15 项 CI 全绿且 review 已解决，已合并 `680e70cd`。F10 其余目录继续进行；三路下一轮推进 F06、F15 及网关收尾。MCP 新增两条 review 正在处理，A2A 本地验证仍在进行，未将二者标为完成。
+
+- 2026-10-03：MCP 补充修复 `63a6c466` 已推送，最新 CI 待验收；A2A `c3bd992f` 完整检查通过后已推送，继续处理新审查。Messages 补 web 工具预算及现有 api.chat 权限复用，17 项 HTTP 测试通过，完整检查进行中。F06 Copilot/Bedrock 原生路由与 F15 WebSocket 实现由另外两路推进，未提前标完成。
