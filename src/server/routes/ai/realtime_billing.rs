@@ -13,6 +13,7 @@ pub(super) struct Rates {
     output: [f64; 2],
     pub max_input: u32,
     pub max_output: u32,
+    model_max_output: u32,
 }
 impl Rates {
     pub fn load(info: &LiteLLMModelInfo, output_limit: Option<u32>) -> Result<Self, String> {
@@ -30,6 +31,7 @@ impl Rates {
             .max_output_tokens
             .filter(|v| *v > 0)
             .ok_or("Missing realtime output limit")?;
+        let model_max_output = max_output;
         let max_output = output_limit.map_or(max_output, |limit| limit.min(max_output));
         if max_output == 0 {
             return Err("Realtime output limit must be positive".into());
@@ -49,7 +51,17 @@ impl Rates {
             ],
             max_input,
             max_output,
+            model_max_output,
         })
+    }
+    pub fn wire_output_limit(&self, limit: u32) -> Result<Value, &'static str> {
+        if (1..=4096).contains(&limit) {
+            Ok(Value::from(limit))
+        } else if limit == self.model_max_output {
+            Ok(Value::from("inf"))
+        } else {
+            Err("Realtime output policy cannot be represented by the upstream token limit")
+        }
     }
     pub fn bound(&self, max_output: u32) -> f64 {
         self.max_input as f64

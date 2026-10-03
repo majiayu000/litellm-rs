@@ -189,8 +189,11 @@ async fn initialize_upstream(
     wire_model: &str,
     timeout: Duration,
 ) -> Result<Vec<String>, ProviderError> {
+    let output_limit = rates
+        .wire_output_limit(rates.max_output)
+        .map_err(|message| ProviderError::invalid_request("openai", message))?;
     let initialize = async {
-        upstream.send(Message::Text(json!({"type":"session.update","session":{"type":"realtime","tools":[],"max_output_tokens":rates.max_output,"audio":{"input":{"turn_detection":null,"transcription":null}}}}).to_string().into())).await.map_err(|_| "Realtime initialization write failed")?;
+        upstream.send(Message::Text(json!({"type":"session.update","session":{"type":"realtime","tools":[],"max_output_tokens":output_limit,"audio":{"input":{"turn_detection":null,"transcription":null}}}}).to_string().into())).await.map_err(|_| "Realtime initialization write failed")?;
         let mut initial = Vec::new();
         while let Some(event) = upstream.next().await {
             match event.map_err(|_| "Realtime initialization interrupted")? {
@@ -217,8 +220,7 @@ async fn initialize_upstream(
                             != Some(&Value::Null)
                             || value.pointer("/session/audio/input/transcription")
                                 != Some(&Value::Null)
-                            || value["session"]["max_output_tokens"].as_u64()
-                                != Some(rates.max_output as u64))
+                            || value["session"]["max_output_tokens"] != output_limit)
                     {
                         return Err("Upstream did not enforce manual Realtime configuration");
                     }
@@ -413,7 +415,10 @@ fn prepare_event(
                 .get("max_output_tokens")
                 .is_some_and(|limit| limit == "inf")
             {
-                options.insert("max_output_tokens".into(), json!(rates.max_output));
+                options.insert(
+                    "max_output_tokens".into(),
+                    rates.wire_output_limit(rates.max_output)?,
+                );
             }
             if !creates && options.get("type").is_some_and(|v| v != "realtime") {
                 return Err("Only realtime sessions are supported");
@@ -440,8 +445,12 @@ fn prepare_event(
             let limit = options
                 .get("max_output_tokens")
                 .map(|v| {
+                    if v == "inf" {
+                        return Ok(rates.max_output as u64);
+                    }
                     v.as_u64()
-                        .ok_or("max_output_tokens must be a positive integer")
+                        .filter(|limit| *limit <= 4096)
+                        .ok_or("max_output_tokens must be an integer from 1 to 4096 or inf")
                 })
                 .transpose()?
                 .unwrap_or(rates.max_output as u64);
@@ -532,6 +541,10 @@ async fn relay(
                         };
                         if creates {
                             let current_runtime = state.pin_runtime();
+                            if current_runtime.guardrails.is_enabled() {
+                                error_type = "permission_error";
+                                return Err("Realtime does not implement configured content guardrails".into());
+                            }
                             let rate_policy = &current_runtime.config.gateway.rate_limit;
                             let requests_per_minute = rate_policy.enabled.then(|| rate_policy.effective_rpm());
                             let mut key_rpm = requests_per_minute;
@@ -562,11 +575,16 @@ async fn relay(
                                 if let Some(budget_id) = crate::auth::api_key_budget_id(&key) { context.set_api_key_budget_id(budget_id); } else { context.clear_api_key_budget_id(); }
                             }
                             if output_limit == 0 { return Err("Realtime output is forbidden by current key policy".into()); }
-                            if unbounded_output {
-                                value["response"]["max_output_tokens"] = json!(output_limit);
-                            } else if value["response"].get("max_output_tokens").is_none() {
-                                value["response"]["max_output_tokens"] = json!(session_output_limit.min(output_limit));
-                            }
+                            let effective_output = if unbounded_output {
+                                output_limit
+                            } else {
+                                value["response"]["max_output_tokens"].as_u64().map_or(session_output_limit.min(output_limit), |limit| limit as u32)
+                            };
+                            let wire_limit = match rates.wire_output_limit(effective_output) {
+                                Ok(limit) => limit,
+                                Err(message) => { send_client(&mut downstream, json!({"type":"error","error":{"type":"invalid_request_error","message":message,"event_id":value.get("event_id")}}).to_string(), timeout).await?; continue; }
+                            };
+                            value["response"]["max_output_tokens"] = wire_limit;
                             if let Some(rpm) = key_rpm
                                 && let Err(retry_after) = crate::server::middleware::enforce_socket_request_rate(&context, rpm).await {
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":"Realtime request rate exceeded","retry_after":retry_after}}).to_string(), timeout).await?;
@@ -576,7 +594,6 @@ async fn relay(
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":error.to_string()}}).to_string(), timeout).await?;
                                 continue;
                             }
-                            let effective_output = value["response"]["max_output_tokens"].as_u64().ok_or("Missing Realtime output limit")? as u32;
                             match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output) {
                                 Ok(reservation) => {
                                     let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -612,11 +629,22 @@ async fn relay(
                         let value: Value = serde_json::from_str(&text).map_err(|_| { failure = true; "Malformed upstream Realtime event" })?;
                         if value["type"] == "error" && pending_session_update.as_deref().is_some_and(|id| Some(id) == value["error"]["event_id"].as_str()) {
                             pending_session_update = None;
+                            if value["error"]["type"] != "invalid_request_error" {
+                                let status = match value["error"]["type"].as_str() {
+                                    Some("rate_limit_error") => 429,
+                                    Some("authentication_error") => 401,
+                                    Some("permission_error") => 403,
+                                    _ => 500,
+                                };
+                                lease.record_provider_event_failure(&ProviderError::api_error("openai", status, value["error"].to_string()));
+                            }
                         }
                         if value["type"] == "session.updated" {
                             pending_session_update = None;
                             if let Some(limit) = value["session"]["max_output_tokens"].as_u64().and_then(|limit| u32::try_from(limit).ok()) {
                                 session_output_limit = limit.min(rates.max_output);
+                            } else if value["session"]["max_output_tokens"] == "inf" {
+                                session_output_limit = rates.max_output;
                             }
                         } else if value["type"] == "response.created" {
                             if pending.is_none() || response_id.is_some() { failure = true; return Err("Unreserved upstream Realtime response".into()); }

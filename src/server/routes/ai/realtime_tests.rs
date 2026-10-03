@@ -80,6 +80,13 @@ async fn upstream(
                     calls.lock().unwrap().push(value.clone());
                     match value["type"].as_str().unwrap() {
                         "session.update" => {
+                            if let Some(kind) = value["session"]["instructions"]
+                                .as_str()
+                                .and_then(|s| s.strip_prefix("reject-session:"))
+                            {
+                                let _ = session.text(json!({"type":"error","error":{"type":kind,"event_id":value["event_id"],"message":"mock update rejection"}}).to_string()).await;
+                                continue;
+                            }
                             if value["session"]["instructions"] == "delay-session-ack" {
                                 tokio::time::sleep(Duration::from_millis(150)).await;
                             }
@@ -2306,6 +2313,183 @@ async fn open_socket_uses_reloaded_gateway_default_rpm() {
             .filter(|v| v["type"] == "response.create")
             .count(),
         1
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn open_socket_rejects_responses_when_guardrails_are_enabled() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    let mut next = (*state.config()).clone();
+    next.gateway.guardrails.enabled = true;
+    state.apply_runtime(next).await.unwrap();
+    assert!(state.pin_runtime().guardrails.is_enabled());
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "permission_error"
+    );
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|v| v["type"] == "response.create")
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn session_update_errors_penalize_only_provider_failures() {
+    for kind in [
+        "invalid_request_error",
+        "server_error",
+        "rate_limit_error",
+        "authentication_error",
+    ] {
+        let (state, url, raw, _, handles) = fixture().await;
+        let mut client = client(&url, &raw).await;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        client.send(Message::Text(json!({"type":"session.update","session":{"instructions":format!("reject-session:{kind}")}}).to_string().into())).await.unwrap();
+        let error = next_json(&mut client).await;
+        assert_eq!(error["error"]["type"], kind);
+        assert_eq!(error["error"]["message"], "mock update rejection");
+        let router = state.pin_runtime().unified_router.clone();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        assert_eq!(
+            deployment
+                .state
+                .fail_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::from(kind != "invalid_request_error")
+        );
+        assert_eq!(
+            deployment
+                .state
+                .success_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn realtime_two_preserves_infinite_wire_limit_and_reserves_model_maximum() {
+    let (state, url, raw, calls, handles) = fixture_with_config(|c| {
+        let p = &mut c.gateway.providers[0];
+        p.models = vec!["gpt-realtime-2".into()];
+        p.settings.insert("model_mappings".into(), json!({"gpt-realtime-2":"gpt-realtime-mini-mapped"}));
+        p.settings.insert("model_identity_mappings".into(), json!({"gpt-realtime-2":{"capability_catalog_model":"gpt-realtime-2","pricing_model":"gpt-realtime-2"}}));
+    }).await;
+    let pricing = state.pricing.snapshot();
+    let (_, info) = pricing
+        .get_model_info_for_provider("openai", "gpt-realtime-2")
+        .unwrap();
+    let rates = Rates::load(&info, None).unwrap();
+    assert_eq!(rates.max_output, 32_000);
+    assert_eq!(rates.wire_output_limit(32_000).unwrap(), "inf");
+    assert!(
+        Rates::load(&info, Some(6000))
+            .unwrap()
+            .wire_output_limit(6000)
+            .is_err()
+    );
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(rates.bound(4096), ResetPeriod::Monthly),
+    );
+    let mut client = client(&url.replace("gpt-realtime-mini", "gpt-realtime-2"), &raw).await;
+    next_json(&mut client).await;
+    assert_eq!(
+        next_json(&mut client).await["session"]["max_output_tokens"],
+        "inf"
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"session.update","session":{"max_output_tokens":"inf"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["session"]["max_output_tokens"],
+        "inf"
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "insufficient_quota"
+    );
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|v| v["type"] == "response.create")
+    );
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"max_output_tokens":"inf"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        next_json(&mut client).await;
+    }
+    assert_eq!(next_json(&mut client).await["type"], "response.done");
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|v| v["type"] == "response.create")
+            .unwrap()["response"]["max_output_tokens"],
+        "inf"
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"max_output_tokens":5000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "invalid_request_error"
     );
     drop(client);
     for handle in handles {

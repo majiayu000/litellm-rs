@@ -93,6 +93,11 @@ impl StreamingDeploymentLease {
     }
 
     #[cfg(feature = "websockets")]
+    pub(super) fn record_provider_event_failure(&mut self, error: &ProviderError) {
+        self.complete_failure(error, 0);
+    }
+
+    #[cfg(feature = "websockets")]
     pub(super) fn begin_response(&mut self, estimated_tokens: u64) -> Result<(), ProviderError> {
         // The handshake and each generation are separate admission boundaries.
         // Idle sockets do not hold a generation's parallel-request slot.
