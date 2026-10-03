@@ -330,11 +330,21 @@ impl OpenAILikeProvider {
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
         if matches!(
             self.provider_name.as_str(),
-            "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim" | "aiml" | "aiml_api"
+            "fireworks"
+                | "fireworks_ai"
+                | "openrouter"
+                | "nvidia_nim"
+                | "heroku"
+                | "aiml"
+                | "aiml_api"
         ) && let Some(fields) = body.as_object_mut()
             && let Some(task_type) = fields.remove("task_type")
         {
             fields.insert("input_type".into(), task_type);
+        }
+        if self.provider_name == "heroku" && body["encoding_format"] == "float" {
+            // Heroku calls unencoded floating-point vectors "raw".
+            body["encoding_format"] = Value::String("raw".into());
         }
         if self.provider_name == "nvidia_nim"
             && let Some(fields) = body.as_object_mut()

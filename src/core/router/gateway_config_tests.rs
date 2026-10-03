@@ -10,7 +10,8 @@ mod matrix {
         "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
         "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
         "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
-        "BASETEN_API_KEY",
+        "BASETEN_API_KEY", "HEROKU_API_KEY", "INFERENCE_KEY", "EMBEDDING_KEY",
+        "OVHCLOUD_API_KEY", "OVH_AI_ENDPOINTS_ACCESS_TOKEN",
     ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";
@@ -144,6 +145,40 @@ mod matrix {
     }
 
     #[tokio::test]
+    async fn direct_factory_skips_blank_primary_and_alternate_credentials() {
+        for (selector, values, selected) in [
+            (
+                "heroku",
+                vec![
+                    ("HEROKU_API_KEY", " "),
+                    ("INFERENCE_KEY", ""),
+                    ("EMBEDDING_KEY", "embedding-fixture"),
+                ],
+                "embedding-fixture",
+            ),
+            (
+                "ovhcloud",
+                vec![
+                    ("OVHCLOUD_API_KEY", ""),
+                    ("OVH_AI_ENDPOINTS_ACCESS_TOKEN", "ovh-fixture"),
+                ],
+                "ovh-fixture",
+            ),
+        ] {
+            let _env = EnvScope::new(&values);
+            let mut config = provider(selector, "");
+            config.provider_type = selector.to_owned();
+            let created = crate::core::providers::create_provider(config)
+                .await
+                .unwrap();
+            let crate::core::providers::Provider::OpenAILike(created) = created else {
+                panic!("expected catalog provider");
+            };
+            assert_eq!(created.config().base.api_key.as_deref(), Some(selected));
+        }
+    }
+
+    #[tokio::test]
     async fn complete_construction_credential_precedence_matrix() {
         #[rustfmt::skip]
     let cases = [
@@ -157,6 +192,12 @@ mod matrix {
         Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "heroku-explicit", selector: "heroku", top: "explicit", settings: &[], env: &[("HEROKU_API_KEY","primary"),("INFERENCE_KEY","native"),("EMBEDDING_KEY","embedding")], selected: Some("explicit"), shadowed: &["primary","native","embedding"] },
+        Case { name: "heroku-primary", selector: "heroku", top: "", settings: &[], env: &[("HEROKU_API_KEY","primary"),("INFERENCE_KEY","native")], selected: Some("primary"), shadowed: &["native"] },
+        Case { name: "heroku-native", selector: "heroku", top: "", settings: &[], env: &[("INFERENCE_KEY","native")], selected: Some("native"), shadowed: &[] },
+        Case { name: "heroku-embedding", selector: "heroku", top: "", settings: &[], env: &[("INFERENCE_KEY"," "),("EMBEDDING_KEY","embedding")], selected: Some("embedding"), shadowed: &[] },
+        Case { name: "ovh-native", selector: "ovhcloud", top: "", settings: &[], env: &[("OVH_AI_ENDPOINTS_ACCESS_TOKEN","native")], selected: Some("native"), shadowed: &[] },
+        Case { name: "ovh-explicit", selector: "ovhcloud", top: "explicit", settings: &[], env: &[("OVHCLOUD_API_KEY","primary"),("OVH_AI_ENDPOINTS_ACCESS_TOKEN","native")], selected: Some("explicit"), shadowed: &["primary","native"] },
         Case { name: "catalog-baseten-env", selector: "baseten", top: "", settings: &[], env: &[("BASETEN_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "cf-settings", selector: "cf", top: "top", settings: &[("api_token","settings")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("settings"), shadowed: &["top","env"] },
         Case { name: "cf-top", selector: "cloudflare", top: "top", settings: &[("api_token"," ")], env: &[("CLOUDFLARE_API_TOKEN","env")], selected: Some("top"), shadowed: &["env"] },
