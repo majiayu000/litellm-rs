@@ -1013,12 +1013,8 @@ async fn zhipu_and_zai_images_preserve_url_responses() {
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["size"], "1280x1280");
         assert_eq!(body["quality"], "hd");
-        if selector == "zai" {
-            assert_eq!(body["user_id"], "user-123");
-            assert!(body.get("user").is_none());
-        } else {
-            assert_eq!(body["user"], "user-123");
-        }
+        assert_eq!(body["user_id"], "user-123");
+        assert!(body.get("user").is_none());
         handle.stop(false).await;
     }
 }

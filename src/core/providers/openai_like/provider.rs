@@ -472,7 +472,7 @@ impl OpenAILikeProvider {
         let headers = self.get_request_headers();
         let mut body = serde_json::to_value(&request)
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
-        if self.provider_name == "zai"
+        if matches!(self.provider_name.as_str(), "zhipu" | "zai")
             && let Some(fields) = body.as_object_mut()
             && let Some(user) = fields.remove("user")
         {
