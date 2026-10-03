@@ -1,6 +1,6 @@
 # LiteLLM 差距补齐清单
 
-更新日期：2026-10-04T02:13:19+08:00（北京时间）。起点：`e9cf6a4b`。本轮已验收合并 17 个实现 PR，关闭 8 个关联 issue；当前远端 main 为 `fec51c5d`。文末区分已接受提交、新候选与剩余阻断。
+更新日期：2026-10-04T02:29:02+08:00（北京时间）。起点：`e9cf6a4b`。本轮已验收合并 18 个实现 PR，合并 1 个文档 PR，关闭 10 个关联 issue；当前远端 main 为 `5ff9ceca`。文末区分已接受提交、新候选与剩余阻断。
 
 本文件是继续执行 F01–F18 的唯一台账。已完成 F01–F04、F06、F08、F12、F13、F14、F17；其余工作按下方复选清单推进。功能验收、合并和发布分别记录；当前发行仍为 v0.7.0，尚不包含本轮新增成果。
 
@@ -20,11 +20,11 @@
 | F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 完成 | [#1380](https://github.com/majiayu000/litellm-rs/issues/1380) / [PR #1381](https://github.com/majiayu000/litellm-rs/pull/1381)，当前 `bb6ecc10` 已退出草稿：JSON/SSE、count_tokens、缓存 TTL、有界直接 web 工具及显式/继承 US 地区计费已接通；未知用量保留承诺但账单记为 unpriced。22 项集成、默认完整检查、gateway/sqlite/mcp 完整测试（9780 通过/1 忽略）、clippy 和 all-features check 通过。前轮五项审查修复已推送，默认 7270 项库测试/1 忽略及联合完整检查通过；all-features check 属此前提交。新轮 Haiku 缓存价格、终态用量/JSON stop_reason、start envelope 与 guardrail 健康归因五项修复已推送，25 项 HTTP、52 项 Python/重复同步、默认完整及 gateway/sqlite/mcp 完整检查通过，review 清零；随后原分支整合 f62c5adb，当前 `bb6ecc10` 的 15 项 CI 全绿且 review 清零，已合并 `7336a20e` 并自动关闭 #1380；本轮 25 项原生 Messages HTTP 测试通过；另 Sonnet 4.5 1M beta 审查经官方 2026-04-30 退役说明确认不适用，保留 200k。 |
 | F09 | P2 | Responses compact 与 Gemini 文档覆盖 | 接通 /v1/responses/compact；Gemini 已有 generateContent/streamGenerateContent 路由，补 OpenAPI 覆盖并复核现有鉴权/流式/用量测试 | 待验收 | [#1382](https://github.com/majiayu000/litellm-rs/issues/1382) / [Draft PR #1383](https://github.com/majiayu000/litellm-rs/pull/1383)，最新 `48f1b2be`，base F07 `c44b48d4`。compact 经过原生 OpenAI、权限/预算和持久记录；Gemini 八个既有路径补契约，不重复实现。历史 `2918fa38` 完整 gateway/sqlite 9653/1 忽略通过；`0050a21b` [Main Full](https://github.com/majiayu000/litellm-rs/actions/runs/37120379335)和[Cross Platform](https://github.com/majiayu000/litellm-rs/actions/runs/37120381165)均成功，只适用于旧 head。最新 94 项 HTTP（Responses 31、adapter 10、Gemini 30、catalog 23）、fmt、同步/check、联合 clippy 通过。最新 head 的 [Main Full](https://github.com/majiayu000/litellm-rs/actions/runs/37126576346)和[Cross Platform](https://github.com/majiayu000/litellm-rs/actions/runs/37126578702)均已成功；F07 接受后再改 base 为 main，不能用旧 CI 代替新 head/base 验收。 |
 | F10 | P1 | 模型退役与目录一致性 | 去除已退役模型的可调用声明；优先修 Cloudflare；复核全部现有静态供应商目录、示例、价格和能力来源 | 进行中 | [#1373](https://github.com/majiayu000/litellm-rs/issues/1373)。先前 OpenAI/Azure/Cloudflare/Copilot/Bedrock #1376、Mistral #1396、Anthropic/Gemini #1385 已合并；本轮 DeepSeek/xAI/Cohere #1408（`bd8db0a8`）、Perplexity #1414（`19a18375`）、fal #1417（`5753956a`）、Replicate #1419（`ca0833ee`）、Stability/BFL #1423（`afdeb820`）均在 exact head 的 15 项 CI 全绿和 review 清零后合并。Azure/Voyage #1416 的 `19df4e8f` 同样通过并合并 `ed1e83ed`；实际 providers-extra Azure AI 107 项为前轮 d0eb912d，最新整合为 Azure 相关 116 项、Voyage 6 项、Responses 18 项、Python 52 项及联合 clippy。不能把错误特性过滤匹配的两个测试算原生 Azure 模块验收。历史全量检查与最新定向检查分开归档。Azure mapped authority 35 条、GitHub Models、Nova/Meta/v0、剩余音频/非 Gemini Vertex 等仍需核验；历史价格不恢复 callable，图片价格不从 tokens 推断。基线见 [逐条目录记录](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/audit/model-catalog-2026-10-01.entries.json)。 |
-| F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 进行中 | 具名协议分批核验，不从聊天兼容或价格表推导能力。已接受自托管 #1412、聚合 #1424、云兼容 #1418 和 W&B/余下选择器 #1432；对应 #1409/#1422/#1415/#1431 已关闭。云兼容验收 head c354fd6f 完整默认7132/扩展10252（各1忽略）、27 HTTP、官方 credential 矩阵和两套clippy通过；15项CI全绿并合并b19e8fc9。Nscale图片因像素计费缺口撤回声明。中文 #1421 最新 5afc6536 保留 DashScope/Qwen total-only usage、云限制和 W&B 新地址；原分支整合及当前联合HTTP/clippy证据按提交归档。地区 #1426 已接受并关闭#1425；head bb85cf44 在现有 wire 边界拒绝百川大于16/空批次，官方余额429为不可重试QuotaExceeded，限流保留Retry-After。原生协议 #1428 当前 c8c78d98 移除五个旧Doubao embedding行的未经核实零价，removal-only覆盖从fresh source保留限额/vector/metadata刷新，用实际bundled ID验证缺价前置拒绝与显式测试价结算，不推断当前USD价格或callable状态。多模态聚合 #1430 最新 fc6d9282 原分支整合，保留AIML total-only usage/input_type与Heroku映射；missing/null/invalid usage按现有解析错误拒绝。所有新head须独立CI/review验收。#1434关于超预算实际费用的P1例子与现有结算实现不符；真实HTTP回归已验证，仍需当前整合CI/review验收。#1436官方协议文档更正见下文。F11总项和F10总项仍开放，不以单批验收关闭全部62个选择器范围。 |
+| F11 | P2 | 兼容供应商的非聊天能力 | OpenAI-compatible 通路补齐 embeddings/images/audio 的实际调度；只声明经过协议验证的能力；未知/不支持能力返回明确错误 | 进行中 | 具名协议分批核验，不从聊天兼容或价格表推导能力。已接受自托管 #1412、聚合 #1424、云兼容 #1418 和 W&B/余下选择器 #1432；对应 #1409/#1422/#1415/#1431 已关闭。云兼容验收 head c354fd6f 完整默认7132/扩展10252（各1忽略）、27 HTTP、官方 credential 矩阵和两套clippy通过；15项CI全绿并合并b19e8fc9。Nscale图片因像素计费缺口撤回声明。中文 #1421 最新 edda3bbe 保留 DashScope/Qwen total-only usage、云限制和 W&B 新地址；原分支整合及当前联合HTTP/clippy证据按提交归档。地区 #1426 已接受并关闭#1425；head bb85cf44 在现有 wire 边界拒绝百川大于16/空批次，官方余额429为不可重试QuotaExceeded，限流保留Retry-After。原生协议 #1428 当前 c8c78d98 移除五个旧Doubao embedding行的未经核实零价，removal-only覆盖从fresh source保留限额/vector/metadata刷新，用实际bundled ID验证缺价前置拒绝与显式测试价结算，不推断当前USD价格或callable状态。多模态聚合 #1430 最新 97d3e5f6 原分支整合，保留AIML total-only usage/input_type与Heroku映射；missing/null/invalid usage按现有解析错误拒绝。所有新head须独立CI/review验收。#1434关于超预算实际费用的P1例子与现有结算实现不符；真实HTTP回归已验证，仍需当前整合CI/review验收。#1436官方协议文档更正见下文。F11总项和F10总项仍开放，不以单批验收关闭全部62个选择器范围。 |
 | F12 | P2 | 自定义供应商注册 | 外部实现可通过公开 API 注册并被路由，无须修改内部 Provider 枚举；覆盖构造、能力、错误和流式测试 | 完成 | [#1384](https://github.com/majiayu000/litellm-rs/issues/1384)；外部接口已接入现有 Provider/Deployment/Router，all-features 编译通过；4 项外部集成测试通过（注册/路由、模型能力、流式错误、未实现能力/缺价）；默认完整测试/check/clippy、gateway/sqlite/扩展 provider clippy 均通过（默认库 7,217 项通过、1 项忽略）；已提交 [PR #1387](https://github.com/majiayu000/litellm-rs/pull/1387)；审查补充健康检查回调路由回归；全部 CI 通过、review 已解决，已合并 `f24aa58f` |
 | F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 完成 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)，`a1f718bb`：MCP 2026-07-28 无状态 POST、工具/资源/提示词、MRTR/SSE、命名权限、Origin/出站限制、并发/超时和断流已接通。新增前缀同名路由、配置导出脱敏、空/旧通用权限拒绝及 Tasks taskId 路由头回归；最新 22 项路由测试、fmt 和特性 all-target clippy 通过。前一提交 bf8434ab 默认完整检查（7219 通过/1 忽略）及 gateway/sqlite/mcp 完整测试/clippy 通过；提交 a1f718bb 的 15 项 CI 全绿，review 清零；已合并 ceff7f39。无旧协议、OAuth 获取、聚合或外部工具计费；无网关会话亲和要求。范围见 [文档](https://github.com/majiayu000/litellm-rs/blob/a1f718bb771f5974d212450c813ac4c87bd85b9d/docs/gateway/mcp.md)。 |
 | F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 完成 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)，`9a3d19be`：补 server Message context、任意 JSON data、畸形 URL 导出脱敏、终态订阅拒绝及 SSE 禁止缓冲。41 项路由、默认完整检查、gateway/sqlite/a2a/mcp 完整测试（9990 通过/1 忽略，另有集成/doc）及 clippy 通过，五条对应 review 已解决；此前 c29db734 的 15 项 CI 全绿；最新六条协议 review 及其验证见本行后续记录。进程内归属需实例亲和、重启拒绝旧归属，无 push/list/扩展卡片/代理计费。见 [不可变范围文档](https://github.com/majiayu000/litellm-rs/blob/c29db734e312f040c4ef62d3225bb4000f2a4f91/docs/gateway/a2a.md)。 最新 9a3d19be 六条新 review 已处理、43 项路由、默认完整 7267/1 忽略和 gateway/sqlite/a2a/mcp 完整 9992/1 忽略及 clippy 通过，已推送；9a3d19be 的 15 项 CI 全绿、review 清零，已合并 `7919b463` 并自动关闭 #1392；F18 单独验证发行产物。 |
-| F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 进行中 | Realtime bdb466d6 的38项真实WS、默认7132/特性9841（各库1忽略，另集成/doc）、两套clippy属于前轮源码。最新原分支 `2c8b3c06` 已另修三条审查：live guardrails启用后阻止响应；相关provider session.update错误记录失败/cooldown，保留活动响应admission；32,000模型最大输出上游用inf，内部按实际上限预留/验用量。数字1–4096或inf来自官方合同，中间无法表示的key cap明确拒绝。42项Realtime、完整默认库7132（1忽略，另集成/doc）、两套clippy、check/fmt/sync通过。完整联合特性检查仍在执行，尚不计通过。已推送并解决三线程；必须验收最新head CI，不借用bdb及更早head。 首批范围与非durable exactly-once限制保留。 |
+| F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 进行中 | Realtime bdb466d6 的38项真实WS、默认7132/特性9841（各库1忽略，另集成/doc）、两套clippy属于前轮源码。最新原分支 `2c8b3c06` 已另修三条审查：live guardrails启用后阻止响应；相关provider session.update错误记录失败/cooldown，保留活动响应admission；32,000模型最大输出上游用inf，内部按实际上限预留/验用量。数字1–4096或inf来自官方合同，中间无法表示的key cap明确拒绝。42项Realtime、完整默认库7132（1忽略，另集成/doc）、两套clippy、check/fmt/sync通过。完整gateway/sqlite/websockets/a2a/mcp库9845（1忽略，另集成/doc）通过。已推送并解决三线程；必须验收最新head CI，不借用bdb及更早head。 首批范围与非durable exactly-once限制保留。最新2c8b3c06已完成42项Realtime、默认库7132/联合特性库9845（各1忽略，另集成/doc）、两套clippy等8项检查，但随后新增6条未解决审查（含live router P1），不能合并或关闭#1397。 |
 | F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 进行中 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / [首批 PR #1404](https://github.com/majiayu000/litellm-rs/pull/1404)，`6b9b4580`：删除过期且未使用的 BatchProcessor、重复 VirtualKeyManager、UserManager 和 user-management feature，保留实际网关/鉴权/用户数据通路；README 与登记表记录未发布的源码破坏性变更。默认完整检查 7266 通过/1 忽略、all-features check、gateway/sqlite 9631 项库测试/1 忽略及 clippy 通过，15 项 CI 全绿且无未解决 review，已合并 `e6677a0b`。后续 [#1406](https://github.com/majiayu000/litellm-rs/pull/1406) 删除过期 analytics/semantic cache，[#1407](https://github.com/majiayu000/litellm-rs/pull/1407) 删除闲置 observability/webhooks，[#1410](https://github.com/majiayu000/litellm-rs/pull/1410) 删除五套过期重复 native provider。三批各自默认完整、all-features、相关特性测试/clippy 均通过；#1407 最新 689954f5 的 15 项 CI 全绿、review 清零，已合并 decce90f。#1406（a3390652）/#1410（c8324b26）与该 main 的冲突已原分支解决，整合后的默认完整、all-features、相关特性完整测试/clippy 已通过并推送。#1410 首次扩展运行在 batch mock 关闭时挂起被中断，定向与单线程完整复测通过，未声称已修复偶发挂起。retry/SDK 清理 [#1411](https://github.com/majiayu000/litellm-rs/pull/1411)（3ea5f99f）默认完整 7259/1 忽略及扩展 clippy/all-features 通过，文档 review 已处理，3ea5f99f 的 15 项 CI 全绿且 review 清零，已合并 `c3d0977f`；旧 realtime 及最终声明尚待核对。 #1410 的 c8324b26 在 15 项 CI 全绿、review 清零后已合并 ba3add3f；#1406 更新迁移文档冲突为 fc72de28，该 head 15 项 CI 全绿、线程清零后已合并 `8a253b42`；F16 总项继续开放。 |
 | F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 完成 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395) 已于 2026-10-03 合并（`cb76a186`）。同机、同上游、4 workers、并发 64 的三轮对照及直连基线共 9 个样本零请求错误；原始数据/环境/限制随报告提交。12 项运行器行为测试、14 项现有 benchmark 契约测试、默认完整 Rust 检查及全部 CI 通过，审查线程已解决。结果仅适用于报告中的本地模拟负载，不宣称通用倍数，见 [已合并报告](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison.md)及[原始证据包](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison-20261003.json.gz)。 |
 | F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 进行中 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403) / [Draft PR #1413](https://github.com/majiayu000/litellm-rs/pull/1413)，最新 `674f804f` 已整合 main `1723787d`，保留 Rust 1.96.1、统一 A2A-inclusive 发行特性、GHCR 登录、归档 checksum 和真实 Cargo target 文件。fmt 和 locked 精确发行特性 gateway 编译通过；当前 CI 即使全绿仍只验收准备补丁。此前 ceff7f39 基础的两种原生 ARM64 Docker 镜像、普通用户 /health=200、解包 crate 编译和干净 install/validate-config 为历史预验证，未推 registry，不代表最终候选或跨架构运行。最终版本/不可变候选、产物协议冒烟与发布仍缺。实际发行仍 [v0.7.0](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0)（`3341e54a`，2026-09-30），未创建 tag、发布 crate/镜像或触发正式发行。 |
@@ -238,7 +238,7 @@ Responses 的现有分支依赖为 `#1374 → #1377 → #1379 → #1383`。先�
 
 ## 本轮 issues / PR 分析与处理
 
-清单起点：12个开放issue、15个开放PR。处理期间新增事项持续进入；本报告纳入28个PR（含新增Draft #1438）。最后GitHub快照为 2026-10-04T02:12:25+08:00：13个开放issue、11个开放PR。已验收合并17个实现PR，关闭#1392、#1409、#1380、#1375、#1422、#1415、#1431、#1425共8个issue。快照不是持续实时状态，新提交/新审查必须再次核对。
+清单起点：12个开放issue、15个开放PR。处理期间新增事项持续进入；本报告纳入28个PR（含新增Draft #1438）。最后GitHub快照为 2026-10-04T02:27:25+08:00：11个开放issue、9个开放PR。已验收合并18个实现PR，关闭#1392、#1409、#1380、#1375、#1422、#1415、#1431、#1425、#1427、#1435共10个issue。快照不是持续实时状态，新提交/新审查必须再次核对。
 
 ### 主要判断与处理
 
@@ -261,7 +261,7 @@ Responses 的现有分支依赖为 `#1374 → #1377 → #1379 → #1383`。先�
 | [#1383](https://github.com/majiayu000/litellm-rs/pull/1383) | #1382 / F09 | `48f1b2be` | 保持Draft，base F07；94 HTTP/clippy及本head的Main Full/Cross Platform已成功。依赖F07接受后更新base再验收。 |
 | [#1390](https://github.com/majiayu000/litellm-rs/pull/1390) | 台账 / 本报告 | `本次修订` | 沿用原PR，记录精确源码/CI与可携带日志。文档新增head的CI须独立验收。 |
 | [#1393](https://github.com/majiayu000/litellm-rs/pull/1393) | #1392 / F14 A2A | `9a3d19be` | 该head的15项CI成功、review清零后合并 `7919b463`。 |
-| [#1405](https://github.com/majiayu000/litellm-rs/pull/1405) | #1397 / F15 | `2c8b3c06` | 最新原分支 `2c8b3c06` 已另修三条审查：live guardrails启用后阻止响应；相关provider session.update错误记录失败/cooldown，保留活动响应admission；32,000模型最大输出上游用inf，内部按实际上限预留/验用量。数字1–4096或inf来自官方合同，中间无法表示的key cap明确拒绝。42项Realtime、完整默认库7132（1忽略，另集成/doc）、两套clippy、check/fmt/sync通过。完整联合特性检查仍在执行，尚不计通过。已推送并解决三线程；必须验收最新head CI，不借用bdb及更早head。 |
+| [#1405](https://github.com/majiayu000/litellm-rs/pull/1405) | #1397 / Realtime | `2c8b3c06` | 最新2c8b3c06已完成42项Realtime、默认库7132/联合特性库9845（各1忽略，另集成/doc）、两套clippy等8项检查，但随后新增6条未解决审查（含live router P1），不能合并或关闭#1397。原先六条及后三条修复已推送；新审查与关闭条件见下文。 |
 | [#1406](https://github.com/majiayu000/litellm-rs/pull/1406) | F16 analytics/cache | `fc72de28` | 该head的15项CI成功、review清零后合并 `8a253b42`。 |
 | [#1408](https://github.com/majiayu000/litellm-rs/pull/1408) | F10 DeepSeek/xAI/Cohere | `7019848e` | 该head的15项CI成功、review清零后合并 `bd8db0a8`。 |
 | [#1410](https://github.com/majiayu000/litellm-rs/pull/1410) | F16 重复 native provider | `c8324b26` | 该head的15项CI成功、review清零后合并 `ba3add3f`。 |
@@ -273,15 +273,15 @@ Responses 的现有分支依赖为 `#1374 → #1377 → #1379 → #1383`。先�
 | [#1417](https://github.com/majiayu000/litellm-rs/pull/1417) | F10 fal | `319fefd9` | 该head的15项CI成功、review清零后合并 `5753956a`。 |
 | [#1418](https://github.com/majiayu000/litellm-rs/pull/1418) | #1415 / F11 云兼容 | `c354fd6f` | 该head的15项CI成功、review清零后合并 `b19e8fc9`。 |
 | [#1419](https://github.com/majiayu000/litellm-rs/pull/1419) | F10 Replicate | `683bc29d` | 该head的15项CI成功、review清零后合并 `ca0833ee`。 |
-| [#1421](https://github.com/majiayu000/litellm-rs/pull/1421) | #1420 / 中文 | `5afc6536` | 整合接受的百川main；37项HTTP、fmt/sync及联合clippy通过，保留所有parent functions，已推原分支；当前CI待验收。 |
+| [#1421](https://github.com/majiayu000/litellm-rs/pull/1421) | #1420 / 中文 | `edda3bbe` | 前5afc6536的15项CI成功后，native/media新main引入HTTP fixture冲突；已在原分支保留所有父函数/Ark、CN native路径并提交最小整合，当前40项HTTP、fmt/sync/联合clippy通过并推送；新CI独立验收。 |
 | [#1423](https://github.com/majiayu000/litellm-rs/pull/1423) | F10 Stability/BFL | `44b5f730` | 该head的15项CI成功、review清零后合并 `afdeb820`。 |
 | [#1424](https://github.com/majiayu000/litellm-rs/pull/1424) | #1422 / F11 聚合供应商 | `fc11c6d8` | 该head的15项CI成功、review清零后合并 `1723787d`。 |
 | [#1426](https://github.com/majiayu000/litellm-rs/pull/1426) | #1425 / F11 地区 | `bb85cf44` | 该head的15项CI成功、review清零后合并 `fec51c5d`。 |
-| [#1428](https://github.com/majiayu000/litellm-rs/pull/1428) | #1427 / 原生 | `c8c78d98` | 移除五个Ark未确认零价且从fresh source刷新非价格元数据；当前35项HTTP/feature clippy/fmt/sync及54 Python通过。前轮f787完整默认7132/两套clippy独立归档。已推原PR、两个线程解决；当前CI待验收。 |
-| [#1430](https://github.com/majiayu000/litellm-rs/pull/1430) | #1429 / 聚合 | `fc6d9282` | AIML两个选择器缺失/null/无效usage以ResponseParsing拒绝；5d6a9937完整默认7132（1忽略）、31 HTTP、两套clippy/53Python/check/sync通过。当前百川整合35 HTTP/feature clippy/fmt/sync通过，已推原PR并解决审查。 |
+| [#1428](https://github.com/majiayu000/litellm-rs/pull/1428) | #1427 / F11 原生 | `c8c78d98` | 该head的15项CI成功、review清零后合并 `564e070c`。 |
+| [#1430](https://github.com/majiayu000/litellm-rs/pull/1430) | #1429 / 聚合 | `97d3e5f6` | AIML缺失/null/无效usage已在5d6完整默认7132/两套clippy等8项验证；再与最新native/media main在原分支合并，保留父HTTP函数/两套vendor映射。当前38项HTTP、fmt/sync/feature clippy通过并推送；新CI独立验收，不能借fc6旧CI。 |
 | [#1432](https://github.com/majiayu000/litellm-rs/pull/1432) | #1431 / F11 W&B/余下选择器 | `d7a0765b` | 该head的15项CI成功、review清零后合并 `b63a8f8f`。 |
-| [#1434](https://github.com/majiayu000/litellm-rs/pull/1434) | #1433 / CompactifAI | `af0ccf56` | 原P1声称实际费用超过预留时丢支出；现有内存结算与Redis settle没有预算cap拒绝，已加真实HTTP例子验证预留60/实际75/限额70秒，provider/model保留实际费用且下一请求前置拒绝。已整合main；最终本地/CI/review按验证清单，完成前不计接受。 |
-| [#1436](https://github.com/majiayu000/litellm-rs/pull/1436) | #1435 / 媒体文档 | `65b83cbf` | 已更正OpenRouter≤25 MB multipart、xAI cost ticks/每图计费，三列默认地址表已核对，移除本机临时文件提供可携带证据的错误声明。diff/table/base/local-link检查通过，四线程已解决并推送；当前docs CI待独立验收。 |
+| [#1434](https://github.com/majiayu000/litellm-rs/pull/1434) | #1433 / CompactifAI | `ede71579` | af0ccf56验证P1具体例子不成立：预留60/实际75/限额70秒的费用保留、下一请求前置拒绝；14 audio、33 catalog、完整默认7132（1忽略）、两套clippy/53Python等9项全通过并推送、线程解决。又整合最新native/media main，当前36项HTTP、fmt/sync/feature clippy通过并推送；新CI独立验收。 |
+| [#1436](https://github.com/majiayu000/litellm-rs/pull/1436) | #1435 / 媒体审计文档 | `65b83cbf` | 官方协议与证据声明更正、三列表/base/local-link核对后，3项docs CI成功、4线程清零，合并 `5ff9ceca` 并关闭#1435。没有新增媒体运行时能力。 |
 | [#1438](https://github.com/majiayu000/litellm-rs/pull/1438) | #1437 / 原生xAI转写 | `af4821f0` | 保持Draft；已只读核对原生/stt、file-last、words.text映射及正duration合同。当前与main冲突、最新完整CI未接受。作者正文的定向/默认结果和两次全量挂起不是本轮亲自执行证据；先整合、复核完整特性/当前CI，再决定ready。 |
 
 ### 开放issue的关闭条件
@@ -292,14 +292,12 @@ Responses 的现有分支依赖为 `#1374 → #1377 → #1379 → #1383`。先�
 | [#1373](https://github.com/majiayu000/litellm-rs/issues/1373) | 静态目录/authority总项 | 剩余逐条核验provider/pricing_key、模型生命周期、能力/限额/成本。Lambda确认退役及Linkup旧chat声明交F10；历史价格不恢复callable。 |
 | [#1378](https://github.com/majiayu000/litellm-rs/issues/1378) | Draft #1379 | 当前main-base完整CI和scope/review验收；持久owner/TTL/取消/竞争/未知费用边界；SQLite证据不写成Postgres实际重启。 |
 | [#1382](https://github.com/majiayu000/litellm-rs/issues/1382) | Draft #1383 | F07接受后改base并验收新head；保留现有Gemini路由，只补已定义契约。 |
-| [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) | Realtime #1405 当前新候选 | 最新post-review head全CI成功、线程清零和真实WS/预算检查完成后接受；不复用969/eef/008CI。 |
+| [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) | #1405最新六条审查阻止接受 | 优先修live pinned deployment授权P1；再保留初始化/准入错误类型、live cap增加、session ack手动模式和content-only image检测。对应真实WS回归、当前完整检查/全部CI/review成功后接受；42项及9845通过不证明这些新问题不存在。 |
 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) | F16清理总项 | 继续核对旧Realtime、subsystem_registry/README/Cargo/真实入口；不把删除重复实现算能力完成。 |
 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403) | 发行Draft #1413 | 固定最终版本/不可变候选；完整测试、跨平台、crate/安装、镜像/协议冒烟；实际tag/commit/checksum/digest可查后关闭。 |
 | [#1420](https://github.com/majiayu000/litellm-rs/issues/1420) | 中文供应商 #1421 | 接受最新整合head的HTTP/clippy、全部CI和review；保存两次旧head未成功Test证据，不以请求重跑作为通过。 |
-| [#1427](https://github.com/majiayu000/litellm-rs/issues/1427) | #1428两个价格/sync审查已修 | 当前head CI/review成功后接受；保持unknown价格，非价格元数据继续更新，不能据历史price恢复callable或未经支持的原生媒体能力。 |
 | [#1429](https://github.com/majiayu000/litellm-rs/issues/1429) | AIML/Comet/Bytez/Poe #1430 | 当前整合head CI/review通过；确认同步协议和实际usage，附件/原生run/异步媒体不伪装标准端点。 |
 | [#1433](https://github.com/majiayu000/litellm-rs/issues/1433) | #1434结算审查按实际复核 | 已用review给出的75秒/70秒预算例子验证费用保留；不得为不成立的例子增加重复记账。完成当前main整合的完整检查、CI/review，原生模型/一分钟最低计费scope验收后接受。后端不可用与崩溃恢复未额外证明。 |
-| [#1435](https://github.com/majiayu000/litellm-rs/issues/1435) | #1436文档四条审查已处理 | 最新docs CI/review通过后接受审计范围；没有运行时媒体新增，不由审计关闭F11或xAI原生实现issue。 |
 | [#1437](https://github.com/majiayu000/litellm-rs/issues/1437) | 新增Draft #1438 | 原生xAI /stt实现已形成Draft；还需整合main，保留unsupported option/model/实际duration/error/预算契约。作者报告两次完整gateway/sqlite在既有不同集成目标挂起、独立目标通过，不计完整套件通过，也不称根因已修；最新CI/review/完整验收后才ready。 |
 
 ### 远端CI与review快照
@@ -308,17 +306,31 @@ Responses 的现有分支依赖为 `#1374 → #1377 → #1379 → #1383`。先�
 | --- | --- | --- | --- | --- |
 | #1379 | `c44b48d4` | 15/15 | 0 | Draft；main；MERGEABLE |
 | #1383 | `48f1b2be` | 1/1 | 0 | Draft；codex/responses-persistent-state-20261003；MERGEABLE |
-| #1390 | `4a352189` | 3/3 | 1 | main；MERGEABLE |
-| #1405 | `2c8b3c06` | 4/15 | 0 | main；MERGEABLE |
+| #1390 | `af159fb6` | 1/3 | 1 | main；MERGEABLE |
+| #1405 | `2c8b3c06` | 13/15 | 6 | main；MERGEABLE |
 | #1413 | `674f804f` | 14/14 | 0 | Draft；main；MERGEABLE |
-| #1421 | `5afc6536` | 13/15 | 0 | main；MERGEABLE |
-| #1428 | `c8c78d98` | 13/15 | 0 | main；MERGEABLE |
-| #1430 | `fc6d9282` | 10/15 | 0 | main；MERGEABLE |
-| #1434 | `af0ccf56` | 0/15 | 0 | main；MERGEABLE |
-| #1436 | `65b83cbf` | 2/3 | 0 | main；MERGEABLE |
+| #1421 | `edda3bbe` | 0/15 | 0 | main；MERGEABLE |
+| #1430 | `97d3e5f6` | 0/13 | 0 | main；MERGEABLE |
+| #1434 | `ede71579` | 0/0 | 0 | main；MERGEABLE |
 | #1438 | `af4821f0` | 0/0 | 0 | Draft；main；CONFLICTING |
 
 本表仅适用于快照中列出的远端head；本报告的新提交以及任何本地尚未推送head，必须独立等待新CI/review。
+
+### Realtime后续六条审查的处理判断
+
+以下审查对应远端 `2c8b3c06`，按当前代码核对。完整测试通过与问题成立可同时存在；本轮将这些线程保留为明确的合并阻断，未把尚未实施的修复计为完成。
+
+| 优先级 | 问题 | 当前代码证据 | 最小处理与验收 |
+| --- | --- | --- | --- |
+| P1 | 运行时更新仍使用旧pinned router | `relay`取得current_runtime只用于guardrails/RPM；`lease.begin_response`继续持有handshake router/deployment。 | 每次response核对live deployment的存在、enabled、配置和admission策略；失效关闭socket。真实WS覆盖删除/disable/credentials或base轮换与降低provider RPM/TPM。 |
+| P2 | 初始化错误丢失分类 | `initialize_upstream`将native error退化为字符串后network error。 | 保留401/403/429/5xx对应ProviderError和cooldown；升级前模拟这些session.update拒绝。 |
+| P2 | live key cap增加仍受旧上限束缚 | Rates::load握手时截断max_output，prepare_event在live key查询前使用此上限。 | 分别保留模型最大值与session/key策略；真实WS低cap连接后升高/移除cap，并验证发送值、预留与终态用量。 |
+| P2 | session.updated未再次验证manual模式 | 后续ack仅清pending/update cap，缺少初始化时turn_detection/transcription检查。 | 每次已确认session snapshot检查manual模式；上游忽略/恢复VAD的ack须在自动生成前关闭并保留账务/原生错误。 |
+| P2 | image检测误扫任意schema/metadata | 递归扫描所有对象的type=input_image，包含自定义function schema和metadata。 | 只检查协议content part位置；测试schema/metadata相同type正常通过、真实image part拒绝。 |
+| P2 | admission故障全部被写成rate_limit | begin_response所有Err均发送rate_limit_error，包括unavailable/backend outage。 | RPM/TPM/parallel限流与backend unavailable、unhealthy/cooldown分型；验证返回native错误类型、admission释放和请求账务。 |
+
+新审查原文与线程状态在最新GitHub快照中随归档保存。
+#1438为后续新Draft范围，不在本轮这些修复结果中冒充已验收。
 
 ### 后续执行顺序
 
