@@ -19,3 +19,7 @@ budget commitment but records the key request as unpriced with zero reported
 actual cost/tokens and leaves ledger cost unknown. An estimate is not presented
 as a provider invoice. This includes malformed finite usage and interrupted or
 failed streams; the original protocol error is still returned.
+
+The [April 30, 2026 release note](https://platform.claude.com/docs/en/release-notes/overview#april-30-2026) retires the Sonnet 4.5 1M-context beta: its header has no effect and the current model context remains 200k. Web-tool reservation uses the callable registry limit, not historical pricing metadata. Sonnet 4.6 and current 1M models use their verified 1M limit.
+
+Finite responses require a completed message envelope and nonempty stop reason. Streams validate the message_start envelope and require final usage on the delta carrying the terminal stop reason; an earlier partial usage delta is insufficient. Output guardrail failures release the deployment lease without adding provider failures.

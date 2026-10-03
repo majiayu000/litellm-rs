@@ -1,6 +1,6 @@
 use super::{
     AppState, MAX_BODY_BYTES, MessageCall, ProviderError, RequestContext, StreamingDeploymentLease,
-    native_usage, settle,
+    native_usage, settle, valid_message_envelope,
 };
 use crate::core::providers::base::sse::{AnthropicTransformer, SSETransformer};
 use crate::server::guardrails::{GuardrailDecisionSink, messages_projection};
@@ -102,6 +102,10 @@ pub(super) fn response(
                                     failure = Some(invalid("Duplicate message_start"));
                                     break 'upstream;
                                 }
+                                if !value.get("message").is_some_and(valid_message_envelope) {
+                                    failure = Some(invalid("Invalid message_start envelope"));
+                                    break 'upstream;
+                                }
                                 started = true;
                                 usage = value
                                     .pointer("/message/usage")
@@ -113,17 +117,24 @@ pub(super) fn response(
                                     failure = Some(invalid("message_delta before message_start"));
                                     break 'upstream;
                                 }
-                                terminal_reason |= value
+                                let ends_message = value
                                     .pointer("/delta/stop_reason")
                                     .and_then(Value::as_str)
                                     .is_some_and(|reason| !reason.is_empty());
                                 if let Some(delta) = value.get("usage") {
-                                    final_usage = true;
                                     if delta.is_object() {
                                         merge_usage(&mut usage, delta);
                                     } else {
                                         usage = Value::Null;
                                     }
+                                }
+                                if ends_message {
+                                    terminal_reason = true;
+                                    final_usage = value
+                                        .pointer("/usage/output_tokens")
+                                        .and_then(Value::as_u64)
+                                        .is_some()
+                                        && native_usage(&usage, require_inference_geo).is_some();
                                 }
                             }
                             "message_stop" => {
@@ -248,14 +259,19 @@ pub(super) fn response(
         .await;
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
-            lease.finish_failure(&error);
-            let kind = if matches!(
+            let blocked = matches!(
                 error,
                 ProviderError::ApiError {
                     provider: "guardrail",
                     ..
                 }
-            ) {
+            );
+            if blocked {
+                drop(lease);
+            } else {
+                lease.finish_failure(&error);
+            }
+            let kind = if blocked {
                 "permission_error"
             } else {
                 "api_error"

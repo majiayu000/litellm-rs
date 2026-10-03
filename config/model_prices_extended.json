@@ -15712,7 +15712,14 @@
     "supports_function_calling": true,
     "supports_vision": true,
     "supports_streaming": true,
-    "supports_system_message": true
+    "supports_system_message": true,
+    "cache_creation_input_token_cost": 1.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 2e-06,
+    "search_context_cost_per_query": {
+      "search_context_size_low": 0.01,
+      "search_context_size_medium": 0.01,
+      "search_context_size_high": 0.01
+    }
   },
   "claude-haiku-4-5": {
     "cache_creation_input_token_cost": 1.25e-06,

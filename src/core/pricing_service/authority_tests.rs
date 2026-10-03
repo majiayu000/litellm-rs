@@ -813,6 +813,7 @@ fn anthropic_geo_prices_all_token_categories_but_not_search_calls() {
 fn anthropic_canonical_cache_writes_and_long_context_tiers_are_priced() {
     let service = PricingService::with_embedded_default().unwrap();
     for (model, short, long) in [
+        ("claude-haiku-4-5-20251001", 1.25e-6, 2e-6),
         ("claude-sonnet-4-6", 3.75e-6, 6e-6),
         ("claude-opus-4-6", 6.25e-6, 10e-6),
         ("claude-opus-4-7", 6.25e-6, 10e-6),

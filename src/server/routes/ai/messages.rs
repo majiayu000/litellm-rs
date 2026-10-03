@@ -298,14 +298,12 @@ async fn create(
             return Err(error);
         }
     };
-    if value
-        .get("id")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-        || value.get("role").and_then(Value::as_str) != Some("assistant")
+    if !valid_message_envelope(&value)
         || usage.is_none()
-        || value.get("type").and_then(Value::as_str) != Some("message")
-        || value.get("content").and_then(Value::as_array).is_none()
+        || value
+            .get("stop_reason")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
     {
         let error = ProviderError::response_parsing("anthropic", "Invalid Messages response");
         callback.fail(error.to_string(), "provider_error");
@@ -326,6 +324,16 @@ async fn create(
         })?;
     callback.complete_pricing_usage(usage.as_ref().map(|usage| &usage.pricing), "success");
     Ok(HttpResponse::Ok().json(value))
+}
+
+fn valid_message_envelope(value: &Value) -> bool {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+        && value.get("role").and_then(Value::as_str) == Some("assistant")
+        && value.get("type").and_then(Value::as_str) == Some("message")
+        && value.get("content").and_then(Value::as_array).is_some()
 }
 
 // Count the original structured input, including image/document sources and tool

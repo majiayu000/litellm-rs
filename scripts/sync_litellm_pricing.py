@@ -294,6 +294,7 @@ ANTHROPIC_GEO_PRICING_MODELS = (
 # Canonical first-party cache/tool rates, verified against official pricing.
 # https://platform.claude.com/docs/en/about-claude/pricing
 for model, short_write, long_write in (
+    ("claude-haiku-4-5-20251001", 0.00000125, 0.000002),
     ("claude-sonnet-4-6", 0.00000375, 0.000006),
     ("claude-opus-4-6", 0.00000625, 0.000010),
     ("claude-opus-4-7", 0.00000625, 0.000010),

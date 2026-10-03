@@ -90,6 +90,34 @@ async fn upstream(
                     }
                 }
             }
+            Some("terminal_missing_usage") => {
+                for event in &mut events {
+                    if event
+                        .pointer("/delta/stop_reason")
+                        .is_some_and(Value::is_string)
+                    {
+                        event.as_object_mut().unwrap().remove("usage");
+                    }
+                }
+            }
+            Some("start_missing_id") => {
+                events[0]["message"].as_object_mut().unwrap().remove("id");
+            }
+            Some("start_wrong_role") => {
+                events[0]["message"]["role"] = json!("user");
+            }
+            Some("start_wrong_type") => {
+                events[0]["message"]["type"] = json!("error");
+            }
+            Some("start_missing_content") => {
+                events[0]["message"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("content");
+            }
+            Some("output_pii") => {
+                events[3]["delta"]["thinking"] = json!("alice@example.com");
+            }
             Some("bad_usage") => {
                 for event in &mut events {
                     if event["type"] == "message_delta" {
@@ -116,6 +144,18 @@ async fn upstream(
         return HttpResponse::Ok()
             .insert_header(("content-type", "text/event-stream"))
             .streaming(futures::stream::iter(chunks));
+    }
+    match *data.fault.lock().unwrap() {
+        Some("missing_reason") => {
+            result.as_object_mut().unwrap().remove("stop_reason");
+        }
+        Some("null_reason") => {
+            result["stop_reason"] = Value::Null;
+        }
+        Some("empty_reason") => {
+            result["stop_reason"] = json!("");
+        }
+        _ => {}
     }
     HttpResponse::Ok().json(result)
 }
@@ -527,6 +567,11 @@ async fn malformed_native_message_streams_cannot_complete_successfully() {
         "missing_stop",
         "missing_delta",
         "missing_reason",
+        "terminal_missing_usage",
+        "start_missing_id",
+        "start_wrong_role",
+        "start_wrong_type",
+        "start_missing_content",
         "bad_usage",
     ] {
         let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
@@ -1002,4 +1047,113 @@ async fn unknown_messages_usage_retains_budget_without_recording_an_actual_bill(
         );
         handle.stop(false).await;
     }
+}
+
+#[tokio::test]
+async fn finite_messages_require_terminal_reason() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    for fault in ["missing_reason", "null_reason", "empty_reason"] {
+        *upstream.fault.lock().unwrap() = Some(fault);
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/messages")
+                .set_json(request(false))
+                .to_request(),
+        )
+        .await;
+        assert!(response.status().is_server_error(), "{fault}");
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["type"], "error");
+    }
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn messages_output_guardrail_does_not_penalize_healthy_deployment() {
+    use litellm_rs::core::guardrails::{GuardrailAction, PIIConfig};
+    use std::sync::atomic::Ordering;
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |config| {
+        config.gateway.guardrails.check_output = true;
+        config.gateway.guardrails.pii = Some(PIIConfig {
+            enabled: true,
+            action: GuardrailAction::Block,
+            ..Default::default()
+        });
+    })
+    .await;
+    *upstream.fault.lock().unwrap() = Some("output_pii");
+    let router = state.unified_router();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("claude-opus-5")[0])
+        .unwrap();
+    let failures = deployment.state.fail_requests.load(Ordering::Relaxed);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(request(true))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let wire = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
+    assert!(wire.contains("permission_error"), "{wire}");
+    assert!(!wire.contains("alice@example.com"));
+    assert_eq!(
+        deployment.state.fail_requests.load(Ordering::Relaxed),
+        failures
+    );
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn haiku_five_minute_cache_reservation_uses_write_rate() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    let model = "claude-haiku-4-5-20251001";
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |config| {
+        config.gateway.providers[0].models = vec![model.into()];
+    })
+    .await;
+    *upstream.count_result.lock().unwrap() = json!({"input_tokens":1000});
+    state
+        .budget_limits
+        .models
+        .set_model_limit(model, ModelLimitConfig::new(0.0011, ResetPeriod::Monthly));
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["model"] = json!(model);
+    body["max_tokens"] = json!(1);
+    body.as_object_mut().unwrap().remove("thinking");
+    body["system"][0]["cache_control"]["ttl"] = json!("5m");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    assert_eq!(upstream.counted.lock().unwrap().len(), 1);
+    handle.stop(false).await;
 }
