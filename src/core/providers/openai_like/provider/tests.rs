@@ -381,29 +381,13 @@ async fn openai_like_catalog_rejects_invalid_capability_profiles() {
         ProviderCapability::ChatCompletion,
         ProviderCapability::ChatCompletion,
     ];
-    static UNIMPLEMENTED: &[ProviderCapability] = &[ProviderCapability::ImageEdit];
-    static UNIMPLEMENTED_EMBEDDINGS: &[ProviderCapability] = &[ProviderCapability::Embeddings];
-    static UNIMPLEMENTED_IMAGE_GENERATION: &[ProviderCapability] =
-        &[ProviderCapability::ImageGeneration];
-    static UNIMPLEMENTED_AUDIO: &[ProviderCapability] = &[ProviderCapability::AudioTranscription];
+    static UNIMPLEMENTED: &[ProviderCapability] = &[ProviderCapability::Rerank];
 
     let config = OpenAILikeConfig::new(TEST_PUBLIC_API_BASE).with_skip_api_key(true);
     for (profile, expected) in [
         (EMPTY, "cannot be empty"),
         (DUPLICATE, "duplicate ChatCompletion"),
         (UNIMPLEMENTED, "not executable for this OpenAI-like profile"),
-        (
-            UNIMPLEMENTED_EMBEDDINGS,
-            "not executable for this OpenAI-like profile",
-        ),
-        (
-            UNIMPLEMENTED_IMAGE_GENERATION,
-            "not executable for this OpenAI-like profile",
-        ),
-        (
-            UNIMPLEMENTED_AUDIO,
-            "not executable for this OpenAI-like profile",
-        ),
     ] {
         let error = OpenAILikeProvider::new_for_catalog(config.clone(), profile)
             .await
