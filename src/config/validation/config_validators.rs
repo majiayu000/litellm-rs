@@ -102,6 +102,22 @@ impl Validate for GatewayConfig {
         #[cfg(feature = "mcp")]
         for (name, server) in &self.mcp_servers {
             server.validate_http_gateway(name)?;
+            if server.enabled
+                && self.auth.enable_api_key
+                && [
+                    "accept",
+                    "content-type",
+                    "mcp-protocol-version",
+                    "mcp-session-id",
+                    "last-event-id",
+                    "origin",
+                    "accept-encoding",
+                ]
+                .iter()
+                .any(|header| header.eq_ignore_ascii_case(&self.auth.api_key_header))
+            {
+                return Err("Gateway API key header conflicts with MCP transport headers".into());
+            }
         }
         Self::validate_model_alias_map(&self.model_aliases)?;
         Validate::validate(&self.router)?;

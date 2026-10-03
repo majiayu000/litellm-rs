@@ -31,6 +31,7 @@ struct Session {
     owner: String,
     binding: Vec<u8>,
     upstream: Option<String>,
+    protocol_version: Option<String>,
     expires: Instant,
     pending: bool,
     server: Arc<McpServerConfig>,
@@ -117,6 +118,10 @@ async fn reap_sessions(sessions: &Sessions, servers: &HashMap<String, McpServerC
                     }
                     let response = request
                         .header("mcp-session-id", upstream)
+                        .header(
+                            "mcp-protocol-version",
+                            session.protocol_version.as_deref().ok_or(())?,
+                        )
                         .send()
                         .await
                         .map_err(|_| ())?;
@@ -411,6 +416,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 owner,
                 binding,
                 upstream: None,
+                protocol_version: None,
                 expires: Instant::now() + Duration::from_secs(3600),
                 pending: true,
                 server: Arc::new(server.clone()),
@@ -455,6 +461,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     }
     response.insert_header(("cache-control", "no-store"));
     let mut initialized_body = None;
+    let mut protocol_version = None;
     if initialize && status == StatusCode::OK {
         // Initialize is finite: do not allocate a gateway session for an RPC error.
         // Preserve the original JSON/SSE bytes after inspecting the completed reply.
@@ -488,8 +495,11 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                     .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
             });
         match initialize_result(&bytes, event_stream, &request_id) {
-            Ok(true) => initialized_body = Some(bytes),
-            Ok(false) => return response.body(bytes),
+            Ok(Some(version)) => {
+                protocol_version = Some(version);
+                initialized_body = Some(bytes);
+            }
+            Ok(None) => return response.body(bytes),
             Err(()) => return error(StatusCode::BAD_GATEWAY, "Invalid MCP initialize result"),
         }
     }
@@ -522,6 +532,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             );
         };
         session.upstream = upstream_id;
+        session.protocol_version = protocol_version;
         session.pending = false;
         session.expires = Instant::now() + Duration::from_secs(3600);
         reservation.committed = true;
@@ -550,7 +561,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     }))
 }
 
-fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<bool, ()> {
+fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<Option<String>, ()> {
     let messages: Vec<Value> = if event_stream {
         let text = std::str::from_utf8(bytes)
             .map_err(|_| ())?
@@ -580,14 +591,18 @@ fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<boo
         })
         .ok_or(())?;
     if response.get("error").is_some() {
-        return Ok(false);
+        return Ok(None);
     }
     let result = response.get("result").ok_or(())?;
     if result.get("protocolVersion").is_some_and(Value::is_string)
         && result.get("capabilities").is_some_and(Value::is_object)
         && result.get("serverInfo").is_some_and(Value::is_object)
     {
-        Ok(true)
+        let version = result["protocolVersion"].as_str().ok_or(())?;
+        if version.is_empty() || reqwest::header::HeaderValue::from_str(version).is_err() {
+            return Err(());
+        }
+        Ok(Some(version.to_owned()))
     } else {
         Err(())
     }

@@ -18,6 +18,12 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
         req.headers().get("authorization").unwrap(),
         "Bearer upstream-only-test"
     );
+    if req.method() == Method::DELETE {
+        assert_eq!(
+            req.headers().get("mcp-protocol-version").unwrap(),
+            "2025-11-25"
+        );
+    }
     let value = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
     let session = req
         .headers()
@@ -262,6 +268,7 @@ async fn isolates_sessions_and_forwards_error_resume_and_delete() {
             .contains("event-2")
     );
     let req = test::TestRequest::delete()
+        .insert_header(("mcp-protocol-version", "2025-11-25"))
         .uri("/docs/mcp")
         .insert_header(("accept", "text/event-stream"))
         .insert_header(("mcp-session-id", token.clone()))
@@ -675,6 +682,7 @@ async fn capacity_is_reserved_before_upstream_and_cancellation_releases_it() {
                     owner: "other".into(),
                     binding: vec![],
                     upstream: None,
+                    protocol_version: None,
                     expires: Instant::now() + Duration::from_secs(60),
                     pending: false,
                     server: Arc::new(McpServerConfig::new("docs", "https://1.1.1.1/mcp")),
@@ -696,6 +704,7 @@ async fn capacity_is_reserved_before_upstream_and_cancellation_releases_it() {
                 owner: "other".into(),
                 binding: vec![],
                 upstream: None,
+                protocol_version: None,
                 expires: Instant::now(),
                 pending: true,
                 server: Arc::new(McpServerConfig::new("docs", "https://1.1.1.1/mcp")),
@@ -936,5 +945,38 @@ async fn unchanged_encoded_bodies_preserve_encoding_metadata() {
     let response = test::call_service(&app, request("compressed", Some(&token), &owner)).await;
     assert_eq!(response.headers().get("content-encoding").unwrap(), "gzip");
     assert_eq!(test::read_body(response).await.as_ref(), COMPRESSED_REPLY);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn mcp_configuration_rejects_unknown_fields_and_transport_auth_collisions() {
+    let (state, _, handle) = fixture(false).await;
+    let mut gateway = state.pin_runtime().config.gateway.clone();
+    gateway.mcp_servers.get_mut("docs").unwrap().url = "https://example.com/mcp".into();
+    for header in [
+        "Accept",
+        "Content-Type",
+        "MCP-Protocol-Version",
+        "MCP-Session-Id",
+        "Origin",
+        "Last-Event-ID",
+        "Accept-Encoding",
+    ] {
+        gateway.auth.enable_api_key = true;
+        gateway.auth.api_key_header = header.into();
+        assert!(
+            gateway
+                .validate()
+                .unwrap_err()
+                .contains("conflicts with MCP")
+        );
+    }
+    let mut server =
+        serde_json::to_value(McpServerConfig::new("docs", "https://example.com/mcp")).unwrap();
+    server["static_header"] = json!({"x-token":"test"});
+    assert!(serde_json::from_value::<McpServerConfig>(server).is_err());
+    let mut auth = serde_json::to_value(AuthConfig::bearer("test")).unwrap();
+    auth["header_nam"] = json!("x-token");
+    assert!(serde_json::from_value::<AuthConfig>(auth).is_err());
     handle.stop(false).await;
 }

@@ -10,6 +10,7 @@ use crate::core::net::validate_outbound_url_str_without_resolution;
 
 /// MCP Server configuration
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpServerConfig {
     /// Server name/alias (used as identifier)
     pub name: String,
@@ -248,6 +249,7 @@ impl McpServerConfig {
 
 /// Authentication configuration
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     /// Authentication type
     #[serde(rename = "type")]
