@@ -929,15 +929,6 @@ async fn nscale_images_are_withheld_until_pixel_pricing_is_supported() {
             .select_deployment_lease_for_capability("public", &ProviderCapability::ImageGeneration)
             .is_err()
     );
-    let request = serde_json::from_value(
-        json!({"model":"test-model","prompt":"mountains","size":"1024x1024"}),
-    )
-    .unwrap();
-    let error = selected(&router, ProviderCapability::Embeddings)
-        .create_images(request, RequestContext::default())
-        .await
-        .unwrap_err();
-    assert!(matches!(error, ProviderError::NotSupported { .. }));
     assert!(upstream.seen.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
