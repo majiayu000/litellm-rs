@@ -160,7 +160,7 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 
 2026-10-04，issue #1437。[官方 STT 合同](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text)当前模型为 `grok-voice-transcribe-2.0`；1.0 已于 2026-10-02 结束生命周期并转向 2.0，本次只开放当前 2.0。不是从价格表推导模型可调用性。
 
-网关 `/v1/audio/transcriptions` 通过 `xai` 选择器调用原生 `/v1/stt`，保留既有自定义 base、Bearer、受限 transport 和预算链路；没有新配置或 SDK。支持上传文件、language、JSON/verbose_json 和 word 时间戳。原生 words[].text 转为网关 words[].word，保留 language/duration；缺失 text/language/duration 或无效时长不变成空成功。prompt、temperature、segment 时间戳和原始字幕格式明确拒绝。没有暴露 URL 下载、diarization、multichannel、WebSocket 或 TTS。
+网关 `/v1/audio/transcriptions` 通过 `xai` 选择器调用原生 `/v1/stt`，保留既有自定义 base、Bearer、受限 transport 和预算链路；没有新配置或 SDK。支持上传文件、language、JSON/verbose_json 和 word 时间戳。提供 language 时同时发送 format=true，启用该语言的数字、货币和单位格式化；未提供 language 时保留原生默认格式化行为。原生 words[].text 转为网关 words[].word，保留 language/duration；缺失 text/language/duration 或无效时长不变成空成功。prompt、temperature、segment 时间戳和原始字幕格式明确拒绝。没有暴露 URL 下载、diarization、multichannel、WebSocket 或 TTS。
 
 具体转录模型不会作为 Chat、翻译或 TTS 候选。沿用现有每秒价格来源与显式覆盖；缺价仍拒绝。预算预留继续采用既有文件大小时长估算，最终按供应商返回的有效 duration 结算。本地测试用人工测试费率证明单位和结算，不将测试费率写成官方价格；没有运行付费实调。
 

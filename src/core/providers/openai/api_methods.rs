@@ -329,10 +329,11 @@ pub(crate) async fn execute_xai_transcription(
         ));
     }
     // The native API requires the file to be the final multipart field.
-    let form = multipart::Form::new()
-        .text("model", request.model)
-        .optional_text("language", request.language)
-        .part("file", audio_file_part(request.file, request.filename));
+    let mut form = multipart::Form::new().text("model", request.model);
+    if let Some(language) = request.language {
+        form = form.text("language", language).text("format", "true");
+    }
+    let form = form.part("file", audio_file_part(request.file, request.filename));
     let bytes = execute_audio_multipart(
         base,
         headers,
