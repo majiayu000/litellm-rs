@@ -384,6 +384,11 @@ impl OpenAILikeProvider {
         let mut value: Value = serde_json::from_slice(&response_bytes)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
         if let Some(usage) = value.get_mut("usage").and_then(Value::as_object_mut) {
+            if !usage.contains_key("prompt_tokens")
+                && let Some(total) = usage.get("total_tokens").cloned()
+            {
+                usage.insert("prompt_tokens".into(), total);
+            }
             usage.entry("completion_tokens").or_insert(Value::from(0));
         }
         serde_json::from_value(value)

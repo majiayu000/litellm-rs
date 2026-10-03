@@ -39,3 +39,5 @@
 | [siliconflow-images-generations-post](https://docs.siliconflow.cn/docs/api/images-generations-post) | `6b5dd1a5aeb5a9afdaae6dc6b38d567c14c9cad4d2737d4aeddd5efe28520cfa` |
 | [siliconflow-audio-speech-post](https://docs.siliconflow.cn/docs/api/audio-speech-post) | `e51879dd1b78314f9c5a5188dac21ffb948f7a61ca6b98665398642f38ae4211` |
 | [siliconflow-audio-transcriptions-post](https://docs.siliconflow.cn/docs/api/audio-transcriptions-post) | `27f9012f6f6735ad740e1d33ec9f3dfdbbd96d7aa1fcc7b35f2a3a93e1e4cef5` |
+
+DashScope/Qwen embeddings 的官方兼容接口仅返回 `usage.total_tokens`；在 embeddings 响应边界将其映射为 prompt_tokens，completion_tokens 为 0，不伪造缺失总量。真实 HTTP fixture 使用该原生形状，同时断言 total/prompt/completion 为 2/2/0。来源：[阿里云兼容 embeddings 接口](https://help.aliyun.com/en/model-studio/embedding-interfaces-compatible-with-openai)。

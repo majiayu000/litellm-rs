@@ -45,7 +45,7 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
         .replace("/api/paas/v4", "/v1")
         .replace("/compatible-mode/v1", "/v1");
     match path.as_str() {
-        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}})),
+        "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage": if req.path().starts_with("/compatible-mode/v1") { json!({"total_tokens":2}) } else { json!({"prompt_tokens":2,"total_tokens":2}) }})),
         "/v1/images/generations" => HttpResponse::Ok().json(if state.image_url { json!({"created":1,"data":[{"url":"https://example.test/generated.png"}]}) } else { json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]}) }),
         "/v1/audio/speech" => {
             let request: Value = serde_json::from_slice(&body).unwrap();
@@ -706,83 +706,85 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
     use actix_web::test;
     use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
     use litellm_rs::server::middleware::AuthMiddleware;
-    let (router, upstream, handle) = fixture("vllm", StatusCode::OK).await;
-    let provider = selected(&router, ProviderCapability::Embeddings);
-    let Provider::OpenAILike(provider) = provider else {
-        panic!("catalog provider")
-    };
-    let mut config = litellm_rs::Config::default();
-    config.gateway.auth.enable_jwt = false;
-    config.gateway.auth.enable_api_key = false;
-    config.gateway.auth.allow_anonymous = true;
-    config.gateway.storage.database.enabled = false;
-    config.gateway.storage.redis.enabled = false;
-    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
-        "vllm",
-        "vllm",
-        "",
-        &provider.config().get_api_base(),
-        vec!["test-model".into()],
-    )];
-    let state = litellm_rs::server::HttpServer::new(&config)
-        .await
-        .unwrap()
-        .state()
-        .clone();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state.clone()))
-            .wrap(AuthMiddleware)
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
-    .await;
-    let request = || {
-        test::TestRequest::post()
-            .uri("/v1/embeddings")
-            .set_json(json!({"model":"test-model","input":"hello"}))
-            .to_request()
-    };
-    let response = test::call_service(&app, request()).await;
-    assert!(!response.status().is_success());
-    let error: Value = test::read_body_json(response).await;
-    assert!(
-        error.to_string().to_lowercase().contains("pricing"),
-        "{error}"
-    );
-    assert!(upstream.seen.lock().unwrap().is_empty());
-    let (_, mut price) = state
-        .pricing
-        .get_model_info_for_provider("openai", "text-embedding-3-small")
-        .unwrap();
-    price.litellm_provider = "vllm".into();
-    price.input_cost_per_token = Some(0.1);
-    state.pricing.add_custom_model("test-model".into(), price);
-    state
-        .budget_limits
-        .providers
-        .set_provider_limit("vllm", ProviderLimitConfig::new(0.01, ResetPeriod::Monthly));
-    assert_eq!(
-        test::call_service(&app, request()).await.status(),
-        StatusCode::PAYMENT_REQUIRED
-    );
-    assert!(upstream.seen.lock().unwrap().is_empty());
-    state.budget_limits.providers.set_provider_limit(
-        "vllm",
-        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
-    );
-    let response = test::call_service(&app, request()).await;
-    let status = response.status();
-    let body: Value = test::read_body_json(response).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
-    let spend = state
-        .budget_limits
-        .providers
-        .get_provider_usage("vllm")
-        .unwrap()
-        .current_spend;
-    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
-    handle.stop(false).await;
+    for selector in ["vllm", "dashscope", "qwen"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let provider = selected(&router, ProviderCapability::Embeddings);
+        let Provider::OpenAILike(provider) = provider else {
+            panic!("catalog provider")
+        };
+        let mut config = litellm_rs::Config::default();
+        config.gateway.auth.enable_jwt = false;
+        config.gateway.auth.enable_api_key = false;
+        config.gateway.auth.allow_anonymous = true;
+        config.gateway.storage.database.enabled = false;
+        config.gateway.storage.redis.enabled = false;
+        config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+            selector,
+            selector,
+            if selector == "vllm" { "" } else { "test-key" },
+            &provider.config().get_api_base(),
+            vec!["test-model".into()],
+        )];
+        let state = litellm_rs::server::HttpServer::new(&config)
+            .await
+            .unwrap()
+            .state()
+            .clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .wrap(AuthMiddleware)
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let request = || {
+            test::TestRequest::post()
+                .uri("/v1/embeddings")
+                .set_json(json!({"model":"test-model","input":"hello"}))
+                .to_request()
+        };
+        let response = test::call_service(&app, request()).await;
+        assert!(!response.status().is_success());
+        let error: Value = test::read_body_json(response).await;
+        assert!(
+            error.to_string().to_lowercase().contains("pricing"),
+            "{error}"
+        );
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        let (_, mut price) = state
+            .pricing
+            .get_model_info_for_provider("openai", "text-embedding-3-small")
+            .unwrap();
+        price.litellm_provider = selector.into();
+        price.input_cost_per_token = Some(0.1);
+        state.pricing.add_custom_model("test-model".into(), price);
+        state.budget_limits.providers.set_provider_limit(
+            selector,
+            ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+        );
+        assert_eq!(
+            test::call_service(&app, request()).await.status(),
+            StatusCode::PAYMENT_REQUIRED
+        );
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        state.budget_limits.providers.set_provider_limit(
+            selector,
+            ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+        );
+        let response = test::call_service(&app, request()).await;
+        let status = response.status();
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        let spend = state
+            .budget_limits
+            .providers
+            .get_provider_usage(selector)
+            .unwrap()
+            .current_spend;
+        assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+        handle.stop(false).await;
+    }
 }
 
 #[tokio::test]
@@ -796,7 +798,10 @@ async fn chinese_embeddings_preserve_native_bases_and_float_usage() {
             .await
             .unwrap();
         assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
-        assert_eq!(response.usage.unwrap().total_tokens, 2);
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.total_tokens, 2);
+        assert_eq!(usage.prompt_tokens, 2);
+        assert_eq!(usage.completion_tokens, 0);
         let expected = match selector {
             "zhipu" => "/api/paas/v4/embeddings",
             "dashscope" | "qwen" => "/compatible-mode/v1/embeddings",
