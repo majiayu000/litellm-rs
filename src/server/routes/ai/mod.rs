@@ -58,9 +58,9 @@ pub use images::{image_edits, image_generations, image_variations};
 pub use models::{get_model, list_models};
 pub use moderations::create_moderation;
 pub use rerank::rerank;
-pub use responses::{
-    cancel_response, create_response, delete_response, get_response, list_response_input_items,
-};
+mod responses_native;
+pub use responses::{cancel_response, delete_response, get_response, list_response_input_items};
+pub use responses_native::create_response;
 
 use crate::core::models::openai::EmbeddingRequest;
 use crate::server::state::AppState;

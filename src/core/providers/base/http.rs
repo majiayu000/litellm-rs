@@ -464,7 +464,7 @@ mod tests {
 
     #[rustfmt::skip]
     #[test]
-    fn endpoint_policy_preserving_opt_ins_are_gemini_only() {
+    fn endpoint_policy_preserving_opt_ins_are_native_protocols() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"); let (mut stack, mut callers) = (vec![root.clone()], Vec::new());
         while let Some(directory) = stack.pop() { for entry in std::fs::read_dir(directory).expect("provider sources must be readable") {
                 let path = entry.expect("provider entry must be readable").path(); if path.is_dir() { stack.push(path); continue; }
@@ -477,7 +477,14 @@ mod tests {
                 }
             }
         }
-        let expected = std::path::PathBuf::from("core/providers/openai_like/provider.rs"); assert_eq!(callers, vec![(expected.clone(), "execute_request_preserving_endpoint_policy"), (expected, "execute_streaming_request_preserving_endpoint_policy")]);
+        callers.sort();
+        let mut expected = Vec::new();
+        for path in ["core/providers/openai_like/provider.rs", "core/providers/responses_native.rs"] {
+            for method in ["execute_request_preserving_endpoint_policy", "execute_streaming_request_preserving_endpoint_policy"] { expected.push((std::path::PathBuf::from(path), method)); }
+        }
+        // Native Responses input_tokens uses the same explicit endpoint policy as generation.
+        expected.push((std::path::PathBuf::from("core/providers/openai/client.rs"), "execute_request_preserving_endpoint_policy"));
+        expected.sort(); assert_eq!(callers, expected);
     }
 
     #[test]
