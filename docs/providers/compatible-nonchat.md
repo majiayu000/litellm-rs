@@ -10,9 +10,9 @@
 | `together` / `together_ai` | embeddings、images/generations、audio/speech、audio/transcriptions、audio/translations | `https://api.together.ai/v1` |
 | `deepinfra` | embeddings、images/generations | `https://api.deepinfra.com/v1/openai` |
 | `fireworks` / `fireworks_ai` | embeddings | `https://api.fireworks.ai/inference/v1` |
-| `openrouter` | embeddings；已确认独立 Image/TTS/STT 合同，原生输入及实际媒体计费尚待适配；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
-| `nebius` | embeddings；图片 width/height 与 data/id 响应待适配，独立音频未确认；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
-| `nvidia_nim` | embeddings；图片为另一 genai 主机/路径，音频为独立 Speech NIM 部署，默认 base 不扩声明；[媒体复核](../audit/compatible-media-followup-2026-10-03.md) |
+| `openrouter` | embeddings | `https://openrouter.ai/api/v1` |
+| `nebius` | embeddings | `https://api.tokenfactory.nebius.com/v1` |
+| `nvidia_nim` | embeddings | `https://integrate.api.nvidia.com/v1` |
 | `lm_studio` | embeddings | `http://localhost:1234/v1` |
 
 在现有 `providers[].models` 中配置该供应商的真实模型 ID，再请求对应网关接口。表中的能力是传输协议范围，不表示每个模型都能执行全部任务：所选模型、账户权限和可用性仍由供应商约束。不支持的 capability 在路由阶段拒绝；上游模型/参数错误保留错误类型，429 的 Retry-After 秒数继续传递给重试链路。已有显式自定义价格和预算检查继续生效，缺价不会自动视为免费。
