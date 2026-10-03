@@ -130,7 +130,17 @@ impl Provider {
             Provider::OpenAILike(provider) if provider.name() == "xai" => {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
+                    && provider
+                        .get_model_info(&provider.config().get_effective_model(model))
+                        .capabilities
+                        .contains(capability)
             }
+            #[cfg(feature = "providers-extended")]
+            Provider::Cohere(provider) => provider
+                .models()
+                .iter()
+                .find(|info| info.id == model)
+                .is_some_and(|info| info.capabilities.contains(capability)),
             Provider::External(provider) => {
                 provider.as_ref().capabilities().contains(capability)
                     && provider
@@ -143,6 +153,10 @@ impl Provider {
                 LLMProvider::supports_model(provider, model)
                     && LLMProvider::supports_capability(provider, capability)
             }
+            #[cfg(feature = "providers-extended")]
+            Provider::FalAI(provider) => LLMProvider::models(provider)
+                .iter()
+                .any(|info| info.id == model && info.capabilities.contains(capability)),
             #[cfg(feature = "providers-extended")]
             Provider::Stability(provider) => LLMProvider::models(provider)
                 .iter()

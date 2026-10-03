@@ -6,6 +6,8 @@ use super::*;
 
 #[test]
 fn test_deepseek_thinking_detection() {
+    assert!(deepseek_thinking::supports_thinking("deepseek-flash"));
+    assert!(!deepseek_thinking::capabilities("deepseek-flash").thinking_always_on);
     assert!(deepseek_thinking::supports_thinking("deepseek-r1"));
     assert!(deepseek_thinking::supports_thinking("deepseek-reasoner"));
     assert!(deepseek_thinking::supports_thinking("r1"));
@@ -124,4 +126,24 @@ fn test_deepseek_usage_extraction_missing() {
 
     let usage = deepseek_thinking::extract_usage(&response);
     assert!(usage.is_none());
+}
+
+#[test]
+fn flash_thinking_toggle_is_explicit() {
+    for model in ["deepseek-flash", "deepseek/deepseek-flash"] {
+        for enabled in [false, true] {
+            let config = ThinkingConfig {
+                enabled,
+                ..Default::default()
+            };
+            let params = deepseek_thinking::transform_config(&config, model).unwrap();
+            assert_eq!(
+                params["thinking"]["type"],
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+    }
+    let legacy =
+        deepseek_thinking::transform_config(&ThinkingConfig::default(), "deepseek-r1").unwrap();
+    assert!(legacy.get("thinking").is_none());
 }

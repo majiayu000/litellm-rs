@@ -719,8 +719,8 @@ fn test_get_compatible_models_google() {
 #[test]
 fn test_get_compatible_models_cohere() {
     let models = ModelUtils::get_compatible_models_for_provider("cohere");
-    assert!(models.contains(&"command".to_string()));
-    assert!(models.contains(&"command-r-plus".to_string()));
+    assert!(models.contains(&"command-a-03-2025".to_string()));
+    assert!(models.contains(&"command-r-plus-08-2024".to_string()));
 }
 
 #[test]

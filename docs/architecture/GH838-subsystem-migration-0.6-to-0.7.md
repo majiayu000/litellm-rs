@@ -62,3 +62,15 @@ Docker defaults and configuration examples have been updated together. This is
 an intentional source/configuration break, not a change to already published
 v0.7.0 artifacts. Ordinary cache TTL/size, audit logging, metrics, user usage
 records and callback integrations remain wired and supported.
+
+## Expired duplicate provider modules
+
+F16 removes the unused native modules `amazon_nova`, `github`, `meta_llama`,
+`v0`, and `custom_api` from unreleased source. The first four keep their existing
+catalog selectors and `OpenAILikeProvider` factory paths. Custom servers use
+`openai_compatible` when compatible, or the public `ExternalProvider` registration
+API for custom protocols. GitHub Copilot is a separate retained native provider.
+Only legacy construction/equivalence tests are removed; current catalog routing,
+capability, model, health and error tests remain. This removal does not attest
+that the retained historical catalog models are currently available; F10 audits
+that question against supplier sources separately.

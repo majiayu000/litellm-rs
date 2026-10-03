@@ -1,6 +1,6 @@
 use super::{
-    PROVIDER_CATALOG, PROVIDER_MODULE_LIFECYCLE, PROVIDER_TYPE_REGISTRY, ProviderDispatchKind,
-    ProviderModuleLifecycle, ProviderRegistryEntry, entry_for_name,
+    PROVIDER_CATALOG, PROVIDER_TYPE_REGISTRY, ProviderDispatchKind, ProviderRegistryEntry,
+    entry_for_name,
 };
 use crate::core::providers::provider_type::ProviderType;
 use std::collections::BTreeSet;
@@ -260,10 +260,8 @@ fn assert_readme_row_matches_dispatch_kind(row: &ReadmeTier2Row, entry: &Provide
 #[test]
 fn provider_registry_readme_provider_support_matrix_matches_registry_and_catalog() {
     let tier2_rows = readme_tier2_rows();
-    let tier1_selectors =
-        readme_code_list_selectors("### Tier 1", "### Experimental / module-only");
-    let experimental_selectors = readme_code_list_selectors(
-        "### Experimental / module-only",
+    let tier1_selectors = readme_code_list_selectors(
+        "### Tier 1",
         "For self-hosted or unlisted OpenAI-compatible endpoints",
     );
     let expected_tier2_selectors = expected_readme_tier2_selectors();
@@ -276,10 +274,6 @@ fn provider_registry_readme_provider_support_matrix_matches_registry_and_catalog
     assert!(
         !tier1_selectors.is_empty(),
         "README Tier 1 catalog list must not be empty"
-    );
-    assert!(
-        !experimental_selectors.is_empty(),
-        "README experimental provider list must not be empty"
     );
 
     let tier2_selectors = tier2_rows
@@ -324,34 +318,5 @@ fn provider_registry_readme_provider_support_matrix_matches_registry_and_catalog
                 entry.canonical_name
             );
         }
-    }
-
-    for selector in experimental_selectors {
-        let lifecycle_entry = PROVIDER_MODULE_LIFECYCLE
-            .iter()
-            .find(|entry| entry.module_name == selector)
-            .unwrap_or_else(|| {
-                panic!("experimental selector {selector} must exist in provider module lifecycle")
-            });
-        assert!(
-            !PROVIDER_CATALOG.contains_key(selector.as_str()),
-            "experimental selector {selector} must not be a Tier 1 catalog entry"
-        );
-        assert!(
-            !expected_tier2_selectors.contains(&selector),
-            "experimental selector {selector} must not be a Tier 2 provider support row"
-        );
-        assert!(
-            entry_for_name(&selector).is_none_or(|entry| !entry.is_dispatchable()),
-            "experimental selector {selector} must not be dispatchable under active features"
-        );
-        assert!(
-            matches!(
-                lifecycle_entry.lifecycle,
-                ProviderModuleLifecycle::Stub | ProviderModuleLifecycle::Internal
-            ),
-            "experimental selector {selector} must be a retained stub/internal module, got {:?}",
-            lifecycle_entry.lifecycle
-        );
     }
 }

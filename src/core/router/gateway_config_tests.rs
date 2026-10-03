@@ -9,7 +9,7 @@ mod matrix {
         "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
         "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
         "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "PERPLEXITY_API_KEY", "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
+        "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
         "BASETEN_API_KEY",
     ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
@@ -153,7 +153,7 @@ mod matrix {
         Case { name: "catalog-primary", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY","primary"),("XIAOMI_API_KEY","alternate")], selected: Some("primary"), shadowed: &["alternate"] },
         Case { name: "catalog-alternate", selector: "xiaomi_mimo", top: "", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","alternate")], selected: Some("alternate"), shadowed: &[] },
         Case { name: "catalog-blank", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","")], selected: None, shadowed: &[] },
-        Case { name: "catalog-alias-pplx", selector: "pplx", top: "", settings: &[], env: &[("PERPLEXITY_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
+        Case { name: "catalog-alias-ai21", selector: "ai21-chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
@@ -812,6 +812,107 @@ async fn xai_identity_is_automatic_only_for_native_or_explicitly_mapped_publishe
                 )
                 .is_err(),
             "{invalid} must not acquire xAI capability"
+        );
+    }
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn cohere_catalog_modes_select_only_implemented_endpoints() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::types::model::ProviderCapability;
+    let config = ProviderConfig {
+        name: "cohere".into(),
+        provider_type: "cohere".into(),
+        api_key: "test-key".into(),
+        models: vec![
+            "command-a-03-2025".into(),
+            "command-r".into(),
+            "command-a-vision-07-2025".into(),
+            "embed-v4.0".into(),
+            "rerank-v4.0-pro".into(),
+            "cohere-transcribe-03-2026".into(),
+        ],
+        ..Default::default()
+    };
+    let router = Router::from_gateway_config(&[config], None).await.unwrap();
+    for (model, allowed) in [
+        ("command-a-03-2025", ProviderCapability::ChatCompletion),
+        ("command-r", ProviderCapability::ChatCompletion),
+        ("embed-v4.0", ProviderCapability::Embeddings),
+        ("rerank-v4.0-pro", ProviderCapability::Rerank),
+    ] {
+        assert!(
+            router
+                .select_deployment_lease_for_capability(model, &allowed)
+                .is_ok(),
+            "{model}"
+        );
+    }
+    for model in ["embed-v4.0", "rerank-v4.0-pro", "cohere-transcribe-03-2026"] {
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+            ProviderCapability::ToolCalling,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability(model, &capability)
+                    .is_err(),
+                "{model}: {capability:?}"
+            );
+        }
+    }
+    assert!(
+        router
+            .select_deployment_lease_for_capability(
+                "cohere-transcribe-03-2026",
+                &ProviderCapability::AudioTranscription
+            )
+            .is_err()
+    );
+    assert!(
+        router
+            .select_deployment_lease_for_capability(
+                "command-a-vision-07-2025",
+                &ProviderCapability::ToolCalling
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn xai_multi_agent_is_not_a_chat_deployment() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::types::model::ProviderCapability;
+    let config = ProviderConfig {
+        name: "xai".into(),
+        provider_type: "xai".into(),
+        api_key: "test-key".into(),
+        models: vec![
+            "grok-4.20-multi-agent-0309".into(),
+            "grok-4.20-0309-reasoning".into(),
+        ],
+        ..Default::default()
+    };
+    let router = Router::from_gateway_config(&[config], None).await.unwrap();
+    assert!(
+        router
+            .select_deployment_lease_for_capability(
+                "grok-4.20-0309-reasoning",
+                &ProviderCapability::ChatCompletion
+            )
+            .is_ok()
+    );
+    for capability in [
+        ProviderCapability::ChatCompletion,
+        ProviderCapability::ChatCompletionStream,
+        ProviderCapability::ToolCalling,
+    ] {
+        assert!(
+            router
+                .select_deployment_lease_for_capability("grok-4.20-multi-agent-0309", &capability)
+                .is_err()
         );
     }
 }

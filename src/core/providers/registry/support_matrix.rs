@@ -102,6 +102,11 @@ const CATALOG_HTTP_SUPPORT: ProviderLegacyAdapterSupport = row(
 /// additional legacy completion adapters.
 pub static LEGACY_ADAPTER_MATRIX: &[ProviderLegacyAdapterSupport] = &[
     row(
+        "perplexity",
+        [U, U, U, U, U, U, U, U, U],
+        "Sonar Chat Completions retired; Agent API has no runtime adapter yet.",
+    ),
+    row(
         "openai",
         [S, S, S, S, S, S, S, S, S],
         "Reference provider across HTTP, SDK, and completion().",
