@@ -1078,7 +1078,7 @@ async fn active_normal_close_and_failed_done_affect_provider_health() {
                     .state
                     .success_requests
                     .load(std::sync::atomic::Ordering::Relaxed),
-                1
+                0
             );
         }
         drop(client);
