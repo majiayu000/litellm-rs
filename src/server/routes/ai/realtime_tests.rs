@@ -80,6 +80,10 @@ async fn upstream(
                     calls.lock().unwrap().push(value.clone());
                     match value["type"].as_str().unwrap() {
                         "session.update" => {
+                            if value["session"]["audio"]["output"]["voice"] == "reject-voice" {
+                                let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":value["event_id"],"message":"mock invalid voice"}}).to_string()).await;
+                                continue;
+                            }
                             if session
                                 .text(
                                     json!({"type":"session.updated","session":value["session"]})
@@ -1492,5 +1496,120 @@ async fn response_boundaries_reauthorize_jwt_users_and_teams() {
         for handle in handles {
             handle.stop(false).await;
         }
+    }
+}
+
+#[actix_web::test]
+async fn rejected_session_updates_do_not_change_the_response_cap() {
+    let (_, url, raw, calls, handles) = fixture().await;
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"session.update","session":{"max_output_tokens":128}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "session.updated");
+    client.send(Message::Text(json!({"type":"session.update","session":{"max_output_tokens":1024,"audio":{"output":{"voice":"reject-voice"}}}}).to_string().into())).await.unwrap();
+    assert_eq!(
+        next_json(&mut client).await["error"]["type"],
+        "invalid_request_error"
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|value| value["type"] == "response.create")
+            .unwrap()["response"]["max_output_tokens"],
+        128
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn completed_responses_survive_failed_budget_settlement() {
+    let (state, url, raw, _, handles) = fixture().await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let (key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"hold":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.created");
+    // Exercise a real settlement error after admission without an external Redis
+    // dependency. This does not claim a Redis disconnect/reconciliation test.
+    state
+        .budget_limits
+        .providers
+        .budgets
+        .get_mut("openai")
+        .unwrap()
+        .current_spend = f64::NAN;
+    client
+        .send(Message::Text(
+            json!({"type":"input_audio_buffer.clear"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.done");
+    let stored = state
+        .storage
+        .db()
+        .find_api_key_by_id(key.metadata.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let (cost, tokens) = rates().cost(&usage()).unwrap();
+    assert_eq!(stored.usage_stats.total_tokens, tokens);
+    assert!((stored.usage_stats.total_cost - cost).abs() < 1e-12);
+    let router = state.pin_runtime().unified_router.clone();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    assert_eq!(
+        deployment
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
     }
 }

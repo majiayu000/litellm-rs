@@ -50,6 +50,8 @@ plus the allowed maximum output, priced at the most expensive supported input
 and output modality. The existing provider/model and API-key budget mechanisms
 must both admit it **before** the event is forwarded. The output cap is the
 smaller of the model limit and key limit; an explicit client cap must fit it. Omitted caps preserve the last explicit session cap and are additionally bounded by the current key policy. The reservation uses this effective response cap, including later reductions in the key limit.
+Session caps change only after an upstream `session.updated` acknowledgment;
+a rejected update does not change the inherited response cap.
 This conservative approach intentionally requires more available budget than a
 short actual response will cost. For the current embedded mini price row, the
 full 32,000-input/4,096-output reservation is $0.40192. Lower budgets cannot
@@ -69,6 +71,12 @@ automatic retries or durable reconciliation are not implemented. Abrupt task can
 reservation charged, but cannot asynchronously persist key usage, and process
 crash reconciliation is not implemented. Thus this first increment must not
 be represented as durable exactly-once accounting across process failures.
+
+Budget settlement failures are logged separately with provider/model, key ID,
+tokens and cost. Settlement of the other budget ledger and the key-usage write
+are still attempted, and a trusted completed `response.done` is forwarded.
+The settlement helper still returns an error; a failed budget backend can leave
+accounting unresolved. No automatic retries or durable reconciliation are added.
 
 There is no separate price table, platform service, or session configuration
 surface. Pricing/model metadata must already be reviewed in the gateway

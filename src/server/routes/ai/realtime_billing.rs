@@ -145,16 +145,18 @@ impl Pending {
         actual: Option<(f64, u64)>,
     ) -> Result<u64, String> {
         let (cost, tokens) = actual.unwrap_or((self.bound, 0));
-        if let Some(reservation) = self.provider.take() {
+        let provider_error = self.provider.take().and_then(|reservation| {
             reservation
                 .settle(cost)
-                .map_err(|_| "Realtime budget settlement failed")?;
-        }
-        if let Some(reservation) = self.key.take() {
+                .err()
+                .map(|_| "Realtime budget settlement failed".to_string())
+        });
+        let key_error = self.key.take().and_then(|reservation| {
             reservation
                 .settle(cost)
-                .map_err(|_| "Realtime key budget settlement failed")?;
-        }
+                .err()
+                .map(|_| "Realtime key budget settlement failed".to_string())
+        });
         if let Some(key_id) = key_id
             && let Err(error) = state
                 .budgeted
@@ -162,11 +164,14 @@ impl Pending {
                 .record_usage(key_id, tokens, cost)
                 .await
         {
-            // Budget settlement succeeded and the native response is complete.
-            // Report persistence separately rather than suppressing response.done.
-            tracing::error!(%error, %key_id, tokens, cost, "Realtime key usage recording failed after budget settlement");
+            // Attempt usage persistence even when a separate budget ledger failed.
+            tracing::error!(%error, %key_id, tokens, cost, "Realtime key usage recording failed");
         }
-        Ok(tokens)
+        match (provider_error, key_error) {
+            (Some(provider), Some(key)) => Err(format!("{provider}; {key}")),
+            (Some(error), None) | (None, Some(error)) => Err(error),
+            (None, None) => Ok(tokens),
+        }
     }
 }
 impl Drop for Pending {

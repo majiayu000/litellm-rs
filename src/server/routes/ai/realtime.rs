@@ -537,7 +537,6 @@ async fn relay(
                             }
                         }
                         tokio::time::timeout(timeout, upstream.send(Message::Text(value.to_string().into()))).await.map_err(|_| { failure = true; "Realtime upstream write timeout" })?.map_err(|_| { failure = true; "Realtime upstream write failed" })?;
-                        if value["type"] == "session.update" && let Some(limit) = value["session"]["max_output_tokens"].as_u64() { session_output_limit = limit as u32; }
                     }
                     Some(Ok(actix_ws::AggregatedMessage::Ping(bytes))) => { tokio::time::timeout(timeout, downstream.pong(&bytes)).await.map_err(|_| "Realtime pong timeout")?.map_err(|_| "Client disconnected")?; }
                     Some(Ok(actix_ws::AggregatedMessage::Pong(_))) => {}
@@ -553,7 +552,11 @@ async fn relay(
                 event = upstream.next() => match event {
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).map_err(|_| { failure = true; "Malformed upstream Realtime event" })?;
-                        if value["type"] == "response.created" {
+                        if value["type"] == "session.updated" {
+                            if let Some(limit) = value["session"]["max_output_tokens"].as_u64().and_then(|limit| u32::try_from(limit).ok()) {
+                                session_output_limit = limit.min(rates.max_output);
+                            }
+                        } else if value["type"] == "response.created" {
                             if pending.is_none() || response_id.is_some() { failure = true; return Err("Unreserved upstream Realtime response".into()); }
                             response_id = Some(value["response"]["id"].as_str().ok_or_else(|| { failure = true; "Missing Realtime response ID" })?.to_owned());
                         } else if value["type"] == "response.done" {
@@ -561,7 +564,9 @@ async fn relay(
                             let usage = rates.cost(&value["response"]["usage"]).inspect_err(|_| { failure = true; })?;
                             let reservation = pending.take().ok_or("Missing Realtime reservation")?;
                             tokens = usage.1;
-                            reservation.settle(&state, context.api_key_id(), Some(usage)).await?;
+                            if let Err(error) = reservation.settle(&state, context.api_key_id(), Some(usage)).await {
+                                tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = usage.0, "Realtime completed response budget settlement failed");
+                            }
                             let provider_failed = value["response"]["status"] == "failed"
                                 && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
                             if provider_failed {
