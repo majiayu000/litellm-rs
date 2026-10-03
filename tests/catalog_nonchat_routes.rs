@@ -39,7 +39,11 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
             .insert_header(("retry-after", "7"))
             .json(json!({"error":{"message":"upstream unavailable"}}));
     }
-    match req.path() {
+    let path = req
+        .path()
+        .replace("/api/v1", "/v1")
+        .replace("/v3/openai", "/v1");
+    match path.as_str() {
         "/v1/embeddings" | "/embeddings" | "/engines/llama.cpp/v1/embeddings" => HttpResponse::Ok().json(json!({"object":"list","model":"test-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}})),
         "/v1/images/generations" => HttpResponse::Ok().json(json!({"created":1,"data":[{"b64_json":"aW1hZ2U="}]})),
         "/v1/audio/speech" => {
@@ -94,6 +98,8 @@ async fn fixture(
             match selector {
                 "infinity" => "",
                 "docker_model_runner" => "/engines/llama.cpp/v1",
+                "nanogpt" => "/api/v1",
+                "novita" => "/v3/openai",
                 _ => "/v1",
             }
         ),
@@ -775,4 +781,227 @@ async fn local_embeddings_require_prices_and_obey_gateway_budgets() {
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
     handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn aggregator_embeddings_follow_each_official_base() {
+    for selector in ["novita", "nanogpt", "galadriel", "featherless"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let response = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(embedding_request(), RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+        assert_eq!(response.usage.unwrap().total_tokens, 2);
+        let expected = match selector {
+            "novita" => "/v3/openai/embeddings",
+            "nanogpt" => "/api/v1/embeddings",
+            _ => "/v1/embeddings",
+        };
+        assert_eq!(upstream.seen.lock().unwrap()[0].0, expected);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn nanogpt_images_use_root_v1_and_galadriel_preserves_standard_response() {
+    for selector in ["nanogpt", "galadriel"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let response = selected(&router, ProviderCapability::ImageGeneration)
+            .create_images(
+                serde_json::from_value(
+                    json!({"model":"test-model","prompt":"test","n":1,"size":"1024x1024"}),
+                )
+                .unwrap(),
+                RequestContext::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.data[0].b64_json.as_deref(), Some("aW1hZ2U="));
+        assert_eq!(upstream.seen.lock().unwrap()[0].0, "/v1/images/generations");
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn aggregator_audio_preserves_binary_multipart_and_duration() {
+    for selector in ["nanogpt", "featherless"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        let request = serde_json::from_value(
+            json!({"model":"test-model","input":"hello","voice":"default","response_format":"wav"}),
+        )
+        .unwrap();
+        let response = selected(&router, ProviderCapability::TextToSpeech)
+            .text_to_speech(request, RequestContext::default())
+            .await
+            .unwrap();
+        assert_eq!(response.audio, b"test-audio");
+        assert_eq!(response.content_type, "audio/wav");
+        if selector == "nanogpt" {
+            assert_eq!(upstream.seen.lock().unwrap()[0].0, "/api/v1/audio/speech");
+            let mut request: TranscriptionRequest =
+                serde_json::from_value(json!({"model":"Whisper-Large-V3"})).unwrap();
+            request.file = b"test-wave-data".to_vec();
+            request.filename = "test.wav".into();
+            let response = selected(&router, ProviderCapability::AudioTranscription)
+                .audio_transcription(request, RequestContext::default())
+                .await
+                .unwrap();
+            assert_eq!(response.text, "transcribed");
+            assert_eq!(response.duration, Some(1.0));
+            assert_eq!(
+                upstream.seen.lock().unwrap()[1].0,
+                "/api/v1/audio/transcriptions"
+            );
+        } else {
+            assert_eq!(upstream.seen.lock().unwrap()[0].0, "/v1/audio/speech");
+        }
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn nanogpt_embeddings_require_prices_and_obey_gateway_budgets() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("nanogpt", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("catalog provider")
+    };
+    let mut config = litellm_rs::Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+        "nanogpt",
+        "nanogpt",
+        "test-key",
+        &provider.config().get_api_base(),
+        vec!["test-model".into()],
+    )];
+    let state = litellm_rs::server::HttpServer::new(&config)
+        .await
+        .unwrap()
+        .state()
+        .clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::post()
+            .uri("/v1/embeddings")
+            .set_json(json!({"model":"test-model","input":"hello"}))
+            .to_request()
+    };
+    let response = test::call_service(&app, request()).await;
+    assert!(!response.status().is_success());
+    let error: Value = test::read_body_json(response).await;
+    assert!(
+        error.to_string().to_lowercase().contains("pricing"),
+        "{error}"
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let (_, mut price) = state
+        .pricing
+        .get_model_info_for_provider("openai", "text-embedding-3-small")
+        .unwrap();
+    price.litellm_provider = "nanogpt".into();
+    price.input_cost_per_token = Some(0.1);
+    state.pricing.add_custom_model("test-model".into(), price);
+    state.budget_limits.providers.set_provider_limit(
+        "nanogpt",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    assert_eq!(
+        test::call_service(&app, request()).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    state.budget_limits.providers.set_provider_limit(
+        "nanogpt",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let response = test::call_service(&app, request()).await;
+    let status = response.status();
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("nanogpt")
+        .unwrap()
+        .current_spend;
+    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn aggregator_errors_and_unverified_operations_fail_closed() {
+    for selector in ["novita", "nanogpt", "galadriel", "featherless"] {
+        for status in [StatusCode::BAD_REQUEST, StatusCode::TOO_MANY_REQUESTS] {
+            let (router, _, handle) = fixture(selector, status).await;
+            let error = selected(&router, ProviderCapability::Embeddings)
+                .create_embeddings(embedding_request(), RequestContext::default())
+                .await
+                .unwrap_err();
+            if status == StatusCode::BAD_REQUEST {
+                assert!(matches!(
+                    error,
+                    ProviderError::InvalidRequest { .. }
+                        | ProviderError::ApiError { status: 400, .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    ProviderError::RateLimit {
+                        retry_after: Some(7),
+                        ..
+                    }
+                ));
+            }
+            assert!(
+                router
+                    .select_deployment_lease_for_capability(
+                        "public",
+                        &ProviderCapability::AudioTranslation
+                    )
+                    .is_err()
+            );
+            assert!(
+                router
+                    .select_deployment_lease_for_capability(
+                        "public",
+                        &ProviderCapability::ImageEdit
+                    )
+                    .is_err()
+            );
+            handle.stop(false).await;
+        }
+    }
+    for selector in ["ai21", "cerebras"] {
+        let (router, upstream, handle) = fixture(selector, StatusCode::OK).await;
+        for capability in [
+            ProviderCapability::Embeddings,
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        assert!(upstream.seen.lock().unwrap().is_empty());
+        handle.stop(false).await;
+    }
 }
