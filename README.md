@@ -279,7 +279,7 @@ a gateway video route.
 
 ### Tier 1 — catalog providers (OpenAI-compatible, always available)
 
-All entries below route through `OpenAILikeProvider`. Chat and streaming work for any endpoint that follows OpenAI's `/chat/completions` SSE protocol. Embeddings, images, audio, and other non-chat endpoints are not exposed through this path today, even when the upstream provider offers them.
+All entries below route through `OpenAILikeProvider`. Chat and streaming use the compatible `/chat/completions` protocol. Selected providers also expose verified non-chat capabilities listed in [compatible non-chat support](docs/providers/compatible-nonchat.md); other capabilities fail explicitly.
 
 **Cloud (`Bearer` auth via env var):**
 
