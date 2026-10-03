@@ -34,3 +34,5 @@ Version query keys are case-insensitive. Configured discovery modes are parsed a
 With exactly one enabled agent, `/.well-known/agent-card.json` exposes the same authenticated card. With multiple agents, configure each named card URL directly (`/a2a/{agent_name}/.well-known/agent-card.json`); [A2A 1.0 section 8.2](https://a2a-protocol.org/v1.0.0/specification/#82-discovery-mechanisms) explicitly supports direct configuration. The root route does not choose an arbitrary agent.
 
 Finite calls share one deadline for headers and body. Task streams close immediately after forwarding a terminal task/status event, even if the upstream leaves its connection open. Ownership expiry sweeps run at request reservation rather than on every artifact chunk.
+
+Enabled agents require at least one gateway authentication method (API key or JWT). Stream chunks obey `server.stream_idle_timeout` in seconds; zero disables the idle bound. Finite successful responses must match the requested method: exactly one Task/Message for SendMessage, and a Task for GetTask/CancelTask.

@@ -548,6 +548,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     let task = task.map(str::to_owned);
     let context = context.map(str::to_owned);
     let limit = runtime.config.gateway.server.max_body_size;
+    let idle_timeout_secs = runtime.config.gateway.server.stream_idle_timeout;
     if status.is_success()
         && upstream
             .headers()
@@ -573,7 +574,14 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             let mut task_seen = false;
             let mut expected_task = task.clone();
             let mut expected_context = context.clone();
-            'events: while let Some(chunk) = upstream.chunk().await.map_err(|_| actix_web::error::ErrorBadGateway("A2A stream interrupted"))? {
+            'events: loop {
+                let next = if idle_timeout_secs == 0 {
+                    upstream.chunk().await
+                } else {
+                    tokio::time::timeout(Duration::from_secs(idle_timeout_secs), upstream.chunk()).await
+                        .map_err(|_| actix_web::error::ErrorGatewayTimeout("A2A stream idle timeout"))?
+                };
+                let Some(chunk) = next.map_err(|_| actix_web::error::ErrorBadGateway("A2A stream interrupted"))? else { break; };
                 buffer.extend_from_slice(&chunk);
                 while let Some(end) = event_boundary(&buffer, scan_from) {
                     scan_from = 0;
@@ -679,6 +687,31 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             -32006,
             "A2A streaming method requires an event stream",
         );
+    }
+    if let Some(result) = value.get("result") {
+        let valid = if send {
+            result.is_object()
+                && (result.get("task").is_some() ^ result.get("message").is_some())
+                && result
+                    .get("task")
+                    .or_else(|| result.get("message"))
+                    .is_some_and(Value::is_object)
+        } else {
+            result.is_object()
+                && result.get("task").is_none()
+                && result.get("message").is_none()
+                && identifier(result.get("id")).ok().flatten().is_some()
+                && identifier(result.get("contextId")).ok().flatten().is_some()
+                && result.get("status").is_some_and(Value::is_object)
+        };
+        if !valid {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                id,
+                -32006,
+                "Invalid A2A result for requested method",
+            );
+        }
     }
     if let Err(message) = owners.observe(
         &binding,

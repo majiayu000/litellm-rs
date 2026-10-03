@@ -102,6 +102,9 @@ impl Validate for GatewayConfig {
         #[cfg(feature = "a2a")]
         for (name, agent) in &self.a2a_agents {
             agent.validate_http_gateway(name)?;
+            if agent.enabled && !self.auth.enable_api_key && !self.auth.enable_jwt {
+                return Err("Enabled A2A agents require API key or JWT authentication".into());
+            }
             if agent.enabled
                 && self.auth.enable_api_key
                 && ["accept", "content-type", "a2a-version", "a2a-extensions"]

@@ -20,6 +20,23 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
         .and_then(Value::as_str)
     {
         let initial = json!({"jsonrpc":"2.0","id":body["id"],"result":{"task":{"id":"task-1","contextId":"context-1","status":{"state":"TASK_STATE_WORKING"}}}});
+        if case == "ambiguous" {
+            let mut response = initial.clone();
+            response["result"]["message"] = json!({"messageId":"reply","contextId":"context-1"});
+            return HttpResponse::Ok().json(response);
+        }
+        if case == "wrapped-message" {
+            return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":body["id"],"result":{"message":{"messageId":"reply","taskId":"task-1","contextId":"context-1"}}}));
+        }
+        if case == "idle" {
+            return HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(async_stream::stream! {
+                    yield Ok::<_, std::io::Error>(web::Bytes::from_static(b": ready\n\n"));
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    yield Ok(web::Bytes::from(format!("data: {initial}\n\n")));
+                });
+        }
         if case == "json-result" {
             return HttpResponse::Ok().json(initial);
         }
@@ -895,5 +912,92 @@ async fn api_key_header_cannot_replace_a2a_protocol_headers() {
     config.gateway.validate().unwrap();
     config.gateway.a2a_agents.get_mut("test").unwrap().enabled = false;
     config.gateway.auth.api_key_header = "content-type".into();
+    config.gateway.validate().unwrap();
+}
+
+#[actix_web::test]
+async fn finite_result_must_match_the_requested_a2a_method() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    assert_eq!(
+        test::call_service(&app, request("SendMessage", message(), &owner))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    for (method, case) in [
+        ("SendMessage", "ambiguous"),
+        ("GetTask", "wrapped-message"),
+        ("CancelTask", "wrapped-message"),
+    ] {
+        let mut params = if method == "SendMessage" {
+            message()
+        } else {
+            json!({"id":"task-1"})
+        };
+        params["metadata"] = json!({"test_contract":case});
+        let response = test::call_service(&app, request(method, params, &owner)).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body: Value = test::read_body_json(response).await;
+        assert_eq!(body["error"]["code"], -32006);
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn stream_idle_timeout_is_enforced_and_zero_disables_it() {
+    for seconds in [1, 0] {
+        let (state, _, handle) = fixture().await;
+        let mut revision = state.pin_runtime().as_ref().clone();
+        let mut config = revision.config.as_ref().clone();
+        config.gateway.server.stream_idle_timeout = seconds;
+        revision.config = Arc::new(config);
+        state.runtime.store(revision);
+        let app = test::init_service(
+            App::new()
+                .app_data(state.clone())
+                .configure(|c| configure_routes(c, 4096)),
+        )
+        .await;
+        let mut params = message();
+        params["metadata"] = json!({"test_contract":"idle"});
+        let response =
+            test::call_service(&app, request("SendStreamingMessage", params, &user())).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            actix_web::body::to_bytes(response.into_body()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.is_err(), seconds != 0);
+        assert_eq!(state.a2a_tasks.reserved.load(Ordering::Relaxed), 0);
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn enabled_agents_require_an_authentication_method() {
+    let mut config = crate::server::valid_test_config();
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.a2a_agents.insert(
+        "test".into(),
+        AgentConfig::new("test", "https://agent.example/rpc"),
+    );
+    assert!(
+        config
+            .gateway
+            .validate()
+            .unwrap_err()
+            .contains("require API key or JWT")
+    );
+    config.gateway.a2a_agents.get_mut("test").unwrap().enabled = false;
     config.gateway.validate().unwrap();
 }
