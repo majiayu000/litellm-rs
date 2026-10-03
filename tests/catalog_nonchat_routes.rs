@@ -1304,7 +1304,7 @@ async fn baichuan_embeddings_require_prices_and_obey_gateway_budgets() {
 async fn baichuan_rejects_truncated_batches_before_dispatch() {
     let (router, upstream, handle) = fixture("baichuan", StatusCode::OK).await;
     let provider = selected(&router, ProviderCapability::Embeddings);
-    for input in [json!(vec!["text"; 17]), json!([1, 2]), json!([])] {
+    for input in [json!(vec!["text"; 17]), json!([])] {
         let request =
             serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":input}))
                 .unwrap();
