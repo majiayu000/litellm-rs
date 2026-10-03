@@ -50,6 +50,11 @@ fn stable_inference_openapi_contract_matches_registered_route_surface() {
 
     let contract_operations = paths
         .iter()
+        // Gemini uses versioned scopes; its documented paths are exercised by
+        // gemini_sdk_routes::documented_gemini_paths_are_live.
+        .filter(|(path, _)| {
+            !path.contains(":generateContent") && !path.contains(":streamGenerateContent")
+        })
         .flat_map(|(path, item)| {
             item.as_object().into_iter().flat_map(move |item| {
                 item.keys()

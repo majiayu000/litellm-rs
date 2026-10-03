@@ -1,8 +1,8 @@
 use super::{
     audio_speech, audio_transcriptions, audio_translations, cancel_response, chat_completions,
-    create_moderation, create_response, delete_response, embeddings, get_model, get_response,
-    image_edits, image_generations, image_variations, list_models, list_response_input_items,
-    rerank,
+    compact_response, create_moderation, create_response, delete_response, embeddings, get_model,
+    get_response, image_edits, image_generations, image_variations, list_models,
+    list_response_input_items, rerank,
 };
 use actix_web::{Route, web};
 
@@ -41,6 +41,7 @@ enum StableInferenceOperation {
     ChatCompletion,
     NativeMessage,
     CreateResponse,
+    CompactResponse,
     DeleteResponse,
     Embedding,
     GetModel,
@@ -76,6 +77,11 @@ const STABLE_INFERENCE_ROUTES: &[StableInferenceRoute] = &[
         path: "/v1/responses",
         method: StableInferenceMethod::Post,
         operation: StableInferenceOperation::CreateResponse,
+    },
+    StableInferenceRoute {
+        path: "/v1/responses/compact",
+        method: StableInferenceMethod::Post,
+        operation: StableInferenceOperation::CompactResponse,
     },
     StableInferenceRoute {
         path: "/v1/responses/{response_id}",
@@ -188,6 +194,9 @@ pub(super) fn configure(cfg: &mut web::ServiceConfig) {
             }
             StableInferenceOperation::ChatCompletion => {
                 cfg.route(path, route.method.actix_route().to(chat_completions));
+            }
+            StableInferenceOperation::CompactResponse => {
+                cfg.route(path, route.method.actix_route().to(compact_response));
             }
             StableInferenceOperation::CreateResponse => {
                 cfg.route(path, route.method.actix_route().to(create_response));

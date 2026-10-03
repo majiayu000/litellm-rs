@@ -18,6 +18,10 @@ OpenAI bills search calls and retrieved content, file-search calls/storage, cont
 
 Completed, incomplete and failed terminal responses use validated input/output/cached/reasoning usage; reasoning is already included in output tokens and is not billed twice. Missing or malformed usage, interrupted SSE and native error events retain the conservative reservation in provider/model and key budget accounting. The request ledger retains unknown usage/cost, and key usage records an unpriced request with zero inferred actual tokens/cost. That reserved upper bound is budget protection, not a supplier invoice. Stateless unknown outcomes have no upstream recovery job; F07 separately persists background recovery obligations.
 
+Compaction selects OpenAI deployments only, even when a model group contains another Responses-capable provider. Because compact has no output-limit parameter, its reservation uses the selected pricing snapshot's verified model maximum output tokens. Missing bounds are rejected before generation. Only the default service tier is supported.
+
+Responses usage preserves `input_tokens_details.cache_write_tokens` through the existing cache-creation accounting field. Cached reads and cache writes must together fit within input tokens; invalid usage remains unknown. Admission covers the larger ordinary-input or cache-write cost, and terminal settlement uses the observed split. This follows [OpenAI prompt-caching billing](https://developers.openai.com/api/docs/guides/prompt-caching) and the [compact usage contract](https://developers.openai.com/api/reference/java/resources/responses/methods/compact).
+
 ## Evidence and implementation choice
 
 Verified primary sources:
