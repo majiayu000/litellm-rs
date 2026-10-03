@@ -1166,47 +1166,23 @@ async fn aggregator_errors_and_unverified_operations_fail_closed() {
 }
 
 #[tokio::test]
-async fn volcengine_embeddings_preserve_wire_usage_and_errors() {
-    for status in [
-        StatusCode::OK,
-        StatusCode::BAD_REQUEST,
-        StatusCode::TOO_MANY_REQUESTS,
-    ] {
-        let (router, upstream, handle) = fixture("volcengine", status).await;
-        let request = serde_json::from_value(
-            json!({"model":"doubao-embedding-text-240515","input":["hello"]}),
-        )
-        .unwrap();
-        let result = selected(&router, ProviderCapability::Embeddings)
-            .create_embeddings(request, RequestContext::default())
-            .await;
-        match status {
-            StatusCode::OK => {
-                let response = result.unwrap();
-                assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
-                assert_eq!(response.usage.unwrap().total_tokens, 2);
-                let calls = upstream.seen.lock().unwrap();
-                assert_eq!(calls[0].0, "/api/v3/embeddings");
-                let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
-                assert_eq!(body["model"], "doubao-embedding-text-240515");
-                assert_eq!(body["input"], json!(["hello"]));
-            }
-            StatusCode::BAD_REQUEST => assert!(matches!(
-                result.unwrap_err(),
-                ProviderError::InvalidRequest { .. } | ProviderError::ApiError { status: 400, .. }
-            )),
-            _ => assert!(matches!(
-                result.unwrap_err(),
-                ProviderError::RateLimit {
-                    retry_after: Some(7),
-                    ..
-                }
-            )),
-        }
+async fn compactifai_whisper_routes_only_to_transcription_and_preserves_errors() {
+    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        let (router, upstream, handle) = fixture("compactifai", status).await;
+        let provider = selected(&router, ProviderCapability::ChatCompletion);
+        let router = UnifiedRouter::default();
+        let model = "cai-whisper-large-v3-turbo-slim";
+        router.add_deployment(Deployment::new(
+            model.into(),
+            provider,
+            model.into(),
+            "public".into(),
+        ));
         for capability in [
-            ProviderCapability::ImageGeneration,
-            ProviderCapability::AudioTranscription,
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::AudioTranslation,
             ProviderCapability::TextToSpeech,
+            ProviderCapability::Embeddings,
         ] {
             assert!(
                 router
@@ -1214,162 +1190,33 @@ async fn volcengine_embeddings_preserve_wire_usage_and_errors() {
                     .is_err()
             );
         }
+        let request = TranscriptionRequest {
+            model: model.into(),
+            file: vec![1, 2],
+            filename: "sample.wav".into(),
+            language: None,
+            prompt: None,
+            response_format: None,
+            temperature: None,
+            timestamp_granularities: None,
+        };
+        let result = selected(&router, ProviderCapability::AudioTranscription)
+            .audio_transcription(request, RequestContext::default())
+            .await;
+        if status == StatusCode::OK {
+            assert_eq!(result.unwrap().duration, Some(1.0));
+        } else {
+            assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        }
         assert_eq!(upstream.seen.lock().unwrap().len(), 1);
         handle.stop(false).await;
     }
-}
-
-#[tokio::test]
-async fn volcengine_embeddings_require_prices_and_obey_gateway_budgets() {
-    use actix_web::test;
-    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
-    use litellm_rs::server::middleware::AuthMiddleware;
-    let (router, upstream, handle) = fixture("volcengine", StatusCode::OK).await;
-    let provider = selected(&router, ProviderCapability::Embeddings);
-    let Provider::OpenAILike(provider) = provider else {
-        panic!("catalog provider")
-    };
-    let mut config = litellm_rs::Config::default();
-    config.gateway.auth.enable_jwt = false;
-    config.gateway.auth.enable_api_key = false;
-    config.gateway.auth.allow_anonymous = true;
-    config.gateway.storage.database.enabled = false;
-    config.gateway.storage.redis.enabled = false;
-    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
-        "volcengine",
-        "volcengine",
-        "test-key",
-        &provider.config().get_api_base(),
-        vec!["doubao-embedding-text-240715".into()],
-    )];
-    let state = litellm_rs::server::HttpServer::new(&config)
-        .await
-        .unwrap()
-        .state()
-        .clone();
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state.clone()))
-            .wrap(AuthMiddleware)
-            .configure(litellm_rs::server::routes::ai::configure_routes),
-    )
-    .await;
-    let request = || {
-        test::TestRequest::post()
-            .uri("/v1/embeddings")
-            .set_json(json!({"model":"doubao-embedding-text-240715","input":"hello"}))
-            .to_request()
-    };
-    let response = test::call_service(&app, request()).await;
-    assert!(!response.status().is_success());
-    let error: Value = test::read_body_json(response).await;
-    assert!(
-        error.to_string().to_lowercase().contains("pricing"),
-        "{error}"
-    );
-    assert!(upstream.seen.lock().unwrap().is_empty());
-    let (_, mut price) = state
-        .pricing
-        .get_model_info_for_provider("openai", "text-embedding-3-small")
-        .unwrap();
-    price.litellm_provider = "volcengine".into();
-    price.input_cost_per_token = Some(0.1);
-    state
-        .pricing
-        .add_custom_model("doubao-embedding-text-240715".into(), price);
-    state.budget_limits.providers.set_provider_limit(
-        "volcengine",
-        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
-    );
-    assert_eq!(
-        test::call_service(&app, request()).await.status(),
-        StatusCode::PAYMENT_REQUIRED
-    );
-    assert!(upstream.seen.lock().unwrap().is_empty());
-    state.budget_limits.providers.set_provider_limit(
-        "volcengine",
-        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
-    );
-    let response = test::call_service(&app, request()).await;
-    let status = response.status();
-    let body: Value = test::read_body_json(response).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
-    let spend = state
-        .budget_limits
-        .providers
-        .get_provider_usage("volcengine")
-        .unwrap()
-        .current_spend;
-    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
-    handle.stop(false).await;
-}
-
-#[tokio::test]
-async fn volcengine_embedding_string_is_sent_as_one_item_array() {
-    let (router, upstream, handle) = fixture("volcengine", StatusCode::OK).await;
-    let request =
-        serde_json::from_value(json!({"model":"doubao-embedding-text-240515","input":"hello"}))
-            .unwrap();
-    selected(&router, ProviderCapability::Embeddings)
-        .create_embeddings(request, RequestContext::default())
-        .await
-        .unwrap();
-    let calls = upstream.seen.lock().unwrap().clone();
-    let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
-    assert_eq!(body["input"], json!(["hello"]));
-    handle.stop(false).await;
-}
-
-#[tokio::test]
-async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
-    let definition = litellm_rs::core::providers::registry::get_definition("wandb").unwrap();
-    assert_eq!(definition.base_url, "https://api.inference.wandb.ai/v1");
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = HttpServer::new(|| App::new().route("/v1/chat/completions", web::post().to(|req: HttpRequest| async move {
-        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer test-key");
-        assert_eq!(req.headers().get("openai-project").unwrap(), "test-team/test-project");
-        HttpResponse::Ok().json(json!({"id":"chat-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}))
-    }))).workers(1).listen(listener).unwrap().run();
-    let handle = server.handle();
-    tokio::spawn(server);
-    let mut config = provider_fixtures::mock_provider_config(
-        "wandb",
-        "wandb",
-        "test-key",
-        &format!("http://{address}/v1"),
-        vec!["test-model".into()],
-    );
-    config.settings.insert(
-        "custom_headers".into(),
-        json!({"OpenAI-Project":"test-team/test-project"}),
-    );
-    let provider = create_provider(config).await.unwrap();
-    let router = UnifiedRouter::default();
-    router.add_deployment(Deployment::new(
-        "wandb-test".into(),
-        provider,
-        "test-model".into(),
-        "public".into(),
-    ));
-    assert!(
-        router
-            .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
-            .is_err()
-    );
-    let response = selected(&router, ProviderCapability::ChatCompletion)
-        .chat_completion(
-            serde_json::from_value(
-                json!({"model":"test-model","messages":[{"role":"user","content":"hello"}]}),
-            )
-            .unwrap(),
-            RequestContext::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.usage.unwrap().total_tokens, 2);
-    handle.stop(true).await;
 }
 #[tokio::test]
 async fn baichuan_embeddings_preserve_wire_usage_and_errors() {
@@ -1576,5 +1423,210 @@ async fn baichuan_balance_429_is_quota_and_rate_429_preserves_retry_after() {
         }
     }
     assert_eq!(upstream.seen.lock().unwrap().len(), 2);
+    handle.stop(false).await;
+}
+#[tokio::test]
+async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
+    let definition = litellm_rs::core::providers::registry::get_definition("wandb").unwrap();
+    assert_eq!(definition.base_url, "https://api.inference.wandb.ai/v1");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpServer::new(|| App::new().route("/v1/chat/completions", web::post().to(|req: HttpRequest| async move {
+        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer test-key");
+        assert_eq!(req.headers().get("openai-project").unwrap(), "test-team/test-project");
+        HttpResponse::Ok().json(json!({"id":"chat-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}))
+    }))).workers(1).listen(listener).unwrap().run();
+    let handle = server.handle();
+    tokio::spawn(server);
+    let mut config = provider_fixtures::mock_provider_config(
+        "wandb",
+        "wandb",
+        "test-key",
+        &format!("http://{address}/v1"),
+        vec!["test-model".into()],
+    );
+    config.settings.insert(
+        "custom_headers".into(),
+        json!({"OpenAI-Project":"test-team/test-project"}),
+    );
+    let provider = create_provider(config).await.unwrap();
+    let router = UnifiedRouter::default();
+    router.add_deployment(Deployment::new(
+        "wandb-test".into(),
+        provider,
+        "test-model".into(),
+        "public".into(),
+    ));
+    assert!(
+        router
+            .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
+            .is_err()
+    );
+    let response = selected(&router, ProviderCapability::ChatCompletion)
+        .chat_completion(
+            serde_json::from_value(
+                json!({"model":"test-model","messages":[{"role":"user","content":"hello"}]}),
+            )
+            .unwrap(),
+            RequestContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.usage.unwrap().total_tokens, 2);
+    handle.stop(true).await;
+}
+#[tokio::test]
+async fn volcengine_embeddings_preserve_wire_usage_and_errors() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::BAD_REQUEST,
+        StatusCode::TOO_MANY_REQUESTS,
+    ] {
+        let (router, upstream, handle) = fixture("volcengine", status).await;
+        let request = serde_json::from_value(
+            json!({"model":"doubao-embedding-text-240515","input":["hello"]}),
+        )
+        .unwrap();
+        let result = selected(&router, ProviderCapability::Embeddings)
+            .create_embeddings(request, RequestContext::default())
+            .await;
+        match status {
+            StatusCode::OK => {
+                let response = result.unwrap();
+                assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+                assert_eq!(response.usage.unwrap().total_tokens, 2);
+                let calls = upstream.seen.lock().unwrap();
+                assert_eq!(calls[0].0, "/api/v3/embeddings");
+                let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+                assert_eq!(body["model"], "doubao-embedding-text-240515");
+                assert_eq!(body["input"], json!(["hello"]));
+            }
+            StatusCode::BAD_REQUEST => assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::InvalidRequest { .. } | ProviderError::ApiError { status: 400, .. }
+            )),
+            _ => assert!(matches!(
+                result.unwrap_err(),
+                ProviderError::RateLimit {
+                    retry_after: Some(7),
+                    ..
+                }
+            )),
+        }
+        for capability in [
+            ProviderCapability::ImageGeneration,
+            ProviderCapability::AudioTranscription,
+            ProviderCapability::TextToSpeech,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability("public", &capability)
+                    .is_err()
+            );
+        }
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn volcengine_embeddings_require_prices_and_obey_gateway_budgets() {
+    use actix_web::test;
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    use litellm_rs::server::middleware::AuthMiddleware;
+    let (router, upstream, handle) = fixture("volcengine", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    let Provider::OpenAILike(provider) = provider else {
+        panic!("catalog provider")
+    };
+    let mut config = litellm_rs::Config::default();
+    config.gateway.auth.enable_jwt = false;
+    config.gateway.auth.enable_api_key = false;
+    config.gateway.auth.allow_anonymous = true;
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![provider_fixtures::mock_provider_config(
+        "volcengine",
+        "volcengine",
+        "test-key",
+        &provider.config().get_api_base(),
+        vec!["doubao-embedding-text-240715".into()],
+    )];
+    let state = litellm_rs::server::HttpServer::new(&config)
+        .await
+        .unwrap()
+        .state()
+        .clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .wrap(AuthMiddleware)
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let request = || {
+        test::TestRequest::post()
+            .uri("/v1/embeddings")
+            .set_json(json!({"model":"doubao-embedding-text-240715","input":"hello"}))
+            .to_request()
+    };
+    let response = test::call_service(&app, request()).await;
+    assert!(!response.status().is_success());
+    let error: Value = test::read_body_json(response).await;
+    assert!(
+        error.to_string().to_lowercase().contains("pricing"),
+        "{error}"
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let (_, mut price) = state
+        .pricing
+        .get_model_info_for_provider("openai", "text-embedding-3-small")
+        .unwrap();
+    price.litellm_provider = "volcengine".into();
+    price.input_cost_per_token = Some(0.1);
+    state
+        .pricing
+        .add_custom_model("doubao-embedding-text-240715".into(), price);
+    state.budget_limits.providers.set_provider_limit(
+        "volcengine",
+        ProviderLimitConfig::new(0.01, ResetPeriod::Monthly),
+    );
+    assert_eq!(
+        test::call_service(&app, request()).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    state.budget_limits.providers.set_provider_limit(
+        "volcengine",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let response = test::call_service(&app, request()).await;
+    let status = response.status();
+    let body: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    let spend = state
+        .budget_limits
+        .providers
+        .get_provider_usage("volcengine")
+        .unwrap()
+        .current_spend;
+    assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn volcengine_embedding_string_is_sent_as_one_item_array() {
+    let (router, upstream, handle) = fixture("volcengine", StatusCode::OK).await;
+    let request =
+        serde_json::from_value(json!({"model":"doubao-embedding-text-240515","input":"hello"}))
+            .unwrap();
+    selected(&router, ProviderCapability::Embeddings)
+        .create_embeddings(request, RequestContext::default())
+        .await
+        .unwrap();
+    let calls = upstream.seen.lock().unwrap().clone();
+    let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+    assert_eq!(body["input"], json!(["hello"]));
     handle.stop(false).await;
 }
