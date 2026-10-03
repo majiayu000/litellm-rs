@@ -728,6 +728,11 @@ async fn equivalent_config_reload_preserves_session() {
             .get_mut("docs")
             .unwrap()
             .static_headers = headers;
+        if reverse {
+            let server = config.gateway.mcp_servers.get_mut("docs").unwrap();
+            server.description = Some("changed description".into());
+            server.timeout_ms += 100;
+        }
         revision.config = Arc::new(config);
         state.runtime.store(revision);
         let response = test::call_service(
