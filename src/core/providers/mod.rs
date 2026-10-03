@@ -1,9 +1,10 @@
 //! AI Provider implementations using Rust-idiomatic enum-based design.
 //!
-//! This module contains the closed `Provider` enum used by router deployments
-//! plus the built-in provider implementations wired into that enum. Implementing
-//! `LLMProvider` alone does not make a provider routeable; new routed providers
-//! must be added to the enum, dispatch arms, and factory wiring.
+//! Router deployments accept built-in providers and external Rust implementations
+//! through `ExternalProvider`. External implementations use the existing deployment
+//! registration API; they do not require changes to the built-in factory.
+pub mod external;
+pub use external::ExternalProvider;
 // Base infrastructure
 pub mod base;
 #[cfg(feature = "gateway")]
@@ -45,7 +46,7 @@ mod enterprise;
 #[cfg(feature = "providers-extended")]
 pub mod fal_ai;
 // Catalog Tier 1: featherless, fireworks, friendliai, galadriel.
-#[cfg(any(feature = "providers-extended", feature = "providers-extra"))]
+// Model metadata is available in every build; transports remain feature-gated.
 pub mod gemini;
 #[cfg(feature = "providers-extended")]
 pub mod github;
@@ -282,6 +283,7 @@ macro_rules! dispatch_provider {
             Provider::BlackForestLabs(p) => p.$method($($arg),*),
             Provider::OpenAILike(p) => p.$method($($arg),*),
             Provider::Voyage(p) => p.$method($($arg),*),
+            Provider::External(p) => p.$method($($arg),*),
         }
     };
 
@@ -319,6 +321,7 @@ macro_rules! dispatch_provider {
             Provider::BlackForestLabs(p) => LLMProvider::$method(p.as_ref(), $($arg),*).await.map_err(ProviderError::from),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
             Provider::Voyage(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
+            Provider::External(p) => LLMProvider::$method(p, $($arg),*).await.map_err(ProviderError::from),
         }
     };
 
@@ -356,6 +359,7 @@ macro_rules! dispatch_provider {
             Provider::BlackForestLabs(p) => LLMProvider::$method(p.as_ref(), $($arg),*),
             Provider::OpenAILike(p) => LLMProvider::$method(p, $($arg),*),
             Provider::Voyage(p) => LLMProvider::$method(p, $($arg),*),
+            Provider::External(p) => LLMProvider::$method(p, $($arg),*),
         }
     };
 
@@ -393,6 +397,7 @@ macro_rules! dispatch_provider {
             Provider::BlackForestLabs(p) => LLMProvider::$method(p.as_ref()).await,
             Provider::OpenAILike(p) => LLMProvider::$method(p).await,
             Provider::Voyage(p) => LLMProvider::$method(p).await,
+            Provider::External(p) => LLMProvider::$method(p).await,
         }
     };
 }
@@ -422,9 +427,11 @@ mod capability_dispatch;
 mod model_health_check;
 pub mod model_identity;
 
-/// Unified built-in provider enum used by router deployments.
+/// Unified built-in and external provider dispatch used by router deployments.
 #[derive(Debug, Clone)]
 pub enum Provider {
+    /// Provider implemented by a downstream Rust crate.
+    External(std::sync::Arc<dyn ExternalProvider>),
     OpenAI(openai::OpenAIProvider),
     Anthropic(anthropic::AnthropicProvider),
     Bedrock(bedrock::BedrockProvider),
@@ -619,6 +626,7 @@ impl Provider {
                 p.name()
             }
             Provider::Voyage(_) => "voyage",
+            Provider::External(provider) => provider.as_ref().name(),
         }
     }
 
@@ -657,6 +665,9 @@ impl Provider {
             Provider::BlackForestLabs(_) => ProviderType::BlackForestLabs,
             Provider::OpenAILike(_) => ProviderType::OpenAICompatible,
             Provider::Voyage(_) => ProviderType::Voyage,
+            Provider::External(provider) => {
+                ProviderType::Custom(provider.as_ref().name().to_owned())
+            }
         }
     }
 

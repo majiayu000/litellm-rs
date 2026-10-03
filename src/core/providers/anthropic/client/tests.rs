@@ -67,7 +67,7 @@ async fn forbidden_anthropic_url(truncated: bool) -> std::io::Result<String> {
 }
 
 fn anthropic_request() -> ChatRequest {
-    ChatRequest::new("claude-3-haiku-20240307").add_user_message("hello")
+    ChatRequest::new("claude-haiku-4-5-20251001").add_user_message("hello")
 }
 
 async fn forbidden_client(truncated: bool) -> Result<AnthropicClient, Box<dyn std::error::Error>> {
@@ -127,4 +127,25 @@ async fn chat_preserves_403_when_error_body_is_truncated() -> Result<(), Box<dyn
         } if message.contains("failed to read upstream error body")
     ));
     Ok(())
+}
+
+#[tokio::test]
+async fn retired_model_is_rejected_before_network_request() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let config = AnthropicConfig::new_test("test-key")
+        .with_base_url(format!("http://{}", listener.local_addr().unwrap()))
+        .with_endpoint_access(ProviderEndpointAccess::PrivateNetwork);
+    let client = AnthropicClient::new(config).unwrap();
+    let error = client
+        .chat(ChatRequest::new("claude-3-haiku-20240307").add_user_message("hello"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ProviderError::ApiError {status: 400, ref message, ..} if message.contains("Unsupported model"))
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), listener.accept())
+            .await
+            .is_err()
+    );
 }
