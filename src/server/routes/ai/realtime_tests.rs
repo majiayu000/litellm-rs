@@ -66,6 +66,7 @@ async fn upstream(
     );
     assert!(!req.headers().contains_key("x-api-key"));
     assert_eq!(req.query_string(), "model=gpt-realtime-mini-mapped");
+    let injected_tool = req.match_info().get("tool").map(str::to_owned);
     let (response, mut session, mut stream) = actix_ws::handle(&req, payload)?;
     let calls = calls.get_ref().clone();
     actix_web::rt::spawn(async move {
@@ -79,6 +80,10 @@ async fn upstream(
                 actix_ws::Message::Text(text) => {
                     let value: Value = serde_json::from_str(&text).unwrap();
                     calls.lock().unwrap().push(value.clone());
+                    if let Some(kind) = value["upstream_error"].as_str() {
+                        let _ = session.text(json!({"type":"error","error":{"type":kind,"event_id":value["event_id"],"message":"mock forwarded operation failure"}}).to_string()).await;
+                        continue;
+                    }
                     match value["type"].as_str().unwrap() {
                         "session.update" => {
                             if let Some(kind) = value["session"]["instructions"]
@@ -110,6 +115,16 @@ async fn upstream(
                                 }
                             }
                             merge_session(&mut session_state, &value["session"]);
+                            if let Some(kind) = injected_tool.as_deref() {
+                                session_state["tools"] = json!([{"type":kind,"name":"injected"}]);
+                            }
+                            if value["session"]["instructions"] == "unsafe-tools" {
+                                session_state["tools"] =
+                                    json!([{"type":"mcp","server_url":"https://example.test/mcp"}]);
+                            }
+                            if value["session"]["instructions"] == "wrong-model" {
+                                session_state["model"] = json!("other-model");
+                            }
                             if value["session"]["instructions"] == "unsafe-vad" {
                                 session_state["audio"]["input"]["turn_detection"] =
                                     json!({"type":"server_vad"});
@@ -166,12 +181,17 @@ async fn upstream(
                                 }
                                 _ => usage(),
                             };
-                            for event in [
+                            for mut event in [
                                 json!({"type":"response.created","response":{"id":"response-1"}}),
                                 json!({"type":"response.output_audio.delta","delta":"aGVsbG8="}),
                                 json!({"type":"response.function_call_arguments.done","arguments":"{}","call_id":"call-1"}),
                                 json!({"type":"response.done","response":{"id":"response-1","status":value["response"]["metadata"]["status"].as_str().unwrap_or("completed"),"status_details":{"error":{"type":value["response"]["metadata"]["error_type"].as_str().unwrap_or("server_error"),"message":"mock failure"}},"usage":terminal_usage}}),
                             ] {
+                                if event["type"] == "response.done"
+                                    && value["response"]["metadata"]["status"] == "missing-status"
+                                {
+                                    event["response"].as_object_mut().unwrap().remove("status");
+                                }
                                 if session.text(event.to_string()).await.is_err() {
                                     break;
                                 }
@@ -236,6 +256,7 @@ async fn fixture_with_config(
         App::new()
             .app_data(web::Data::new(copy.clone()))
             .route("/v1/realtime", web::get().to(upstream))
+            .route("/unsafe-tools/{tool}/v1/realtime", web::get().to(upstream))
             .route(
                 "/mismatch-created/v1/realtime",
                 web::get().to(mismatched_session_model),
@@ -2813,7 +2834,12 @@ async fn live_key_output_cap_increases_allow_explicit_larger_responses() {
 
 #[actix_web::test]
 async fn acknowledged_updates_must_keep_manual_audio_mode() {
-    for instructions in ["unsafe-vad", "unsafe-transcription"] {
+    for instructions in [
+        "unsafe-vad",
+        "unsafe-transcription",
+        "unsafe-tools",
+        "wrong-model",
+    ] {
         let (_, url, raw, calls, handles) = fixture().await;
         let mut socket = client(&url, &raw).await;
         next_json(&mut socket).await;
@@ -2965,6 +2991,192 @@ async fn terminal_provider_errors_keep_auth_and_rate_limit_cooldown() {
         drop(socket);
         for handle in handles {
             handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn live_zero_output_policy_is_an_authentication_failure() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let mut socket = client(&url, &raw).await;
+    next_json(&mut socket).await;
+    next_json(&mut socket).await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":0,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+    state.storage.db().update_api_key(&key).await.unwrap();
+    socket
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_json(&mut socket).await["error"]["type"],
+        "authentication_error"
+    );
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|event| event["type"] != "response.create")
+    );
+    let router = state.unified_router();
+    let deployment = router
+        .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+        .unwrap();
+    assert_eq!(
+        deployment
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    drop(socket);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn initial_acknowledgment_must_keep_the_requested_empty_tools() {
+    for tool in ["mcp", "function"] {
+        let (_, url, raw, calls, handles) = fixture_with_config(|config| {
+            let base = config.gateway.providers[0].base_url.as_mut().unwrap();
+            *base = base.replace("/v1", &format!("/unsafe-tools/{tool}/v1"));
+        })
+        .await;
+        let response = reqwest::Client::new()
+            .get(url.replace("ws://", "http://"))
+            .header("x-api-key", &raw)
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(response.status().as_u16(), 101);
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|event| event["type"] != "response.create")
+        );
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn unknown_terminal_statuses_do_not_record_success() {
+    for status in ["unknown", "missing-status"] {
+        let (state, url, raw, _, handles) = fixture().await;
+        let mut socket = client(&url, &raw).await;
+        next_json(&mut socket).await;
+        next_json(&mut socket).await;
+        socket
+            .send(Message::Text(
+                json!({"type":"response.create","response":{"metadata":{"status":status}}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            next_json(&mut socket).await;
+        }
+        let error = next_json(&mut socket).await;
+        assert_eq!(error["type"], "error");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("terminal response status")
+        );
+        let router = state.unified_router();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        assert_eq!(
+            deployment
+                .state
+                .success_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            deployment
+                .state
+                .fail_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            deployment
+                .state
+                .active_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        drop(socket);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn forwarded_operation_errors_update_provider_health_once() {
+    for event in ["conversation.item.create", "input_audio_buffer.append"] {
+        for kind in [
+            "authentication_error",
+            "rate_limit_error",
+            "server_error",
+            "invalid_request_error",
+        ] {
+            let (state, url, raw, _, handles) = fixture().await;
+            let mut socket = client(&url, &raw).await;
+            next_json(&mut socket).await;
+            next_json(&mut socket).await;
+            socket.send(Message::Text(json!({"type":event,"event_id":"forwarded-operation","upstream_error":kind,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]},"audio":"aGVsbG8="}).to_string().into())).await.unwrap();
+            let error = next_json(&mut socket).await;
+            assert_eq!(error["error"]["type"], kind);
+            let router = state.unified_router();
+            let deployment = router
+                .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+                .unwrap();
+            assert_eq!(
+                deployment
+                    .state
+                    .fail_requests
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                u64::from(kind != "invalid_request_error"),
+                "{event}/{kind}"
+            );
+            assert_eq!(
+                deployment
+                    .state
+                    .active_requests
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(
+                deployment.is_in_cooldown(),
+                matches!(kind, "authentication_error" | "rate_limit_error")
+            );
+            drop(socket);
+            for handle in handles {
+                handle.stop(false).await;
+            }
         }
     }
 }

@@ -195,7 +195,11 @@ fn upstream_event_error(error: &Value) -> ProviderError {
 }
 
 fn manual_session(value: &Value) -> bool {
-    value.pointer("/session/audio/input/turn_detection") == Some(&Value::Null)
+    value["session"]["type"] == "realtime"
+        && value["session"]["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().all(|tool| tool["type"] == "function"))
+        && value.pointer("/session/audio/input/turn_detection") == Some(&Value::Null)
         && value.pointer("/session/audio/input/transcription") == Some(&Value::Null)
 }
 
@@ -237,6 +241,7 @@ async fn initialize_upstream(
                     let ready = value["type"] == "session.updated";
                     if ready
                         && (!manual_session(&value)
+                            || value["session"]["tools"] != json!([])
                             || value["session"]["max_output_tokens"] != output_limit)
                     {
                         return Err(ProviderError::network(
@@ -610,7 +615,7 @@ async fn relay(
                                 key_rpm = key.rate_limits.as_ref().and_then(|limits| limits.rpm).or(requests_per_minute);
                                 if let Some(budget_id) = crate::auth::api_key_budget_id(&key) { context.set_api_key_budget_id(budget_id); } else { context.clear_api_key_budget_id(); }
                             }
-                            if output_limit == 0 { return Err("Realtime output is forbidden by current key policy".into()); }
+                            if output_limit == 0 { error_type = "authentication_error"; return Err("Realtime output is forbidden by current key policy".into()); }
                             let effective_output = if unbounded_output {
                                 output_limit
                             } else {
@@ -667,17 +672,19 @@ async fn relay(
                 event = upstream.next() => match event {
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).map_err(|_| { failure = true; "Malformed upstream Realtime event" })?;
+                        if value["type"] == "error" && value["error"]["type"] != "invalid_request_error"
+                            && !(pending.is_some() && response_id.is_none()
+                                && response_event_id.as_deref() == value["error"]["event_id"].as_str()) {
+                            lease.record_provider_event_failure(&upstream_event_error(&value["error"]));
+                        }
                         if value["type"] == "error" && pending_session_update.as_ref().is_some_and(|(id, _)| Some(id.as_str()) == value["error"]["event_id"].as_str()) {
                             pending_session_update = None;
-                            if value["error"]["type"] != "invalid_request_error" {
-
-                                lease.record_provider_event_failure(&upstream_event_error(&value["error"]));
-                            }
                         }
                         if value["type"] == "session.updated" {
                             let expected_output = pending_session_update.as_ref().map(|(_, limit)| limit.clone())
                                 .unwrap_or(rates.wire_output_limit(session_output_limit).map_err(str::to_owned)?);
-                            if !manual_session(&value) || value["session"]["max_output_tokens"] != expected_output {
+                            if !manual_session(&value) || value["session"]["max_output_tokens"] != expected_output
+                                || value["session"]["model"].as_str().is_some_and(|model| model != wire_model) {
                                 failure = true;
                                 return Err("Upstream did not enforce the requested Realtime session configuration".into());
                             }
@@ -692,6 +699,8 @@ async fn relay(
                             response_id = Some(value["response"]["id"].as_str().ok_or_else(|| { failure = true; "Missing Realtime response ID" })?.to_owned());
                         } else if value["type"] == "response.done" {
                             if response_id.as_deref() != value["response"]["id"].as_str() || response_id.is_none() { failure = true; return Err("Mismatched Realtime response ID".into()); }
+                            let status = value["response"]["status"].as_str().filter(|status| matches!(*status, "completed" | "failed" | "cancelled" | "incomplete"))
+                                .ok_or_else(|| { failure = true; "Unknown Realtime terminal response status" })?;
                             let reservation = pending.take().ok_or("Missing Realtime reservation")?;
                             let usage = rates.cost(&value["response"]["usage"], reservation.max_output);
                             match usage {
@@ -700,12 +709,11 @@ async fn relay(
                                     if let Err(error) = reservation.settle(&state, context.api_key_id(), usage).await {
                                         tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
                                     }
-                                    let status = value["response"]["status"].as_str();
-                                    let provider_failed = status == Some("failed")
+                                    let provider_failed = status == "failed"
                                         && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
                                     if provider_failed {
                                         lease.finish_interrupted(tokens, Some(&upstream_event_error(&value["response"]["status_details"]["error"])));
-                                    } else if matches!(status, Some("cancelled" | "incomplete" | "failed")) {
+                                    } else if matches!(status, "cancelled" | "incomplete" | "failed") {
                                         lease.finish_interrupted(tokens, None);
                                     } else {
                                         lease.complete_response(tokens, None);

@@ -147,3 +147,10 @@ by that update, or retain the last agreed cap when no change was requested.
 Ignored, malformed or unexpectedly raised caps close the socket before generation.
 Failed terminal responses retain authentication, permission and rate-limit error
 classification for immediate deployment cooldown; invalid client requests remain neutral.
+
+Live zero-output key policy is an authentication failure. Missing or unknown
+terminal statuses are upstream protocol errors, never successful generations.
+Initial acknowledgments must retain the requested empty tool list; later sessions
+accept client function tools only and reject changed reported models. Provider
+errors from forwarded conversation/audio operations affect health once, while
+invalid client requests remain neutral.
