@@ -39,6 +39,46 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
             .and_then(|v| v.to_str().ok()),
         Some("gateway-only-sentinel")
     );
+    if let Some(case) = value
+        .pointer("/params/test_contract")
+        .and_then(Value::as_str)
+    {
+        let version = if case == "long-version" {
+            "x".repeat(65)
+        } else {
+            "2025-11-25".into()
+        };
+        let result = json!({"jsonrpc":"2.0","id":value["id"],"result":{"protocolVersion":version,"capabilities":{},"serverInfo":{"name":"test","version":"1"}}});
+        let mut response = HttpResponse::Ok();
+        response.insert_header(("mcp-session-id", "upstream-session"));
+        if case == "open-sse" {
+            return response.insert_header(("content-type", "text/event-stream")).streaming(async_stream::stream! {
+                let bytes = format!(": heartbeat\r\n\r\ndata: {result}\r\n\r\n").into_bytes();
+                for byte in bytes { yield Ok::<_, std::io::Error>(web::Bytes::from(vec![byte])); }
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                yield Ok(web::Bytes::from_static(b": still open\n\n"));
+            });
+        }
+        if case == "timeout" || case == "cancel" {
+            return response
+                .insert_header(("content-type", "application/json"))
+                .streaming(async_stream::stream! {
+                    yield Ok::<_, std::io::Error>(web::Bytes::from_static(b"{"));
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    yield Ok(web::Bytes::from_static(b"}"));
+                });
+        }
+        if case == "oversize" {
+            return response.body("x".repeat(8192));
+        }
+        if case == "truncated" {
+            return response.body("{invalid");
+        }
+        if case == "rpc-error" {
+            return response.json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"invalid"}}));
+        }
+        return response.json(result);
+    }
     if value.pointer("/params/test_initialize_error") == Some(&Value::Bool(true)) {
         return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"unsupported version"}}));
     }
@@ -978,5 +1018,153 @@ async fn mcp_configuration_rejects_unknown_fields_and_transport_auth_collisions(
     let mut auth = serde_json::to_value(AuthConfig::bearer("test")).unwrap();
     auth["header_nam"] = json!("x-token");
     assert!(serde_json::from_value::<AuthConfig>(auth).is_err());
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn allocated_sessions_are_reaped_after_initialize_errors_and_cancellation() {
+    let (state, calls, handle) = fixture(false).await;
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    config.gateway.server.max_body_size = 4096;
+    config
+        .gateway
+        .mcp_servers
+        .get_mut("docs")
+        .unwrap()
+        .timeout_ms = 200;
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for case in [
+        "oversize",
+        "truncated",
+        "timeout",
+        "long-version",
+        "rpc-error",
+        "cancel",
+    ] {
+        let req = test::TestRequest::post().uri("/docs/mcp")
+            .insert_header(("accept", "application/json, text/event-stream"))
+            .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":"2025-11-25","test_contract":case}})).to_request();
+        req.extensions_mut().insert(owner.clone());
+        if case == "cancel" {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), test::call_service(&app, req))
+                    .await
+                    .is_err()
+            );
+        } else {
+            let response = test::call_service(&app, req).await;
+            assert_eq!(
+                response.status(),
+                if case == "rpc-error" {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_GATEWAY
+                },
+                "{case}"
+            );
+            assert!(!response.headers().contains_key("mcp-session-id"));
+        }
+        {
+            let entries = state.mcp_sessions.entries.lock().unwrap();
+            assert_eq!(entries.len(), 1, "{case}");
+            let session = entries.values().next().unwrap();
+            assert!(!session.pending);
+            assert!(session.expires <= Instant::now());
+        }
+        reap_sessions(
+            &state.mcp_sessions,
+            &state.pin_runtime().config.gateway.mcp_servers,
+        )
+        .await;
+        assert!(state.mcp_sessions.entries.lock().unwrap().is_empty());
+    }
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, _, _)| method == "DELETE")
+            .count(),
+        6
+    );
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn sse_initialize_returns_before_upstream_closes() {
+    use actix_web::body::MessageBody;
+    let (state, _, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let req = test::TestRequest::post().uri("/docs/mcp")
+        .insert_header(("accept", "application/json, text/event-stream"))
+        .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"test_contract":"open-sse"}})).to_request();
+    req.extensions_mut().insert(user());
+    let response = tokio::time::timeout(Duration::from_secs(2), test::call_service(&app, req))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key("mcp-session-id"));
+    let mut body = Box::pin(response.into_body());
+    let first = tokio::time::timeout(
+        Duration::from_secs(2),
+        futures::future::poll_fn(|cx| body.as_mut().poll_next(cx)),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    let text = std::str::from_utf8(&first).unwrap();
+    assert!(text.contains("2025-11-25"));
+    assert!(text.starts_with(": heartbeat"));
+    drop(body);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn canonical_forwarding_preserves_large_and_fractional_numbers() {
+    let (state, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let response = test::call_service(&app, request("initialize", None, &owner)).await;
+    let token = response
+        .headers()
+        .get("mcp-session-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let req = test::TestRequest::post().uri("/docs/mcp")
+        .insert_header(("accept", "application/json, text/event-stream"))
+        .insert_header(("content-type", "application/json"))
+        .insert_header(("mcp-session-id", token))
+        .set_payload(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"arguments":{"large":184467440737095516170,"decimal":0.12345678901234567890123456789}}}"#).to_request();
+    req.extensions_mut().insert(owner);
+    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+    let calls = calls.lock().unwrap().clone();
+    let args = &calls.last().unwrap().1["params"]["arguments"];
+    assert_eq!(args["large"].to_string(), "184467440737095516170");
+    assert_eq!(
+        args["decimal"].to_string(),
+        "0.12345678901234567890123456789"
+    );
     handle.stop(false).await;
 }

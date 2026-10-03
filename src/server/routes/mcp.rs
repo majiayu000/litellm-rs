@@ -165,7 +165,14 @@ impl Drop for PendingSession {
         if !self.committed
             && let Ok(mut entries) = self.sessions.entries.lock()
         {
-            entries.remove(&self.token);
+            if let Some(session) = entries.get_mut(&self.token)
+                && session.upstream.is_some()
+            {
+                session.pending = false;
+                session.expires = Instant::now();
+            } else {
+                entries.remove(&self.token);
+            }
         }
     }
 }
@@ -272,6 +279,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     }
     let mut outgoing_body = body.to_vec();
     let mut request_id = Value::Null;
+    let mut requested_version = None;
     let initialize = if req.method() == Method::POST {
         if !req
             .headers()
@@ -304,6 +312,11 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             );
         }
         request_id = message.get("id").cloned().unwrap_or(Value::Null);
+        requested_version = message
+            .pointer("/params/protocolVersion")
+            .and_then(Value::as_str)
+            .filter(|version| valid_protocol_version(version))
+            .map(str::to_owned);
         outgoing_body = message.to_string().into_bytes();
         message.get("method").and_then(Value::as_str) == Some("initialize")
     } else {
@@ -462,52 +475,23 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     response.insert_header(("cache-control", "no-store"));
     let mut initialized_body = None;
     let mut protocol_version = None;
+    let event_stream = upstream
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
+        });
     if initialize && status == StatusCode::OK {
-        // Initialize is finite: do not allocate a gateway session for an RPC error.
-        // Preserve the original JSON/SSE bytes after inspecting the completed reply.
-        let read = async {
-            let mut bytes = Vec::new();
-            while let Some(chunk) = upstream.chunk().await.map_err(|_| ())? {
-                if bytes.len().saturating_add(chunk.len()) > config.server.max_body_size {
-                    return Err(());
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            Ok::<_, ()>(bytes)
-        };
-        let bytes = match tokio::time::timeout(Duration::from_millis(server.timeout_ms), read).await
-        {
-            Ok(Ok(bytes)) => bytes,
-            _ => {
-                return error(
-                    StatusCode::BAD_GATEWAY,
-                    "Invalid or incomplete MCP initialize response",
-                );
-            }
-        };
-        let event_stream = upstream
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| {
-                v.split(';')
-                    .next()
-                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
-            });
-        match initialize_result(&bytes, event_stream, &request_id) {
-            Ok(Some(version)) => {
-                protocol_version = Some(version);
-                initialized_body = Some(bytes);
-            }
-            Ok(None) => return response.body(bytes),
-            Err(()) => return error(StatusCode::BAD_GATEWAY, "Invalid MCP initialize result"),
-        }
-    }
-    if initialize && status == StatusCode::OK {
+        // Capture allocated upstream state before reading a body that can fail or be cancelled.
         let upstream_id = match upstream.headers().get("mcp-session-id") {
             Some(value) => match value.to_str() {
                 Ok(value)
-                    if value.len() <= 4096 && value.bytes().all(|b| (0x21..=0x7e).contains(&b)) =>
+                    if !value.is_empty()
+                        && value.len() <= 4096
+                        && value.bytes().all(|b| (0x21..=0x7e).contains(&b)) =>
                 {
                     Some(value.to_owned())
                 }
@@ -515,6 +499,78 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             },
             None => None,
         };
+        if let Some(reservation) = &reservation {
+            let mut entries = match state.mcp_sessions.entries.lock() {
+                Ok(entries) => entries,
+                Err(_) => {
+                    return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable");
+                }
+            };
+            if let Some(session) = entries.get_mut(&reservation.token) {
+                session.upstream = upstream_id;
+                // Before negotiation completes, cleanup can only use the requested
+                // version (or the transport specification's missing-header default).
+                session.protocol_version = Some(
+                    requested_version
+                        .clone()
+                        .or_else(|| {
+                            req.headers()
+                                .get("mcp-protocol-version")
+                                .and_then(|v| v.to_str().ok())
+                                .filter(|v| valid_protocol_version(v))
+                                .map(str::to_owned)
+                        })
+                        .unwrap_or_else(|| "2025-03-26".into()),
+                );
+            }
+        }
+        let read = async {
+            let mut bytes = Vec::new();
+            let mut parsed = 0;
+            let mut scan_from = 0;
+            while let Some(chunk) = upstream.chunk().await.map_err(|_| ())? {
+                if bytes.len().saturating_add(chunk.len()) > config.server.max_body_size {
+                    return Err(());
+                }
+                bytes.extend_from_slice(&chunk);
+                if event_stream {
+                    while let Some(end) = event_boundary(&bytes, scan_from) {
+                        if let Some(result) =
+                            initialize_result(&bytes[parsed..end], true, &request_id)?
+                        {
+                            return Ok((bytes, result));
+                        }
+                        parsed = end;
+                        scan_from = end;
+                    }
+                    scan_from = bytes.len().saturating_sub(3).max(parsed);
+                }
+            }
+            if event_stream {
+                return Err(());
+            }
+            let result = initialize_result(&bytes, false, &request_id)?.ok_or(())?;
+            Ok::<_, ()>((bytes, result))
+        };
+        let (bytes, result) =
+            match tokio::time::timeout(Duration::from_millis(server.timeout_ms), read).await {
+                Ok(Ok(result)) => result,
+                _ => {
+                    return error(
+                        StatusCode::BAD_GATEWAY,
+                        "Invalid or incomplete MCP initialize response",
+                    );
+                }
+            };
+        match result {
+            Some(version) => {
+                protocol_version = Some(version);
+                initialized_body = Some(bytes);
+            }
+            None => return response.body(bytes),
+        }
+    }
+    if initialize && status == StatusCode::OK {
         let mut entries = match state.mcp_sessions.entries.lock() {
             Ok(entries) => entries,
             Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable"),
@@ -531,7 +587,6 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 "MCP reservation unavailable",
             );
         };
-        session.upstream = upstream_id;
         session.protocol_version = protocol_version;
         session.pending = false;
         session.expires = Instant::now() + Duration::from_secs(3600);
@@ -552,7 +607,16 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         }
     }
     if let Some(bytes) = initialized_body {
-        return response.body(bytes);
+        if !event_stream {
+            return response.body(bytes);
+        }
+        let prefix =
+            futures::stream::once(
+                async move { Ok::<_, actix_web::Error>(web::Bytes::from(bytes)) },
+            );
+        return response.streaming(prefix.chain(upstream.bytes_stream().map(|chunk| {
+            chunk.map_err(|_| actix_web::error::ErrorBadGateway("MCP upstream stream interrupted"))
+        })));
     }
     // The response stream owns reqwest's body. Dropping the downstream stream
     // closes the upstream body without buffering SSE or rewriting RPC errors.
@@ -561,7 +625,12 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     }))
 }
 
-fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<Option<String>, ()> {
+// Outer None: no matching response in this complete SSE frame. Inner None: RPC error.
+fn initialize_result(
+    bytes: &[u8],
+    event_stream: bool,
+    id: &Value,
+) -> Result<Option<Option<String>>, ()> {
     let messages: Vec<Value> = if event_stream {
         let text = std::str::from_utf8(bytes)
             .map_err(|_| ())?
@@ -583,15 +652,15 @@ fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<Opt
     } else {
         vec![serde_json::from_slice(bytes).map_err(|_| ())?]
     };
-    let response = messages
-        .iter()
-        .find(|message| {
-            message.get("id") == Some(id)
-                && message.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-        })
-        .ok_or(())?;
+    let response = messages.iter().find(|message| {
+        message.get("id") == Some(id)
+            && message.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+    });
+    let Some(response) = response else {
+        return if event_stream { Ok(None) } else { Err(()) };
+    };
     if response.get("error").is_some() {
-        return Ok(None);
+        return Ok(Some(None));
     }
     let result = response.get("result").ok_or(())?;
     if result.get("protocolVersion").is_some_and(Value::is_string)
@@ -599,13 +668,31 @@ fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<Opt
         && result.get("serverInfo").is_some_and(Value::is_object)
     {
         let version = result["protocolVersion"].as_str().ok_or(())?;
-        if version.is_empty() || reqwest::header::HeaderValue::from_str(version).is_err() {
+        if !valid_protocol_version(version) {
             return Err(());
         }
-        Ok(Some(version.to_owned()))
+        Ok(Some(Some(version.to_owned())))
     } else {
         Err(())
     }
+}
+
+fn valid_protocol_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 64
+        && reqwest::header::HeaderValue::from_str(version).is_ok()
+}
+
+fn event_boundary(bytes: &[u8], start: usize) -> Option<usize> {
+    (start..bytes.len()).find_map(|i| {
+        if bytes[i..].starts_with(b"\r\n\r\n") {
+            Some(i + 4)
+        } else if bytes[i..].starts_with(b"\n\n") || bytes[i..].starts_with(b"\r\r") {
+            Some(i + 2)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]

@@ -225,7 +225,7 @@ tracing = ["dep:tracing-subscriber"]
 # Default-off protocol and platform experiments. These features expose library
 # modules; gateway+mcp also mounts configured MCP Streamable HTTP routes.
 a2a = []
-mcp = []
+mcp = ["serde_json/arbitrary_precision"]
 webhooks = []
 user-management = ["storage"]
 
