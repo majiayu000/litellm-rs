@@ -40,6 +40,8 @@ pub struct HttpServer {
     /// Background worker that drains budget persistence events on shutdown.
     budget_persistence_task: Option<JoinHandle<()>>,
     config_sync_task: Option<super::config_sync::ConfigSyncTask>,
+    response_settlement_task:
+        Option<super::routes::ai::responses_settlement::ResponseSettlementTask>,
     /// Background worker that delivers configured callback events.
     callback_runtime: CallbackRuntime,
 }
@@ -138,6 +140,8 @@ impl HttpServer {
         state.config_sync = super::config_sync::ConfigSync::from_config(config)?;
         state.reconcile_runtime_config().await?;
         let config_sync_task = super::config_sync::start(state.clone());
+        let response_settlement_task =
+            super::routes::ai::responses_settlement::start(state.clone());
 
         Ok(Self {
             config: config.gateway.server.clone(),
@@ -145,6 +149,7 @@ impl HttpServer {
             tls,
             budget_persistence_task,
             config_sync_task,
+            response_settlement_task,
             callback_runtime,
         })
     }
@@ -362,6 +367,7 @@ impl HttpServer {
         let port = self.config.port;
         let budget_persistence_task = self.budget_persistence_task.take();
         let config_sync_task = self.config_sync_task.take();
+        let response_settlement_task = self.response_settlement_task.take();
         let callback_runtime =
             std::mem::replace(&mut self.callback_runtime, CallbackRuntime::disabled());
 
@@ -447,6 +453,8 @@ impl HttpServer {
                 Err(e) => Err(GatewayError::server(format!("Server task failed: {}", e))),
             };
         }
+
+        drop(response_settlement_task);
 
         // AppState clones are gone, so worker queues can now drain.
         drop(server_handle);

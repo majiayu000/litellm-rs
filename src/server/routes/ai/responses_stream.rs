@@ -201,6 +201,7 @@ pub(crate) async fn handle_streaming_response(
                 ledger_facts: crate::core::request_ledger::current_facts(),
             };
 
+            let database = Arc::clone(&state.storage.database);
             tokio::spawn(async move {
                 let mut lease = Some(lease);
                 let mut settlement = settlement;
@@ -728,6 +729,31 @@ pub(crate) async fn handle_streaming_response(
                     previous_response_id: guarded_request.previous_response_id.clone(),
                     metadata: guarded_request.metadata.clone(),
                 };
+                if let Err(error) =
+                    store_response_if_requested(&database, &guarded_request, &completed, owner)
+                        .await
+                {
+                    error!("Responses stream could not be stored: {error}");
+                    let _ = tx
+                        .send(sse_error(
+                            "Response storage failed",
+                            "server_error",
+                            "storage_error",
+                        ))
+                        .await;
+                    settlement
+                        .record_completion(budget_usage.as_ref(), saw_upstream_output)
+                        .await;
+                    callback.fail("Response storage failed", "storage_error");
+                    if let Some(lease) = lease.take() {
+                        lease.finish_success(
+                            budget_usage
+                                .as_ref()
+                                .map_or(u64::from(total), |usage| u64::from(usage.total_tokens)),
+                        );
+                    }
+                    return;
+                }
                 if let Err(error) = emit(
                     &tx,
                     &ResponseStreamEvent::ResponseCompleted {
@@ -747,7 +773,6 @@ pub(crate) async fn handle_streaming_response(
                     return_after_disconnect!();
                 }
 
-                store_response_if_requested(&guarded_request, &completed, owner);
                 settlement
                     .record_completion(budget_usage.as_ref(), saw_upstream_output)
                     .await;

@@ -30,145 +30,89 @@ pub(super) fn response(
             pricing,
             reservation,
             key_reservation,
+            storage,
+            started,
         } = call;
-        let mut upstream = response.bytes_stream();
-        let mut frames = Frames::default();
-        let mut usage = None;
-        let mut terminal = false;
-        let mut upstream_failed = false;
-        let mut failure = None;
-        let sink = GuardrailDecisionSink::from_state(
+        let background = storage
+            .as_ref()
+            .is_some_and(|storage| storage.is_background());
+        let StreamResult {
+            response,
+            storage,
+            usage,
+            terminal,
+            upstream_failed,
+            failure,
+        } = forward(
             &state,
-            Some(&model),
-            Some(&provider),
-            Some(&deployment),
-        );
-        let mut guard = StreamOutputGuardrail::new(state.guardrails()).with_decision_sink(sink);
-        let idle_seconds = state.config().gateway.server.stream_idle_timeout;
-        'upstream: loop {
-            let chunk = tokio::select! {
-                biased;
-                _ = tx.closed() => break,
-                chunk = async {
-                    if idle_seconds == 0 { Ok(upstream.next().await) }
-                    else { tokio::time::timeout(std::time::Duration::from_secs(idle_seconds), upstream.next()).await }
-                } => match chunk {
-                    Ok(chunk) => chunk,
-                    Err(_) => { failure = Some(ProviderError::timeout("responses", "Responses stream idle timeout")); break; }
-                },
-            };
-            match chunk {
-                Some(Ok(chunk)) => {
-                    if let Err(error) = frames.push(&chunk) {
-                        failure = Some(error);
-                        break;
-                    }
-                    while let Some(frame) = frames.next() {
-                        let value = match event_value(&frame) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                failure = Some(error);
-                                break 'upstream;
-                            }
-                        };
-                        let mut surfaces = Vec::new();
-                        if let Some(value) = value {
-                            let event = value
-                                .get("type")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            if matches!(
-                                event,
-                                "response.completed" | "response.incomplete" | "response.failed"
-                            ) {
-                                terminal = true;
-                                upstream_failed = event == "response.failed";
-                                usage = value.get("response").and_then(response_usage);
-                            } else if event == "error" {
-                                terminal = true;
-                                upstream_failed = true;
-                            }
-                            // Keep each output's delta sequence contiguous for split-token checks.
-                            if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                                let index = value
-                                    .get("output_index")
-                                    .and_then(Value::as_u64)
-                                    .unwrap_or(0);
-                                let Ok(index) = u32::try_from(index) else {
-                                    failure = Some(invalid("Invalid output index"));
-                                    break 'upstream;
-                                };
-                                surfaces.push((index, delta.to_string()));
-                            }
-                            // Inspect all native and future fields too; raw event bytes are retained.
-                            surfaces.push((u32::MAX, native_responses_projection(&value)));
-                        }
-                        match guard.push_many_until_closed(&tx, surfaces, frame).await {
-                            Ok(Some(events)) => {
-                                for event in events {
-                                    if tx.send(event).await.is_err() {
-                                        break 'upstream;
-                                    }
-                                }
-                            }
-                            Ok(None) => break 'upstream,
-                            Err(error) => {
-                                failure = Some(ProviderError::api_error(
-                                    "guardrail",
-                                    403,
-                                    error.message(),
-                                ));
-                                break 'upstream;
-                            }
-                        }
-                        if terminal {
-                            break 'upstream;
-                        }
-                    }
-                }
-                Some(Err(_)) => {
-                    failure = Some(ProviderError::network(
-                        "responses",
-                        "Responses stream interrupted",
-                    ));
-                    break;
-                }
-                None => {
-                    if !terminal {
-                        failure = Some(invalid("Responses stream ended before a terminal event"));
-                    }
-                    break;
-                }
-            }
-        }
-        if failure.is_none() && terminal {
-            match guard.finish_until_closed(&tx).await {
-                Ok(Some(events)) => {
-                    for event in events {
-                        if tx.send(event).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    failure = Some(ProviderError::api_error("guardrail", 403, error.message()));
-                }
-            }
-        }
-        // A disconnect or malformed usage never releases a possibly consumed reservation.
-        settle(
-            &state,
-            &context,
+            &tx,
+            response,
+            storage,
             &provider,
-            &model,
-            pricing,
-            usage.as_ref(),
-            reservation,
-            key_reservation,
-            facts,
+            Some(&deployment),
+            None,
+            background.then_some(started + std::time::Duration::from_secs(540)),
         )
         .await;
+        if background
+            && !terminal
+            && let Some(record) = storage.as_ref().and_then(|storage| storage.record())
+        {
+            if let Some(error) = failure.as_ref() {
+                let code = if provider_error_is_guardrail(error) {
+                    "guardrail_violation"
+                } else {
+                    "upstream_stream_error"
+                };
+                let event =
+                    serde_json::json!({"type":"error", "code":code, "message":error.to_string()});
+                let _ = tx
+                    .send(Bytes::from(format!("event: error\ndata: {event}\n\n")))
+                    .await;
+            }
+            let initial = serde_json::from_str(&record.response_json).map_err(Into::into);
+            let call = NativeCall {
+                callback,
+                response,
+                provider,
+                model,
+                deployment,
+                pricing,
+                reservation,
+                key_reservation,
+                storage,
+                started,
+            };
+            // The client or upstream SSE connection can end while native work
+            // continues. Transfer the SAME reservations to the creation's poller.
+            let _ = super::background::response(state, context, call, lease, initial, true, facts)
+                .await;
+            return;
+        }
+        // A disconnect or malformed usage never releases a possibly consumed reservation.
+        if let Some(id) = storage
+            .as_ref()
+            .and_then(|storage| storage.settlement_id.as_ref())
+        {
+            if let Err(error) =
+                super::super::responses_settlement::submit_usage(&state, id, usage.as_ref()).await
+            {
+                tracing::error!(%error, "Response stream settlement remains pending for recovery");
+            }
+        } else {
+            settle(
+                &state,
+                &context,
+                &provider,
+                &model,
+                pricing,
+                usage.as_ref(),
+                reservation,
+                key_reservation,
+                facts,
+            )
+            .await;
+        }
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
             lease.finish_failure(&error);
@@ -198,6 +142,253 @@ pub(super) fn response(
             );
         } else {
             callback.fail("Client disconnected", "client_disconnect");
+        }
+    });
+    HttpResponse::Ok()
+        .insert_header(("content-type", "text/event-stream"))
+        .insert_header(("cache-control", "no-cache"))
+        .streaming(ReceiverStream::new(rx).map(Ok::<_, actix_web::Error>))
+}
+
+struct StreamResult {
+    response: reqwest::Response,
+    storage: Option<super::NativeResponseStorage>,
+    usage: Option<super::Usage>,
+    terminal: bool,
+    upstream_failed: bool,
+    failure: Option<ProviderError>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn forward(
+    state: &AppState,
+    tx: &mpsc::Sender<Bytes>,
+    mut response: reqwest::Response,
+    mut storage: Option<super::NativeResponseStorage>,
+    provider: &str,
+    deployment: Option<&str>,
+    expected_id: Option<&str>,
+    deadline: Option<tokio::time::Instant>,
+) -> StreamResult {
+    let mut frames = Frames::default();
+    let mut usage = None;
+    let mut terminal = false;
+    let mut upstream_failed = false;
+    let mut failure = None;
+    let sink = GuardrailDecisionSink::from_state(state, None, Some(provider), deployment);
+    let mut guard = StreamOutputGuardrail::new(state.guardrails()).with_decision_sink(sink);
+    let idle_seconds = state.config().gateway.server.stream_idle_timeout;
+    'upstream: loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = tx.closed() => break,
+            _ = async { match deadline { Some(deadline) => tokio::time::sleep_until(deadline).await, None => std::future::pending::<()>().await } } => {
+                failure = Some(ProviderError::timeout("responses", "Background Responses stream tracking timed out")); break;
+            },
+            chunk = async {
+                if idle_seconds == 0 { Ok(response.chunk().await) }
+                else { tokio::time::timeout(std::time::Duration::from_secs(idle_seconds), response.chunk()).await }
+            } => match chunk {
+                Ok(chunk) => chunk,
+                Err(_) => { failure = Some(ProviderError::timeout("responses", "Responses stream idle timeout")); break; }
+            },
+        };
+        match chunk {
+            Ok(Some(chunk)) => {
+                if let Err(error) = frames.push(&chunk) {
+                    failure = Some(error);
+                    break;
+                }
+                while let Some(frame) = frames.next() {
+                    let value = match event_value(&frame) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            failure = Some(error);
+                            break 'upstream;
+                        }
+                    };
+                    let created = value
+                        .as_ref()
+                        .and_then(|value| value.get("type"))
+                        .and_then(Value::as_str)
+                        == Some("response.created");
+                    let mut surfaces = Vec::new();
+                    if let Some(value) = value {
+                        if let (Some(expected), Some(id)) = (
+                            expected_id,
+                            value.pointer("/response/id").and_then(Value::as_str),
+                        ) && id != expected
+                        {
+                            failure = Some(invalid("Responses stream returned a different ID"));
+                            break 'upstream;
+                        }
+                        let event = value
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if matches!(
+                            event,
+                            "response.completed"
+                                | "response.incomplete"
+                                | "response.failed"
+                                | "response.cancelled"
+                        ) {
+                            terminal = true;
+                            upstream_failed = event == "response.failed";
+                            usage = value.get("response").and_then(response_usage);
+                        } else if event == "error" {
+                            terminal = true;
+                            upstream_failed = true;
+                        }
+                        if matches!(
+                            event,
+                            "response.created"
+                                | "response.completed"
+                                | "response.incomplete"
+                                | "response.failed"
+                                | "response.cancelled"
+                        ) && let Some(storage) = storage.as_mut()
+                        {
+                            let Some(response) = value.get("response") else {
+                                failure = Some(invalid("Response event is missing its response"));
+                                break 'upstream;
+                            };
+                            if let Err(error) =
+                                storage.save(&state.storage.database, response).await
+                            {
+                                tracing::error!("Native response could not be stored: {error}");
+                                failure = Some(ProviderError::api_error(
+                                    "responses",
+                                    500,
+                                    "Native response storage failed",
+                                ));
+                                break 'upstream;
+                            }
+                        }
+                        // Keep each output's delta sequence contiguous for split-token checks.
+                        if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                            let index = value
+                                .get("output_index")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0);
+                            let Ok(index) = u32::try_from(index) else {
+                                failure = Some(invalid("Invalid output index"));
+                                break 'upstream;
+                            };
+                            surfaces.push((index, delta.to_string()));
+                        }
+                        // Inspect all native and future fields too; raw event bytes are retained.
+                        surfaces.push((u32::MAX, native_responses_projection(&value)));
+                    }
+                    match guard.push_many_until_closed(tx, surfaces, frame).await {
+                        Ok(Some(events)) => {
+                            for event in events {
+                                if tx.send(event).await.is_err() {
+                                    break 'upstream;
+                                }
+                            }
+                        }
+                        Ok(None) => break 'upstream,
+                        Err(error) => {
+                            failure =
+                                Some(ProviderError::api_error("guardrail", 403, error.message()));
+                            break 'upstream;
+                        }
+                    }
+                    if created {
+                        // Release the authorized handle promptly even when later chunks
+                        // never arrive; check its full frame before making it resumable.
+                        match guard.flush_to_until_closed(tx).await {
+                            Ok(Some(_)) => {}
+                            Ok(None) => break 'upstream,
+                            Err(error) => {
+                                failure = Some(ProviderError::api_error(
+                                    "guardrail",
+                                    403,
+                                    error.message(),
+                                ));
+                                break 'upstream;
+                            }
+                        }
+                    }
+                    if terminal {
+                        break 'upstream;
+                    }
+                }
+            }
+            Err(_) => {
+                failure = Some(ProviderError::network(
+                    "responses",
+                    "Responses stream interrupted",
+                ));
+                break;
+            }
+            Ok(None) => {
+                if !terminal {
+                    failure = Some(invalid("Responses stream ended before a terminal event"));
+                }
+                break;
+            }
+        }
+    }
+    if failure.is_none() && terminal {
+        match guard.finish_until_closed(tx).await {
+            Ok(Some(events)) => {
+                for event in events {
+                    if tx.send(event).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                failure = Some(ProviderError::api_error("guardrail", 403, error.message()));
+            }
+        }
+    }
+
+    StreamResult {
+        response,
+        storage,
+        usage,
+        terminal,
+        upstream_failed,
+        failure,
+    }
+}
+
+/// Replays upstream events through guardrails without reserving or recording spend.
+pub(super) fn resume(
+    state: AppState,
+    response: reqwest::Response,
+    id: String,
+    provider: String,
+    deployment: Option<String>,
+) -> HttpResponse {
+    let (tx, rx) = mpsc::channel::<Bytes>(8);
+    tokio::spawn(async move {
+        let result = forward(
+            &state,
+            &tx,
+            response,
+            None,
+            &provider,
+            deployment.as_deref(),
+            Some(&id),
+            None,
+        )
+        .await;
+        if let Some(error) = result.failure {
+            let code = if provider_error_is_guardrail(&error) {
+                "guardrail_violation"
+            } else {
+                "upstream_stream_error"
+            };
+            let event =
+                serde_json::json!({"type":"error", "code":code, "message":error.to_string()});
+            let _ = tx
+                .send(Bytes::from(format!("event: error\ndata: {event}\n\n")))
+                .await;
         }
     });
     HttpResponse::Ok()

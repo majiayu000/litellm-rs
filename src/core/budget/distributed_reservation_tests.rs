@@ -206,6 +206,56 @@ mod redis {
             .await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn durable_response_settlement_survives_expiry_restart_and_duplicate_retry() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("response-recovery");
+        let model = unique("response-recovery");
+        let creator = UnifiedBudgetLimits::new().with_redis_lease_ttl(pool.clone(), 1);
+        creator.providers.set_provider_limit(
+            &provider,
+            ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        creator
+            .models
+            .set_model_limit(&model, ModelLimitConfig::new(10.0, ResetPeriod::Monthly));
+        let reservation = creator.reserve_spend(&provider, &model, 8.0).unwrap();
+        let descriptor = reservation.response_leases().unwrap();
+        let encoded = serde_json::to_string(&descriptor).unwrap();
+        reservation.detach_response();
+        drop(creator);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let restarted = seeded(pool.clone(), &provider, &model, 10.0);
+        let descriptor = serde_json::from_str(&encoded).unwrap();
+        restarted
+            .settle_response_leases(&provider, &model, &descriptor, 3.0)
+            .unwrap();
+        // Simulate Redis committed but SQL acknowledgement was lost.
+        let other = seeded(pool.clone(), &provider, &model, 10.0);
+        other
+            .settle_response_leases(&provider, &model, &descriptor, 3.0)
+            .unwrap();
+        assert!((other.models.get_model_usage(&model).unwrap().current_spend - 3.0).abs() < 1e-9);
+        assert!(
+            (other
+                .providers
+                .get_provider_usage(&provider)
+                .unwrap()
+                .current_spend
+                - 3.0)
+                .abs()
+                < 1e-9
+        );
+        other
+            .reserve_spend(&provider, &model, 7.0)
+            .unwrap()
+            .cancel();
+        assert!(other.reserve_spend(&provider, &model, 7.1).is_err());
+        cleanup(&pool, &provider, &model).await;
+    }
+
     async fn live_redis_pool() -> Option<Arc<RedisPool>> {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());

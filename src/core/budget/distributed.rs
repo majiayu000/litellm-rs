@@ -184,6 +184,46 @@ impl BudgetLeaseBackend {
         }
     }
 
+    #[cfg(feature = "gateway")]
+    pub(crate) fn settle_response(
+        &self,
+        scope: BudgetLeaseScope,
+        name: &str,
+        lease_id: &str,
+        reserved: BudgetAmount,
+        actual: BudgetAmount,
+        period_epoch: i64,
+    ) -> Result<(LeaseSnapshot, bool), BudgetReservationError> {
+        #[cfg(not(feature = "gateway"))]
+        let _ = (scope, name, lease_id, reserved, actual, period_epoch);
+        match self {
+            Self::InProcess => Err(BudgetReservationError::BackendUnavailable),
+            #[cfg(test)]
+            Self::Unavailable => Err(BudgetReservationError::BackendUnavailable),
+            #[cfg(feature = "gateway")]
+            Self::Redis { pool, .. } => {
+                let pool = Arc::clone(pool);
+                let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
+                let reserved = to_i64(reserved)?;
+                let actual = to_i64(actual)?;
+                let lease_id = lease_id.to_string();
+                let now_ms = now_ms();
+                let state = run_redis(scope, name, "settle", async move {
+                    pool.budget_settle_response(
+                        &key,
+                        reserved,
+                        actual,
+                        period_epoch,
+                        &lease_id,
+                        now_ms,
+                    )
+                    .await
+                })?;
+                Ok((lease_snapshot(state)?, state.allowed))
+            }
+        }
+    }
+
     pub(crate) fn cancel(
         &self,
         scope: BudgetLeaseScope,
