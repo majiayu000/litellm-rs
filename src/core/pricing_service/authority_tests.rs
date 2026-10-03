@@ -763,3 +763,48 @@ fn provider_scoped_exact_rows_precede_old_fuzzy_aliases() {
         "amazon.nova-2-lite-v1:0"
     );
 }
+
+#[test]
+fn anthropic_geo_prices_all_token_categories_but_not_search_calls() {
+    let service = PricingService::with_embedded_default().unwrap();
+    let mut usage = PricingUsage {
+        prompt_tokens: 100,
+        completion_tokens: 10,
+        total_tokens: 110,
+        cache_creation_tokens: Some(50),
+        cache_creation_1h_tokens: Some(20),
+        cache_read_tokens: Some(10),
+        web_search_requests: Some(2),
+        ..Default::default()
+    };
+    let global = service
+        .calculate_loaded_usage_cost_for_provider("anthropic", "claude-opus-5", &usage)
+        .unwrap();
+    usage.inference_geo = Some("us".into());
+    let us = service
+        .calculate_loaded_usage_cost_for_provider("anthropic", "claude-opus-5", &usage)
+        .unwrap();
+    assert!((us.input_cost - global.input_cost * 1.1).abs() < 1e-12);
+    assert!((us.output_cost - global.output_cost * 1.1).abs() < 1e-12);
+    assert!((us.cache_cost - global.cache_cost * 1.1).abs() < 1e-12);
+    assert_eq!(us.tool_cost, global.tool_cost);
+    assert!(
+        (us.total_cost - ((global.total_cost - global.tool_cost) * 1.1 + global.tool_cost)).abs()
+            < 1e-12
+    );
+    assert!(
+        service
+            .calculate_loaded_usage_cost_for_provider(
+                "anthropic",
+                "claude-haiku-4-5-20251001",
+                &usage
+            )
+            .is_err()
+    );
+    usage.inference_geo = Some("unpriced-geo".into());
+    assert!(
+        service
+            .calculate_loaded_usage_cost_for_provider("anthropic", "claude-opus-5", &usage)
+            .is_err()
+    );
+}

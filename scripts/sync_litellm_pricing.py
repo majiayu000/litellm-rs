@@ -281,6 +281,16 @@ for model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-e
 for key in ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"):
     OFFICIAL_OVERRIDE_PATCHES.setdefault(key, {})["pricing_status"] = "official_off_peak_rate_checked_2026_10_01"
 
+# First-party Claude >=4.6 inference geo pricing. These are pricing identities,
+# not additions to the callable model catalog. Preserve independent fast rates.
+# https://platform.claude.com/docs/en/manage-claude/data-residency
+ANTHROPIC_GEO_PRICING_MODELS = (
+    "claude-opus-4-6", "claude-opus-4-6-20260205",
+    "claude-opus-4-7", "claude-opus-4-7-20260416", "claude-opus-4-8",
+    "claude-sonnet-4-6", "claude-fable-5", "claude-fable-5-1",
+    "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-5-5",
+)
+
 OFFICIAL_PRICING_CONTRACTS: dict[str, dict[str, Any]] = {
     "claude-fable-5": {
         "input_cost_per_token": 0.000010,
@@ -647,6 +657,15 @@ def apply_official_overrides(
             entry.pop("pricing_valid_through", None)
         elif not promo_expired:
             entry.update(patch)
+        patched[model] = entry
+    for model in ANTHROPIC_GEO_PRICING_MODELS:
+        original = patched.get(model, source_entries.get(model))
+        if original is None:
+            continue
+        entry = dict(original)
+        entry["provider_specific_entry"] = {
+            **entry.get("provider_specific_entry", {}), "us": 1.1,
+        }
         patched[model] = entry
     return patched
 

@@ -30,6 +30,7 @@ pub(super) fn response(
             pricing,
             reservation,
             key_reservation,
+            require_inference_geo,
         } = call;
         let sink = GuardrailDecisionSink::from_state(
             &state,
@@ -125,7 +126,9 @@ pub(super) fn response(
                                     failure = Some(invalid("message_stop before message_start"));
                                     break 'upstream;
                                 }
-                                if !final_usage || native_usage(&usage).is_none() {
+                                if !final_usage
+                                    || native_usage(&usage, require_inference_geo).is_none()
+                                {
                                     failure =
                                         Some(invalid("Messages stream has no valid final usage"));
                                     break 'upstream;
@@ -218,7 +221,7 @@ pub(super) fn response(
             failure = Some(ProviderError::api_error("guardrail", 403, error.message()));
         }
         let usage = (terminal && final_usage && !upstream_failed)
-            .then(|| native_usage(&usage))
+            .then(|| native_usage(&usage, require_inference_geo))
             .flatten();
         settle(
             &state,

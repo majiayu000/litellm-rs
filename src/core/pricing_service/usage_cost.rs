@@ -76,13 +76,32 @@ fn calculate_usage_cost_with_rates(
         }
         PricingBillingMode::Standard => standard_token_rates(model, model_info, usage, peak_rates)?,
     };
-    let input_cost = non_cached_tokens as f64 * input_rate;
-    let output_cost = usage.completion_tokens as f64 * output_rate;
+    let geo_multiplier = match usage.inference_geo.as_deref() {
+        None | Some("global") => 1.0,
+        Some(geo) if requested_provider == "anthropic" => model_info
+            .extra
+            .get("provider_specific_entry")
+            .and_then(|entry| entry.get(geo))
+            .and_then(serde_json::Value::as_f64)
+            .filter(|rate| rate.is_finite() && *rate >= 1.0)
+            .ok_or_else(|| {
+                GatewayError::Config(format!(
+                    "Verified inference geo pricing unavailable for {model}: {geo}"
+                ))
+            })?,
+        Some(_) => {
+            return Err(GatewayError::Config(
+                "Inference geo pricing is only supported for native Anthropic usage".into(),
+            ));
+        }
+    };
+    let input_cost = non_cached_tokens as f64 * input_rate * geo_multiplier;
+    let output_cost = usage.completion_tokens as f64 * output_rate * geo_multiplier;
     let one_hour = usage.cache_creation_1h_tokens.unwrap_or(0);
     let short_cache = cache_creation_tokens.checked_sub(one_hour).ok_or_else(|| {
         GatewayError::validation("One-hour cache tokens exceed total cache creation tokens")
     })?;
-    let cache_cost = short_cache as f64 * cache_creation_rate
+    let cache_cost = (short_cache as f64 * cache_creation_rate
         + priced_extra_units(
             model_info,
             model,
@@ -90,7 +109,8 @@ fn calculate_usage_cost_with_rates(
             &["cache_creation_input_token_cost_above_1hr"],
             "one-hour cache pricing",
         )?
-        + cache_read_tokens as f64 * cache_read_rate;
+        + cache_read_tokens as f64 * cache_read_rate)
+        * geo_multiplier;
     let tool_cost = anthropic_search_cost(
         requested_provider,
         model,

@@ -252,6 +252,7 @@ fn amazon_nova_fallback_pricing_prefers_catalog_over_shared_bedrock() {
 fn pricing_usage_from_cost_usage(usage: &UsageTokens) -> PricingUsage {
     PricingUsage {
         billing_mode: Default::default(),
+        inference_geo: None,
         prompt_tokens: usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
         total_tokens: usage.total_tokens,

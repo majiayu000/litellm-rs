@@ -43,6 +43,7 @@ struct MessageCall {
     pricing: spend::RequestPricing,
     reservation: Option<UnifiedBudgetReservation>,
     key_reservation: Option<BudgetReservation>,
+    require_inference_geo: bool,
 }
 
 async fn create(
@@ -150,6 +151,24 @@ async fn create(
                             "Native Messages for this provider",
                         ));
                     };
+                    use crate::core::providers::anthropic::models::{
+                        AnthropicModelFamily, get_anthropic_registry,
+                    };
+                    let require_inference_geo =
+                        match get_anthropic_registry().get_model_family(&model) {
+                            Some(
+                                AnthropicModelFamily::ClaudeOpus45
+                                | AnthropicModelFamily::ClaudeSonnet45
+                                | AnthropicModelFamily::ClaudeHaiku45,
+                            ) => false,
+                            Some(_) => true,
+                            None => {
+                                return Err(ProviderError::not_supported(
+                                    "anthropic",
+                                    "Unverified native Messages model billing",
+                                ));
+                            }
+                        };
                     let count_body = token_count_body(&body);
                     let mut counted = native
                         .native_count_tokens(count_body, version.clone(), beta.clone())
@@ -176,8 +195,18 @@ async fn create(
                         .iter()
                         .find(|info| info.id == model)
                         .map(|info| info.max_context_length);
-                    let estimated_usage =
+                    let mut estimated_usage =
                         reservation_usage(&body, input_tokens, max_tokens, context_limit)?;
+                    // Omission inherits a private workspace default. Reserve the
+                    // highest supported geo without changing the native request.
+                    if require_inference_geo {
+                        estimated_usage.inference_geo = Some(
+                            body.get("inference_geo")
+                                .and_then(Value::as_str)
+                                .unwrap_or("us")
+                                .to_string(),
+                        );
+                    }
                     let limits = state.budgeted.budget_limits();
                     let (response, reservations) = state
                         .budgeted
@@ -218,6 +247,7 @@ async fn create(
                         pricing,
                         reservation,
                         key_reservation,
+                        require_inference_geo,
                     })
                 }
             }
@@ -239,12 +269,13 @@ async fn create(
         pricing,
         reservation,
         key_reservation,
+        require_inference_geo,
     } = call;
     let result = read_json(&mut response).await;
     let usage = result
         .as_ref()
         .ok()
-        .and_then(|value| native_usage(value.get("usage")?));
+        .and_then(|value| native_usage(value.get("usage")?, require_inference_geo));
     settle(
         state,
         &context,
@@ -319,7 +350,7 @@ fn token_count_body(body: &Value) -> Value {
 // Native fields remain unchanged, but unsupported billing modes must fail before
 // contacting either the token-count or generation endpoint.
 fn validate_billing_scope(body: &Value) -> Result<(), GatewayError> {
-    for (field, supported) in [("speed", "standard"), ("inference_geo", "global")] {
+    for (field, supported) in [("speed", "standard")] {
         if body
             .get(field)
             .is_some_and(|value| !value.is_null() && value.as_str() != Some(supported))
@@ -328,6 +359,12 @@ fn validate_billing_scope(body: &Value) -> Result<(), GatewayError> {
                 "Native Messages {field} supports only {supported} until premium pricing is implemented"
             )));
         }
+    }
+    if body
+        .get("inference_geo")
+        .is_some_and(|value| !value.is_null() && !matches!(value.as_str(), Some("global" | "us")))
+    {
+        return Err(GatewayError::validation("Unsupported inference_geo"));
     }
     if body.get("mcp_servers").is_some_and(|value| {
         !value.is_null() && value.as_array().is_none_or(|servers| !servers.is_empty())
@@ -472,7 +509,12 @@ struct NativeUsage {
     normalized: Usage,
     pricing: PricingUsage,
 }
-fn native_usage(value: &Value) -> Option<NativeUsage> {
+fn native_usage(value: &Value, require_inference_geo: bool) -> Option<NativeUsage> {
+    let inference_geo = match value.get("inference_geo") {
+        Some(Value::String(geo)) if matches!(geo.as_str(), "global" | "us") => Some(geo.clone()),
+        None | Some(Value::Null) if !require_inference_geo => None,
+        _ => return None,
+    };
     for name in ["cache_creation", "server_tool_use"] {
         if value
             .get(name)
@@ -528,6 +570,7 @@ fn native_usage(value: &Value) -> Option<NativeUsage> {
         thinking_usage: None,
     };
     let mut pricing = PricingUsage::from(&normalized);
+    pricing.inference_geo = inference_geo;
     pricing.cache_creation_1h_tokens = Some(one_hour);
     pricing.web_search_requests = Some(nested("/server_tool_use/web_search_requests")?);
     Some(NativeUsage {

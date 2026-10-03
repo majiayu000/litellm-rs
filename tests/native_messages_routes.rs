@@ -14,12 +14,13 @@ struct Upstream {
     seen: Arc<Mutex<Vec<CapturedRequest>>>,
     counted: Arc<Mutex<Vec<Value>>>,
     count_result: Arc<Mutex<Value>>,
+    reported_usage: Arc<Mutex<Value>>,
     status: StatusCode,
     broken: bool,
     fault: Arc<Mutex<Option<&'static str>>>,
 }
 fn usage() -> Value {
-    json!({"input_tokens":40,"output_tokens":10,"cache_creation_input_tokens":50,"cache_read_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20,"ephemeral_5m_input_tokens":30},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1}})
+    json!({"inference_geo":"global","input_tokens":40,"output_tokens":10,"cache_creation_input_tokens":50,"cache_read_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20,"ephemeral_5m_input_tokens":30},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1}})
 }
 fn output() -> Value {
     json!({"id":"msg_native","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"thinking","thinking":"思考中","signature":"opaque-signature"},{"type":"tool_use","id":"tool_1","name":"find","input":{"query":"你好"}}],"stop_reason":"tool_use","usage":usage(),"future_output":{"keep":true}})
@@ -49,8 +50,11 @@ async fn upstream(
                 json!({"type":"error","error":{"type":"overloaded_error","message":"Unavailable"}}),
             );
     }
+    let mut result = output();
+    result["usage"] = data.reported_usage.lock().unwrap().clone();
+    result["model"] = body["model"].clone();
     if body["stream"] == true {
-        let mut first = output();
+        let mut first = result;
         first["content"] = json!([]);
         first["stop_reason"] = Value::Null;
         first["usage"]["output_tokens"] = json!(1);
@@ -106,7 +110,7 @@ async fn upstream(
             .insert_header(("content-type", "text/event-stream"))
             .streaming(futures::stream::iter(chunks));
     }
-    HttpResponse::Ok().json(output())
+    HttpResponse::Ok().json(result)
 }
 async fn count_tokens(
     data: web::Data<Upstream>,
@@ -129,6 +133,7 @@ async fn fixture(
         seen: Arc::default(),
         counted: Arc::default(),
         count_result: Arc::new(Mutex::new(json!({"input_tokens": 100}))),
+        reported_usage: Arc::new(Mutex::new(usage())),
         status,
         broken,
         fault: Arc::default(),
@@ -723,7 +728,7 @@ async fn unsupported_native_billing_modes_fail_before_any_upstream_call() {
     .await;
     let cases = [
         json!({"speed":"fast"}),
-        json!({"inference_geo":"us"}),
+        json!({"inference_geo":"eu"}),
         json!({"mcp_servers":[{"type":"url","url":"https://mcp.example.test","name":"remote"}]}),
         json!({"tools":[{"type":"code_execution_20260120","name":"code_execution"}]}),
         json!({"tools":[{"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}]}),
@@ -751,4 +756,168 @@ async fn unsupported_native_billing_modes_fail_before_any_upstream_call() {
     assert!(upstream.seen.lock().unwrap().is_empty());
     assert!(upstream.counted.lock().unwrap().is_empty());
     handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn native_geo_uses_reported_region_for_json_and_sse_without_rewriting_request() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    for stream in [false, true] {
+        for explicit in [false, true] {
+            let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+            upstream.reported_usage.lock().unwrap()["inference_geo"] = json!("us");
+            state.budget_limits.models.set_model_limit(
+                "claude-opus-5",
+                ModelLimitConfig::new(1.0, ResetPeriod::Never),
+            );
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let mut body = request(stream);
+            if explicit {
+                body["inference_geo"] = json!("us");
+            }
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/messages")
+                    .set_json(&body)
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = test::read_body(response).await;
+            if stream {
+                let wire = String::from_utf8_lossy(&bytes);
+                assert!(wire.contains("event: message_stop"), "{wire}");
+                assert!(!wire.contains("event: error"), "{wire}");
+            }
+            let tokens = 40.0 * 0.000005
+                + 30.0 * 0.00000625
+                + 20.0 * 0.00001
+                + 10.0 * 0.0000005
+                + 10.0 * 0.000025;
+            let spend = state
+                .budget_limits
+                .models
+                .get_model_usage("claude-opus-5")
+                .unwrap();
+            assert!((spend.current_spend - (tokens * 1.1 + 0.02)).abs() < 1e-12);
+            assert_eq!(upstream.seen.lock().unwrap()[0].0, body);
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn workspace_geo_upper_bound_is_reserved_before_generation() {
+    use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
+    let (state, upstream, handle) = fixture(StatusCode::OK, false, |_| {}).await;
+    state.budget_limits.models.set_model_limit(
+        "claude-opus-5",
+        ModelLimitConfig::new(0.00055, ResetPeriod::Never),
+    );
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let mut body = request(false);
+    body["max_tokens"] = json!(1);
+    body["system"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("cache_control");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(&body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(upstream.counted.lock().unwrap().len(), 1);
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    body["inference_geo"] = json!("global");
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/messages")
+            .set_json(&body)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn geo_capable_models_reject_missing_billing_region_but_haiku45_accepts_it() {
+    for (model, valid) in [
+        ("claude-opus-5", false),
+        ("claude-haiku-4-5-20251001", true),
+    ] {
+        for stream in [false, true] {
+            let (state, upstream, handle) = fixture(StatusCode::OK, false, |config| {
+                config.gateway.providers[0].models = vec![model.into()];
+            })
+            .await;
+            upstream
+                .reported_usage
+                .lock()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("inference_geo");
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let mut body = request(stream);
+            body["model"] = json!(model);
+            if valid {
+                body.as_object_mut().unwrap().remove("thinking");
+                body["system"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("cache_control");
+                *upstream.reported_usage.lock().unwrap() =
+                    json!({"input_tokens":40,"output_tokens":10});
+            }
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/messages")
+                    .set_json(body)
+                    .to_request(),
+            )
+            .await;
+            if stream {
+                let wire = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
+                assert_eq!(wire.contains("event: error"), !valid, "{wire}");
+                assert_eq!(wire.contains("event: message_stop"), valid, "{wire}");
+            } else {
+                let status = response.status();
+                let body = test::read_body(response).await;
+                assert_eq!(
+                    status,
+                    if valid {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::BAD_GATEWAY
+                    },
+                    "{}",
+                    String::from_utf8_lossy(&body)
+                );
+            }
+            handle.stop(false).await;
+        }
+    }
 }

@@ -92,6 +92,8 @@ pub enum PricingBillingMode {
 #[derive(Debug, Clone, Default)]
 pub struct PricingUsage {
     pub billing_mode: PricingBillingMode,
+    /// Native Anthropic inference region reported by the upstream.
+    pub inference_geo: Option<String>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
@@ -114,6 +116,7 @@ impl PricingUsage {
     pub fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
         Self {
             billing_mode: PricingBillingMode::Standard,
+            inference_geo: None,
             prompt_tokens,
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
@@ -159,6 +162,7 @@ impl From<&crate::core::types::responses::Usage> for PricingUsage {
         let completion_details = usage.completion_tokens_details.as_ref();
         Self {
             billing_mode: PricingBillingMode::Standard,
+            inference_geo: None,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
