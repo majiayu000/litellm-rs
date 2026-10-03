@@ -328,6 +328,21 @@ impl OpenAILikeProvider {
         let headers = self.get_request_headers();
         let mut body = serde_json::to_value(&request)
             .map_err(|e| OpenAILikeError::serialization(PROVIDER_NAME, e.to_string()))?;
+        if self.provider_name == "baichuan" {
+            let valid = match &body["input"] {
+                Value::String(_) => true,
+                Value::Array(inputs) => {
+                    !inputs.is_empty() && inputs.len() <= 16 && inputs.iter().all(Value::is_string)
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(ProviderError::invalid_request(
+                    "baichuan",
+                    "Baichuan embeddings require a text string or 1 to 16 text strings",
+                ));
+            }
+        }
         if matches!(
             self.provider_name.as_str(),
             "fireworks" | "fireworks_ai" | "openrouter" | "nvidia_nim" | "heroku"
@@ -661,6 +676,16 @@ impl OpenAILikeProvider {
     }
 
     fn map_error_response(&self, status: u16, body: &str) -> OpenAILikeError {
+        // Baichuan also uses 429 for exhausted account balance, which is not
+        // a transient rate limit and must not enter rate-limit retries.
+        if self.provider_name == "baichuan"
+            && status == 429
+            && body
+                .to_ascii_lowercase()
+                .contains("insufficient account balance")
+        {
+            return ProviderError::quota_exceeded("baichuan", "Insufficient account balance");
+        }
         if let Some(error) =
             crate::core::providers::registry::catalog_policy::catalog_error_response(
                 &self.provider_name,

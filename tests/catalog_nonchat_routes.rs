@@ -21,6 +21,7 @@ struct Upstream {
     seen: RecordedCalls,
     status: StatusCode,
     auth: bool,
+    error_message: Arc<Mutex<String>>,
 }
 async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>) -> HttpResponse {
     assert_eq!(
@@ -37,7 +38,7 @@ async fn respond(req: HttpRequest, body: web::Bytes, state: web::Data<Upstream>)
     if state.status != StatusCode::OK {
         return HttpResponse::build(state.status)
             .insert_header(("retry-after", "7"))
-            .json(json!({"error":{"message":"upstream unavailable"}}));
+            .json(json!({"error":{"message":state.error_message.lock().unwrap().clone()}}));
     }
     let path = req
         .path()
@@ -63,6 +64,7 @@ async fn fixture(
     let seen = Upstream {
         seen: Arc::default(),
         status,
+        error_message: Arc::new(Mutex::new("upstream unavailable".into())),
         auth: !matches!(
             selector,
             "lm_studio"
@@ -1295,5 +1297,76 @@ async fn baichuan_embeddings_require_prices_and_obey_gateway_budgets() {
         .unwrap()
         .current_spend;
     assert!((spend - 0.2).abs() < 1e-9, "{spend}");
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn baichuan_rejects_truncated_batches_before_dispatch() {
+    let (router, upstream, handle) = fixture("baichuan", StatusCode::OK).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    for input in [json!(vec!["text"; 17]), json!([1, 2]), json!([])] {
+        let request =
+            serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":input}))
+                .unwrap();
+        assert!(matches!(
+            provider
+                .create_embeddings(request, RequestContext::default())
+                .await
+                .unwrap_err(),
+            ProviderError::InvalidRequest { .. }
+        ));
+    }
+    assert!(upstream.seen.lock().unwrap().is_empty());
+    let request =
+        serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":vec!["text"; 16]}))
+            .unwrap();
+    provider
+        .create_embeddings(request, RequestContext::default())
+        .await
+        .unwrap();
+    let calls = upstream.seen.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let body: Value = serde_json::from_slice(&calls[0].1).unwrap();
+    assert_eq!(body["input"].as_array().unwrap().len(), 16);
+    drop(calls);
+    handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn baichuan_balance_429_is_quota_and_rate_429_preserves_retry_after() {
+    let (router, upstream, handle) = fixture("baichuan", StatusCode::TOO_MANY_REQUESTS).await;
+    let provider = selected(&router, ProviderCapability::Embeddings);
+    for (message, quota) in [
+        ("Insufficient account balance, please recharge", true),
+        ("Rate limit", false),
+    ] {
+        *upstream.error_message.lock().unwrap() = message.into();
+        let request =
+            serde_json::from_value(json!({"model":"Baichuan-Text-Embedding","input":"text"}))
+                .unwrap();
+        let error = provider
+            .create_embeddings(request, RequestContext::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.canonical_retryable(), !quota);
+        if quota {
+            assert!(
+                matches!(error, ProviderError::QuotaExceeded { .. }),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    error,
+                    ProviderError::RateLimit {
+                        retry_after: Some(7),
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+        }
+    }
+    assert_eq!(upstream.seen.lock().unwrap().len(), 2);
     handle.stop(false).await;
 }

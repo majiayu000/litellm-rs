@@ -67,7 +67,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
 
-第八批（#1425，核验 2026-10-03）沿用现有传输接入百川文本 embeddings，官方端点为 `https://api.baichuan-ai.com/v1/embeddings`。官方已索引协议限定 `Baichuan-Text-Embedding`、每条最多 512 tokens、批次最多 16 条、固定 1024 维；超限由上游截断。当前直接文档页面仅显示申请体验外壳，未实调账户可用性，不据此新增静态 callable 型号或价格。使用已获访问权限的真实模型配置和正确价格。
+第八批（#1425，核验 2026-10-03）沿用现有传输接入百川文本 embeddings，官方端点为 `https://api.baichuan-ai.com/v1/embeddings`。官方已索引协议限定 `Baichuan-Text-Embedding`、每条最多 512 tokens、批次最多 16 条、固定 1024 维；超过 16 条的批次在发送前拒绝，避免上游静默截断；仅发送文本字符串或文本数组。余额不足的官方 429 映射为不可重试 QuotaExceeded，限流 429 保留 Retry-After。当前直接文档页面仅显示申请体验外壳，未实调账户可用性，不据此新增静态 callable 型号或价格。使用已获访问权限的真实模型配置和正确价格。
 
 本批同时核验 Moonshot、DeepSeek、Xiaomi MiMo、Yi、Maritalk。MiMo 的 TTS/ASR 官方确实存在，但经聊天请求/响应中的音频协议，需要独立适配后才能挂到网关 `/audio/*`；Maritaca 官方明确推荐其他供应商的 embeddings。未确认端点保持不声明，详见 [区域供应商审计](../audit/regional-compatible-nonchat-2026-10-03.md)。
 

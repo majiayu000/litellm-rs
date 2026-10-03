@@ -15,7 +15,7 @@ Decision: adapt existing catalog capability/transport only for Baichuan's docume
 
 ## Validation
 
-HTTP simulations exercise actual Baichuan factory/Router dispatch, model/input preservation, token usage, 400/429 errors and unsupported image/audio selection. A real gateway test covers missing prices, an insufficient finite budget before upstream dispatch, and actual two-token cost settlement. These are protocol fixtures, not live vendor validation. Passed: 20 HTTP/gateway tests, fmt/check, default complete tests (7,141 library passed, 1 ignored, plus integration/doc suites), default and gateway/sqlite all-target clippy. Gateway/sqlite complete rerun passed (9,514 library passed, 1 ignored, plus integration/doc suites). First feature full run hung in the existing `test_completions_streaming_response_sends_sse_and_done` integration test and was stopped after 1,200 seconds; its exact targeted rerun passed one test, and one complete rerun passed. No unrelated streaming code was changed, so the intermittent hang is not claimed fixed.
+HTTP simulations exercise actual Baichuan factory/Router dispatch, model/input preservation, token usage, 400/429 errors and unsupported image/audio selection. A real gateway test covers missing prices, an insufficient finite budget before upstream dispatch, and actual two-token cost settlement. These are protocol fixtures, not live vendor validation. Original PR head `cded6245` verification: 20 HTTP/gateway tests, fmt/check, default complete tests (7,141 library passed, 1 ignored, plus integration/doc suites), default and gateway/sqlite all-target clippy. Gateway/sqlite complete rerun passed (9,514 library passed, 1 ignored, plus integration/doc suites). First feature full run hung in the existing `test_completions_streaming_response_sends_sse_and_done` integration test and was stopped after 1,200 seconds; its exact targeted rerun passed one test, and one complete rerun passed. No unrelated streaming code was changed, so the intermittent hang is not claimed fixed.
 
 ## Dated sources
 
@@ -32,3 +32,7 @@ Raw snapshot SHA-256 hashes identify retrieved evidence; documentation remains m
 - [maritalk-embeddings](https://docs.maritaca.ai/pt/embeddings%2BSabia-4%2BRAG): SHA-256 `4292e54cebd2d4d18aeb7e75f301e5c860f9e6f02d73f060f243efbd15f9d68e`.
 - [Baichuan indexed protocol](https://platform.baichuan-ai.com/docs/text-Embedding): official page content retrieved through web search on 2026-10-03; the raw HTML snapshot above is only the current page shell.
 - [DeepSeek current quickstart](https://api-docs.deepseek.com/): retrieved via the `/llms.txt` URL which returned HTML quickstart, not an actual endpoint index. No claim is based on a nonexistent llms index.
+
+## Review corrections
+
+The existing wire boundary rejects non-text and batches over 16 before I/O, avoiding the documented silent truncation. The official [error table](https://platform.baichuan-ai.com/docs/errCode) assigns 429 to both rate limits and exhausted account balance; the documented balance message maps to QuotaExceeded, while rate limits retain Retry-After. Tests cover pre-dispatch rejection, 16-item dispatch, and both 429 meanings. Token limits still depend on the native model/tokenizer and are not approximated locally.
