@@ -2,6 +2,7 @@
 use super::ai::{
     api_key_allows_endpoint, check_permission, get_authenticated_api_key, get_authenticated_user,
 };
+use crate::core::mcp::config::McpServerConfig;
 use crate::core::net::ProviderEndpointPolicy;
 use crate::server::state::AppState;
 use crate::utils::net::http::ProviderHttpClient;
@@ -18,7 +19,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -29,14 +33,119 @@ struct Session {
     upstream: Option<String>,
     expires: Instant,
     pending: bool,
+    server: Arc<McpServerConfig>,
 }
 
 /// Bounded process-local sessions. A restart requires clients to initialize again.
 #[derive(Default)]
 pub(crate) struct Sessions {
     entries: Mutex<HashMap<String, Session>>,
+    reaper_started: AtomicBool,
     #[cfg(test)]
     client: Option<ProviderHttpClient>,
+}
+
+fn account_binding(name: &str, server: &McpServerConfig) -> Vec<u8> {
+    let mut account =
+        json!({"name":name,"url":server.url,"auth":server.auth,"headers":server.static_headers});
+    account.sort_all_objects();
+    Sha256::digest(account.to_string().as_bytes()).to_vec()
+}
+
+fn start_reaper(state: &AppState) {
+    if state
+        .mcp_sessions
+        .reaper_started
+        .swap(true, Ordering::AcqRel)
+    {
+        return;
+    }
+    let sessions = Arc::downgrade(&state.mcp_sessions);
+    let runtime = Arc::downgrade(&state.runtime);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let (Some(sessions), Some(runtime)) = (sessions.upgrade(), runtime.upgrade()) else {
+                break;
+            };
+            let revision = runtime.load();
+            reap_sessions(&sessions, &revision.config.gateway.mcp_servers).await;
+        }
+    });
+}
+
+// Retain the occupied slot until the bounded DELETE attempt completes. One reaper
+// and 32 concurrent requests cap cleanup work, including repeated config rotations.
+async fn reap_sessions(sessions: &Sessions, servers: &HashMap<String, McpServerConfig>) {
+    let stale: Vec<_> = match sessions.entries.lock() {
+        Ok(entries) => entries
+            .iter()
+            .filter(|(_, session)| {
+                !session.pending
+                    && (session.expires <= Instant::now()
+                        || servers
+                            .get(&session.server.name)
+                            .filter(|server| server.enabled)
+                            .is_none_or(|server| {
+                                account_binding(&server.name, server) != session.binding
+                            }))
+            })
+            .map(|(token, session)| (token.clone(), session.clone()))
+            .collect(),
+        Err(_) => return,
+    };
+    futures::stream::iter(stale)
+        .for_each_concurrent(32, |(token, session)| async move {
+            if let Some(upstream) = &session.upstream {
+                let client = ProviderHttpClient::streaming_no_redirect(
+                    ProviderEndpointPolicy::public_only(),
+                );
+                #[cfg(test)]
+                let client = sessions.client.clone().map(Ok).unwrap_or(client);
+                let cleanup = async {
+                    let client = client.map_err(|_| ())?;
+                    let mut request = client
+                        .request(reqwest::Method::DELETE, &session.server.url)
+                        .map_err(|_| ())?;
+                    for (name, value) in &session.server.static_headers {
+                        request = request.header(name, value);
+                    }
+                    if let Some(auth) = &session.server.auth
+                        && let Some(value) = auth.get_header_value()
+                    {
+                        request = request.header(auth.get_header_name(), value);
+                    }
+                    let response = request
+                        .header("mcp-session-id", upstream)
+                        .send()
+                        .await
+                        .map_err(|_| ())?;
+                    if response.status().is_success()
+                        || response.status() == reqwest::StatusCode::NOT_FOUND
+                    {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                };
+                if !matches!(
+                    tokio::time::timeout(
+                        Duration::from_millis(session.server.timeout_ms.min(5000)),
+                        cleanup
+                    )
+                    .await,
+                    Ok(Ok(()))
+                ) {
+                    tracing::warn!(
+                        "MCP upstream session cleanup failed; remote expiration is required"
+                    );
+                }
+            }
+            if let Ok(mut entries) = sessions.entries.lock() {
+                entries.remove(&token);
+            }
+        })
+        .await;
 }
 
 // Reserve before contacting the upstream. Cancellation and every error path release
@@ -134,18 +243,9 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     else {
         return error(StatusCode::NOT_FOUND, "MCP server not found");
     };
+    start_reaper(&state);
     // Bind only upstream identity; harmless timeout/description edits preserve sessions.
-    let mut account = json!({"name":server_name,"url":server.url,"auth":server.auth,"headers":server.static_headers});
-    account.sort_all_objects();
-    let binding = match serde_json::to_vec(&account) {
-        Ok(bytes) => Sha256::digest(bytes).to_vec(),
-        Err(_) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Invalid MCP configuration",
-            );
-        }
-    };
+    let binding = account_binding(server_name, server);
     let accept = Accept::parse(&req).ok();
     let accepts = |kind: &str, subtype: &str| {
         accept.as_ref().is_some_and(|accept| {
@@ -280,7 +380,6 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             Ok(entries) => entries,
             Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable"),
         };
-        entries.retain(|_, session| session.pending || session.expires > Instant::now());
         if entries.len() >= 4096 {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -296,6 +395,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 upstream: None,
                 expires: Instant::now() + Duration::from_secs(3600),
                 pending: true,
+                server: Arc::new(server.clone()),
             },
         );
         Some(PendingSession {

@@ -93,6 +93,7 @@ async fn fixture(auth: bool) -> (web::Data<AppState>, Calls, actix_web::dev::Ser
     state.runtime.store(revision);
     state.mcp_sessions = Arc::new(Sessions {
         entries: Mutex::default(),
+        reaper_started: AtomicBool::new(false),
         client: Some(
             ProviderHttpClient::streaming_no_redirect(
                 ProviderEndpointPolicy::for_base_url(ProviderEndpointAccess::PrivateNetwork, &url)
@@ -321,6 +322,24 @@ async fn rejects_unsupported_gateway_configuration() {
     let mut other = config.clone();
     other.forward_headers.push("authorization".into());
     assert!(other.validate_http_gateway("docs").is_err());
+    for url in [
+        "htps://user:sentinel@example.test/?key=sentinel",
+        "https://[?key=sentinel",
+    ] {
+        let malformed = McpServerConfig::new("docs", url);
+        let error = malformed.validate_http_gateway("docs").unwrap_err();
+        assert!(!error.contains("sentinel"));
+    }
+    let collision = config
+        .clone()
+        .with_auth(AuthConfig::bearer("test"))
+        .with_header("aUtHoRiZaTiOn", "other");
+    assert!(
+        collision
+            .validate_http_gateway("docs")
+            .unwrap_err()
+            .contains("one MCP")
+    );
     let other = config.with_header("mcp-session-id", "shared-session");
     assert!(other.validate_http_gateway("docs").is_err());
 }
@@ -431,7 +450,18 @@ async fn expires_sessions_and_invalidates_changed_accounts() {
         let response = test::call_service(&app, request("tools/list", Some(&token), &owner)).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
-    assert_eq!(calls.lock().unwrap().len(), 2);
+    let runtime = state.pin_runtime();
+    reap_sessions(&state.mcp_sessions, &runtime.config.gateway.mcp_servers).await;
+    assert!(state.mcp_sessions.entries.lock().unwrap().is_empty());
+    let calls = calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(method, _, _)| method == "DELETE")
+            .count(),
+        2
+    );
     server.stop(true).await;
 }
 
@@ -620,6 +650,7 @@ async fn capacity_is_reserved_before_upstream_and_cancellation_releases_it() {
                     upstream: None,
                     expires: Instant::now() + Duration::from_secs(60),
                     pending: false,
+                    server: Arc::new(McpServerConfig::new("docs", "https://1.1.1.1/mcp")),
                 },
             );
         }
@@ -640,6 +671,7 @@ async fn capacity_is_reserved_before_upstream_and_cancellation_releases_it() {
                 upstream: None,
                 expires: Instant::now(),
                 pending: true,
+                server: Arc::new(McpServerConfig::new("docs", "https://1.1.1.1/mcp")),
             },
         );
         let _reservation = PendingSession {

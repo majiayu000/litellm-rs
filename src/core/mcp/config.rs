@@ -88,7 +88,8 @@ impl Default for McpServerConfig {
 impl McpServerConfig {
     /// Validate the subset exposed by the public Streamable HTTP gateway.
     pub fn validate_http_gateway(&self, route_name: &str) -> Result<(), String> {
-        self.validate()?;
+        self.validate()
+            .map_err(|_| "Invalid MCP server configuration")?;
         if route_name != self.name
             || route_name.is_empty()
             || !route_name
@@ -113,6 +114,15 @@ impl McpServerConfig {
             && auth.auth_type == McpAuthType::OAuth2
         {
             return Err("MCP gateway requires a configured upstream credential; OAuth acquisition is not supported".into());
+        }
+        if let Some(auth) = &self.auth
+            && auth.get_header_value().is_some()
+            && self
+                .static_headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(auth.get_header_name()))
+        {
+            return Err("Configure one MCP authentication header".into());
         }
         for (name, value) in self
             .static_headers
