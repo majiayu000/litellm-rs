@@ -7,7 +7,7 @@ description: LiteLLM-RS response caching architecture. Covers the two-tier deter
 
 ## Overview
 
-LiteLLM-RS ships exactly one wired caching subsystem: an **exact-match response cache** for non-streaming chat completions and embeddings. It is a two-tier read-through cache, not a three-tier stack — semantic (vector) caching exists as a deprecated, unwired module (see below).
+LiteLLM-RS ships exactly one wired caching subsystem: an **exact-match response cache** for non-streaming chat completions and embeddings. It is a two-tier read-through cache, not a three-tier stack — the former unwired semantic (vector) module has been removed from unreleased source.
 
 ```
 Request (non-streaming /v1/chat/completions, /v1/embeddings)
@@ -37,7 +37,7 @@ LLM Provider → response stored back into both tiers
 | Capability | Status |
 |---|---|
 | Exact-match response cache (chat + embeddings) | Wired: `AppState.response_cache`, built by `build_response_cache` (src/server/state.rs:143) |
-| Semantic similarity cache | Not wired: `cache.semantic_cache: true` fails startup validation (src/config/validation/cache_validators.rs:16); `core::semantic_cache` is deprecated since 0.6.0, removal planned in 0.7.0 (src/core/semantic_cache/mod.rs) |
+| Semantic similarity cache | Removed: `core::semantic_cache`, `cache.semantic_cache`, and `cache.similarity_threshold` no longer exist in unreleased source; remove those config keys, including false/default values |
 | Vector DB backends | Storage-only: `QdrantStore` implemented; weaviate/pinecone declared but return "not implemented yet" (src/storage/vector/backend.rs:29). Nothing connects them to caching at runtime |
 | Cloud object-storage caches | `core::cache::cloud` (`CloudCache` trait; S3/GCS/Azure under feature `s3`) — not part of the request path |
 
@@ -50,11 +50,9 @@ cache:
   enabled: true               # default false; requires ttl > 0
   ttl: 3600                   # seconds; applied to chat AND embedding entries
   max_size: 1000              # max entries per in-memory layer
-  semantic_cache: false       # must stay false — true fails startup validation
-  similarity_threshold: 0.95  # parsed but unused while semantic cache is unwired
 ```
 
-These are the only five fields (`src/config/models/cache.rs:9`, `deny_unknown_fields`). There is no `l1`/`l2`/`l3` block, `redis_url`, `prefix`, `exclude_models`, or `skip_streaming` key.
+These are the only three fields (`src/config/models/cache.rs:9`, `deny_unknown_fields`). There is no `l1`/`l2`/`l3` block, `redis_url`, `prefix`, `exclude_models`, or `skip_streaming` key.
 
 - Redis is not configured here: the cache reuses the gateway's Redis pool. Without a pool it runs memory-only (`CacheMode::MemoryOnly`).
 - `enabled: true` with `ttl: 0` logs an error and leaves the cache off (src/server/state.rs:148).
@@ -119,7 +117,7 @@ fn should_bypass_chat_cache(request: &ChatCompletionRequest, context: &RequestCo
 }
 ```
 
-The temperature/tools-based filtering you may find in `src/core/semantic_cache/validation.rs` (`should_cache_request`) belongs to the deprecated semantic cache and has no runtime effect.
+The removed semantic-cache filters are not part of the current request path.
 
 ---
 
@@ -129,5 +127,5 @@ The temperature/tools-based filtering you may find in `src/core/semantic_cache/v
 - [reference/cache-key-generation.md](reference/cache-key-generation.md) — Key functions, `v4` key format, canonicalization policy, `CacheKeyBuilder`.
 - [reference/in-memory-cache.md](reference/in-memory-cache.md) — L1 `InMemoryCache<T>`: DashMap storage, TTL, sampled eviction, cleanup task.
 - [reference/redis-cache.md](reference/redis-cache.md) — L2 `RedisCache<T>`: RedisPool usage, key prefix, serializable entry envelope.
-- [reference/semantic-cache.md](reference/semantic-cache.md) — Deprecated semantic cache: status, module surface, vector storage reality.
+- [reference/semantic-cache.md](reference/semantic-cache.md) — Semantic-cache removal and supported replacement boundary.
 - [reference/cache-metrics.md](reference/cache-metrics.md) — `AtomicCacheStats` / `CacheStatsSnapshot` / `CombinedCacheStats`, admin status endpoint, collector hooks.

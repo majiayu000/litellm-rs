@@ -315,8 +315,6 @@ impl LLMCache {
             return Ok(Some(cached.response_arc()));
         }
 
-        // NOTE: Semantic cache lookup not yet implemented.
-
         Ok(None)
     }
 
