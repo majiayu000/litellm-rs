@@ -133,12 +133,13 @@ fn test_get_model_capabilities_gpt35_16k() {
 }
 
 #[test]
-fn test_get_model_capabilities_claude3() {
+fn test_get_model_capabilities_retired_claude3() {
     let caps = ModelUtils::get_model_capabilities("claude-3-opus");
-    assert!(caps.supports_function_calling);
-    assert!(caps.supports_vision);
-    assert!(caps.supports_url_context);
-    assert_eq!(caps.max_tokens, Some(200000));
+    assert!(!caps.supports_function_calling);
+    assert!(!caps.supports_vision);
+    assert!(!caps.supports_streaming);
+    assert!(!caps.supports_url_context);
+    assert!(caps.max_tokens.is_none());
 }
 
 #[test]
@@ -146,7 +147,7 @@ fn test_get_model_capabilities_claude_opus_47() {
     let caps = ModelUtils::get_model_capabilities("claude-opus-4-7");
     assert!(caps.supports_function_calling);
     assert!(caps.supports_vision);
-    assert_eq!(caps.max_tokens, Some(1_000_000));
+    assert_eq!(caps.max_tokens, Some(128_000));
     assert_eq!(caps.context_window, Some(1_000_000));
 }
 
@@ -157,16 +158,16 @@ fn test_get_model_capabilities_claude_haiku_45() {
     assert!(caps.supports_tool_choice);
     assert!(caps.supports_vision);
     assert!(caps.supports_streaming);
-    assert_eq!(caps.max_tokens, Some(200000));
+    assert_eq!(caps.max_tokens, Some(64000));
     assert_eq!(caps.context_window, Some(200000));
 
     let dotted_caps = ModelUtils::get_model_capabilities("claude-haiku-4.5");
-    assert!(dotted_caps.supports_function_calling);
-    assert!(dotted_caps.supports_tool_choice);
-    assert!(dotted_caps.supports_vision);
-    assert!(dotted_caps.supports_streaming);
-    assert_eq!(dotted_caps.max_tokens, Some(200000));
-    assert_eq!(dotted_caps.context_window, Some(200000));
+    assert!(!dotted_caps.supports_function_calling);
+    assert!(!dotted_caps.supports_tool_choice);
+    assert!(!dotted_caps.supports_vision);
+    assert!(!dotted_caps.supports_streaming);
+    assert!(dotted_caps.max_tokens.is_none());
+    assert!(dotted_caps.context_window.is_none());
 }
 
 #[test]
@@ -174,14 +175,14 @@ fn test_get_model_capabilities_claude2() {
     let caps = ModelUtils::get_model_capabilities("claude-2.1");
     assert!(!caps.supports_function_calling);
     assert!(!caps.supports_vision);
-    assert_eq!(caps.max_tokens, Some(100000));
+    assert!(caps.max_tokens.is_none());
 }
 
 #[test]
 fn test_get_model_capabilities_claude_instant() {
     let caps = ModelUtils::get_model_capabilities("claude-instant-1.2");
     assert!(!caps.supports_function_calling);
-    assert_eq!(caps.max_tokens, Some(100000));
+    assert!(caps.max_tokens.is_none());
 }
 
 #[test]
@@ -269,7 +270,7 @@ fn test_get_model_capabilities_unknown() {
 fn test_supports_function_calling() {
     assert!(ModelUtils::supports_function_calling("gpt-4"));
     assert!(ModelUtils::supports_function_calling("claude-haiku-4-5"));
-    assert!(ModelUtils::supports_function_calling("claude-haiku-4.5"));
+    assert!(!ModelUtils::supports_function_calling("claude-haiku-4.5"));
     assert!(!ModelUtils::supports_function_calling("claude-2"));
 }
 
@@ -284,7 +285,7 @@ fn test_supports_parallel_function_calling() {
 #[test]
 fn test_supports_tool_choice() {
     assert!(ModelUtils::supports_tool_choice("gpt-4"));
-    assert!(ModelUtils::supports_tool_choice("claude-3-sonnet"));
+    assert!(ModelUtils::supports_tool_choice("claude-sonnet-5-5"));
 }
 
 #[test]
@@ -296,7 +297,7 @@ fn test_supports_response_schema() {
 #[test]
 fn test_supports_system_messages() {
     assert!(ModelUtils::supports_system_messages("gpt-4"));
-    assert!(ModelUtils::supports_system_messages("claude-3-opus"));
+    assert!(ModelUtils::supports_system_messages("claude-sonnet-5-5"));
 }
 
 #[test]
@@ -308,16 +309,16 @@ fn test_supports_web_search() {
 #[test]
 fn test_supports_url_context() {
     assert!(ModelUtils::supports_url_context("gpt-4"));
-    assert!(ModelUtils::supports_url_context("claude-3-opus"));
+    assert!(!ModelUtils::supports_url_context("claude-3-opus"));
     assert!(!ModelUtils::supports_url_context("gpt-3.5-turbo"));
 }
 
 #[test]
 fn test_supports_vision() {
     assert!(ModelUtils::supports_vision("gpt-4-turbo"));
-    assert!(ModelUtils::supports_vision("claude-3-opus"));
+    assert!(ModelUtils::supports_vision("claude-opus-5-5"));
     assert!(ModelUtils::supports_vision("claude-haiku-4-5"));
-    assert!(ModelUtils::supports_vision("claude-haiku-4.5"));
+    assert!(!ModelUtils::supports_vision("claude-haiku-4.5"));
     assert!(!ModelUtils::supports_vision("gpt-3.5-turbo"));
     // o3 and o4-mini support vision
     assert!(ModelUtils::supports_vision("o3"));
@@ -332,7 +333,8 @@ fn test_supports_vision() {
 #[test]
 fn test_supports_streaming() {
     assert!(ModelUtils::supports_streaming("gpt-4"));
-    assert!(ModelUtils::supports_streaming("claude-3-opus"));
+    assert!(ModelUtils::supports_streaming("claude-opus-5-5"));
+    assert!(!ModelUtils::supports_streaming("claude-3-opus"));
 }
 
 // ==================== get_provider_from_model Tests ====================
@@ -501,7 +503,7 @@ fn test_is_valid_model_known() {
     assert!(ModelUtils::is_valid_model("gpt-5.5-pro"));
     assert!(ModelUtils::is_valid_model("gpt-4"));
     assert!(ModelUtils::is_valid_model("gpt-3.5-turbo"));
-    assert!(ModelUtils::is_valid_model("claude-3-opus"));
+    assert!(!ModelUtils::is_valid_model("claude-3-opus"));
     assert!(ModelUtils::is_valid_model("claude-opus-4-8"));
     assert!(ModelUtils::is_valid_model("claude-opus-4-6"));
     assert!(ModelUtils::is_valid_model("claude-sonnet-4-5"));
@@ -517,7 +519,8 @@ fn test_is_valid_model_known() {
 #[test]
 fn test_is_valid_model_with_provider() {
     assert!(ModelUtils::is_valid_model("openai/gpt-4"));
-    assert!(ModelUtils::is_valid_model("anthropic/claude-3"));
+    assert!(!ModelUtils::is_valid_model("anthropic/claude-3"));
+    assert!(ModelUtils::is_valid_model("anthropic/claude-sonnet-5-5"));
 }
 
 #[test]
@@ -736,4 +739,53 @@ fn test_get_compatible_models_unknown() {
 fn test_get_compatible_models_case_insensitive() {
     let models = ModelUtils::get_compatible_models_for_provider("OPENAI");
     assert!(!models.is_empty());
+}
+
+#[test]
+fn every_callable_anthropic_model_has_consistent_public_validation_and_capabilities() {
+    let registry = crate::core::providers::anthropic::models::get_anthropic_registry();
+    for spec in registry.list_models() {
+        for id in [
+            spec.model_info.id.clone(),
+            format!("anthropic/{}", spec.model_info.id),
+        ] {
+            assert!(ModelUtils::is_valid_model(&id), "{id}");
+            assert!(
+                ModelUtils::validate_model_with_provider(&id, "anthropic").is_ok(),
+                "{id}"
+            );
+            let caps = ModelUtils::get_model_capabilities(&id);
+            assert_eq!(
+                caps.supports_function_calling, spec.model_info.supports_tools,
+                "{id}"
+            );
+            assert_eq!(
+                caps.supports_vision, spec.model_info.supports_multimodal,
+                "{id}"
+            );
+            assert_eq!(
+                caps.supports_streaming, spec.model_info.supports_streaming,
+                "{id}"
+            );
+            assert_eq!(
+                caps.max_tokens,
+                Some(spec.limits.max_output_tokens as usize),
+                "{id}"
+            );
+        }
+    }
+    for id in [
+        "claude-opus-4-7-latest",
+        "claude-sonnet-4-6-20251001",
+        "claude-sonnet-5-5-fake",
+        "Claude-Sonnet-5-5",
+    ] {
+        for value in [id.to_owned(), format!("anthropic/{id}")] {
+            assert!(!ModelUtils::is_valid_model(&value), "{value}");
+            assert!(
+                ModelUtils::validate_model_with_provider(&value, "anthropic").is_err(),
+                "{value}"
+            );
+        }
+    }
 }

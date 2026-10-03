@@ -11,7 +11,7 @@ fn test_model_capabilities() {
     assert!(caps_35.supports_function_calling);
     assert!(!caps_35.supports_parallel_function_calling);
 
-    let caps_claude = ModelUtils::get_model_capabilities("claude-3-opus");
+    let caps_claude = ModelUtils::get_model_capabilities("claude-opus-5-5");
     assert!(caps_claude.supports_function_calling);
     assert!(caps_claude.supports_vision);
 }
@@ -53,7 +53,7 @@ fn test_base_model_extraction() {
 #[test]
 fn test_model_validation() {
     assert!(ModelUtils::is_valid_model("gpt-4"));
-    assert!(ModelUtils::is_valid_model("claude-3-opus"));
+    assert!(!ModelUtils::is_valid_model("claude-3-opus"));
     assert!(ModelUtils::is_valid_model("gemini-2.0-flash"));
     assert!(ModelUtils::is_valid_model("gemini-3.1-pro-preview"));
     assert!(!ModelUtils::is_valid_model("unknown-model-xyz"));

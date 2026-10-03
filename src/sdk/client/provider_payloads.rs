@@ -173,14 +173,14 @@ pub(super) fn convert_anthropic_response(
         .unwrap_or("chatcmpl-anthropic")
         .to_string();
 
+    // Thinking/redacted-thinking blocks may precede or separate text blocks.
     let content = anthropic_response
         .get("content")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|item| item.get("text"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
+        .collect::<String>();
 
     let usage = if let Some(u) = anthropic_response.get("usage") {
         Usage {
@@ -508,6 +508,25 @@ mod tests {
             response.choices[0].message.content,
             Some(Content::Text(ref text)) if text == "hello from claude"
         ));
+    }
+
+    #[test]
+    fn claude5_response_preserves_text_after_thinking_blocks() {
+        let response = convert_anthropic_response(
+            serde_json::json!({
+                "id":"claude5-reply",
+                "content":[{"type":"thinking","thinking":"private reasoning","signature":"opaque"},
+                    {"type":"text","text":"First "},{"type":"redacted_thinking","data":"opaque"},
+                    {"type":"text","text":"second"}],
+                "usage":{"input_tokens":2,"output_tokens":3}
+            }),
+            "claude-sonnet-5-5",
+        )
+        .unwrap();
+        assert!(
+            matches!(&response.choices[0].message.content,Some(Content::Text(text)) if text=="First second")
+        );
+        assert_eq!(response.usage.total_tokens, 5);
     }
 
     #[test]
