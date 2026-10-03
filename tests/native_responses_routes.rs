@@ -386,26 +386,20 @@ async fn compact_skips_higher_priority_non_openai_responses_deployments() {
         config.gateway.router.strategy =
             litellm_rs::core::router::config::RoutingStrategy::PriorityBased;
         config.gateway.providers[0].priority = 1;
-        let mut copilot = config.gateway.providers[0].clone();
-        copilot.name = "copilot-test".into();
-        copilot.provider_type = "github_copilot".into();
-        copilot.api_key.clear();
-        copilot.priority = 0;
-        config.gateway.providers.push(copilot);
     })
     .await;
     let router = state.unified_router();
-    let copilot = router
-        .get_deployments_for_model("gpt-4o-mini")
-        .into_iter()
-        .filter_map(|id| router.get_deployment(&id))
-        .find(|deployment| {
-            matches!(
-                &deployment.provider,
-                litellm_rs::core::providers::Provider::GitHubCopilot(_)
-            )
-        })
-        .unwrap();
+    let provider =
+        litellm_rs::core::providers::github_copilot::GitHubCopilotProvider::new(Default::default())
+            .await
+            .unwrap();
+    router.add_deployment(litellm_rs::core::router::deployment::Deployment::new(
+        "copilot-test".into(),
+        litellm_rs::core::providers::Provider::GitHubCopilot(provider),
+        "gpt-4o-mini".into(),
+        "gpt-4o-mini".into(),
+    ));
+    let copilot = router.get_deployment("copilot-test").unwrap();
     assert!(
         copilot
             .provider
