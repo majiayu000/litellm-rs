@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::core::types::model::ModelInfo;
+use crate::core::types::model::{ModelInfo, ProviderCapability};
 
 type CohereModelEntry = (
     &'static str,
@@ -266,8 +266,8 @@ const COHERE_MODELS: &[CohereModelEntry] = &[
         false,
         "rerank",
         "live",
-        Some(0.002),
-        Some(0.0),
+        None,
+        None,
     ),
     (
         "rerank-multilingual-v3.0",
@@ -277,18 +277,6 @@ const COHERE_MODELS: &[CohereModelEntry] = &[
         false,
         false,
         "rerank",
-        "live",
-        Some(0.002),
-        Some(0.0),
-    ),
-    (
-        "cohere-transcribe-03-2026",
-        "Cohere Transcribe",
-        0,
-        None,
-        false,
-        false,
-        "audio_transcription",
         "live",
         None,
         None,
@@ -394,7 +382,21 @@ pub(super) fn create_model_registry() -> Vec<ModelInfo> {
                 input_cost_per_1k_tokens: *input_cost_per_1k_tokens,
                 output_cost_per_1k_tokens: *output_cost_per_1k_tokens,
                 currency: "USD".to_string(),
-                capabilities: vec![],
+                capabilities: match *mode {
+                    "embedding" => vec![ProviderCapability::Embeddings],
+                    "rerank" => vec![ProviderCapability::Rerank],
+                    "chat" => {
+                        let mut capabilities = vec![
+                            ProviderCapability::ChatCompletion,
+                            ProviderCapability::ChatCompletionStream,
+                        ];
+                        if *supports_tools {
+                            capabilities.push(ProviderCapability::ToolCalling);
+                        }
+                        capabilities
+                    }
+                    _ => vec![],
+                },
                 created_at: None,
                 updated_at: None,
                 metadata: HashMap::from([(
