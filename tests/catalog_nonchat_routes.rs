@@ -1254,8 +1254,6 @@ async fn xai_native_transcription_maps_upload_words_and_upstream_errors() {
         assert!(body.contains("grok-voice-transcribe-2.0"));
         assert!(!body.contains("xai/grok"));
         assert!(body.find("name=\"language\"").unwrap() < body.find("name=\"file\"").unwrap());
-        assert!(body.contains("name=\"format\"\r\n\r\ntrue\r\n"));
-        assert!(body.find("name=\"format\"").unwrap() < body.find("name=\"file\"").unwrap());
         assert!(!body.contains("response_format"));
         handle.stop(false).await;
     }

@@ -460,11 +460,12 @@ mod tests {
 
     #[tokio::test]
     async fn xai_transcription_reserves_and_settles_native_duration() {
-        for (duration, limit, priced, expected_status) in [
-            (3.0, 1.0, true, StatusCode::OK),
-            (75.0, 1.0, true, StatusCode::OK),
-            (3.0, 0.001, true, StatusCode::PAYMENT_REQUIRED),
-            (3.0, 1.0, false, StatusCode::BAD_REQUEST),
+        for (duration, limit, priced, expected_status, language) in [
+            (3.0, 1.0, true, StatusCode::OK, false),
+            (75.0, 1.0, true, StatusCode::OK, false),
+            (3.0, 0.001, true, StatusCode::PAYMENT_REQUIRED, false),
+            (3.0, 1.0, false, StatusCode::BAD_REQUEST, false),
+            (3.0, 1.0, true, StatusCode::OK, true),
         ] {
             let mock = MockAudioServer::start_with_duration(Some(duration)).await;
             let model = "grok-voice-transcribe-2.0";
@@ -491,11 +492,12 @@ mod tests {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 ))
-                .set_payload(audio_multipart_body(
+                .set_payload(audio_multipart_body_with_fields(
                     boundary,
                     model,
                     "sample.mp3",
                     &vec![b'a'; 32_000],
+                    if language { &[("language", "en")] } else { &[] },
                 ))
                 .to_request();
             let response = test::call_service(&app, request).await;
@@ -516,7 +518,17 @@ mod tests {
                 let requests = mock.requests();
                 assert_eq!(requests.len(), 1);
                 assert_eq!(requests[0].path, "/stt");
-                assert!(!String::from_utf8_lossy(&requests[0].body).contains("name=\"format\""));
+                let multipart = String::from_utf8_lossy(&requests[0].body);
+                if language {
+                    assert!(multipart.contains("name=\"format\"\r\n\r\ntrue\r\n"));
+                    assert!(
+                        multipart.find("name=\"format\"").unwrap()
+                            < multipart.find("name=\"file\"").unwrap()
+                    );
+                    assert!(multipart.contains("name=\"language\"\r\n\r\nen\r\n"));
+                } else {
+                    assert!(!multipart.contains("name=\"format\""));
+                }
                 assert!(!String::from_utf8_lossy(&requests[0].body).contains("response_format"));
             } else {
                 assert!(mock.requests().is_empty());
