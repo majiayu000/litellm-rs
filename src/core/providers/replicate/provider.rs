@@ -102,7 +102,7 @@ impl ReplicateProvider {
         stream: bool,
     ) -> Result<PredictionResponse, ProviderError> {
         // Create prediction request
-        let version_hash = ReplicateConfig::extract_version_hash(model);
+        let version_hash = ReplicateConfig::prediction_version(model);
         let prediction_request =
             ReplicateClient::create_prediction_request(input, version_hash, stream);
 
@@ -282,7 +282,19 @@ impl ReplicateProvider {
     ) -> Result<ImageGenerationResponse, ProviderError> {
         let model = request.model.as_deref().unwrap_or("stability-ai/sdxl");
 
-        let input = ReplicateClient::transform_image_request(&request, model);
+        match ReplicateClient::get_model_type(model) {
+            ReplicateModelType::ImageGeneration => {}
+            ReplicateModelType::Other => {
+                return Err(ProviderError::model_not_found("replicate", model));
+            }
+            _ => {
+                return Err(ProviderError::invalid_request(
+                    "replicate",
+                    "Cannot use a text model for image generation",
+                ));
+            }
+        }
+        let input = ReplicateClient::transform_image_request(&request, model)?;
         let prediction = self.create_prediction_and_wait(model, input, false).await?;
 
         ReplicateClient::transform_prediction_to_image_response(&prediction)
@@ -363,7 +375,10 @@ impl LLMProvider for ReplicateProvider {
 
         // Check if this is an image model
         let model_type = ReplicateClient::get_model_type(model);
-        if model_type == ReplicateModelType::ImageGeneration {
+        if model_type == ReplicateModelType::Other {
+            return Err(ProviderError::model_not_found("replicate", model));
+        }
+        if model_type != ReplicateModelType::TextGeneration {
             return Err(ProviderError::invalid_request(
                 "replicate",
                 "Cannot use image model for chat completion",
@@ -386,7 +401,10 @@ impl LLMProvider for ReplicateProvider {
 
         // Check if this is an image model
         let model_type = ReplicateClient::get_model_type(model);
-        if model_type == ReplicateModelType::ImageGeneration {
+        if model_type == ReplicateModelType::Other {
+            return Err(ProviderError::model_not_found("replicate", model));
+        }
+        if model_type != ReplicateModelType::TextGeneration {
             return Err(ProviderError::invalid_request(
                 "replicate",
                 "Cannot use image model for chat completion",
@@ -394,7 +412,7 @@ impl LLMProvider for ReplicateProvider {
         }
 
         let input = ReplicateClient::transform_chat_request(&request);
-        let version_hash = ReplicateConfig::extract_version_hash(model);
+        let version_hash = ReplicateConfig::prediction_version(model);
         let prediction_request = ReplicateClient::create_prediction_request(
             input,
             version_hash,
@@ -513,36 +531,197 @@ impl LLMProvider for ReplicateProvider {
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<f64, ProviderError> {
-        // Replicate pricing is per-second of compute time, not per token
-        // We approximate based on model type and token counts
-        if let Some(spec) = super::models::get_replicate_registry().get_model_spec(model) {
-            if spec
-                .model_info
-                .metadata
-                .get("pricing_unit")
-                .and_then(Value::as_str)
-                == Some("megapixel")
-            {
-                return Err(ProviderError::not_supported(
-                    "replicate",
-                    "Image dimensions are required to calculate this model's cost",
-                ));
-            }
-            let input_cost = spec.model_info.input_cost_per_1k_tokens.unwrap_or(0.0)
-                * (input_tokens as f64 / 1000.0);
-            let output_cost = spec.model_info.output_cost_per_1k_tokens.unwrap_or(0.0)
-                * (output_tokens as f64 / 1000.0);
-            Ok(input_cost + output_cost)
-        } else {
-            // Default pricing estimate
-            Ok((input_tokens + output_tokens) as f64 * 0.0001)
+        let spec = super::models::get_replicate_registry()
+            .get_model_spec(model)
+            .ok_or_else(|| ProviderError::model_not_found("replicate", model))?;
+        if spec.model_type != ReplicateModelType::TextGeneration {
+            return Err(ProviderError::not_supported(
+                "replicate",
+                "Image cost requires output count, dimensions or hardware runtime; token counts cannot determine it",
+            ));
         }
+        let (Some(input_price), Some(output_price)) = (
+            spec.model_info.input_cost_per_1k_tokens,
+            spec.model_info.output_cost_per_1k_tokens,
+        ) else {
+            return Err(ProviderError::not_supported(
+                "replicate",
+                "Verified token pricing is unavailable",
+            ));
+        };
+        Ok(input_price * f64::from(input_tokens) / 1000.0
+            + output_price * f64::from(output_tokens) / 1000.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn image_request(model: &str) -> ImageGenerationRequest {
+        ImageGenerationRequest {
+            model: Some(model.into()),
+            prompt: "a bird".into(),
+            n: None,
+            size: None,
+            quality: None,
+            response_format: None,
+            style: None,
+            user: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn audited_models_preserve_modality_and_reject_unknown_prices() {
+        let provider = ReplicateProvider::new(ReplicateConfig::new("fixture-token")).unwrap();
+        let wrapped = crate::core::providers::Provider::Replicate(provider.clone());
+        for model in [
+            "meta/meta-llama-3.1-405b-instruct",
+            "mistralai/mistral-7b-instruct-v0.2",
+            "mistralai/mixtral-8x7b-instruct-v0.1",
+            "lucataco/playground-v2.5-1024px-aesthetic",
+            "unknown/model",
+        ] {
+            assert!(
+                !wrapped.supports_capability_for_model(model, &ProviderCapability::ChatCompletion)
+            );
+            assert!(
+                !wrapped.supports_capability_for_model(model, &ProviderCapability::ImageGeneration)
+            );
+            assert!(matches!(
+                provider.calculate_cost(model, 1, 1).await,
+                Err(ProviderError::ModelNotFound { .. })
+            ));
+            assert!(matches!(
+                provider
+                    .chat_completion(
+                        ChatRequest {
+                            model: model.into(),
+                            ..Default::default()
+                        },
+                        RequestContext::default()
+                    )
+                    .await,
+                Err(ProviderError::ModelNotFound { .. })
+            ));
+        }
+        for model in provider.models() {
+            if model
+                .capabilities
+                .contains(&ProviderCapability::ImageGeneration)
+            {
+                assert!(
+                    !wrapped.supports_capability_for_model(
+                        &model.id,
+                        &ProviderCapability::ChatCompletion
+                    )
+                );
+                assert!(matches!(
+                    provider.calculate_cost(&model.id, 0, 0).await,
+                    Err(ProviderError::NotSupported { .. })
+                ));
+            } else {
+                assert!(wrapped.supports_capability_for_model(
+                    &model.id,
+                    &ProviderCapability::ChatCompletionStream
+                ));
+                assert!(!wrapped.supports_capability_for_model(
+                    &model.id,
+                    &ProviderCapability::ImageGeneration
+                ));
+            }
+        }
+        let cost = provider
+            .calculate_cost("meta/llama-2-70b-chat", 1000, 1000)
+            .await
+            .unwrap();
+        assert!((cost - 0.0034).abs() < 1e-12);
+        assert!(
+            provider
+                .image_generation(
+                    image_request("meta/llama-2-70b-chat"),
+                    RequestContext::default()
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn http_community_version_and_official_prediction_paths() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut posts = Vec::new();
+            for _ in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0; 4096];
+                let (header_end, length) = loop {
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        break (end + 4, length);
+                    }
+                };
+                while bytes.len() < header_end + length {
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let body = if headers.starts_with("POST ") {
+                    posts.push((headers.lines().next().unwrap().to_owned(), serde_json::from_slice::<Value>(&bytes[header_end..header_end + length]).unwrap()));
+                    serde_json::json!({"id":"pred-test", "status":"processing", "urls":{"get":format!("http://{address}/v1/predictions/pred-test")}})
+                } else {
+                    serde_json::json!({"id":"pred-test", "status":"succeeded", "output":["https://example.com/image.png"]})
+                }.to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            posts
+        });
+        let mut config = ReplicateConfig::new("fixture-token");
+        config.base.api_base = Some(format!("http://{address}/v1"));
+        config.polling_delay_seconds = 1;
+        let provider = ReplicateProvider::new(config).unwrap();
+        for model in ["stability-ai/sdxl", "black-forest-labs/flux-2-pro"] {
+            let mut request = image_request(model);
+            request.size = Some("1024x768".into());
+            let response = provider
+                .image_generation(request, RequestContext::default())
+                .await
+                .unwrap();
+            assert_eq!(response.data.len(), 1);
+        }
+        let posts = server.await.unwrap();
+        assert_eq!(posts[0].0, "POST /v1/predictions HTTP/1.1");
+        assert_eq!(
+            posts[0].1["version"],
+            "7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc"
+        );
+        assert_eq!(
+            posts[1].0,
+            "POST /v1/models/black-forest-labs/flux-2-pro/predictions HTTP/1.1"
+        );
+        assert!(posts[1].1.get("version").is_none());
+        assert_eq!(posts[1].1["input"]["aspect_ratio"], "custom");
+        assert_eq!(posts[1].1["input"]["width"], 1024);
+        assert!(posts[1].1["input"].get("num_outputs").is_none());
+    }
 
     #[test]
     fn test_provider_creation_without_api_key() {
@@ -789,12 +968,7 @@ mod tests {
         let config = ReplicateConfig::new("test-token");
         let provider = ReplicateProvider::new(config).unwrap();
 
-        let cost = provider
-            .calculate_cost("unknown/model", 100, 50)
-            .await
-            .unwrap();
-
-        // Should return a default estimate
-        assert!(cost >= 0.0);
+        let cost = provider.calculate_cost("unknown/model", 100, 50).await;
+        assert!(matches!(cost, Err(ProviderError::ModelNotFound { .. })));
     }
 }

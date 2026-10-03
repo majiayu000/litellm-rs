@@ -71,7 +71,7 @@ impl ReplicateModelRegistry {
                 "meta/llama-2-70b-chat",
                 "Llama 2 70B Chat",
                 4096,
-                Some(2048),
+                None,
                 0.00065, // ~$0.65/1M tokens
                 0.00275, // ~$2.75/1M tokens
             ),
@@ -79,7 +79,7 @@ impl ReplicateModelRegistry {
                 "meta/llama-2-13b-chat",
                 "Llama 2 13B Chat",
                 4096,
-                Some(2048),
+                None,
                 0.0001,
                 0.0005,
             ),
@@ -87,7 +87,7 @@ impl ReplicateModelRegistry {
                 "meta/llama-2-7b-chat",
                 "Llama 2 7B Chat",
                 4096,
-                Some(2048),
+                None,
                 0.00005,
                 0.00025,
             ),
@@ -96,7 +96,7 @@ impl ReplicateModelRegistry {
                 "meta/meta-llama-3-70b-instruct",
                 "Llama 3 70B Instruct",
                 8192,
-                Some(4096),
+                None,
                 0.00065,
                 0.00275,
             ),
@@ -104,35 +104,9 @@ impl ReplicateModelRegistry {
                 "meta/meta-llama-3-8b-instruct",
                 "Llama 3 8B Instruct",
                 8192,
-                Some(4096),
+                None,
                 0.00005,
                 0.00025,
-            ),
-            // Meta Llama 3.1 models
-            (
-                "meta/meta-llama-3.1-405b-instruct",
-                "Llama 3.1 405B Instruct",
-                128_000,
-                Some(4096),
-                0.0095, // Higher cost for largest model
-                0.0095,
-            ),
-            // Mistral models
-            (
-                "mistralai/mistral-7b-instruct-v0.2",
-                "Mistral 7B Instruct v0.2",
-                32_768,
-                Some(4096),
-                0.00005,
-                0.00025,
-            ),
-            (
-                "mistralai/mixtral-8x7b-instruct-v0.1",
-                "Mixtral 8x7B Instruct",
-                32_768,
-                Some(4096),
-                0.00027,
-                0.00027,
             ),
         ];
 
@@ -149,7 +123,10 @@ impl ReplicateModelRegistry {
                 input_cost_per_1k_tokens: Some(input_cost),
                 output_cost_per_1k_tokens: Some(output_cost),
                 currency: "USD".to_string(),
-                capabilities: vec![ProviderCapability::ChatCompletion],
+                capabilities: vec![
+                    ProviderCapability::ChatCompletion,
+                    ProviderCapability::ChatCompletionStream,
+                ],
                 created_at: None,
                 updated_at: None,
                 metadata: HashMap::new(),
@@ -204,35 +181,35 @@ impl ReplicateModelRegistry {
                 "stability-ai/sdxl",
                 "Stable Diffusion XL",
                 "1024x1024",
-                0.003, // ~$0.003 per image
+                None, // Hardware-time billing; not a fixed per-image tariff.
             ),
             (
                 "stability-ai/stable-diffusion",
                 "Stable Diffusion 2.1",
                 "768x768",
-                0.002,
+                None,
             ),
             // FLUX models
             (
                 "black-forest-labs/flux-schnell",
                 "FLUX Schnell",
-                "1024x1024",
-                0.003,
+                "",
+                Some(0.003),
             ),
-            ("black-forest-labs/flux-dev", "FLUX Dev", "1024x1024", 0.025),
-            ("black-forest-labs/flux-pro", "FLUX Pro", "1024x1024", 0.05),
+            ("black-forest-labs/flux-dev", "FLUX Dev", "", Some(0.025)),
+            ("black-forest-labs/flux-pro", "FLUX Pro", "", Some(0.055)),
             // Other popular models
             (
                 "bytedance/sdxl-lightning-4step",
                 "SDXL Lightning 4-Step",
                 "1024x1024",
-                0.002,
+                None,
             ),
             (
-                "lucataco/playground-v2.5-1024px-aesthetic",
+                "playgroundai/playground-v2.5-1024px-aesthetic",
                 "Playground v2.5",
                 "1024x1024",
-                0.004,
+                None,
             ),
         ];
 
@@ -242,10 +219,33 @@ impl ReplicateModelRegistry {
                 "default_size".to_string(),
                 serde_json::Value::String(default_size.to_string()),
             );
-            metadata.insert(
-                "cost_per_image".to_string(),
-                serde_json::json!(cost_per_image),
-            );
+            if let Some(cost) = cost_per_image {
+                metadata.insert("cost_per_image".to_string(), serde_json::json!(cost));
+            } else {
+                metadata.insert(
+                    "pricing_unit".to_string(),
+                    serde_json::json!("hardware_time"),
+                );
+            }
+            // Community models require a concrete version at /predictions.
+            let version = match id {
+                "stability-ai/sdxl" => {
+                    Some("7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc")
+                }
+                "stability-ai/stable-diffusion" => {
+                    Some("ac732df83cea7fff18b8472768c88ad041fa750ff7682a21affe81863cbe77e4")
+                }
+                "bytedance/sdxl-lightning-4step" => {
+                    Some("6f7a773af6fc3e8de9d5a3c00be77c17308914bf67772726aff83496ba1e3bbe")
+                }
+                "playgroundai/playground-v2.5-1024px-aesthetic" => {
+                    Some("a45f82a1382bed5c7aeb861dac7c7d191b0fdf74d8d57c4a0e6ed7d4d0bf7d24")
+                }
+                _ => None,
+            };
+            if let Some(version) = version {
+                metadata.insert("version".to_string(), serde_json::json!(version));
+            }
 
             let model_info = ModelInfo {
                 id: id.to_string(),
