@@ -8,6 +8,11 @@ use actix_web::{App, HttpMessage, HttpServer, test};
 use std::sync::Arc;
 
 type Calls = Arc<Mutex<Vec<(String, Value, Option<String>)>>>;
+const COMPRESSED_REPLY: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 19, 171, 86, 202, 42, 206, 207, 43, 42, 72, 86, 178, 82, 50, 210,
+    51, 80, 210, 81, 202, 76, 81, 178, 50, 212, 81, 42, 74, 45, 46, 205, 41, 81, 178, 170, 86, 202,
+    207, 86, 178, 42, 41, 42, 77, 173, 173, 5, 0, 230, 64, 26, 162, 45, 0, 0, 0,
+];
 async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -> HttpResponse {
     assert_eq!(
         req.headers().get("authorization").unwrap(),
@@ -22,6 +27,28 @@ async fn upstream(req: HttpRequest, body: web::Bytes, calls: web::Data<Calls>) -
         .lock()
         .unwrap()
         .push((req.method().to_string(), value.clone(), session.clone()));
+    assert_ne!(
+        req.headers()
+            .get("mcp-protocol-version")
+            .and_then(|v| v.to_str().ok()),
+        Some("gateway-only-sentinel")
+    );
+    if value.pointer("/params/test_initialize_error") == Some(&Value::Bool(true)) {
+        return HttpResponse::Ok().json(json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"unsupported version"}}));
+    }
+    if value.pointer("/params/test_initialize_sse") == Some(&Value::Bool(true)) {
+        let result = json!({"jsonrpc":"2.0","id":value["id"],"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}});
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "Text/Event-Stream"))
+            .insert_header(("mcp-session-id", "upstream-session"))
+            .body(format!("data: {result}\n\n"));
+    }
+    if value.get("method").and_then(Value::as_str) == Some("compressed") {
+        return HttpResponse::Ok()
+            .insert_header(("content-type", "application/json"))
+            .insert_header(("content-encoding", "gzip"))
+            .body(COMPRESSED_REPLY);
+    }
     if req.method() == Method::GET {
         assert_eq!(session.as_deref(), Some("upstream-session"));
         assert_eq!(req.headers().get("last-event-id").unwrap(), "event-1");
@@ -791,4 +818,123 @@ async fn equivalent_config_reload_preserves_session() {
         drop(test::read_body(response).await);
     }
     server.stop(true).await;
+}
+
+#[actix_web::test]
+async fn initialize_rpc_errors_do_not_commit_sessions_and_sse_results_do() {
+    let (state, _, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for sse in [false, true] {
+        let req = test::TestRequest::post().uri("/docs/mcp")
+            .insert_header(("accept", "application/json, text/event-stream"))
+            .set_json(json!({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"test_initialize_error":!sse,"test_initialize_sse":sse}})).to_request();
+        req.extensions_mut().insert(owner.clone());
+        let response = test::call_service(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().contains_key("mcp-session-id"), sse);
+        let bytes = test::read_body(response).await;
+        assert_eq!(
+            state.mcp_sessions.entries.lock().unwrap().len(),
+            usize::from(sse)
+        );
+        if sse {
+            assert!(std::str::from_utf8(&bytes).unwrap().starts_with("data: "));
+        } else {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["code"],
+                -32602
+            );
+        }
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn one_owner_cannot_fill_global_session_capacity() {
+    let (state, calls, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let response = test::call_service(&app, request("initialize", None, &owner)).await;
+    drop(test::read_body(response).await);
+    {
+        let mut entries = state.mcp_sessions.entries.lock().unwrap();
+        let mut session = entries.values().next().unwrap().clone();
+        session.upstream = None;
+        for index in 1..128 {
+            entries.insert(format!("fixture-{index}"), session.clone());
+        }
+    }
+    assert_eq!(
+        test::call_service(&app, request("initialize", None, &owner))
+            .await
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    let response = test::call_service(&app, request("initialize", None, &user())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    drop(test::read_body(response).await);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn configured_gateway_credential_header_is_not_forwarded() {
+    let (state, _, handle) = fixture(false).await;
+    let mut revision = state.pin_runtime().as_ref().clone();
+    let mut config = revision.config.as_ref().clone();
+    config.gateway.auth.enable_api_key = true;
+    config.gateway.auth.api_key_header = "MCP-Protocol-Version".into();
+    revision.config = Arc::new(config);
+    state.runtime.store(revision);
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let mut req = request("initialize", None, &user());
+    req.headers_mut().insert(
+        actix_web::http::header::HeaderName::from_static("mcp-protocol-version"),
+        "gateway-only-sentinel".parse().unwrap(),
+    );
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    drop(test::read_body(response).await);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn unchanged_encoded_bodies_preserve_encoding_metadata() {
+    let (state, _, handle) = fixture(false).await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    let response = test::call_service(&app, request("initialize", None, &owner)).await;
+    let token = response
+        .headers()
+        .get("mcp-session-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    drop(test::read_body(response).await);
+    let response = test::call_service(&app, request("compressed", Some(&token), &owner)).await;
+    assert_eq!(response.headers().get("content-encoding").unwrap(), "gzip");
+    assert_eq!(test::read_body(response).await.as_ref(), COMPRESSED_REPLY);
+    handle.stop(false).await;
 }

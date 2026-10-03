@@ -144,6 +144,7 @@ impl McpServerConfig {
                     | "connection"
                     | "content-type"
                     | "accept"
+                    | "accept-encoding"
                     | "origin"
                     | "mcp-session-id"
                     | "mcp-protocol-version"

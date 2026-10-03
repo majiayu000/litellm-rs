@@ -265,6 +265,8 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             "Accept must include the MCP response types",
         );
     }
+    let mut outgoing_body = body.to_vec();
+    let mut request_id = Value::Null;
     let initialize = if req.method() == Method::POST {
         if !req
             .headers()
@@ -296,6 +298,8 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
                 "Expected a single JSON-RPC message",
             );
         }
+        request_id = message.get("id").cloned().unwrap_or(Value::Null);
+        outgoing_body = message.to_string().into_bytes();
         message.get("method").and_then(Value::as_str) == Some("initialize")
     } else {
         false
@@ -368,6 +372,9 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         "mcp-protocol-version",
         "last-event-id",
     ] {
+        if config.auth.enable_api_key && name.eq_ignore_ascii_case(&config.auth.api_key_header) {
+            continue;
+        }
         for value in req.headers().get_all(name) {
             outgoing = outgoing.header(name, value.as_bytes());
         }
@@ -380,6 +387,17 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             Ok(entries) => entries,
             Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "MCP sessions unavailable"),
         };
+        if entries
+            .values()
+            .filter(|session| session.owner == owner)
+            .count()
+            >= 128
+        {
+            return error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "MCP session capacity reached for this caller",
+            );
+        }
         if entries.len() >= 4096 {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -406,8 +424,10 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     } else {
         None
     };
-    let outgoing = outgoing.body(body.to_vec());
-    let upstream =
+    let outgoing = outgoing
+        .header("accept-encoding", "identity")
+        .body(outgoing_body);
+    let mut upstream =
         match tokio::time::timeout(Duration::from_millis(server.timeout_ms), outgoing.send()).await
         {
             Ok(Ok(response)) => response,
@@ -424,6 +444,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     let mut response = HttpResponse::build(status);
     for name in [
         "content-type",
+        "content-encoding",
         "retry-after",
         "mcp-protocol-version",
         "allow",
@@ -433,6 +454,45 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         }
     }
     response.insert_header(("cache-control", "no-store"));
+    let mut initialized_body = None;
+    if initialize && status == StatusCode::OK {
+        // Initialize is finite: do not allocate a gateway session for an RPC error.
+        // Preserve the original JSON/SSE bytes after inspecting the completed reply.
+        let read = async {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = upstream.chunk().await.map_err(|_| ())? {
+                if bytes.len().saturating_add(chunk.len()) > config.server.max_body_size {
+                    return Err(());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok::<_, ()>(bytes)
+        };
+        let bytes = match tokio::time::timeout(Duration::from_millis(server.timeout_ms), read).await
+        {
+            Ok(Ok(bytes)) => bytes,
+            _ => {
+                return error(
+                    StatusCode::BAD_GATEWAY,
+                    "Invalid or incomplete MCP initialize response",
+                );
+            }
+        };
+        let event_stream = upstream
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.split(';')
+                    .next()
+                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
+            });
+        match initialize_result(&bytes, event_stream, &request_id) {
+            Ok(true) => initialized_body = Some(bytes),
+            Ok(false) => return response.body(bytes),
+            Err(()) => return error(StatusCode::BAD_GATEWAY, "Invalid MCP initialize result"),
+        }
+    }
     if initialize && status == StatusCode::OK {
         let upstream_id = match upstream.headers().get("mcp-session-id") {
             Some(value) => match value.to_str() {
@@ -480,11 +540,57 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             response.insert_header(("mcp-session-id", token));
         }
     }
+    if let Some(bytes) = initialized_body {
+        return response.body(bytes);
+    }
     // The response stream owns reqwest's body. Dropping the downstream stream
     // closes the upstream body without buffering SSE or rewriting RPC errors.
     response.streaming(upstream.bytes_stream().map(|chunk| {
         chunk.map_err(|_| actix_web::error::ErrorBadGateway("MCP upstream stream interrupted"))
     }))
+}
+
+fn initialize_result(bytes: &[u8], event_stream: bool, id: &Value) -> Result<bool, ()> {
+    let messages: Vec<Value> = if event_stream {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| ())?
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
+        text.split("\n\n")
+            .filter_map(|event| {
+                let data = event
+                    .lines()
+                    .filter_map(|line| {
+                        line.strip_prefix("data:")
+                            .map(|v| v.strip_prefix(' ').unwrap_or(v))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!data.is_empty()).then(|| serde_json::from_str(&data).map_err(|_| ()))
+            })
+            .collect::<Result<_, _>>()?
+    } else {
+        vec![serde_json::from_slice(bytes).map_err(|_| ())?]
+    };
+    let response = messages
+        .iter()
+        .find(|message| {
+            message.get("id") == Some(id)
+                && message.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+        })
+        .ok_or(())?;
+    if response.get("error").is_some() {
+        return Ok(false);
+    }
+    let result = response.get("result").ok_or(())?;
+    if result.get("protocolVersion").is_some_and(Value::is_string)
+        && result.get("capabilities").is_some_and(Value::is_object)
+        && result.get("serverInfo").is_some_and(Value::is_object)
+    {
+        Ok(true)
+    } else {
+        Err(())
+    }
 }
 
 #[cfg(test)]
