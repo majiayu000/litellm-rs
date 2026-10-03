@@ -630,7 +630,7 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         def_chat(
             "wandb",
             "Weights & Biases",
-            "https://api.wandb.ai/v1",
+            "https://api.inference.wandb.ai/v1",
             "WANDB_API_KEY",
         ),
         ProviderDefinition {

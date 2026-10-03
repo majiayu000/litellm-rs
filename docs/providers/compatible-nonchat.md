@@ -123,21 +123,21 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `zhipu` | 待核验；本批未扩展非聊天声明 |
 | `zai` | 待核验；本批未扩展非聊天声明 |
 | `lemonade` | embeddings、images/generations、audio/speech/transcriptions；修正本地默认 base；编辑/变体待网关调度接入 |
-| `linkup` | 待核验；本批未扩展非聊天声明 |
+| `linkup` | 当前官方为 Search/Fetch/Research/Tasks/Extract；无兼容非聊天证据，旧 chat 声明待 F10 复核；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `poe` | 待核验；本批未扩展非聊天声明 |
-| `wandb` | 待核验；本批未扩展非聊天声明 |
+| `wandb` | 已核验当前 CoreWeave Serverless：修正 inference 默认地址；仅 Chat/Models 合同，独立非聊天未确认；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `nanogpt` | embeddings、images/generations、同步 speech/transcriptions；图片 /v1，其他 /api/v1；异步/克隆未接 |
 | `aiml_api` | 待核验；本批未扩展非聊天声明 |
 | `aiml` | 待核验；本批未扩展非聊天声明 |
-| `aleph_alpha` | 待核验；本批未扩展非聊天声明 |
-| `anyscale` | 待核验；本批未扩展非聊天声明 |
+| `aleph_alpha` | 官方 SDK 有兼容 embeddings；默认 host/部署模型未确认，尚未启用；旧 semantic_embed 不等同兼容协议；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
+| `anyscale` | 当前官方是部署型 Ray Serve/vLLM；旧共享 endpoint 与非聊天能力未确认，不推断退役；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `bytez` | 待核验；本批未扩展非聊天声明 |
 | `comet_api` | 待核验；本批未扩展非聊天声明 |
-| `compactifai` | 待核验；本批未扩展非聊天声明 |
+| `compactifai` | 已核验 ASR 协议；一分钟最低计费待预留/结算适配，暂不声明；其余独立非聊天未确认；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `maritalk` | 待核验；本批未扩展非聊天声明 |
 | `siliconflow` | 待核验；本批未扩展非聊天声明 |
 | `yi` | 待核验；本批未扩展非聊天声明 |
-| `lambda_ai` | 待核验；本批未扩展非聊天声明 |
+| `lambda_ai` | 官方确认共享推理于 2025-09-25 退役，交 F10 #1373 清理；不扩非聊天能力；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
 选择器别名沿用 `canonical_catalog_name`，例如 hugging_face、aimlapi、ai21_chat 等不另建重复审核项。

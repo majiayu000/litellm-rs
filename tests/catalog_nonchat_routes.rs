@@ -1318,3 +1318,54 @@ async fn volcengine_embedding_string_is_sent_as_one_item_array() {
     assert_eq!(body["input"], json!(["hello"]));
     handle.stop(false).await;
 }
+
+#[tokio::test]
+async fn wandb_project_header_reaches_the_inference_chat_endpoint() {
+    let definition = litellm_rs::core::providers::registry::get_definition("wandb").unwrap();
+    assert_eq!(definition.base_url, "https://api.inference.wandb.ai/v1");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpServer::new(|| App::new().route("/v1/chat/completions", web::post().to(|req: HttpRequest| async move {
+        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer test-key");
+        assert_eq!(req.headers().get("openai-project").unwrap(), "test-team/test-project");
+        HttpResponse::Ok().json(json!({"id":"chat-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}))
+    }))).workers(1).listen(listener).unwrap().run();
+    let handle = server.handle();
+    tokio::spawn(server);
+    let mut config = provider_fixtures::mock_provider_config(
+        "wandb",
+        "wandb",
+        "test-key",
+        &format!("http://{address}/v1"),
+        vec!["test-model".into()],
+    );
+    config.settings.insert(
+        "custom_headers".into(),
+        json!({"OpenAI-Project":"test-team/test-project"}),
+    );
+    let provider = create_provider(config).await.unwrap();
+    let router = UnifiedRouter::default();
+    router.add_deployment(Deployment::new(
+        "wandb-test".into(),
+        provider,
+        "test-model".into(),
+        "public".into(),
+    ));
+    assert!(
+        router
+            .select_deployment_lease_for_capability("public", &ProviderCapability::Embeddings)
+            .is_err()
+    );
+    let response = selected(&router, ProviderCapability::ChatCompletion)
+        .chat_completion(
+            serde_json::from_value(
+                json!({"model":"test-model","messages":[{"role":"user","content":"hello"}]}),
+            )
+            .unwrap(),
+            RequestContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.usage.unwrap().total_tokens, 2);
+    handle.stop(true).await;
+}
