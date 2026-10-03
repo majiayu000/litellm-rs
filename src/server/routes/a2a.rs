@@ -22,6 +22,7 @@ use std::{
 struct Owner {
     principal: String,
     expires: Instant,
+    context: Option<String>,
 }
 type TaskIdentity = (Vec<u8>, String, String);
 
@@ -74,6 +75,17 @@ impl TaskOwners {
             })
             .is_some_and(|entry| entry.principal == principal && entry.expires > Instant::now())
     }
+    fn owns_pair(&self, binding: &[u8], principal: &str, task: &str, context: &str) -> bool {
+        self.entries.lock().ok().is_some_and(|entries| {
+            entries
+                .get(&(binding.to_vec(), "task".into(), task.into()))
+                .is_some_and(|owner| {
+                    owner.principal == principal
+                        && owner.expires > Instant::now()
+                        && owner.context.as_deref() == Some(context)
+                })
+        })
+    }
     fn observe(
         &self,
         binding: &[u8],
@@ -125,9 +137,22 @@ impl TaskOwners {
             && object
                 .pointer("/status/state")
                 .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
+                .is_none_or(|state| {
+                    !matches!(
+                        state,
+                        "TASK_STATE_UNSPECIFIED"
+                            | "TASK_STATE_SUBMITTED"
+                            | "TASK_STATE_WORKING"
+                            | "TASK_STATE_COMPLETED"
+                            | "TASK_STATE_FAILED"
+                            | "TASK_STATE_CANCELED"
+                            | "TASK_STATE_INPUT_REQUIRED"
+                            | "TASK_STATE_REJECTED"
+                            | "TASK_STATE_AUTH_REQUIRED"
+                    )
+                })
         {
-            return Err("Missing A2A task status");
+            return Err("Invalid A2A task status");
         }
         if kind == "message"
             && (identifier(object.get("messageId")).ok().flatten().is_none()
@@ -182,6 +207,14 @@ impl TaskOwners {
         }) {
             return Err("A2A response belongs to another caller");
         }
+        if let (Some(task), Some(context)) = (task, context)
+            && entries
+                .get(&(binding.to_vec(), "task".into(), task.into()))
+                .and_then(|owner| owner.context.as_deref())
+                .is_some_and(|stored| stored != context)
+        {
+            return Err("A2A task changed context");
+        }
         let new_ids = ids.iter().filter(|id| !entries.contains_key(*id)).count();
         let credit = reservation.as_ref().map_or(0, |r| r.remaining.min(new_ids));
         if entries.len() + self.reserved.load(Ordering::Relaxed) + new_ids - credit > 4096 {
@@ -192,11 +225,19 @@ impl TaskOwners {
             self.reserved.fetch_sub(credit, Ordering::Relaxed);
         }
         for id in ids {
+            let task_context = if id.1 == "task" {
+                context
+                    .map(str::to_owned)
+                    .or_else(|| entries.get(&id).and_then(|owner| owner.context.clone()))
+            } else {
+                None
+            };
             entries.insert(
                 id,
                 Owner {
                     principal: principal.into(),
                     expires: Instant::now() + Duration::from_secs(3600),
+                    context: task_context,
                 },
             );
         }
@@ -247,6 +288,17 @@ fn authenticated(req: &HttpRequest, name: &str) -> Result<String, HttpResponse> 
     }
     Ok(principal)
 }
+fn supported_version(req: &HttpRequest) -> bool {
+    let query_version = url::form_urlencoded::parse(req.query_string().as_bytes())
+        .find(|(name, _)| name.eq_ignore_ascii_case("A2A-Version"))
+        .map(|(_, value)| value.into_owned());
+    let version = req
+        .headers()
+        .get("a2a-version")
+        .and_then(|v| v.to_str().ok())
+        .or(query_version.as_deref());
+    version == Some("1.0")
+}
 async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
     let runtime = state.pin_runtime();
     let name = if let Some(name) = req.match_info().get("agent_name") {
@@ -287,6 +339,14 @@ async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
             "Agent not found",
         );
     };
+    if !supported_version(&req) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            Value::Null,
+            -32009,
+            "Only A2A-Version: 1.0 is supported",
+        );
+    }
     let mut schemes = serde_json::Map::new();
     let mut requirements = Vec::new();
     if runtime.config.gateway.auth.enable_api_key {
@@ -357,7 +417,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         return error(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Value::Null,
-            -32600,
+            -32005,
             "A2A requires application/json",
         );
     }
@@ -376,15 +436,8 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             "Expected a JSON-RPC request with ID",
         );
     }
-    let query_version = url::form_urlencoded::parse(req.query_string().as_bytes())
-        .find(|(name, _)| name.eq_ignore_ascii_case("A2A-Version"))
-        .map(|(_, value)| value.into_owned());
-    let version = req
-        .headers()
-        .get("a2a-version")
-        .and_then(|v| v.to_str().ok())
-        .or(query_version.as_deref());
-    if version != Some("1.0") {
+
+    if !supported_version(&req) {
         return error(
             StatusCode::BAD_REQUEST,
             id,
@@ -397,10 +450,18 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     let stream = matches!(method, "SendStreamingMessage" | "SubscribeToTask");
     let subscribe = method == "SubscribeToTask";
     if !send && !matches!(method, "GetTask" | "CancelTask" | "SubscribeToTask") {
+        let code = match method {
+            "ListTasks" | "GetExtendedAgentCard" => -32004,
+            "CreateTaskPushNotificationConfig"
+            | "GetTaskPushNotificationConfig"
+            | "ListTaskPushNotificationConfigs"
+            | "DeleteTaskPushNotificationConfig" => -32003,
+            _ => -32601,
+        };
         return error(
             StatusCode::OK,
             id,
-            -32601,
+            code,
             "A2A method not supported by this gateway",
         );
     }
@@ -459,6 +520,18 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
         || context.is_some_and(|id| !state.a2a_tasks.owns(&binding, &principal, "context", id))
     {
         return error(StatusCode::OK, id, -32001, "Task/context not found");
+    }
+    if let (Some(task), Some(context)) = (task, context)
+        && !state
+            .a2a_tasks
+            .owns_pair(&binding, &principal, task, context)
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            id,
+            -32602,
+            "Context does not match the task",
+        );
     }
     if let Some(references) = message.get("referenceTaskIds")
         && !references.as_array().is_some_and(|ids| {

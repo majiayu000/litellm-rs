@@ -295,6 +295,7 @@ async fn messages_tasks_cancellation_and_cards_reach_gateway() {
     assert_eq!(calls.lock().unwrap()[0]["params"], message());
     let req = test::TestRequest::get()
         .uri("/a2a/test/.well-known/agent-card.json")
+        .insert_header(("a2a-version", "1.0"))
         .to_request();
     req.extensions_mut().insert(user);
     let card: Value = test::read_body_json(test::call_service(&app, req).await).await;
@@ -674,6 +675,7 @@ async fn capacity_rejection_precedes_upstream_and_reservations_release() {
                 Owner {
                     principal: "other".into(),
                     expires: Instant::now() + Duration::from_secs(60),
+                    context: None,
                 },
             );
         }
@@ -851,6 +853,7 @@ async fn finite_response_uses_one_deadline_and_root_card_discovers_single_agent(
     .await;
     let req = test::TestRequest::get()
         .uri("/.well-known/agent-card.json")
+        .insert_header(("a2a-version", "1.0"))
         .to_request();
     req.extensions_mut().insert(user());
     let response = test::call_service(&app, req).await;
@@ -1172,6 +1175,126 @@ async fn optional_task_context_and_split_sse_bom_are_supported() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = test::read_body(response).await;
     assert!(String::from_utf8_lossy(&bytes).contains("TASK_STATE_COMPLETED"));
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn review_rejects_unknown_task_states_before_recording_ownership() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for status in [json!("TASK_STATE_COMPLETE"), json!("unknown"), json!(42)] {
+        let mut params = message();
+        params["metadata"] =
+            json!({"test_result":{"task":{"id":"invalid-state","status":{"state":status}}}});
+        let response = test::call_service(&app, request("SendMessage", params, &user())).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(state.a2a_tasks.entries.lock().unwrap().is_empty());
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn review_rejects_mismatched_owned_task_context_pairs() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    let owner = user();
+    for (task, context) in [("task-1", "context-1"), ("task-2", "context-2")] {
+        let mut params = message();
+        params["metadata"] = json!({"test_result":{"task":{"id":task,"contextId":context,"status":{"state":"TASK_STATE_WORKING"}}}});
+        let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let before = calls.lock().unwrap().len();
+    let mut params = message();
+    params["message"]["taskId"] = json!("task-1");
+    params["message"]["contextId"] = json!("context-2");
+    let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(value["error"]["code"], -32602);
+    assert_eq!(calls.lock().unwrap().len(), before);
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn review_card_negotiates_header_and_query_versions() {
+    let (state, _, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for path in [
+        "/.well-known/agent-card.json",
+        "/a2a/test/.well-known/agent-card.json",
+    ] {
+        for version in [None, Some("0.3"), Some("1.0")] {
+            let mut req = test::TestRequest::get().uri(path);
+            if let Some(version) = version {
+                req = req.insert_header(("A2A-Version", version));
+            }
+            let req = req.to_request();
+            req.extensions_mut().insert(user());
+            let response = test::call_service(&app, req).await;
+            if version == Some("1.0") {
+                assert_eq!(response.status(), StatusCode::OK);
+            } else {
+                let value: Value = test::read_body_json(response).await;
+                assert_eq!(value["error"]["code"], -32009);
+            }
+        }
+        let req = test::TestRequest::get()
+            .uri(&format!("{path}?a2A-vErSiOn=1.0"))
+            .to_request();
+        req.extensions_mut().insert(user());
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+    }
+    handle.stop(false).await;
+}
+
+#[actix_web::test]
+async fn review_distinguishes_protocol_method_and_media_errors() {
+    let (state, calls, handle) = fixture().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state)
+            .configure(|c| configure_routes(c, 4096)),
+    )
+    .await;
+    for (method, code) in [
+        ("ListTasks", -32004),
+        ("GetExtendedAgentCard", -32004),
+        ("CreateTaskPushNotificationConfig", -32003),
+        ("GetTaskPushNotificationConfig", -32003),
+        ("ListTaskPushNotificationConfigs", -32003),
+        ("DeleteTaskPushNotificationConfig", -32003),
+        ("UnknownMethod", -32601),
+    ] {
+        let response = test::call_service(&app, request(method, json!({}), &user())).await;
+        let value: Value = test::read_body_json(response).await;
+        assert_eq!(value["error"]["code"], code, "{method}: {value}");
+    }
+    let req = test::TestRequest::post()
+        .uri("/a2a/test")
+        .insert_header(("content-type", "text/plain"))
+        .set_payload("{}")
+        .to_request();
+    req.extensions_mut().insert(user());
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(value["error"]["code"], -32005);
+    assert!(calls.lock().unwrap().is_empty());
     handle.stop(false).await;
 }
 

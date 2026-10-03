@@ -59,7 +59,13 @@ fn validate_create_key_input(name: &str, permissions: &[String]) -> Result<()> {
 
     // Validate permissions against known set
     for perm in permissions {
-        if !VALID_PERMISSIONS.contains(&perm.as_str()) {
+        let agent_permission = perm.strip_prefix("a2a.").is_some_and(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        });
+        if !VALID_PERMISSIONS.contains(&perm.as_str()) && !agent_permission {
             return Err(GatewayError::Validation(format!(
                 "Unknown permission: '{}'. Valid permissions: {}",
                 perm,
@@ -477,6 +483,16 @@ mod tests {
         let perms: Vec<String> = VALID_PERMISSIONS.iter().map(|p| p.to_string()).collect();
         let result = validate_create_key_input("My Key", &perms);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn agent_permissions_match_named_gateway_routes() {
+        for permission in ["a2a.research", "a2a.team-1", "a2a.team_2"] {
+            assert!(validate_create_key_input("agent", &[permission.into()]).is_ok());
+        }
+        for permission in ["a2a.", "a2a.*", "a2a.other/path", "a2a.\n"] {
+            assert!(validate_create_key_input("agent", &[permission.into()]).is_err());
+        }
     }
 
     #[test]
