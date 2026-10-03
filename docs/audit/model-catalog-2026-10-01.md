@@ -298,3 +298,11 @@ Cloudflare 本次逐型号核验：
 - 历史价格库和历史模型家族分类保持独立，不因取消可调用声明而删除既有历史查询记录。真实供应商网络调用未运行。
 
 依据（2026-10-03 核对）：[Claude 退役表](https://platform.claude.com/docs/en/about-claude/model-deprecations)、[Claude ID 规范](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions)、[Gemini 退役表](https://ai.google.dev/gemini-api/docs/deprecations)、[Gemini 更新记录](https://ai.google.dev/gemini-api/docs/changelog)、[Vertex 生命周期](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions)、[Gemini 定价](https://ai.google.dev/gemini-api/docs/pricing)。
+
+## 2026-10-03 Mistral 能力与固定快照复核
+
+Ministral 3 的 3B/8B/14B 都支持视觉；3B 的上下文上限应为 262,144，而非现有的 128,000/131,072。已修正三个 latest 与三个 2512 条目。价格单位核对后仍为每百万输入/输出分别 0.10、0.15、0.20 美元，不作无依据改价。
+
+三个 Ministral 2512 及两个 Magistral 2509 的固定 ID 不应在发请求时改写成 latest，现保留调用者选择的日期快照。Pixtral Large、Pixtral 12B、Mistral Nemo、Devstral 2、Magistral Medium 1.2 和 Mistral Small 3.2 的官方卡片当前标注 deprecated，并非 retired；未据此删除仍可用的目录记录。
+
+依据：[Ministral 3B](https://docs.mistral.ai/models/ministral-3-3b-25-12)、[8B](https://docs.mistral.ai/models/ministral-3-8b-25-12)、[14B](https://docs.mistral.ai/models/ministral-3-14b-25-12)、[官方参数中的精确上下文长度](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512/blob/cfcb068fa7c44114cf77a462357c6cdcd2c304b4/params.json)、[Magistral Medium 1.2](https://docs.mistral.ai/models/magistral-medium-1-2-25-09)、[生命周期规则](https://docs.mistral.ai/inference/model-lifecycle)。测试仅使用本地请求转换，不代表供应商账户实调。
