@@ -42,10 +42,6 @@ pub struct ProviderOrphanBaselineEntry {
 }
 
 pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
-    stub(
-        "amazon_nova",
-        "native module retained; ProviderType::AmazonNova currently uses a generic OpenAI-compatible adapter",
-    ),
     wire("anthropic", "native Provider enum variant"),
     provider_extra_wire(
         "azure",
@@ -69,10 +65,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "cohere",
         "ProviderType::Cohere dispatches to native Cohere API paths when providers-extended is enabled",
     ),
-    stub(
-        "custom_api",
-        "public surface deprecated in 0.6.0; retained unchanged until approved breaking removal in 0.7.0 after release and compatibility gates",
-    ),
     internal("factory", "provider construction infrastructure"),
     providers_extended_wire(
         "fal_ai",
@@ -82,19 +74,11 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "gemini",
         "ProviderType::Gemini dispatches to native Google AI Studio Gemini auth when providers-extended is enabled",
     ),
-    stub(
-        "github",
-        "native GitHub module retained; ProviderType::GitHub currently uses a generic OpenAI-compatible adapter",
-    ),
     providers_extended_wire(
         "github_copilot",
         "ProviderType::GitHubCopilot dispatches to native GitHub Copilot auth when providers-extended is enabled",
     ),
     internal("macros", "provider macro infrastructure"),
-    stub(
-        "meta_llama",
-        "catalog runtime preserves Meta Llama auth, identity, params, capabilities, and model metadata; deprecated native public surface remains until the 0.7.0 compatibility gate",
-    ),
     wire("mistral", "native Provider enum variant"),
     providers_extended_wire(
         "ollama",
@@ -115,10 +99,6 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
         "ProviderType::Stability dispatches to native v2beta image endpoints",
     ),
     internal("thinking", "shared thinking/reasoning support"),
-    stub(
-        "v0",
-        "catalog runtime preserves V0 aliases, model metadata, pricing, capabilities, health, and error policy; deprecated native public surface remains until the 0.7.0 compatibility gate",
-    ),
     provider_extra_wire(
         "vertex_ai",
         "ProviderType::VertexAI dispatches to native Vertex AI auth when providers-extra is enabled",
@@ -130,32 +110,7 @@ pub static PROVIDER_MODULE_LIFECYCLE: &[ProviderModuleLifecycleEntry] = &[
     ),
 ];
 
-pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[
-    baseline(
-        "amazon_nova",
-        "demote-to-catalog",
-        "catalog-backed duplicate with native macro provider retained until demote tranche",
-    ),
-    approved_removal_baseline(
-        "custom_api",
-        "0.6.0 deprecation precedes the maintainer-approved 0.7.0 public/native removal route",
-    ),
-    baseline(
-        "github",
-        "demote-to-catalog",
-        "catalog-backed duplicate with native provider retained until demote tranche",
-    ),
-    baseline(
-        "meta_llama",
-        "demote-to-catalog",
-        "catalog equivalence complete; native public surface retained until the approved 0.7.0 removal gate",
-    ),
-    baseline(
-        "v0",
-        "demote-to-catalog",
-        "catalog equivalence complete; native public surface retained until the approved 0.7.0 removal gate",
-    ),
-];
+pub static PROVIDER_ORPHAN_BASELINE: &[ProviderOrphanBaselineEntry] = &[];
 
 pub fn provider_module_lifecycle() -> &'static [ProviderModuleLifecycleEntry] {
     PROVIDER_MODULE_LIFECYCLE
@@ -169,41 +124,8 @@ const fn wire(module_name: &'static str, reason: &'static str) -> ProviderModule
     entry(module_name, ProviderModuleLifecycle::Wire, reason)
 }
 
-const fn stub(module_name: &'static str, reason: &'static str) -> ProviderModuleLifecycleEntry {
-    entry(module_name, ProviderModuleLifecycle::Stub, reason)
-}
-
 const fn internal(module_name: &'static str, reason: &'static str) -> ProviderModuleLifecycleEntry {
     entry(module_name, ProviderModuleLifecycle::Internal, reason)
-}
-
-const fn baseline(
-    module_name: &'static str,
-    lane: &'static str,
-    reason: &'static str,
-) -> ProviderOrphanBaselineEntry {
-    ProviderOrphanBaselineEntry {
-        module_name,
-        lane,
-        issue: "GH837",
-        owner: "coordinator",
-        expires: "remove after GH837 disposition approval and tranche execution",
-        reason,
-    }
-}
-
-const fn approved_removal_baseline(
-    module_name: &'static str,
-    reason: &'static str,
-) -> ProviderOrphanBaselineEntry {
-    ProviderOrphanBaselineEntry {
-        module_name,
-        lane: "delete-native",
-        issue: "GH837",
-        owner: "custom_api provider owner",
-        expires: "remove in 0.7.0 after SP837-T22 version and SP837-T9 compatibility gates",
-        reason,
-    }
 }
 
 const fn provider_extra_wire(

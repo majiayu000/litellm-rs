@@ -1,12 +1,9 @@
 //! GitHub Models catalog policy.
 //!
-//! The native `github` provider module is deprecated in 0.6.0 and slated for
-//! the planned 0.7.0 catalog demotion. This module is the single authority for
-//! GitHub Models metadata, pricing, and capabilities on the catalog route.
-//! Every value is transcribed from the native `github::model_info` registry
-//! (the 0.6 compatibility projection) so the catalog route stays an exact
-//! projection of the native authority. Split out of `catalog.rs` to keep that
-//! file under the 800-line ceiling.
+//! Catalog route metadata, pricing and capabilities. The unused native module
+//! was removed after its 0.7 deprecation deadline. Historical metadata here
+//! remains subject to the separate model-catalog audit; removal does not
+//! establish current supplier availability.
 
 use std::sync::LazyLock;
 
@@ -260,7 +257,7 @@ mod tests {
 
     // Locks the GitHub Models catalog policy: the full 16-model roster, the
     // transcribed pricing, and the provider capability profile. The native
-    // `github::model_info` registry is the 0.6 authority this mirrors.
+    // Historical 0.6 metadata; provider availability is audited separately.
     #[test]
     fn github_catalog_policy_locks_models_pricing_and_capabilities() {
         assert_eq!(GITHUB_CATALOG_MODELS.len(), 16);
@@ -327,32 +324,5 @@ mod tests {
         assert_eq!(definition.base_url, "https://models.inference.ai.azure.com");
         assert_eq!(definition.auth_env_var, "GITHUB_TOKEN");
         assert_eq!(definition.capabilities, GITHUB_CATALOG_CAPABILITIES);
-    }
-
-    // Catalog-vs-native equivalence: the catalog is an exact projection of the
-    // native `github::model_info` authority (native is retained in 0.6, only
-    // asserted equal here).
-    #[cfg(feature = "providers-extended")]
-    #[test]
-    fn github_catalog_policy_is_exact_native_authority_projection() {
-        use crate::core::providers::github::{get_available_models, get_model_info};
-
-        let native_ids = get_available_models();
-        assert_eq!(native_ids.len(), GITHUB_CATALOG_MODELS.len());
-        for entry in GITHUB_CATALOG_MODELS {
-            let native = get_model_info(entry.model_id)
-                .unwrap_or_else(|| panic!("native github model {} must exist", entry.model_id));
-            assert_eq!(native.display_name, entry.display_name);
-            assert_eq!(native.max_context_length, entry.max_context_length);
-            assert_eq!(native.max_output_length, entry.max_output_length);
-            assert_eq!(native.supports_tools, entry.supports_tools);
-            assert_eq!(native.supports_multimodal, entry.supports_multimodal);
-            assert_eq!(native.supports_streaming, GITHUB_SUPPORTS_STREAMING);
-            assert_eq!(native.input_cost_per_million, entry.input_cost_per_million);
-            assert_eq!(
-                native.output_cost_per_million,
-                entry.output_cost_per_million
-            );
-        }
     }
 }

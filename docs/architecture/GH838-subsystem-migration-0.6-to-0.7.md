@@ -41,3 +41,15 @@ shipped as a patch release.
 Issue #1402 removes the unreachable BatchProcessor, duplicate VirtualKeyManager, unused UserManager and user-management Cargo feature, and resolved GH838 temporary-exemption constants/variant. Repository references were confined to the implementations, exports and compatibility-only tests. Batch async helpers, RuntimeVirtualKeyManager (canonical KeyManager), and user/team/virtual-key records remain because current runtime/storage paths consume them. This is a source-breaking removal, without replacement shims.
 
 Remaining F16 review: legacy analytics, semantic-cache and retry helpers; observability exports must be checked individually because config provider export still calls its redaction helpers. A2A/MCP/Realtime declarations follow their respective gateway implementations. Removal of the three unused managers does not complete the entire subsystem audit.
+
+## Expired duplicate provider modules
+
+F16 removes the unused native modules `amazon_nova`, `github`, `meta_llama`,
+`v0`, and `custom_api` from unreleased source. The first four keep their existing
+catalog selectors and `OpenAILikeProvider` factory paths. Custom servers use
+`openai_compatible` when compatible, or the public `ExternalProvider` registration
+API for custom protocols. GitHub Copilot is a separate retained native provider.
+Only legacy construction/equivalence tests are removed; current catalog routing,
+capability, model, health and error tests remain. This removal does not attest
+that the retained historical catalog models are currently available; F10 audits
+that question against supplier sources separately.
