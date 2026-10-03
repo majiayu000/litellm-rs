@@ -25,6 +25,10 @@ mod output_fallback;
 mod provider_config;
 #[cfg(test)]
 mod provider_selection;
+#[cfg(feature = "websockets")]
+mod realtime;
+#[cfg(feature = "websockets")]
+mod realtime_billing;
 mod rerank;
 mod response_cache;
 mod responses;
@@ -80,6 +84,8 @@ pub fn configure_routes_with_body_limit(cfg: &mut web::ServiceConfig, max_body_s
 }
 
 fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usize>) {
+    #[cfg(feature = "websockets")]
+    cfg.route("/v1/realtime", web::get().to(realtime::connect));
     cfg.route(
         "/openapi.json",
         web::get().to(|| async {

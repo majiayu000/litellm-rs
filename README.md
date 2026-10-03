@@ -160,7 +160,7 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/ip_access` | wire | Configured allow/block rules run as an outer Actix middleware and short-circuit before downstream side effects; empty/default rules allow all. |
 | `core/mcp` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `mcp`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. Responses API MCP descriptors still pass through independently. |
 | `core/a2a` | experimental-gate | Deprecated in 0.6 and excluded from default builds behind `a2a`; enabling it exposes library types but mounts no HTTP route. Removal is scheduled for 0.7. |
-| `core/realtime` | experimental-gate | Deprecated in 0.6 and default-off behind `websockets`; no gateway route is mounted. Removal is scheduled for 0.7. |
+| `core/realtime` | feature-gated | `gateway,websockets` mounts the [manual OpenAI Realtime gateway](docs/gateway/realtime.md); the deprecated library client remains separate. |
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. The unreachable `BatchProcessor` is deprecated in 0.6 and scheduled for removal in 0.7. |

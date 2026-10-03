@@ -60,11 +60,11 @@ pub mod rate_limiter; // Rate limiting system
     not(test),
     deprecated(
         since = "0.6.0",
-        note = "core::realtime is a default-off compatibility surface scheduled for removal in 0.7.0"
+        note = "legacy core::realtime types remain pending removal in issue #1402; use the separate /v1/realtime gateway"
     )
 )]
 #[cfg(feature = "websockets")]
-pub mod realtime; // Experimental module-only realtime API; see subsystem_registry.
+pub mod realtime; // Legacy library types; the HTTP gateway is implemented separately.
 pub mod rerank; // Rerank API for RAG systems
 pub mod router;
 pub mod secret_managers; // Secret management system

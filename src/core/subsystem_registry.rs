@@ -235,7 +235,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "realtime",
         decision: SubsystemDecision::FeatureGated,
         runtime_path: Some("Cargo feature: websockets"),
-        note: "Realtime module is excluded from the default build behind the websockets feature.",
+        note: "GET /v1/realtime is a manual OpenAI text/audio/function WebSocket gateway; deprecated core client is separate. Automatic VAD, transcription, images and hosted MCP are unsupported.",
     },
     CoreSubsystem {
         name: "request_ledger",

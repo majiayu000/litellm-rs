@@ -88,6 +88,10 @@ sea-orm = { version = "1.1", features = ["macros", "with-chrono", "with-uuid", "
 sea-orm-migration = { version = "1.1", default-features = false, optional = true }
 redis = { version = "1.0", features = ["tokio-comp", "cluster", "cluster-async", "streams", "aio", "connection-manager"], optional = true }
 
+# Native Realtime gateway frames; outbound TLS/DNS remains in ProviderHttpClient.
+actix-ws = { version = "0.4", optional = true }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"], optional = true }
+
 # Caching
 lru = "0.16"
 
@@ -234,8 +238,8 @@ mcp-validation = ["dep:jsonschema", "mcp"]
 
 # Advanced feature gates
 vector-db = ["storage"]
-# Realtime WebSocket API (`core::realtime`)
-websockets = []
+# Realtime WebSocket gateway and legacy `core::realtime` types
+websockets = ["dep:actix-ws", "dep:tokio-tungstenite"]
 # Storage-backed analytics module (`core::analytics`)
 analytics = ["storage"]
 # Enterprise-oriented bundle; enables the feature-gated analytics and vector search surfaces.
