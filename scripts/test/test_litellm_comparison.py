@@ -7,6 +7,9 @@ import socket
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+import time
 
 SCRIPT = Path(__file__).resolve().parents[1] / "bench/compare_litellm.py"
 spec = importlib.util.spec_from_file_location("compare_litellm", SCRIPT)
@@ -56,6 +59,56 @@ class ComparisonTests(unittest.TestCase):
                 with bench.service([sys.executable, "-c", "import time; time.sleep(30)"], Path(directory) / "service.log", dict(os.environ)) as process:
                     raise RuntimeError("abort")
             self.assertIsNotNone(process.poll())
+
+    def test_partial_sample_links_evidence_when_warmup_fails(self):
+        report = {"samples": []}
+        saves = []
+        args = SimpleNamespace(oha="oha", warmup=1, seconds=1, concurrency=1)
+        with patch.object(bench, "probe", return_value={}), patch.object(bench, "measure", side_effect=RuntimeError("failed warmup")):
+            with self.assertRaisesRegex(RuntimeError, "failed warmup"):
+                bench.record_sample(report, lambda: saves.append(json.loads(json.dumps(report))), args, None, 1234, Path("/tmp"), "round-1-rust", 0, "rust", {})
+        sample = report["samples"][0]
+        self.assertFalse(sample["complete"])
+        self.assertEqual(sample["phase"], "warmup")
+        self.assertEqual(sample["warmup"]["memory"], "round-1-rust-warmup.memory.json")
+        self.assertIn("failure", saves[-1]["samples"][0])
+        self.assertIn("raw", saves[0]["samples"][0])
+
+    def test_external_cargo_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "repo"
+            checkout.mkdir()
+            cargo = root / "cargo-home"
+            cargo.mkdir()
+            with patch.object(bench, "ROOT", checkout):
+                env = {"HOME": str(root), "CARGO_HOME": str(cargo)}
+                bench.reject_external_cargo_config(env)
+                (cargo / "config.toml").write_text('[build]\nrustflags = ["-Ctarget-cpu=native"]\n')
+                with self.assertRaisesRegex(RuntimeError, "unrecorded external Cargo"):
+                    bench.reject_external_cargo_config(env)
+                (cargo / "config.toml").unlink()
+                (root / ".cargo").mkdir()
+                (root / ".cargo/config").write_text("[build]\n")
+                with self.assertRaisesRegex(RuntimeError, "unrecorded external Cargo"):
+                    bench.reject_external_cargo_config(env)
+
+    def test_orphan_workers_are_stopped_after_launcher_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pidfile = root / "child.pid"
+            source = "import subprocess,sys; from pathlib import Path; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); Path(sys.argv[1]).write_text(str(p.pid))"
+            with bench.service([sys.executable, "-c", source, str(pidfile)], root / "launcher.log", dict(os.environ)) as launcher:
+                launcher.wait(timeout=5)
+                child = bench.psutil.Process(int(pidfile.read_text()))
+                self.assertTrue(child.is_running())
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and child.is_running() and child.status() != bench.psutil.STATUS_ZOMBIE:
+                time.sleep(.02)
+            self.assertTrue(not child.is_running() or child.status() == bench.psutil.STATUS_ZOMBIE)
+
+    def test_cpu_model_records_host_processor(self):
+        self.assertTrue(bench.cpu_model())
 
 
 if __name__ == "__main__":

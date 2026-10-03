@@ -24,7 +24,7 @@
 | F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 待开始 | 目前只有 feature-gated 类型，缺 HTTP 挂载 |
 | F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 待开始 | 目前没有公开网关路由 |
 | F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 待开始 | 依赖对应功能完成；不作无关架构重写 |
-| F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 待验收 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395)；三轮共九组对比及预热全部完成且零错误；4 项脚本行为测试、14 项基准契约测试和默认全量 test/check/clippy 通过；原始指标、内存/主机负载、版本配置与日志已归档，见 `docs/benchmarks/litellm-comparison.md`；结果仅适用于记录的共享工作站配置，等待 CI/review |
+| F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 待验收 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395)；三轮共九组对比及预热全部完成且零错误；4 项脚本行为测试、14 项基准契约测试和默认全量 test/check/clippy 通过；原始指标、内存/主机负载、版本配置与日志已归档，见 `docs/benchmarks/litellm-comparison.md`；结果仅适用于记录的共享工作站配置，等待 CI/review；审查修复 mock 命令/CPU 记录、外部 Cargo 配置拒绝、失败样本索引及孤儿进程清理；8 项对比脚本测试和 14 项既有基准测试通过，历史证据与审查时补查信息分开记录 |
 | F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 待开始 | 当前 v0.7.0 不含 #1360；发布前准备可审阅结果 |
 
 ## 执行与验收记录

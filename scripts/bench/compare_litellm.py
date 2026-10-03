@@ -69,13 +69,21 @@ def service(args: list[str], log: Path, env: dict[str, str]):
         try:
             yield process
         finally:
-            if process.poll() is None:
+            # A dead launcher may still have live worker descendants in its session.
+            try:
                 os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                pass
+            finally:
                 try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=5)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=5)
 
 
 def ready(process: subprocess.Popen, url: str) -> None:
@@ -157,6 +165,49 @@ def measure(oha: str, process: subprocess.Popen, url: str, seconds: int, concurr
     return {"command": args, "raw": output.name, "memory": output.with_suffix(".memory.json").name, **summarize(raw, samples)}
 
 
+def reject_external_cargo_config(env: dict[str, str]) -> None:
+    directories = [parent / ".cargo" for parent in ROOT.parents]
+    directories.append(Path(env.get("CARGO_HOME", str(Path(env["HOME"]) / ".cargo"))).expanduser())
+    for directory in dict.fromkeys(directories):
+        for name in ("config", "config.toml"):
+            if (directory / name).exists():
+                raise RuntimeError(f"unrecorded external Cargo configuration: {directory / name}")
+
+
+def cpu_model() -> str:
+    if platform.system() == "Darwin":
+        return command(["sysctl", "-n", "machdep.cpu.brand_string"])
+    if platform.system() == "Linux":
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith(("model name", "Hardware")):
+                return line.split(":", 1)[1].strip()
+    return platform.processor() or "unavailable"
+
+
+def record_sample(report, save, args, process, port, output, prefix, round_index, name, env):
+    def references(stem):
+        return {"raw": f"{stem}.json", "memory": f"{stem}.memory.json", "stderr": f"{stem}.stderr.log"}
+    sample = {"round": round_index + 1, "implementation": name, "complete": False,
+              "phase": "probe", "warmup": references(f"{prefix}-warmup"), **references(prefix)}
+    report["samples"].append(sample)
+    save()
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    try:
+        sample["probe"] = probe(url)
+        sample["phase"] = "warmup"
+        save()
+        sample["warmup"].update(measure(args.oha, process, url, args.warmup, args.concurrency, output / f"{prefix}-warmup.json", env))
+        sample["phase"] = "measurement"
+        save()
+        sample.update(measure(args.oha, process, url, args.seconds, args.concurrency, output / f"{prefix}.json", env))
+        sample.update(complete=True, phase="complete")
+    except BaseException as error:
+        sample["failure"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        save()
+
+
 def run(args: argparse.Namespace) -> None:
     git_sha = source_identity()
     for package, version in VERSIONS.items():
@@ -189,7 +240,7 @@ def run(args: argparse.Namespace) -> None:
     report = {
         "schema_version": 1, "captured_at": datetime.now(timezone.utc).isoformat(),
         "source": {"git_sha": git_sha, "build_command": BUILD},
-        "environment": {"platform": platform.platform(), "machine": platform.machine(), "cpus": psutil.cpu_count(), "memory_bytes": psutil.virtual_memory().total, "python": sys.version, "rust": command(["rustc", "-Vv"], env=env), "cargo": command(["cargo", "-V"], env=env), "oha": command([args.oha, "--version"]), "packages": VERSIONS},
+        "environment": {"platform": platform.platform(), "machine": platform.machine(), "cpu_model": cpu_model(), "cpus": psutil.cpu_count(), "memory_bytes": psutil.virtual_memory().total, "python": sys.version, "rust": command(["rustc", "-Vv"], env=env), "cargo": command(["cargo", "-V"], env=env), "oha": command([args.oha, "--version"]), "packages": VERSIONS},
         "workload": {"concurrency": args.concurrency, "duration_seconds": args.seconds, "warmup_seconds": args.warmup, "rounds": args.rounds, "workers_each": 4, "request": json.loads(REQUEST), "memory_sample_seconds": 0.1},
         "samples": [], "complete": False,
         "limits": ["Plain non-streaming chat; auth, storage, cache, guardrails and spend logging disabled.", "Local mock and load generator share host CPU with gateway.", "Sampled sum of process-tree RSS can double-count shared pages; not unique memory or a precise allocation peak.", "Results apply only to recorded configurations and host load, not feature parity or paid provider latency."],
@@ -198,6 +249,8 @@ def run(args: argparse.Namespace) -> None:
         (output / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")
     save()
     try:
+        reject_external_cargo_config(env)
+        report["source"]["external_cargo_config"] = "none; checked before build"
         build_env = dict(env, CARGO_TARGET_DIR=str(output / "cargo-target"))
         with (output / "build.log").open("w") as log:
             subprocess.run(BUILD, cwd=ROOT, env=build_env, stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -208,9 +261,10 @@ def run(args: argparse.Namespace) -> None:
             "rust": ([str(binary), "--config", str(output / "rust.yaml"), "--log-level", "error", "serve"], rust_port, "/health"),
             "litellm": ([str(Path(sys.executable).parent / "litellm"), "--config", str(output / "python.yaml"), "--host", "127.0.0.1", "--port", str(python_port), "--num_workers", "4", "--telemetry", "False"], python_port, "/health/liveliness"),
         }
-        report["launch_commands"] = {name: launch for name, (launch, _, _) in variants.items()}
+        mock_command = [sys.executable, str(ROOT / "scripts/bench/mock_openai.py"), "--port", str(mock_port)]
+        report["launch_commands"] = {"upstream": mock_command, **{name: launch for name, (launch, _, _) in variants.items()}}
         save()
-        with service([sys.executable, str(ROOT / "scripts/bench/mock_openai.py"), "--port", str(mock_port)], output / "mock.log", env) as mock:
+        with service(mock_command, output / "mock.log", env) as mock:
             ready(mock, f"http://127.0.0.1:{mock_port}/health")
             for round_index in range(args.rounds):
                 # Alternate order so one implementation is not always measured cold/first.
@@ -218,12 +272,7 @@ def run(args: argparse.Namespace) -> None:
                 for name in ["upstream", *order]:
                     prefix = f"round-{round_index + 1}-{name}"
                     def sample(process, port):
-                        url = f"http://127.0.0.1:{port}/v1/chat/completions"
-                        evidence = probe(url)
-                        warmup = measure(args.oha, process, url, args.warmup, args.concurrency, output / f"{prefix}-warmup.json", env)
-                        result = measure(args.oha, process, url, args.seconds, args.concurrency, output / f"{prefix}.json", env)
-                        report["samples"].append({"round": round_index + 1, "implementation": name, "probe": evidence, "warmup": warmup, **result})
-                        save()
+                        record_sample(report, save, args, process, port, output, prefix, round_index, name, env)
                     if name == "upstream":
                         sample(mock, mock_port)
                     else:
