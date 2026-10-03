@@ -37,12 +37,53 @@ const DEEPINFRA_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::Embeddings,
     ProviderCapability::ImageGeneration,
 ];
+
+const XINFERENCE_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+    ProviderCapability::TextToSpeech,
+];
+
+const OOBABOOGA_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+];
 const EMBEDDING_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
     ProviderCapability::ChatCompletionStream,
     ProviderCapability::ToolCalling,
     ProviderCapability::FunctionCalling,
     ProviderCapability::Embeddings,
+];
+// Verified local protocols; model/backend availability is configured by the server.
+const VLLM_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::AudioTranslation,
+];
+const LEMONADE_CAPABILITIES: &[ProviderCapability] = &[
+    ProviderCapability::ChatCompletion,
+    ProviderCapability::ChatCompletionStream,
+    ProviderCapability::ToolCalling,
+    ProviderCapability::FunctionCalling,
+    ProviderCapability::Embeddings,
+    ProviderCapability::ImageGeneration,
+    ProviderCapability::AudioTranscription,
+    ProviderCapability::TextToSpeech,
 ];
 pub(crate) const AMAZON_NOVA_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::ChatCompletion,
@@ -438,21 +479,42 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             ..def_chat("xai", "xAI", "https://api.x.ai/v1", "XAI_API_KEY")
         },
         // ===== Group 1c: Local inference (no API key) =====
-        def_local_chat("vllm", "vLLM", "http://localhost:8000/v1"),
-        def_local_chat("hosted_vllm", "Hosted vLLM", "http://localhost:8000/v1"),
+        ProviderDefinition {
+            capabilities: VLLM_CAPABILITIES,
+            ..def_local_chat("vllm", "vLLM", "http://localhost:8000/v1")
+        },
+        ProviderDefinition {
+            capabilities: VLLM_CAPABILITIES,
+            ..def_local_chat("hosted_vllm", "Hosted vLLM", "http://localhost:8000/v1")
+        },
         ProviderDefinition {
             capabilities: EMBEDDING_CATALOG_CAPABILITIES,
             ..def_local_chat("lm_studio", "LM Studio", "http://localhost:1234/v1")
         },
-        def_local_chat("llamafile", "Llamafile", "http://localhost:8080/v1"),
-        def_local_chat(
-            "docker_model_runner",
-            "Docker Model Runner",
-            "http://localhost:12434/engines/llama.cpp/v1",
-        ),
-        def_local_chat("xinference", "Xinference", "http://localhost:9997/v1"),
-        def_local_chat("infinity", "Infinity", "http://localhost:7997/v1"),
-        def_local_chat("oobabooga", "Oobabooga", "http://localhost:5000/v1"),
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_local_chat("llamafile", "Llamafile", "http://localhost:8080/v1")
+        },
+        ProviderDefinition {
+            capabilities: EMBEDDING_CATALOG_CAPABILITIES,
+            ..def_local_chat(
+                "docker_model_runner",
+                "Docker Model Runner",
+                "http://localhost:12434/engines/llama.cpp/v1",
+            )
+        },
+        ProviderDefinition {
+            capabilities: XINFERENCE_CAPABILITIES,
+            ..def_local_chat("xinference", "Xinference", "http://localhost:9997/v1")
+        },
+        ProviderDefinition {
+            capabilities: &[ProviderCapability::Embeddings],
+            ..def_local_chat("infinity", "Infinity", "http://localhost:7997")
+        },
+        ProviderDefinition {
+            capabilities: OOBABOOGA_CAPABILITIES,
+            ..def_local_chat("oobabooga", "Oobabooga", "http://localhost:5000/v1")
+        },
         // ===== Group 1d: Chinese OpenAI-compatible =====
         def_chat(
             "moonshot",
@@ -507,12 +569,11 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
         ),
         def_chat("zai", "ZAI", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
         // ===== Group 1e: Other OpenAI-compatible =====
-        def_chat(
-            "lemonade",
-            "Lemonade",
-            "https://api.lemonade.social/v1",
-            "LEMONADE_API_KEY",
-        ),
+        ProviderDefinition {
+            capabilities: LEMONADE_CAPABILITIES,
+            auth_env_var: "LEMONADE_API_KEY",
+            ..def_local_chat("lemonade", "Lemonade", "http://localhost:13305/v1")
+        },
         def_chat(
             "linkup",
             "Linkup",
