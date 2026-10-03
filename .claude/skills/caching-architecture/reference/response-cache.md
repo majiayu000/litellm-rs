@@ -44,8 +44,8 @@ The generic `LLMCache::get::<T>` / `set::<T>` methods are placeholders that do n
 - Requires `gateway.cache.enabled == true` and `ttl > 0`; otherwise no cache is built (ttl 0 logs an error first).
 - With a live Redis pool: `DualCacheConfig::default()` → mode `Dual`. Without one: `DualCacheConfig::memory_only()`.
 - `max_size` and TTL come from `cache.max_size` / `cache.ttl`; both chat and embedding TTLs are set to the same value.
-- `user_specific` is hard-coded `true` for chat key selection;
-  `semantic_cache_enabled` is hard-coded `false`. Embedding lookup/store still pass no
+- `user_specific` is hard-coded `true` for chat key selection.
+  Embedding lookup/store still pass no
   separate user ID, and `generate_embedding_key` ignores `EmbeddingRequest.user`, so
   identical model/input requests share an embedding entry across callers.
 - `cache.start_cleanup_tasks()` spawns background expiry sweeps for both layers.

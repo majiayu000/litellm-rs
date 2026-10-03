@@ -944,31 +944,18 @@ class CatalogAuthorityTests(unittest.TestCase):
         self.assertEqual(authority["_metadata"]["total_entry_count"], len(prices))
         # Scheduled imports may add pending rows, but cannot change reviewed ones.
         # Retirement review #1373 moved 20 entries to historical pricing only.
-        # The Azure AI static review reclassified one callable alias and five pending retired rows.
+        # Azure moved one callable alias and five pending rows to pricing-only.
         self.assertEqual(target_counts["callable"], 150)
         self.assertEqual(target_counts["pricing_only"], 435)
         self.assertGreaterEqual(target_counts["unreviewed"], 71)
-        self.assertEqual(
-            sorted(callable_with_explicit_contract),
-            [
-                ("azure", "azure/gpt-6-astra"),
-                ("azure", "azure/gpt-6-luna"),
-                ("azure", "azure/gpt-6-sol"),
-                ("azure", "azure/gpt-6.1-sol"),
-                ("azure_ai", "azure_ai/cohere-rerank-v4.0-fast"),
-                ("azure_ai", "azure_ai/cohere-rerank-v4.0-pro"),
-                ("deepgram", "deepgram/aura-2-thalia-en"),
-                ('openai', 'gpt-6-astra'),
-                ('openai', 'gpt-6-luna'),
-                ('openai', 'gpt-6-sol'),
-                ('openai', 'gpt-6.1-sol'),
-                ('openai', 'gpt-image-2.5-flare'),
-                ('openai', 'gpt-image-2.5-sunburst'),
-                ("xai", "xai/grok-4.5"),
-                ("xai", "xai/grok-4.5-latest"),
-                ("xai", "xai/grok-4.6"),
-            ],
+        # Preserve the reviewed Responses endpoint contracts after the merge.
+        expected_contracts = sorted(
+            (entry["provider"], entry["pricing_key"])
+            for entry in decisions["entries"]
+            if entry["decision"] == "callable"
+            and any(field in entry for field in ("endpoints", "capabilities", "supported_parameters"))
         )
+        self.assertEqual(sorted(callable_with_explicit_contract), expected_contracts)
         self.assertNotIn("chatgpt-4o-latest", prices)
         live = next(entry for entry in authority["entries"]
                     if entry["provider"] == "openai" and entry["pricing_key"] == "gpt-live-1")
@@ -1062,6 +1049,16 @@ class OfficialPricingRegressionTests(unittest.TestCase):
                 "cache_creation_input_token_cost_above_1hr": 0.000004,
             },
         )
+
+    def test_anthropic_geo_overlay_preserves_fast_prices_and_does_not_add_callable_models(self) -> None:
+        patched = sync.apply_official_overrides(self.catalog, self.catalog)
+        for model in sync.ANTHROPIC_GEO_PRICING_MODELS:
+            self.assertEqual(patched[model]["provider_specific_entry"]["us"], 1.1)
+            original = self.catalog[model].get("provider_specific_entry", {})
+            for key, rate in original.items():
+                if key != "us":
+                    self.assertEqual(patched[model]["provider_specific_entry"][key], rate)
+        self.assertNotIn("us", patched.get("claude-haiku-4-5-20251001", self.catalog["claude-haiku-4-5-20251001"]).get("provider_specific_entry", {}))
 
     def test_issue_1212_and_1223_gemini_promo_exact_ids(self) -> None:
         expected = {

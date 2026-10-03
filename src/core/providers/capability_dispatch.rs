@@ -154,6 +154,10 @@ impl Provider {
                     && LLMProvider::supports_capability(provider, capability)
             }
             #[cfg(feature = "providers-extended")]
+            Provider::FalAI(provider) => LLMProvider::models(provider)
+                .iter()
+                .any(|info| info.id == model && info.capabilities.contains(capability)),
+            #[cfg(feature = "providers-extended")]
             Provider::Stability(provider) => LLMProvider::models(provider)
                 .iter()
                 .find(|model_info| model_info.id == model)
@@ -180,6 +184,10 @@ impl Provider {
                 if capability == &ProviderCapability::GeminiGenerateContent =>
             {
                 openai_like_provider_supports_gemini(provider.name())
+            }
+            #[cfg(feature = "gateway")]
+            Provider::Bedrock(provider) if capability == &ProviderCapability::Responses => {
+                provider.supports_responses_model(model)
             }
             Provider::Voyage(provider) => provider.supports_capability_for_model(model, capability),
             _ => self.supports_capability(capability),

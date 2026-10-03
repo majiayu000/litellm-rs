@@ -9,7 +9,7 @@
 # API-first defaults (for most users who use this as a unified API library)
 API_FEATURES ?= lite
 # Gateway/common CI bundle
-STANDARD_FEATURES ?= postgres sqlite redis s3 metrics tracing websockets analytics
+STANDARD_FEATURES ?= postgres sqlite redis s3 metrics tracing websockets
 DEV_BUILD_JOBS ?= 4
 DEV_TEST_THREADS ?= 4
 

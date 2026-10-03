@@ -374,7 +374,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_provider_tier1_catalog_creates_openai_like() {
         let config = crate::config::models::provider::ProviderConfig {
-            name: "perplexity".to_string(),
+            name: "ai21".to_string(),
             provider_type: "".to_string(),
             api_key: "test-key".to_string(),
             ..Default::default()
@@ -384,8 +384,8 @@ mod tests {
             .await
             .expect("Tier 1 provider should succeed");
         assert!(matches!(&provider, Provider::OpenAILike(_)));
-        let definition = provider_registry::get_definition("perplexity")
-            .expect("Perplexity definition should exist");
+        let definition =
+            provider_registry::get_definition("ai21").expect("AI21 definition should exist");
         assert_eq!(provider.capabilities(), definition.capabilities);
     }
 
@@ -520,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_provider_tier1_catalog_applies_openai_like_overrides() {
         let mut config = crate::config::models::provider::ProviderConfig {
-            name: "perplexity".to_string(),
+            name: "ai21".to_string(),
             provider_type: "".to_string(),
             api_key: "test-key".to_string(),
             timeout: 42,
@@ -531,10 +531,10 @@ mod tests {
         };
         config
             .settings
-            .insert("model_prefix".to_string(), serde_json::json!("pplx/"));
+            .insert("model_prefix".to_string(), serde_json::json!("ai21/"));
         config.settings.insert(
             "default_model".to_string(),
-            serde_json::json!("llama-3.1-sonar-small"),
+            serde_json::json!("jamba-large"),
         );
         config
             .settings
@@ -555,14 +555,14 @@ mod tests {
         match provider {
             Provider::OpenAILike(provider) => {
                 let cfg = provider.config();
-                assert_eq!(cfg.provider_name, "perplexity");
+                assert_eq!(cfg.provider_name, "ai21");
                 assert_eq!(cfg.base.timeout, 42);
                 assert_eq!(cfg.base.max_retries, 6);
                 assert_eq!(cfg.base.endpoint_access, ProviderEndpointAccess::PublicOnly);
                 assert_eq!(cfg.base.api_version.as_deref(), Some("2024-01-01"));
                 assert_eq!(cfg.base.organization.as_deref(), Some("org-top-level"));
-                assert_eq!(cfg.model_prefix.as_deref(), Some("pplx/"));
-                assert_eq!(cfg.default_model.as_deref(), Some("llama-3.1-sonar-small"));
+                assert_eq!(cfg.model_prefix.as_deref(), Some("ai21/"));
+                assert_eq!(cfg.default_model.as_deref(), Some("jamba-large"));
                 assert!(!cfg.pass_through_params);
                 assert_eq!(
                     cfg.base.headers.get("x-test-header").map(String::as_str),

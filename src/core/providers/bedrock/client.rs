@@ -3,6 +3,9 @@
 //! Wrapper around base HTTP client with Bedrock-specific functionality
 //! including AWS SigV4 signing and request routing.
 
+#[cfg(feature = "gateway")]
+#[path = "responses.rs"]
+mod responses;
 mod target;
 
 use reqwest::Response;

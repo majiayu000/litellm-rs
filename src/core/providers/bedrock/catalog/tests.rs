@@ -236,7 +236,10 @@ fn current_bedrock_models_keep_platform_specific_limits_and_scopes() {
     assert_eq!(sol.limits.max_output_length, Some(131_072));
     assert_eq!(
         sol.inference_profiles,
-        &[InferenceProfileScope::UnitedStates]
+        &[
+            InferenceProfileScope::Global,
+            InferenceProfileScope::UnitedStates
+        ]
     );
     assert_eq!(
         sol.pricing.as_ref().unwrap().input_cost_per_1k_tokens,

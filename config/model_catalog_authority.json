@@ -1,10 +1,10 @@
 {
   "_metadata": {
     "schema_version": 1,
-    "revision": "model-retirement-review-20261003",
-    "decision_source_sha256": "2834ac5b5c18f99b9430b42456fdfb63499e8e49f074107a657c9e74d2cc5d5a",
+    "revision": "responses-endpoint-and-retirement-review-20261003",
+    "decision_source_sha256": "f11f42da8a76fe12351bc183c14eec261a23e52b33467853ba05b0830a47d583",
     "pricing_universe_sha256": "d742cde2ad856944b98a883392dad41c9cf38fd7ecc0715b8a7bada94f4eb109",
-    "classification_sha256": "a05bd789e23f6b4ef8c9e9310550cb88c4b5df815d8b0f644c5dc029e4c256ff",
+    "classification_sha256": "fa7187381bc90127da44179afdee681cfcd00ab1556f980f9dfb099082425db1",
     "total_entry_count": 4569,
     "enforced_providers": [
       "azure",
@@ -24470,9 +24470,14 @@
       "pricing_key": "chat-latest",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-chat-latest",
         "evidence-011"
       ],
       "catalog_model_id": "chat-latest",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24480,9 +24485,14 @@
       "pricing_key": "chatgpt-image-latest",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-chatgpt-image-latest",
         "evidence-012"
       ],
       "catalog_model_id": "chatgpt-image-latest",
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -24632,9 +24642,14 @@
       "pricing_key": "gpt-3.5-turbo",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-3.5-turbo",
         "evidence-014"
       ],
       "catalog_model_id": "gpt-3.5-turbo",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24642,9 +24657,14 @@
       "pricing_key": "gpt-3.5-turbo-0125",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-3.5-turbo",
         "evidence-014"
       ],
       "catalog_model_id": "gpt-3.5-turbo-0125",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24670,9 +24690,14 @@
       "pricing_key": "gpt-4",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4",
         "evidence-015"
       ],
       "catalog_model_id": "gpt-4",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24680,9 +24705,14 @@
       "pricing_key": "gpt-4-0613",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4",
         "evidence-015"
       ],
       "catalog_model_id": "gpt-4-0613",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24698,9 +24728,14 @@
       "pricing_key": "gpt-4-turbo",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4-turbo",
         "evidence-016"
       ],
       "catalog_model_id": "gpt-4-turbo",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24708,9 +24743,14 @@
       "pricing_key": "gpt-4-turbo-2024-04-09",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4-turbo",
         "evidence-016"
       ],
       "catalog_model_id": "gpt-4-turbo-2024-04-09",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24718,9 +24758,14 @@
       "pricing_key": "gpt-4.1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4.1",
         "evidence-018"
       ],
       "catalog_model_id": "gpt-4.1",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24728,9 +24773,14 @@
       "pricing_key": "gpt-4.1-2025-04-14",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4.1",
         "evidence-018"
       ],
       "catalog_model_id": "gpt-4.1-2025-04-14",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24738,9 +24788,14 @@
       "pricing_key": "gpt-4.1-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4.1-mini",
         "evidence-019"
       ],
       "catalog_model_id": "gpt-4.1-mini",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24748,9 +24803,14 @@
       "pricing_key": "gpt-4.1-mini-2025-04-14",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4.1-mini",
         "evidence-019"
       ],
       "catalog_model_id": "gpt-4.1-mini-2025-04-14",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24758,9 +24818,14 @@
       "pricing_key": "gpt-4.1-nano",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4.1-nano",
         "evidence-020"
       ],
       "catalog_model_id": "gpt-4.1-nano",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24768,9 +24833,14 @@
       "pricing_key": "gpt-4.1-nano-2025-04-14",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4.1-nano",
         "evidence-020"
       ],
       "catalog_model_id": "gpt-4.1-nano-2025-04-14",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24778,9 +24848,14 @@
       "pricing_key": "gpt-4o",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o",
         "evidence-021"
       ],
       "catalog_model_id": "gpt-4o",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24788,9 +24863,14 @@
       "pricing_key": "gpt-4o-2024-05-13",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o",
         "evidence-021"
       ],
       "catalog_model_id": "gpt-4o-2024-05-13",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24798,9 +24878,14 @@
       "pricing_key": "gpt-4o-2024-08-06",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o",
         "evidence-021"
       ],
       "catalog_model_id": "gpt-4o-2024-08-06",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24808,9 +24893,14 @@
       "pricing_key": "gpt-4o-2024-11-20",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o",
         "evidence-021"
       ],
       "catalog_model_id": "gpt-4o-2024-11-20",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24838,9 +24928,14 @@
       "pricing_key": "gpt-4o-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini",
         "evidence-023"
       ],
       "catalog_model_id": "gpt-4o-mini",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24848,9 +24943,14 @@
       "pricing_key": "gpt-4o-mini-2024-07-18",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini",
         "evidence-023"
       ],
       "catalog_model_id": "gpt-4o-mini-2024-07-18",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24878,9 +24978,13 @@
       "pricing_key": "gpt-4o-mini-search-preview",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-search-preview",
         "evidence-026"
       ],
       "catalog_model_id": "gpt-4o-mini-search-preview",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -24888,9 +24992,14 @@
       "pricing_key": "gpt-4o-mini-transcribe",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-transcribe",
         "evidence-027"
       ],
       "catalog_model_id": "gpt-4o-mini-transcribe",
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -24898,9 +25007,14 @@
       "pricing_key": "gpt-4o-mini-transcribe-2025-03-20",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-transcribe",
         "evidence-027"
       ],
       "catalog_model_id": "gpt-4o-mini-transcribe-2025-03-20",
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -24908,9 +25022,14 @@
       "pricing_key": "gpt-4o-mini-transcribe-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-transcribe",
         "evidence-027"
       ],
       "catalog_model_id": "gpt-4o-mini-transcribe-2025-12-15",
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -24918,9 +25037,13 @@
       "pricing_key": "gpt-4o-mini-tts",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-tts",
         "evidence-028"
       ],
       "catalog_model_id": "gpt-4o-mini-tts",
+      "endpoints": [
+        "text_to_speech"
+      ],
       "aliases": []
     },
     {
@@ -24928,9 +25051,13 @@
       "pricing_key": "gpt-4o-mini-tts-2025-03-20",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-tts",
         "evidence-028"
       ],
       "catalog_model_id": "gpt-4o-mini-tts-2025-03-20",
+      "endpoints": [
+        "text_to_speech"
+      ],
       "aliases": []
     },
     {
@@ -24938,9 +25065,13 @@
       "pricing_key": "gpt-4o-mini-tts-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-mini-tts",
         "evidence-028"
       ],
       "catalog_model_id": "gpt-4o-mini-tts-2025-12-15",
+      "endpoints": [
+        "text_to_speech"
+      ],
       "aliases": []
     },
     {
@@ -24948,9 +25079,13 @@
       "pricing_key": "gpt-4o-search-preview",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-search-preview",
         "evidence-030"
       ],
       "catalog_model_id": "gpt-4o-search-preview",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -24958,9 +25093,14 @@
       "pricing_key": "gpt-4o-transcribe",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-transcribe",
         "evidence-031"
       ],
       "catalog_model_id": "gpt-4o-transcribe",
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -24968,9 +25108,13 @@
       "pricing_key": "gpt-4o-transcribe-diarize",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-4o-transcribe-diarize",
         "evidence-032"
       ],
       "catalog_model_id": "gpt-4o-transcribe-diarize",
+      "endpoints": [
+        "audio_transcription"
+      ],
       "aliases": []
     },
     {
@@ -24978,9 +25122,14 @@
       "pricing_key": "gpt-5",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5",
         "evidence-033"
       ],
       "catalog_model_id": "gpt-5",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -24988,9 +25137,14 @@
       "pricing_key": "gpt-5-2025-08-07",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5",
         "evidence-033"
       ],
       "catalog_model_id": "gpt-5-2025-08-07",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25026,9 +25180,14 @@
       "pricing_key": "gpt-5-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5-mini",
         "evidence-036"
       ],
       "catalog_model_id": "gpt-5-mini",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25036,9 +25195,14 @@
       "pricing_key": "gpt-5-mini-2025-08-07",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5-mini",
         "evidence-036"
       ],
       "catalog_model_id": "gpt-5-mini-2025-08-07",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25046,9 +25210,14 @@
       "pricing_key": "gpt-5-nano",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5-nano",
         "evidence-037"
       ],
       "catalog_model_id": "gpt-5-nano",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25056,9 +25225,14 @@
       "pricing_key": "gpt-5-nano-2025-08-07",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5-nano",
         "evidence-037"
       ],
       "catalog_model_id": "gpt-5-nano-2025-08-07",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25066,9 +25240,13 @@
       "pricing_key": "gpt-5-pro",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5-pro",
         "evidence-038"
       ],
       "catalog_model_id": "gpt-5-pro",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25076,9 +25254,13 @@
       "pricing_key": "gpt-5-pro-2025-10-06",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5-pro",
         "evidence-038"
       ],
       "catalog_model_id": "gpt-5-pro-2025-10-06",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25102,9 +25284,14 @@
       "pricing_key": "gpt-5.1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.1",
         "evidence-039"
       ],
       "catalog_model_id": "gpt-5.1",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25112,9 +25299,14 @@
       "pricing_key": "gpt-5.1-2025-11-13",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.1",
         "evidence-039"
       ],
       "catalog_model_id": "gpt-5.1-2025-11-13",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25162,9 +25354,14 @@
       "pricing_key": "gpt-5.2",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.2",
         "evidence-044"
       ],
       "catalog_model_id": "gpt-5.2",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25172,9 +25369,14 @@
       "pricing_key": "gpt-5.2-2025-12-11",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.2",
         "evidence-044"
       ],
       "catalog_model_id": "gpt-5.2-2025-12-11",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25202,9 +25404,13 @@
       "pricing_key": "gpt-5.2-pro",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.2-pro",
         "evidence-047"
       ],
       "catalog_model_id": "gpt-5.2-pro",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25212,9 +25418,13 @@
       "pricing_key": "gpt-5.2-pro-2025-12-11",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.2-pro",
         "evidence-047"
       ],
       "catalog_model_id": "gpt-5.2-pro-2025-12-11",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25232,9 +25442,13 @@
       "pricing_key": "gpt-5.3-codex",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.3-codex",
         "evidence-049"
       ],
       "catalog_model_id": "gpt-5.3-codex",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25242,9 +25456,14 @@
       "pricing_key": "gpt-5.4",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4",
         "evidence-050"
       ],
       "catalog_model_id": "gpt-5.4",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25252,9 +25471,14 @@
       "pricing_key": "gpt-5.4-2026-03-05",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4",
         "evidence-050"
       ],
       "catalog_model_id": "gpt-5.4-2026-03-05",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25262,9 +25486,14 @@
       "pricing_key": "gpt-5.4-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4-mini",
         "evidence-051"
       ],
       "catalog_model_id": "gpt-5.4-mini",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25272,9 +25501,14 @@
       "pricing_key": "gpt-5.4-mini-2026-03-17",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4-mini",
         "evidence-051"
       ],
       "catalog_model_id": "gpt-5.4-mini-2026-03-17",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25282,9 +25516,14 @@
       "pricing_key": "gpt-5.4-nano",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4-nano",
         "evidence-052"
       ],
       "catalog_model_id": "gpt-5.4-nano",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25292,9 +25531,14 @@
       "pricing_key": "gpt-5.4-nano-2026-03-17",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4-nano",
         "evidence-052"
       ],
       "catalog_model_id": "gpt-5.4-nano-2026-03-17",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25302,9 +25546,13 @@
       "pricing_key": "gpt-5.4-pro",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4-pro",
         "evidence-053"
       ],
       "catalog_model_id": "gpt-5.4-pro",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25312,9 +25560,13 @@
       "pricing_key": "gpt-5.4-pro-2026-03-05",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.4-pro",
         "evidence-053"
       ],
       "catalog_model_id": "gpt-5.4-pro-2026-03-05",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25322,9 +25574,14 @@
       "pricing_key": "gpt-5.5",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.5",
         "evidence-054"
       ],
       "catalog_model_id": "gpt-5.5",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25332,9 +25589,14 @@
       "pricing_key": "gpt-5.5-2026-04-23",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.5",
         "evidence-054"
       ],
       "catalog_model_id": "gpt-5.5-2026-04-23",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25351,9 +25613,13 @@
       "pricing_key": "gpt-5.5-pro",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.5-pro",
         "evidence-055"
       ],
       "catalog_model_id": "gpt-5.5-pro",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25361,9 +25627,13 @@
       "pricing_key": "gpt-5.5-pro-2026-04-23",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.5-pro",
         "evidence-055"
       ],
       "catalog_model_id": "gpt-5.5-pro-2026-04-23",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25371,9 +25641,14 @@
       "pricing_key": "gpt-5.6",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.6-sol",
         "evidence-058"
       ],
       "catalog_model_id": "gpt-5.6",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25381,10 +25656,14 @@
       "pricing_key": "gpt-5.6-cyber",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.6-cyber",
         "evidence-056",
         "evidence-064"
       ],
       "catalog_model_id": "gpt-5.6-cyber",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25392,9 +25671,14 @@
       "pricing_key": "gpt-5.6-luna",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.6-luna",
         "evidence-057"
       ],
       "catalog_model_id": "gpt-5.6-luna",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25402,10 +25686,15 @@
       "pricing_key": "gpt-5.6-sol",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.6-sol",
         "evidence-058",
         "evidence-063"
       ],
       "catalog_model_id": "gpt-5.6-sol",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25413,9 +25702,14 @@
       "pricing_key": "gpt-5.6-terra",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-5.6-terra",
         "evidence-059"
       ],
       "catalog_model_id": "gpt-5.6-terra",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25423,6 +25717,7 @@
       "pricing_key": "gpt-6-astra",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-6-astra",
         "refresh-gpt-6-astra"
       ],
       "catalog_model_id": "gpt-6-astra",
@@ -25437,6 +25732,7 @@
       "pricing_key": "gpt-6-luna",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-6-luna",
         "refresh-gpt-6-luna"
       ],
       "catalog_model_id": "gpt-6-luna",
@@ -25451,6 +25747,7 @@
       "pricing_key": "gpt-6-sol",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-6-sol",
         "refresh-gpt-6-sol"
       ],
       "catalog_model_id": "gpt-6-sol",
@@ -25465,6 +25762,7 @@
       "pricing_key": "gpt-6.1-sol",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-6.1-sol",
         "refresh-gpt-6.1-sol"
       ],
       "catalog_model_id": "gpt-6.1-sol",
@@ -25479,9 +25777,13 @@
       "pricing_key": "gpt-audio",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-audio",
         "evidence-060"
       ],
       "catalog_model_id": "gpt-audio",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -25489,9 +25791,13 @@
       "pricing_key": "gpt-audio-1.5",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-audio-1.5",
         "evidence-061"
       ],
       "catalog_model_id": "gpt-audio-1.5",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -25499,9 +25805,13 @@
       "pricing_key": "gpt-audio-2025-08-28",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-audio",
         "evidence-060"
       ],
       "catalog_model_id": "gpt-audio-2025-08-28",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -25509,9 +25819,13 @@
       "pricing_key": "gpt-audio-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-audio-mini",
         "evidence-062"
       ],
       "catalog_model_id": "gpt-audio-mini",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -25519,9 +25833,13 @@
       "pricing_key": "gpt-audio-mini-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-audio-mini",
         "evidence-062"
       ],
       "catalog_model_id": "gpt-audio-mini-2025-12-15",
+      "endpoints": [
+        "chat_completions"
+      ],
       "aliases": []
     },
     {
@@ -25547,9 +25865,15 @@
       "pricing_key": "gpt-image-1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-1",
         "evidence-065"
       ],
       "catalog_model_id": "gpt-image-1",
+      "endpoints": [
+        "image_edit",
+        "image_generation",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -25557,9 +25881,14 @@
       "pricing_key": "gpt-image-1-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-1-mini",
         "evidence-066"
       ],
       "catalog_model_id": "gpt-image-1-mini",
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -25567,9 +25896,14 @@
       "pricing_key": "gpt-image-1.5",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-1.5",
         "evidence-067"
       ],
       "catalog_model_id": "gpt-image-1.5",
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -25577,9 +25911,14 @@
       "pricing_key": "gpt-image-1.5-2025-12-16",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-1.5",
         "evidence-067"
       ],
       "catalog_model_id": "gpt-image-1.5-2025-12-16",
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -25587,9 +25926,14 @@
       "pricing_key": "gpt-image-2",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-2",
         "evidence-068"
       ],
       "catalog_model_id": "gpt-image-2",
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -25597,9 +25941,14 @@
       "pricing_key": "gpt-image-2-2026-04-21",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-2",
         "evidence-068"
       ],
       "catalog_model_id": "gpt-image-2-2026-04-21",
+      "endpoints": [
+        "image_edit",
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -25607,6 +25956,7 @@
       "pricing_key": "gpt-image-2.5-flare",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-2.5-flare",
         "refresh-gpt-image-2.5-flare"
       ],
       "catalog_model_id": "gpt-image-2.5-flare",
@@ -25630,6 +25980,7 @@
       "pricing_key": "gpt-image-2.5-sunburst",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-image-2.5-sunburst",
         "refresh-gpt-image-2.5-sunburst"
       ],
       "catalog_model_id": "gpt-image-2.5-sunburst",
@@ -25662,9 +26013,13 @@
       "pricing_key": "gpt-live-transcribe",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-live-transcribe",
         "evidence-069"
       ],
       "catalog_model_id": "gpt-live-transcribe",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25672,9 +26027,13 @@
       "pricing_key": "gpt-realtime",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime",
         "evidence-070"
       ],
       "catalog_model_id": "gpt-realtime",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25682,9 +26041,13 @@
       "pricing_key": "gpt-realtime-1.5",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-1.5",
         "evidence-071"
       ],
       "catalog_model_id": "gpt-realtime-1.5",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25692,9 +26055,13 @@
       "pricing_key": "gpt-realtime-2",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-2",
         "evidence-072"
       ],
       "catalog_model_id": "gpt-realtime-2",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25702,9 +26069,13 @@
       "pricing_key": "gpt-realtime-2.1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-2.1",
         "evidence-073"
       ],
       "catalog_model_id": "gpt-realtime-2.1",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25712,9 +26083,13 @@
       "pricing_key": "gpt-realtime-2.1-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-2.1-mini",
         "evidence-074"
       ],
       "catalog_model_id": "gpt-realtime-2.1-mini",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25722,9 +26097,13 @@
       "pricing_key": "gpt-realtime-2025-08-28",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime",
         "evidence-070"
       ],
       "catalog_model_id": "gpt-realtime-2025-08-28",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25732,9 +26111,13 @@
       "pricing_key": "gpt-realtime-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-mini",
         "evidence-075"
       ],
       "catalog_model_id": "gpt-realtime-mini",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25742,9 +26125,13 @@
       "pricing_key": "gpt-realtime-mini-2025-12-15",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-mini",
         "evidence-075"
       ],
       "catalog_model_id": "gpt-realtime-mini-2025-12-15",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25752,9 +26139,13 @@
       "pricing_key": "gpt-realtime-translate",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-translate",
         "evidence-076"
       ],
       "catalog_model_id": "gpt-realtime-translate",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25762,9 +26153,13 @@
       "pricing_key": "gpt-realtime-whisper",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-realtime-whisper",
         "evidence-077"
       ],
       "catalog_model_id": "gpt-realtime-whisper",
+      "endpoints": [
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -25781,9 +26176,14 @@
       "pricing_key": "gpt-transcribe",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-gpt-transcribe",
         "evidence-078"
       ],
       "catalog_model_id": "gpt-transcribe",
+      "endpoints": [
+        "audio_transcription",
+        "realtime"
+      ],
       "aliases": []
     },
     {
@@ -26088,9 +26488,14 @@
       "pricing_key": "o1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o1",
         "evidence-079"
       ],
       "catalog_model_id": "o1",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26098,9 +26503,14 @@
       "pricing_key": "o1-2024-12-17",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o1",
         "evidence-079"
       ],
       "catalog_model_id": "o1-2024-12-17",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26108,9 +26518,13 @@
       "pricing_key": "o1-pro",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o1-pro",
         "evidence-080"
       ],
       "catalog_model_id": "o1-pro",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26118,9 +26532,13 @@
       "pricing_key": "o1-pro-2025-03-19",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o1-pro",
         "evidence-080"
       ],
       "catalog_model_id": "o1-pro-2025-03-19",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26128,9 +26546,14 @@
       "pricing_key": "o3",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o3",
         "evidence-081"
       ],
       "catalog_model_id": "o3",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26138,9 +26561,14 @@
       "pricing_key": "o3-2025-04-16",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o3",
         "evidence-081"
       ],
       "catalog_model_id": "o3-2025-04-16",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26158,9 +26586,14 @@
       "pricing_key": "o3-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o3-mini",
         "evidence-083"
       ],
       "catalog_model_id": "o3-mini",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26168,9 +26601,14 @@
       "pricing_key": "o3-mini-2025-01-31",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o3-mini",
         "evidence-083"
       ],
       "catalog_model_id": "o3-mini-2025-01-31",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26178,9 +26616,13 @@
       "pricing_key": "o3-pro",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o3-pro",
         "evidence-084"
       ],
       "catalog_model_id": "o3-pro",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26188,9 +26630,13 @@
       "pricing_key": "o3-pro-2025-06-10",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o3-pro",
         "evidence-084"
       ],
       "catalog_model_id": "o3-pro-2025-06-10",
+      "endpoints": [
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26198,9 +26644,14 @@
       "pricing_key": "o4-mini",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o4-mini",
         "evidence-085"
       ],
       "catalog_model_id": "o4-mini",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26208,9 +26659,14 @@
       "pricing_key": "o4-mini-2025-04-16",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-o4-mini",
         "evidence-085"
       ],
       "catalog_model_id": "o4-mini-2025-04-16",
+      "endpoints": [
+        "chat_completions",
+        "responses"
+      ],
       "aliases": []
     },
     {
@@ -26228,9 +26684,13 @@
       "pricing_key": "omni-moderation-2024-09-26",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-omni-moderation-latest",
         "evidence-087"
       ],
       "catalog_model_id": "omni-moderation-2024-09-26",
+      "endpoints": [
+        "moderation"
+      ],
       "aliases": []
     },
     {
@@ -26238,9 +26698,13 @@
       "pricing_key": "omni-moderation-latest",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-omni-moderation-latest",
         "evidence-087"
       ],
       "catalog_model_id": "omni-moderation-latest",
+      "endpoints": [
+        "moderation"
+      ],
       "aliases": []
     },
     {
@@ -26365,9 +26829,13 @@
       "pricing_key": "text-embedding-3-large",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-text-embedding-3-large",
         "evidence-090"
       ],
       "catalog_model_id": "text-embedding-3-large",
+      "endpoints": [
+        "embeddings"
+      ],
       "aliases": []
     },
     {
@@ -26375,9 +26843,13 @@
       "pricing_key": "text-embedding-3-small",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-text-embedding-3-small",
         "evidence-091"
       ],
       "catalog_model_id": "text-embedding-3-small",
+      "endpoints": [
+        "embeddings"
+      ],
       "aliases": []
     },
     {
@@ -26385,9 +26857,13 @@
       "pricing_key": "text-embedding-ada-002",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-text-embedding-ada-002",
         "evidence-092"
       ],
       "catalog_model_id": "text-embedding-ada-002",
+      "endpoints": [
+        "embeddings"
+      ],
       "aliases": []
     },
     {
@@ -26403,9 +26879,13 @@
       "pricing_key": "tts-1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-tts-1",
         "evidence-095"
       ],
       "catalog_model_id": "tts-1",
+      "endpoints": [
+        "text_to_speech"
+      ],
       "aliases": []
     },
     {
@@ -26421,9 +26901,13 @@
       "pricing_key": "tts-1-hd",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-tts-1-hd",
         "evidence-096"
       ],
       "catalog_model_id": "tts-1-hd",
+      "endpoints": [
+        "text_to_speech"
+      ],
       "aliases": []
     },
     {
@@ -26439,9 +26923,14 @@
       "pricing_key": "whisper-1",
       "decision": "callable",
       "evidence_sources": [
+        "endpoints-20261003-whisper-1",
         "evidence-097"
       ],
       "catalog_model_id": "whisper-1",
+      "endpoints": [
+        "audio_transcription",
+        "audio_translation"
+      ],
       "aliases": []
     },
     {

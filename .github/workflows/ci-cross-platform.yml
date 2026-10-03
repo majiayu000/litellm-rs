@@ -15,7 +15,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  FEATURES: "postgres sqlite redis s3 metrics tracing websockets analytics"
+  FEATURES: "postgres sqlite redis s3 metrics tracing websockets"
 
 jobs:
   build:

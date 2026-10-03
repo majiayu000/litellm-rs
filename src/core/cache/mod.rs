@@ -32,7 +32,7 @@
 //! ## Boundary
 //!
 //! This module is the canonical deterministic cache subsystem.
-//! For semantic similarity caching, use `crate::core::semantic_cache`.
+//! The cache uses deterministic request keys; semantic similarity is not supported.
 //! Legacy `crate::core::cache_manager` is compatibility-only.
 //!
 //! ## Usage

@@ -334,12 +334,6 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             )
         },
         def_chat(
-            "perplexity",
-            "Perplexity AI",
-            "https://api.perplexity.ai",
-            "PERPLEXITY_API_KEY",
-        ),
-        def_chat(
             "cerebras",
             "Cerebras",
             "https://api.cerebras.ai/v1",

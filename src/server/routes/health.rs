@@ -582,9 +582,6 @@ fn get_enabled_features() -> Vec<Cow<'static, str>> {
     #[cfg(feature = "enterprise")]
     features.push(Cow::Borrowed("enterprise"));
 
-    #[cfg(feature = "analytics")]
-    features.push(Cow::Borrowed("analytics"));
-
     #[cfg(feature = "vector-db")]
     features.push(Cow::Borrowed("vector-db"));
 
@@ -782,7 +779,7 @@ mod tests {
     fn enabled_features_non_empty() {
         let features = get_enabled_features();
         assert!(!features.is_empty());
-        let valid_features = ["standard", "enterprise", "analytics", "vector-db"];
+        let valid_features = ["standard", "enterprise", "vector-db"];
         assert!(
             features
                 .iter()
