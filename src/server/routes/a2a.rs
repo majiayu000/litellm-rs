@@ -201,8 +201,8 @@ impl TaskOwners {
         {
             ids.push((binding.to_vec(), "context".into(), retained.clone()));
         }
-        // Only inspect identifiers carried by this event. Full expiry cleanup
-        // belongs to per-request reservation, not every artifact chunk.
+        // Inspect this event and its retained task/context association. Full expiry
+        // cleanup belongs to per-request reservation, not every artifact chunk.
         for id in &ids {
             if entries.get(id).is_some_and(|owner| owner.expires <= now) {
                 entries.remove(id);
@@ -897,7 +897,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
             && result.get("task").is_some_and(|task| {
                 matches!(
                     task.pointer("/status/state").and_then(Value::as_str),
-                    Some("TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING")
+                    Some("TASK_STATE_UNSPECIFIED" | "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING")
                 )
             });
         if !valid || premature {

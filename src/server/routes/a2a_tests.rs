@@ -1354,6 +1354,7 @@ async fn blocking_send_rejects_active_tasks_and_accepts_interrupted_or_terminal_
     let owner = user();
     for immediate in [None, Some(false), Some(true)] {
         for state in [
+            "TASK_STATE_UNSPECIFIED",
             "TASK_STATE_SUBMITTED",
             "TASK_STATE_WORKING",
             "TASK_STATE_COMPLETED",
@@ -1369,8 +1370,10 @@ async fn blocking_send_rejects_active_tasks_and_accepts_interrupted_or_terminal_
                 json!({"test_result":{"task":{"id":"task-1","status":{"state":state}}}});
             let response = test::call_service(&app, request("SendMessage", params, &owner)).await;
             let expected = if immediate != Some(true)
-                && matches!(state, "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING")
-            {
+                && matches!(
+                    state,
+                    "TASK_STATE_UNSPECIFIED" | "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING"
+                ) {
                 StatusCode::BAD_GATEWAY
             } else {
                 StatusCode::OK
