@@ -60,6 +60,11 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 
 逐项官方链接、固定源码版本和剩余限制见 [本地非聊天协议审计](../audit/local-compatible-nonchat-2026-10-03.md)。实测均为本地 HTTP 模拟：覆盖 factory/Router、实际 JSON/multipart/二进制传输、模型与参数错误、429 Retry-After，以及本地模型缺价、预算不足和按真实 usage 结算。未安装模型、未运行 GPU 推理或供应商付费调用。
 
+
+第七批（#1422，核验 2026-10-03）接入 Novita 文本 embeddings、Featherless 文本 embeddings/同步语音、Galadriel embeddings/图片生成，以及 NanoGPT embeddings/图片生成/同步语音/转写。NanoGPT 默认地址修正为 `https://api.nano-gpt.com/api/v1`；图片按官方协议使用同一主机的 `/v1/images/generations`。显式 base 以 `/api/v1` 结尾时，图片使用相邻 `/v1`；其他自定义 base 保持原路径。
+
+所有模型须由现有配置指定，能力声明只确认接口协议，不保证任意模型/账户均可用。Featherless 音频可能使用模型原生格式，响应的实际 Content-Type 保持传递；`voice: "default"` 可用于无预设音色的模型。NanoGPT 当前只验证普通同步转写与按字符计费的同步 TTS，不包括克隆、视频、音乐、异步作业和 SSE 音频。图片编辑/变体、音频翻译均未在本批开放。Novita 原生异步图片和 JSON 音频仍需专门适配。AI21/Cerebras 的当前官方文档未提供已确认的兼容非聊天协议，因此不扩展声明，也不把未确认写成供应商绝无该能力。详见 [逐项协议审计](../audit/aggregator-compatible-nonchat-2026-10-03.md)。
+
 ## 具名目录核验范围
 
 下表从本批 `registry/catalog.rs` 的全部定义枚举。已核验只表示表内非聊天协议范围，不表示价格表中的型号都可调用。其余行待逐项核验，不能据当前仅声明聊天就断言供应商不提供其他能力。
@@ -67,7 +72,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | 选择器 | 非聊天核验状态 |
 | --- | --- |
 | `groq` | 音频合成/转写/翻译；见上方模型限制 |
-| `ai21` | 待核验；本批未扩展非聊天声明 |
+| `ai21` | 已核对官方 Jamba/工具目录；未确认兼容 embeddings/images/audio，保持不声明 |
 | `huggingface` | 待核验；本批未扩展非聊天声明 |
 | `baseten` | 待核验；本批未扩展非聊天声明 |
 | `together` | embeddings/images/audio |
@@ -75,17 +80,17 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `fireworks` | embeddings；图片原生路径待适配 |
 | `fireworks_ai` | 同 fireworks |
 | `perplexity`（已移出目录） | Sonar 聊天端点已退役，具名选择器在构造阶段拒绝；[F10 审核证据](../audit/perplexity-sonar-retirement-2026-10-03.md)。Agent/Responses、搜索与 embeddings 不因此自动获得支持，仍待各自核验/适配 |
-| `cerebras` | 待核验；本批未扩展非聊天声明 |
+| `cerebras` | 官方 OpenAPI 仅列 chat/completions；独立 embeddings/images/audio 未确认 |
 | `openrouter` | embeddings；其他待核验 |
 | `deepinfra` | embeddings/images；音频原生路径待适配 |
 | `deepseek` | 待核验；本批未扩展非聊天声明 |
-| `novita` | 待核验；本批未扩展非聊天声明 |
+| `novita` | 文本 embeddings；原生异步图片及 MiniMax 音频协议仍待适配 |
 | `nvidia_nim` | embeddings；其他待核验 |
 | `nebius` | embeddings；图片协议差异待适配 |
 | `nscale` | 待核验；本批未扩展非聊天声明 |
 | `hyperbolic` | 待核验；本批未扩展非聊天声明 |
-| `featherless` | 待核验；本批未扩展非聊天声明 |
-| `galadriel` | 待核验；本批未扩展非聊天声明 |
+| `featherless` | 文本 embeddings、按字符计费的同步语音；格式/voice 依模型，未接克隆/SSE |
+| `galadriel` | 官方 OpenAPI 的 embeddings、images/generations；须配置实际可用模型，未实调账户目录 |
 | `sambanova` | 待核验；本批未扩展非聊天声明 |
 | `heroku` | 待核验；本批未扩展非聊天声明 |
 | `friendliai` | 待核验；本批未扩展非聊天声明 |
@@ -115,7 +120,7 @@ Infinity 的官方默认 URL 没有 `/v1` 前缀，Lemonade 是本地服务器�
 | `linkup` | 待核验；本批未扩展非聊天声明 |
 | `poe` | 待核验；本批未扩展非聊天声明 |
 | `wandb` | 待核验；本批未扩展非聊天声明 |
-| `nanogpt` | 待核验；本批未扩展非聊天声明 |
+| `nanogpt` | embeddings、images/generations、同步 speech/transcriptions；图片 /v1，其他 /api/v1；异步/克隆未接 |
 | `aiml_api` | 待核验；本批未扩展非聊天声明 |
 | `aiml` | 待核验；本批未扩展非聊天声明 |
 | `aleph_alpha` | 待核验；本批未扩展非聊天声明 |
