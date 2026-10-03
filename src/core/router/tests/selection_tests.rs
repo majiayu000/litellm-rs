@@ -161,7 +161,7 @@ async fn test_capability_selection_reports_unsupported_capability() {
 #[tokio::test]
 async fn openai_like_route_selection_rejects_unimplemented_surfaces() {
     let provider = create_provider(ProviderConfig {
-        name: "perplexity".to_string(),
+        name: "ai21".to_string(),
         api_key: "sk-test".to_string(),
         ..Default::default()
     })

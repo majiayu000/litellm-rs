@@ -3,13 +3,12 @@
 //! Tests for error types, conversions, and error recovery mechanisms.
 //! These tests verify that errors flow correctly through the system.
 
-#![allow(deprecated)]
-
 #[cfg(all(test, feature = "gateway"))]
 mod tests {
     use actix_web::ResponseError;
     use litellm_rs::GatewayError;
     use litellm_rs::core::providers::unified_provider::ProviderError;
+    use litellm_rs::utils::error::CanonicalError;
 
     // ==================== ProviderError to GatewayError Conversion ====================
 
@@ -75,19 +74,19 @@ mod tests {
     fn test_error_retryability() {
         // Rate limit should be retryable
         let rate_limit = ProviderError::rate_limit("openai", Some(60));
-        assert!(rate_limit.is_retryable());
+        assert!(rate_limit.canonical_retryable());
 
         // Auth errors should not be retryable
         let auth_err = ProviderError::authentication("openai", "Invalid key");
-        assert!(!auth_err.is_retryable());
+        assert!(!auth_err.canonical_retryable());
 
         // Model not found should not be retryable
         let model_err = ProviderError::model_not_found("openai", "gpt-5");
-        assert!(!model_err.is_retryable());
+        assert!(!model_err.canonical_retryable());
 
         // Network errors should be retryable
         let network_err = ProviderError::network("openai", "Connection reset");
-        assert!(network_err.is_retryable());
+        assert!(network_err.canonical_retryable());
     }
 
     /// Test retry delay suggestions
@@ -193,14 +192,14 @@ mod tests {
             provider: "openai",
             message: "Service temporarily unavailable".to_string(),
         };
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
     }
 
     /// Test that timeout errors are retryable
     #[test]
     fn test_timeout_is_retryable() {
         let err = ProviderError::timeout("openai", "Request timed out");
-        assert!(err.is_retryable());
+        assert!(err.canonical_retryable());
     }
 
     // ==================== API Error Mapping ====================

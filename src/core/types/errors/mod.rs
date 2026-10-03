@@ -9,7 +9,6 @@
 //! ## 1. Trait Layer
 //! - `ProviderErrorTrait`: Common interface for all provider errors
 //! - Provides unified methods:
-//!   - is_retryable(): Whether the error can be retried
 //!   - retry_delay(): Recommended retry delay duration
 //!   - http_status(): HTTP status code mapping
 //!   - Factory methods: not_supported(), authentication_failed() etc
@@ -38,11 +37,9 @@
 //! let err = ProviderError::authentication("openai", "Invalid API key");
 //! let err = ProviderError::rate_limit("anthropic", Some(60));
 //!
-//! // Check error properties
-//! if err.is_retryable() {
-//!     if let Some(delay) = err.retry_delay() {
-//!         println!("Retry after {} seconds", delay);
-//!     }
+//! // Inspect error facts; routing decisions use RetryPolicy::decide
+//! if let Some(delay) = err.retry_delay() {
+//!     println!("Provider suggested retry delay: {} seconds", delay);
 //! }
 //! ```
 //!

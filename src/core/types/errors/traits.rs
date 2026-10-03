@@ -7,13 +7,6 @@ pub trait ProviderErrorTrait: std::error::Error + Send + Sync + 'static {
     /// Get the error type as a string identifier
     fn error_type(&self) -> &'static str;
 
-    /// Check if this error can be retried
-    #[deprecated(
-        since = "0.6.0",
-        note = "use RetryPolicy::decide with ProviderFailureFacts for provider routing/retry; removal tracked in 0.7.0 follow-up (SP965-T010)"
-    )]
-    fn is_retryable(&self) -> bool;
-
     /// Get the recommended retry delay in seconds
     fn retry_delay(&self) -> Option<u64>;
 

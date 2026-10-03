@@ -92,11 +92,17 @@ pub enum PricingBillingMode {
 #[derive(Debug, Clone, Default)]
 pub struct PricingUsage {
     pub billing_mode: PricingBillingMode,
+    /// Native Anthropic inference region reported by the upstream.
+    pub inference_geo: Option<String>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
     pub cached_tokens: Option<u32>,
     pub cache_creation_tokens: Option<u32>,
+    /// Subset of cache creation tokens written with a one-hour TTL.
+    pub cache_creation_1h_tokens: Option<u32>,
+    /// Anthropic server-side search calls (charged separately from tokens).
+    pub web_search_requests: Option<u32>,
     pub cache_read_tokens: Option<u32>,
     pub audio_tokens: Option<u32>,
     pub output_audio_tokens: Option<u32>,
@@ -110,11 +116,14 @@ impl PricingUsage {
     pub fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
         Self {
             billing_mode: PricingBillingMode::Standard,
+            inference_geo: None,
             prompt_tokens,
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
             cached_tokens: None,
             cache_creation_tokens: None,
+            cache_creation_1h_tokens: None,
+            web_search_requests: None,
             cache_read_tokens: None,
             audio_tokens: None,
             output_audio_tokens: None,
@@ -153,11 +162,14 @@ impl From<&crate::core::types::responses::Usage> for PricingUsage {
         let completion_details = usage.completion_tokens_details.as_ref();
         Self {
             billing_mode: PricingBillingMode::Standard,
+            inference_geo: None,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
             cached_tokens: prompt_details.and_then(|details| details.cached_tokens),
             cache_creation_tokens: prompt_details.and_then(|details| details.cache_creation_tokens),
+            cache_creation_1h_tokens: None,
+            web_search_requests: None,
             cache_read_tokens: prompt_details.and_then(|details| details.cache_read_tokens),
             audio_tokens: prompt_details.and_then(|details| details.audio_tokens),
             output_audio_tokens: completion_details.and_then(|details| details.audio_tokens),
@@ -182,6 +194,7 @@ pub struct PricingCostBreakdown {
     pub audio_cost: f64,
     pub image_cost: f64,
     pub reasoning_cost: f64,
+    pub tool_cost: f64,
     pub usage: PricingUsage,
     pub currency: String,
     pub model: String,

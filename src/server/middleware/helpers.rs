@@ -137,6 +137,11 @@ pub(super) fn middleware_gateway_error_response<B>(
     fallback_error: actix_web::Error,
     openai_error: GatewayError,
 ) -> ServiceResponse<EitherBody<B>> {
+    if req.path() == "/v1/messages" {
+        return req
+            .into_response(ai::messages::error_response(&openai_error))
+            .map_into_right_body();
+    }
     if ai::is_openai_compatible_path(req.path()) {
         return req
             .into_response(ai::openai_gateway_error_response(&openai_error))
