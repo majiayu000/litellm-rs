@@ -31,7 +31,7 @@ async fn modality_cache_cost_and_conservative_bound() {
         + 15.0 * 0.00002;
     assert!((cost - expected).abs() < 1e-12);
     assert_eq!(tokens, 60);
-    assert!((rates.bound() - 0.40192).abs() < 1e-12);
+    assert!((rates.bound(rates.max_output) - 0.40192).abs() < 1e-12);
     let mut invalid = usage();
     invalid["input_token_details"]["cached_tokens_details"]["audio_tokens"] = json!(500);
     assert!(rates.cost(&invalid).is_err());
@@ -93,7 +93,7 @@ async fn upstream(
                         }
                         "response.create" => {
                             if value["response"]["metadata"]["reject"] == true {
-                                let _ = session.text(json!({"type":"error","error":{"type":"invalid_request_error","event_id":value["event_id"],"message":"mock rejection"}}).to_string()).await;
+                                let _ = session.text(json!({"type":"error","error":{"type":value["response"]["metadata"].get("reject_type").and_then(Value::as_str).unwrap_or("invalid_request_error"),"event_id":value["event_id"],"message":"mock rejection"}}).to_string()).await;
                                 continue;
                             }
                             if value["response"]["metadata"]["unrelated_error"] == true {
@@ -486,7 +486,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         .await
         .unwrap();
     let id = Some(budget.id.parse().unwrap());
-    let bound = rates().bound();
+    let bound = rates().bound(rates().max_output);
     let pending = Pending::reserve(&state, "openai", "gpt-realtime-mini", id, bound).unwrap();
     assert!(Pending::reserve(&state, "openai", "gpt-realtime-mini", id, bound).is_err());
     pending
@@ -575,7 +575,7 @@ async fn client_disconnect_closes_upstream_and_records_reserved_fallback() {
                 .await
                 .unwrap()
                 .unwrap();
-            if (stored.usage_stats.total_cost - rates().bound()).abs() < 1e-9
+            if (stored.usage_stats.total_cost - rates().bound(rates().max_output)).abs() < 1e-9
                 && calls
                     .lock()
                     .unwrap()
@@ -606,7 +606,7 @@ async fn realtime_2_has_complete_authoritative_audio_cache_rates() {
         info.extra["cache_read_input_audio_token_cost"].as_f64(),
         Some(0.0000004)
     );
-    assert!(rates.cost(&usage()).unwrap().0 < rates.bound());
+    assert!(rates.cost(&usage()).unwrap().0 < rates.bound(rates.max_output));
 }
 
 #[actix_web::test]
@@ -1196,5 +1196,301 @@ async fn realtime_auth_middleware_returns_openai_error_envelopes() {
     }
     for handle in handles {
         handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn malformed_realtime_queries_use_openai_errors() {
+    let (_, url, key, _, handles) = fixture().await;
+    let base = url.split('?').next().unwrap().replace("ws://", "http://");
+    for query in ["", "?extra=1", "?model=gpt-realtime-mini&extra=1"] {
+        let response = reqwest::Client::new()
+            .get(format!("{base}{query}"))
+            .header("x-api-key", &key)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert!(body["error"]["message"].is_string());
+    }
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn lowered_output_policy_reserves_only_the_effective_cap() {
+    let (state, url, raw, calls, handles) = fixture().await;
+    let (mut key, _) = state
+        .auth
+        .api_key()
+        .verify_key(&raw)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    key.metadata.extra.insert("__core_keys".into(), json!({"permissions":{"allowed_models":[],"allowed_endpoints":[],"max_tokens_per_request":64,"is_admin":false,"custom_permissions":["api.realtime"]}}));
+    state.storage.db().update_api_key(&key).await.unwrap();
+    let bound = rates().bound(64);
+    assert!(bound < rates().bound(rates().max_output));
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(bound + 0.000001, ResetPeriod::Monthly),
+    );
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for kind in [
+        "response.created",
+        "response.output_audio.delta",
+        "response.function_call_arguments.done",
+        "response.done",
+    ] {
+        assert_eq!(next_json(&mut client).await["type"], kind);
+    }
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|v| v["type"] == "response.create")
+            .unwrap()["response"]["max_output_tokens"],
+        64
+    );
+    drop(client);
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn precreation_provider_errors_affect_deployment_health() {
+    for kind in [
+        "invalid_request_error",
+        "server_error",
+        "rate_limit_error",
+        "authentication_error",
+    ] {
+        let (state, url, raw, _, handles) = fixture().await;
+        let mut client = client(&url, &raw).await;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        client.send(Message::Text(json!({"type":"response.create","response":{"metadata":{"reject":true,"reject_type":kind}}}).to_string().into())).await.unwrap();
+        assert_eq!(next_json(&mut client).await["error"]["type"], kind);
+        let router = state.pin_runtime().unified_router.clone();
+        let deployment = router
+            .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+            .unwrap();
+        assert_eq!(
+            deployment
+                .state
+                .fail_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::from(kind != "invalid_request_error"),
+            "{kind}"
+        );
+        if matches!(kind, "rate_limit_error" | "authentication_error") {
+            assert!(deployment.is_in_cooldown(), "{kind}");
+        }
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[actix_web::test]
+async fn response_boundaries_reauthorize_jwt_users_and_teams() {
+    use crate::core::models::team::{Team, TeamMember, TeamRole, TeamStatus};
+    use crate::core::teams::TeamRepository;
+    use crate::storage::database::{SeaOrmTeamRepository, entities::user};
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
+    for change in [
+        "active",
+        "deleted",
+        "deactivated",
+        "expired",
+        "team",
+        "membership",
+    ] {
+        let (state, url, raw, calls, handles) = fixture_with_config(|config| {
+            config.gateway.auth.enable_jwt = true;
+            config.gateway.auth.jwt_secret = "Realtime-JWT-fixture-only-123456789!".into();
+        })
+        .await;
+        let (key, _) = state
+            .auth
+            .api_key()
+            .verify_key(&raw)
+            .await
+            .unwrap()
+            .unwrap();
+        let owner = state
+            .storage
+            .db()
+            .find_user_by_id(key.user_id.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let repository = SeaOrmTeamRepository::new(state.storage.database.clone());
+        let mut team = repository
+            .create(Team::new("realtime-jwt-team".into(), None))
+            .await
+            .unwrap();
+        let mut token = if matches!(change, "team" | "membership") {
+            repository
+                .add_member(TeamMember::new(
+                    team.id(),
+                    owner.id(),
+                    TeamRole::Member,
+                    None,
+                ))
+                .await
+                .unwrap();
+            let proof = state
+                .auth
+                .validate_active_team(owner.id(), team.id())
+                .await
+                .unwrap()
+                .unwrap();
+            state
+                .auth
+                .jwt()
+                .create_access_token_for_verified_team(
+                    owner.id(),
+                    "user".into(),
+                    vec!["use:api".into()],
+                    &proof,
+                    None,
+                )
+                .await
+                .unwrap()
+        } else {
+            state
+                .auth
+                .jwt()
+                .create_access_token(
+                    owner.id(),
+                    "user".into(),
+                    vec!["use:api".into()],
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+        };
+        if change == "expired" {
+            let mut claims = state.auth.jwt().verify_access_token(&token).await.unwrap();
+            // Cross the existing JWT verifier's 60-second clock tolerance without
+            // adding a minute-long sleep to the WebSocket regression.
+            claims.exp = chrono::Utc::now().timestamp() as u64 - 50;
+            token = jsonwebtoken::encode(
+                &jsonwebtoken::Header::default(),
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(
+                    state
+                        .pin_runtime()
+                        .config
+                        .gateway
+                        .auth
+                        .jwt_secret
+                        .as_bytes(),
+                ),
+            )
+            .unwrap();
+        }
+        let mut request = url.as_str().into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        let parsed = url::Url::parse(&url).unwrap();
+        let tcp =
+            tokio::net::TcpStream::connect((parsed.host_str().unwrap(), parsed.port().unwrap()))
+                .await
+                .unwrap();
+        let mut client = tokio_tungstenite::client_async(request, tcp)
+            .await
+            .unwrap()
+            .0;
+        next_json(&mut client).await;
+        next_json(&mut client).await;
+        match change {
+            "deleted" => {
+                state
+                    .storage
+                    .db()
+                    .delete_api_key(key.metadata.id)
+                    .await
+                    .unwrap();
+                state
+                    .storage
+                    .db()
+                    .delete_user(&owner.id().to_string())
+                    .await
+                    .unwrap();
+                user::Entity::delete_by_id(owner.id())
+                    .exec(state.storage.db().connection())
+                    .await
+                    .unwrap();
+            }
+            "deactivated" => {
+                user::ActiveModel {
+                    id: Set(owner.id()),
+                    status: Set("suspended".into()),
+                    ..Default::default()
+                }
+                .update(state.storage.db().connection())
+                .await
+                .unwrap();
+            }
+            "expired" => tokio::time::sleep(Duration::from_secs(12)).await,
+            "team" => {
+                team.status = TeamStatus::Inactive;
+                repository.update(team).await.unwrap();
+            }
+            "membership" => repository
+                .remove_member(team.id(), owner.id())
+                .await
+                .unwrap(),
+            _ => {}
+        }
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        let event = next_json(&mut client).await;
+        if change == "active" {
+            assert_eq!(event["type"], "response.created");
+            for _ in 0..3 {
+                next_json(&mut client).await;
+            }
+        } else {
+            assert_eq!(event["type"], "error", "{change}");
+            assert_eq!(event["error"]["type"], "authentication_error", "{change}");
+        }
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|v| v["type"] == "response.create")
+                .count(),
+            usize::from(change == "active"),
+            "{change}"
+        );
+        drop(client);
+        for handle in handles {
+            handle.stop(false).await;
+        }
     }
 }

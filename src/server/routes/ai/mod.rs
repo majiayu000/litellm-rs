@@ -85,7 +85,11 @@ pub fn configure_routes_with_body_limit(cfg: &mut web::ServiceConfig, max_body_s
 
 fn configure_routes_impl(cfg: &mut web::ServiceConfig, max_body_size: Option<usize>) {
     #[cfg(feature = "websockets")]
-    cfg.route("/v1/realtime", web::get().to(realtime::connect));
+    cfg.service(
+        web::resource("/v1/realtime")
+            .app_data(openai_query_error_config())
+            .route(web::get().to(realtime::connect)),
+    );
     cfg.route(
         "/openapi.json",
         web::get().to(|| async {

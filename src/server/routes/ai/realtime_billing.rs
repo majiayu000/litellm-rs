@@ -50,14 +50,14 @@ impl Rates {
             max_output,
         })
     }
-    pub fn bound(&self) -> f64 {
+    pub fn bound(&self, max_output: u32) -> f64 {
         self.max_input as f64
             * self
                 .input
                 .into_iter()
                 .chain(self.cached)
                 .fold(0.0, f64::max)
-            + self.max_output as f64 * self.output.into_iter().fold(0.0, f64::max)
+            + max_output.min(self.max_output) as f64 * self.output.into_iter().fold(0.0, f64::max)
     }
     pub fn cost(&self, usage: &Value) -> Result<(f64, u64), String> {
         let count = |v: &Value| {
