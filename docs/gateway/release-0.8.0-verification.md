@@ -140,7 +140,11 @@ openssl x509 -req -days 2 -in "$release_smoke_dir/certs/mock.csr" \
 
 This writes config/logs/results under the fixture directory and stops its own
 gateway/mock processes. It refuses to overwrite an existing local smoke DB.
-The chosen local ports are 18443 (TLS mock) and 18808 (gateway).
+The default local ports are 18443 (TLS mock) and 18808 (gateway); `--base`
+and `--gateway` select matching alternate ports. A fresh virtualenv/custom-port
+run passed all 8 checks. A missing-binary run failed as expected and released
+the mock port; the child uses the parent interpreter and startup failures clean
+up both test processes.
 
 For a container, the same script supplies three modes: `mock`, `remote-config`
 and `remote-smoke`. Use an internal Docker network with the mock at 11.73.4.2

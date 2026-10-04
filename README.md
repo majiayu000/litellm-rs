@@ -66,11 +66,13 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 
 ## Container distribution status
 
-The public `ghcr.io/majiayu000/litellm-rs:latest` tag is a historical `main`
-image from December 16, 2025 (revision `5fefe416b95d2545d5ce38fa80ac174d3c589b5a`),
-not the current 0.7.0 release. For 0.7.0, use the
-[published crate](https://crates.io/crates/litellm-rs/0.7.0) or
-[GitHub Release downloads](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0).
+The 0.8.0 distributions use the [versioned crate](https://crates.io/crates/litellm-rs/0.8.0),
+[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.0)
+and `ghcr.io/majiayu000/litellm-rs:0.8.0` (Linux amd64/arm64). They share the
+shipped gateway feature profile documented below. Prefer a versioned image tag
+or immutable digest; `latest` is mutable. Docker Hub publication is optional.
+Candidate checks and actual publication identifiers are recorded separately in
+the [0.8.0 verification record](docs/gateway/release-0.8.0-verification.md).
 
 ## Rust Crate
 
