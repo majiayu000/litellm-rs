@@ -1228,6 +1228,13 @@
       "reviewed_on": "2026-10-03",
       "revision": "responses-endpoints-1375",
       "sha256": "18119b30a9cce7bd42efc980126cb47b5ad01cb1ec2bad5ed5c31331ee159547"
+    },
+    "upstream-pricing-29363076619795084143b42205db04c6b3a77932": {
+      "kind": "runtime_pricing_row_pending_provider_review",
+      "location": "https://raw.githubusercontent.com/BerriAI/litellm/29363076619795084143b42205db04c6b3a77932/model_prices_and_context_window.json",
+      "reviewed_on": "2026-10-04",
+      "revision": "29363076619795084143b42205db04c6b3a77932",
+      "sha256": "cbfb0ceda469d7e5fdf331dfe66382b284600dc50cbda3ef28a605af525f6e48"
     }
   },
   "provider_aliases": {
@@ -39584,6 +39591,166 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/kimi-k2-thinking",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "bespoke",
+      "pricing_key": "bespoke/bespokelabs/Bespoke-Nimble-9B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "bespoke",
+      "pricing_key": "bespoke/nimble",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "bespoke",
+      "pricing_key": "bespoke/nimble-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/cloudflare/clef",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/cloudflare/clef-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/clef",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/clef-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "cohere",
+      "pricing_key": "cohere/embed-v5.0-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "cohere",
+      "pricing_key": "cohere/embed-v5.0-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "laya",
+      "pricing_key": "laya/english",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "laya",
+      "pricing_key": "laya/multilingual",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "laya",
+      "pricing_key": "laya/typed-decisions",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/inclusionai/ling-3.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/openai/gpt-image-2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/openai/gpt-image-2.5-flare",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "pricing_key": "openrouter/openai/gpt-image-2.5-sunburst",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-v1-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "strands_decider",
+      "pricing_key": "strands_decider/strands-decider-2B-hobson-v19",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
+      ]
+    },
+    {
+      "provider": "xai",
+      "pricing_key": "xai/grok-imagine-video-1.5-lite",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-29363076619795084143b42205db04c6b3a77932"
       ]
     }
   ]
