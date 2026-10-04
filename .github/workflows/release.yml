@@ -120,7 +120,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
             allow_failure: false
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             name: macos-x86_64
             allow_failure: false
@@ -158,13 +158,54 @@ jobs:
         fi
 
     - name: Install system dependencies (macOS)
-      if: matrix.os == 'macos-latest'
+      if: runner.os == 'macOS'
       run: |
         brew install postgresql openssl pkg-config
 
     - name: Build release binary
       shell: bash
       run: cargo build --locked --release --target ${{ matrix.target }} --bin gateway --no-default-features --features "$RELEASE_FEATURES"
+
+    - name: Install Python for local artifact smoke
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Run actual release executable against local upstreams
+      shell: bash
+      timeout-minutes: 10
+      run: |
+        set -euo pipefail
+        binary="target/${{ matrix.target }}/release/gateway"
+        if [ "$RUNNER_OS" = Windows ]; then binary="${binary}.exe"; fi
+        "$binary" --version
+        "$binary" --config config/gateway.dev.yaml.example validate-config
+        release_smoke_dir="$RUNNER_TEMP/release-artifact-smoke"
+        mkdir -p "$release_smoke_dir/certs"
+        python -m pip install requests==2.32.5 PyYAML==6.0.3
+        MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+          -subj /CN=ReleaseSmokeCA -addext basicConstraints=critical,CA:true \
+          -keyout "$release_smoke_dir/certs/mock-ca-key.pem" \
+          -out "$release_smoke_dir/certs/mock-ca.pem"
+        MSYS_NO_PATHCONV=1 openssl req -new -newkey rsa:2048 -nodes \
+          -subj /CN=release-mock \
+          -keyout "$release_smoke_dir/certs/mock-key.pem" \
+          -out "$release_smoke_dir/certs/mock.csr"
+        cat > "$release_smoke_dir/certs/extensions" <<'EOF'
+        basicConstraints=critical,CA:false
+        subjectAltName=DNS:release-mock,IP:127.0.0.1
+        extendedKeyUsage=serverAuth
+        keyUsage=digitalSignature,keyEncipherment
+        EOF
+        openssl x509 -req -days 2 -in "$release_smoke_dir/certs/mock.csr" \
+          -CA "$release_smoke_dir/certs/mock-ca.pem" \
+          -CAkey "$release_smoke_dir/certs/mock-ca-key.pem" -CAcreateserial \
+          -extfile "$release_smoke_dir/certs/extensions" \
+          -out "$release_smoke_dir/certs/mock-cert.pem"
+        python scripts/test/release_smoke.py local --binary "$binary" \
+          --packaged config/gateway.dev.yaml.example \
+          --directory "$release_smoke_dir/runtime" \
+          --certificates "$release_smoke_dir/certs"
 
     - name: Create archive (Unix)
       if: matrix.os != 'windows-latest'

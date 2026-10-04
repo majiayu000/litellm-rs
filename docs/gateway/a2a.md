@@ -7,7 +7,6 @@ a2a_agents:
   research:
     name: research
     url: https://agent.example/rpc
-    provider: a2a
     api_key: YOUR_UPSTREAM_TOKEN
     timeout_ms: 60000
     capabilities:

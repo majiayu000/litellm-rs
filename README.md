@@ -32,9 +32,10 @@ cargo run --bin gateway --features sqlite
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --version 0.7.0 --locked --bin gateway --features sqlite
+cargo install litellm-rs --version 0.8.0 --locked --bin gateway --no-default-features \
+  --features postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.7.0/config/gateway.dev.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.8.0/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
@@ -42,8 +43,10 @@ The development config starts without provider credentials or auth secrets and
 uses the local `vllm` catalog provider. Use
 `config/gateway.yaml.example` for production-style deployments with real
 provider keys and auth enabled. The explicit `sqlite` feature enables the storage needed by the gateway binary.
-The registry install above intentionally uses the matching published 0.7.0 config;
-new parity routes remain unreleased until their artifact verification is recorded.
+The registry install selects the same feature profile as release archives and
+containers, including MCP, A2A and Realtime. Binary and example config versions
+must match. See the [0.8.0 artifact verification](docs/gateway/release-0.8.0-verification.md)
+for candidate and publication evidence.
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
@@ -63,17 +66,19 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 
 ## Container distribution status
 
-The public `ghcr.io/majiayu000/litellm-rs:latest` tag is a historical `main`
-image from December 16, 2025 (revision `5fefe416b95d2545d5ce38fa80ac174d3c589b5a`),
-not the current 0.7.0 release. For 0.7.0, use the
-[published crate](https://crates.io/crates/litellm-rs/0.7.0) or
-[GitHub Release downloads](https://github.com/majiayu000/litellm-rs/releases/tag/v0.7.0).
+The 0.8.0 distributions use the [versioned crate](https://crates.io/crates/litellm-rs/0.8.0),
+[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.0)
+and `ghcr.io/majiayu000/litellm-rs:0.8.0` (Linux amd64/arm64). They share the
+shipped gateway feature profile documented below. Prefer a versioned image tag
+or immutable digest; `latest` is mutable. Docker Hub publication is optional.
+Candidate checks and actual publication identifiers are recorded separately in
+the [0.8.0 verification record](docs/gateway/release-0.8.0-verification.md).
 
 ## Rust Crate
 
 ```toml
 [dependencies]
-litellm-rs = { version = "0.7", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.8", default-features = false, features = ["lite"] }
 ```
 
 No `make` step is required for crate consumers.
@@ -165,37 +170,37 @@ Runtime wiring decisions are tracked in [`src/core/subsystem_registry.rs`](./src
 | `core/observability` and `core/integrations` | wire | Configured Langfuse, OpenTelemetry, and Datadog backends are initialized at startup and receive real chat, completion, response, and embedding lifecycle events. |
 | `core/audit` | wire | `enterprise.audit_logging: true` registers request audit middleware; events use structured JSON on stderr unless a file or custom output is configured. Default is off. |
 | `core/batch` | library-only | `/v1/batches` remains a wired provider proxy. Domain records and async batch helpers remain; the unreachable `BatchProcessor` has been removed. |
-| Former `core/webhooks` | removed | The unused library and `webhooks` feature have been removed from unreleased source. Budget-alert delivery and provider-native webhook fields remain separate. |
-| Former `core/semantic_cache` and `core/analytics` | removed | Removed from unreleased source after the expired 0.7 deadline. Deterministic caching, request metrics and callbacks remain; see the migration guide for removed fields/features. |
+| Former `core/webhooks` | removed | The unused library and `webhooks` feature have been removed in 0.8.0. Budget-alert delivery and provider-native webhook fields remain separate. |
+| Former `core/semantic_cache` and `core/analytics` | removed | Removed in 0.8.0 after the expired 0.7 deadline. Deterministic caching, request metrics and callbacks remain; see the migration guide for removed fields/features. |
 | `core/virtual_keys` | wire | Runtime virtual keys use the canonical `core::keys::KeyManager`; the duplicate legacy manager has been removed. Storage record types remain in use. |
 | `core/user_management` | internal | Domain records back current auth/storage paths. The unused `UserManager` and its `user-management` feature have been removed. |
 
 ## Installation
 
-On the development branch, default features select the reusable library with
-metrics and tracing. Gateway and database dependencies are opt-in. Published
-0.7.0 still uses gateway defaults; until the next release, library consumers can
-select `default-features = false, features = ["lite"]`.
+Since 0.8.0, default features select the reusable library with metrics and
+tracing. Gateway and database dependencies are opt-in. The previous 0.7.0
+release used gateway defaults; gateway consumers must explicitly select a
+storage feature such as `sqlite` or `postgres`.
 
 ```toml
 # Library with metrics and tracing
 [dependencies]
-litellm-rs = { version = "0.7", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.8", default-features = false, features = ["lite"] }
 
 # Library without optional observability
 [dependencies]
-litellm-rs = { version = "0.7", default-features = false }
+litellm-rs = { version = "0.8", default-features = false }
 
 # Gateway with SQLite (also enables Redis support)
 [dependencies]
-litellm-rs = { version = "0.7", features = ["sqlite"] }
+litellm-rs = { version = "0.8", features = ["sqlite"] }
 ```
 
 Use the crate root or `litellm_rs::prelude` for completion and embedding APIs.
 Advanced types have explicit module paths: `core::providers` for provider
 construction, `core::router` for deployment management, and
 `core::models::openai` for HTTP wire models. Hidden root re-exports of these
-advanced types have been removed on the development branch.
+advanced types have been removed in 0.8.0.
 
 ## Provider Support
 

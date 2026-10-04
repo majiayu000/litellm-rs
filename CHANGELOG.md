@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-04
+
+### Added
+
+- Native OpenAI Responses with persistent ownership/recovery, exact model routing,
+  Gemini native API operations and compaction, plus native Anthropic Messages
+  through gateway authentication, routing, guardrails and budgets (#1374, #1377,
+  #1379, #1381, #1383).
+- Budgeted synchronous OpenAI `file_search` calls with bounded pre-call reservation,
+  actual completed-call settlement and retained reserves for unknown charges
+  (#1372, #1441). Other Responses hosted tools remain unsupported.
+- Authenticated MCP 2026-07-28 stateless Streamable HTTP, A2A 1.0 task forwarding
+  with caller ownership, and OpenAI GA Realtime manual text/audio/function events
+  with conservative budget admission (#1391, #1393, #1405).
+- Verified provider-specific embeddings, images and audio through existing gateway
+  routes; external Rust provider registration (#1387, #1389, #1401, #1412, #1418,
+  #1421, #1424, #1426, #1428, #1430, #1432, #1434, #1438, #1439).
+
+### Fixed
+
+- Reconcile official model retirements, exact capability/price identities and actual
+  provider transports, including Azure AI native tool responses and Vertex custom
+  token-count endpoints (#1385, #1396, #1408, #1414, #1416, #1417, #1419, #1442).
+- Verify media protocol boundaries instead of treating OpenAI-like chat support as
+  proof of non-chat capabilities (#1435, #1436). Nebius images remain disabled
+  pending a current billing contract (#1440).
+- Build release archives and containers from the real Cargo targets using Rust
+  1.96.1 and the shared shipped feature profile; publish GHCR independently of
+  optional Docker Hub credentials and attach archive checksums (#1413, #1403).
+
 ### Breaking changes and migration
 
 - Remove the unused `core::analytics` and `core::semantic_cache` modules and the
@@ -16,8 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `enterprise.advanced_analytics` from JSON/YAML configuration, plus the unused
   semantic fields in `LLMCacheConfig` and the `/admin/cache` response. Delete these
   fields and explicit `analytics` feature selections; ordinary cache TTL/size and
-  request audit logging remain supported. Published v0.7.0 retains its documented
-  deprecated symbols; these removals apply to the next release.
+  request audit logging remain supported. Published v0.7.0 retained its deprecated symbols; these removals apply to 0.8.0.
+
+- Default Cargo features now select the library (`lite`, metrics and tracing).
+  Enable `sqlite` or `postgres` explicitly to build the gateway. Advanced hidden
+  crate-root re-exports were removed; use their documented module paths.
+- Remove unused managers, webhook/observability duplicates, expired native provider
+  duplicates, retry helpers and generic SDK error adapters (#1404, #1407, #1410,
+  #1411). Remove legacy Realtime, MCP/A2A clients and empty catalog policies;
+  retained protocol/configuration types are library support (#1402, #1443).
+- Stop constructing retired Perplexity Sonar, GitHub Models and Lambda shared
+  inference selectors. Disable unverified default Nova, Meta Llama and v0
+  transports; use supported Bedrock models or a verified `openai_compatible`
+  endpoint. Historical price rows do not make a model callable.
+- Stop advertising Replicate static models without verified prediction contracts.
+  Native Messages/Responses/OCR-only Azure models cannot route through Chat
+  Completions. Consult the dated catalog audits for exact supported identities.
 
 ## [0.7.0] - 2026-10-01
 
