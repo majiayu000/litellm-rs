@@ -45,7 +45,11 @@ it. Default crate features provide a library, not a gateway executable. Rust
 
 The existing Release workflow remains the publisher. Required archives target
 Linux x86_64 GNU, Windows x86_64 MSVC, macOS x86_64 and macOS ARM64; Linux x86_64
-musl is explicitly optional. Each archive has a SHA-256 sidecar. GHCR ships
+musl is explicitly optional. Intel macOS uses the native macos-15-intel runner;
+ARM64 macOS uses macos-latest, matching the [official runner architectures](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The existing publisher executes version/config and the local protocol harness
+against each built executable before uploading its archive; publication-run
+results are still pending. Each archive has a SHA-256 sidecar. GHCR ships
 linux/amd64 and linux/arm64 manifests; Docker Hub is optional. Actual crates.io
 upload, GitHub public release and Homebrew formula must be checked separately
 from job success or skip status.
