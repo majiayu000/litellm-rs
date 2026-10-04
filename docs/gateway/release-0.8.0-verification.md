@@ -83,8 +83,8 @@ same locked feature profile, then check version/config/startup and native
 protocol requests against local mocks. Inspect container user, config, startup,
 health and protocol behavior from actual image contents. Download published
 archives/crate, compare checksums, confirm immutable source provenance, inspect
-GHCR by digest and check the actual Homebrew URLs/checksums. Completed results
-will replace this pending status; preparation alone does not close #1403.
+GHCR by digest and check the actual Homebrew URLs/checksums. The accepted results
+below distinguish preparation from verified published distributions.
 
 ## Completed preflight (2026-10-04)
 
@@ -110,8 +110,8 @@ Realtime completed with modality usage totaling 60 tokens. Native markers and
 429 Retry-After are asserted, not inferred from HTTP status alone.
 
 The earlier release-CI timeout and an earlier local integration hang are not
-declared fixed. The complete local exact-profile run above passed; the final
-accepted commit still needs its own green CI and published-artifact identifiers.
+declared fixed. The complete local exact-profile preflight above passed;
+accepted-source CI and published-artifact results are recorded separately below.
 
 ## Reproduce the runtime smoke
 
@@ -321,3 +321,38 @@ Ruby syntax was checked by the publisher. Formula content and both public
 downloads were verified separately from job status. A host-wide Homebrew install
 and `brew test` were not performed; the optimized clean registry install and
 actual archive execution are the installation/runtime evidence.
+
+## Supplementary consumer and native-route acceptance
+
+The final review required a downstream library example as well as the executable
+install. A new independent consumer workspace used
+`litellm-rs = { version = "=0.8.2", default-features = false, features = ["lite"] }`
+and Tokio. Cargo metadata confirms the crates.io registry source, with resolved
+`lite,metrics,tracing` and no gateway feature or repository path dependency.
+Its generated lockfile was retained; `cargo run --locked --offline` built and
+ran with cached registry dependencies inside the session worktree. The actual
+program received three local HTTP mock responses through
+`DefaultRouter::from_runtime`, `LLMClient::from_runtime` and `completion` after
+`install_default_runtime`. It also asserted crate version 0.8.2. No provider
+credentials or supplier account calls were used.
+
+The existing harness now additionally checks native Responses compact output
+and Gemini SSE content/usage. The actual optimized registry-installed executable
+and downloaded macOS ARM64 archive each passed all 10 checks; both immutable
+published GHCR architectures each passed all 13 checks with TLS enabled. Their
+version/config/user/health checks still passed. The original publisher ran the
+earlier 8 checks on each of its five native platforms; those logs remain
+historical evidence and are not relabeled as expanded runs.
+
+Token counting is an upstream admission operation: file search and compaction
+use the selected OpenAI `/responses/input_tokens`, and Messages uses the selected
+Anthropic `/messages/count_tokens`. Public gateway routes are defined by
+`stable_routes.rs` and the inference OpenAPI; they do not expose those two count
+endpoints. The supplementary harness follows that accepted public contract.
+
+[Portable acceptance evidence](../plan/release-0.8.2-acceptance.tar.gz) contains
+the exact consumer source/manifest/lockfile/build log, expanded artifact reports,
+harness and actual publication metadata. SHA-256:
+`7ffafe3b88a9f8c851e7d6dcbc8dd0c3c1364bf6653740ae42b9050b8b1f03bb`.
+Its README gives the consumer mock/run commands; executable/container TLS
+reproduction is documented above. No certificates or private keys are archived.

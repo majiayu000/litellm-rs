@@ -85,6 +85,11 @@ No `make` step is required for crate consumers.
 
 ### Library Example
 
+Add Tokio with `macros` and `rt-multi-thread` features. The application must
+install its configured `RuntimeBinding` with `install_default_runtime` before
+calling `completion`; the [verified consumer example](docs/gateway/release-0.8.0-verification.md#supplementary-consumer-and-native-route-acceptance)
+shows runtime setup and successful calls against a local mock.
+
 ```rust
 use litellm_rs::{completion, user_message, system_message};
 
