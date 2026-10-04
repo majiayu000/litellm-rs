@@ -59,8 +59,6 @@ async fn retired_github_models_selectors_fail_before_transport() {
             "{selector}"
         );
     }
-    assert!(provider_registry::catalog_policy::catalog_model_infos("github").is_none());
-    assert!(provider_registry::catalog_policy::catalog_model_info("github", "gpt-4o").is_none());
     assert_ne!(
         provider_registry::canonical_selector("github_copilot"),
         "github"

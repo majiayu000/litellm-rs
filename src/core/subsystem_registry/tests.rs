@@ -575,7 +575,6 @@ fn issue_838_subsystems_have_explicit_non_silent_decisions() {
         ("ip_access", SubsystemDecision::Wired),
         ("mcp", SubsystemDecision::FeatureGated),
         ("observability", SubsystemDecision::Wired),
-        ("realtime", SubsystemDecision::FeatureGated),
         ("user_management", SubsystemDecision::InternalDependency),
         ("virtual_keys", SubsystemDecision::Wired),
     ];

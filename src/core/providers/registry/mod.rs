@@ -7,7 +7,6 @@
 //! A Tier 1 provider needs zero code — just a `ProviderDefinition` entry.
 
 pub mod catalog;
-pub(crate) mod catalog_policy;
 pub mod definition;
 pub mod lifecycle;
 pub mod model_catalog_authority;

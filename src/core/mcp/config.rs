@@ -464,77 +464,6 @@ pub enum McpAuthType {
     OAuth2,
 }
 
-/// Backward-compatible alias for the prefixed MCP authentication type.
-#[doc(hidden)]
-pub type AuthType = McpAuthType;
-
-/// MCP gateway configuration (collection of servers)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct McpGatewayConfig {
-    /// Registered MCP servers
-    #[serde(default)]
-    pub servers: HashMap<String, McpServerConfig>,
-
-    /// Enable MCP in database storage
-    #[serde(default)]
-    pub store_in_db: bool,
-
-    /// Global rate limit (requests per minute)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_rate_limit: Option<u32>,
-
-    /// Default timeout for all servers
-    #[serde(default = "default_timeout")]
-    pub default_timeout_ms: u64,
-
-    /// Server aliases for shorter names
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub aliases: HashMap<String, String>,
-}
-
-impl McpGatewayConfig {
-    /// Add a server to the configuration
-    pub fn add_server(&mut self, config: McpServerConfig) {
-        self.servers.insert(config.name.clone(), config);
-    }
-
-    /// Get a server by name or alias
-    pub fn get_server(&self, name: &str) -> Option<&McpServerConfig> {
-        // Check direct name first
-        if let Some(server) = self.servers.get(name) {
-            return Some(server);
-        }
-        // Check aliases
-        if let Some(real_name) = self.aliases.get(name) {
-            return self.servers.get(real_name);
-        }
-        None
-    }
-
-    /// Resolve a server name (handles aliases)
-    pub fn resolve_name<'a>(&'a self, name: &'a str) -> Option<&'a str> {
-        if self.servers.contains_key(name) {
-            return Some(name);
-        }
-        self.aliases.get(name).map(|s| s.as_str())
-    }
-
-    /// Validate all server configurations
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let errors: Vec<String> = self
-            .servers
-            .values()
-            .filter_map(|s| s.validate().err())
-            .collect();
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-}
-
 impl std::fmt::Debug for McpServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpServerConfig")
@@ -736,30 +665,6 @@ mod tests {
             header_prefix: None,
         };
         assert!(auth.validate().is_err());
-    }
-
-    #[test]
-    fn test_gateway_config_add_server() {
-        let mut config = McpGatewayConfig::default();
-        config.add_server(McpServerConfig::new("github", "https://api.github.com/mcp"));
-        assert!(config.servers.contains_key("github"));
-    }
-
-    #[test]
-    fn test_gateway_config_aliases() {
-        let mut config = McpGatewayConfig::default();
-        config.add_server(McpServerConfig::new(
-            "github_mcp_server",
-            "https://api.github.com/mcp",
-        ));
-        config
-            .aliases
-            .insert("github".to_string(), "github_mcp_server".to_string());
-
-        // Can get by full name
-        assert!(config.get_server("github_mcp_server").is_some());
-        // Can get by alias
-        assert!(config.get_server("github").is_some());
     }
 
     #[test]

@@ -578,32 +578,15 @@ elif custom_llm_provider == "new_provider":
 
 ## 8. 协议网关对比 (MCP/A2A)
 
-### 8.1 litellm-rs MCP Gateway
+### 8.1 litellm-rs current protocol entries
 
-```rust
-// 完整的 MCP 协议实现
-pub mod mcp {
-    pub mod config;       // 服务器配置
-    pub mod error;        // 错误类型
-    pub mod gateway;      // 主网关
-    pub mod permissions;  // 权限管理
-    pub mod protocol;     // JSON-RPC 2.0
-    pub mod server;       // 服务器连接
-    pub mod tools;        // 工具定义
-    pub mod transport;    // HTTP/SSE/stdio
-}
-
-// 使用示例
-let gateway = McpGateway::new();
-gateway.register_server(config).await?;
-let tools = gateway.list_tools("github").await?;
-let result = gateway.call_tool("github", "get_repo", params).await?;
-```
-
-**特点**：
-- 90+ 单元测试
-- 完整的权限控制 (Key/Team/Organization)
-- 多传输协议支持
+- `server::routes::mcp` is the authenticated stateless MCP 2026-07-28 HTTP proxy;
+  see [its actual transport/authentication scope](../gateway/mcp.md).
+- `server::routes::a2a` is the authenticated A2A 1.0 task proxy; ownership is
+  process-local, with affinity required across replicas. See [the A2A guide](../gateway/a2a.md).
+- Former library gateway clients and registries were removed in 0.8.0. Shared
+  configuration/protocol types remain, without implying aggregation, stdio,
+  OAuth acquisition or native agent-platform execution.
 
 ### 8.2 litellm (Python) MCP Client
 

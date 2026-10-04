@@ -398,69 +398,6 @@ impl AgentCapabilities {
     }
 }
 
-/// A2A Gateway configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct A2AGatewayConfig {
-    /// Registered agents
-    #[serde(default)]
-    pub agents: HashMap<String, AgentConfig>,
-
-    /// Default timeout for all agents
-    #[serde(default = "default_timeout")]
-    pub default_timeout_ms: u64,
-
-    /// Enable request logging
-    #[serde(default = "default_true")]
-    pub enable_logging: bool,
-
-    /// Enable cost tracking
-    #[serde(default)]
-    pub enable_cost_tracking: bool,
-
-    /// Global rate limit
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_rate_limit: Option<u32>,
-
-    /// Enable periodic health checks for registered agents
-    #[serde(default = "default_true")]
-    pub health_check_enabled: bool,
-
-    /// Interval in seconds between periodic health checks
-    #[serde(default = "default_health_check_interval_secs")]
-    pub health_check_interval_secs: u64,
-}
-
-fn default_health_check_interval_secs() -> u64 {
-    30
-}
-
-impl A2AGatewayConfig {
-    /// Add an agent to the configuration
-    pub fn add_agent(&mut self, config: AgentConfig) {
-        self.agents.insert(config.name.clone(), config);
-    }
-
-    /// Get an agent by name
-    pub fn get_agent(&self, name: &str) -> Option<&AgentConfig> {
-        self.agents.get(name)
-    }
-
-    /// Validate all agent configurations
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let errors: Vec<String> = self
-            .agents
-            .values()
-            .filter_map(|a| a.validate().err())
-            .collect();
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,15 +664,6 @@ mod tests {
         let caps = AgentCapabilities::minimal();
         assert!(!caps.streaming);
         assert!(!caps.push_notifications);
-    }
-
-    #[test]
-    fn test_gateway_config() {
-        let mut config = A2AGatewayConfig::default();
-        config.add_agent(AgentConfig::new("agent1", "https://example.com/agent1"));
-
-        assert!(config.get_agent("agent1").is_some());
-        assert!(config.get_agent("nonexistent").is_none());
     }
 
     #[test]

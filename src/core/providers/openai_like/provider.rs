@@ -1,4 +1,32 @@
 //! OpenAI-Like Provider Implementation
+
+const COMMON_OPENAI_PARAMS: &[&str] = &[
+    "messages",
+    "model",
+    "temperature",
+    "max_tokens",
+    "max_completion_tokens",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "stop",
+    "stream",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "response_format",
+    "user",
+    "seed",
+    "n",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+    "reasoning_effort",
+    "store",
+    "metadata",
+    "service_tier",
+];
+
 #[cfg(any(feature = "gateway", test))]
 use crate::core::providers::base::header_owned;
 use futures::Stream;
@@ -675,11 +703,6 @@ impl OpenAILikeProvider {
             super::models::reject_xai_reasoning_incompatible_params(&openai_request)?;
         }
 
-        crate::core::providers::registry::catalog_policy::filter_request(
-            &self.provider_name,
-            &mut openai_request,
-        );
-
         Ok(openai_request)
     }
 
@@ -735,15 +758,6 @@ impl OpenAILikeProvider {
                 .contains("insufficient account balance")
         {
             return ProviderError::quota_exceeded("baichuan", "Insufficient account balance");
-        }
-        if let Some(error) =
-            crate::core::providers::registry::catalog_policy::catalog_error_response(
-                &self.provider_name,
-                status,
-                body,
-            )
-        {
-            return error;
         }
 
         // Try to parse error JSON
@@ -805,12 +819,6 @@ impl OpenAILikeProvider {
                 capabilities: vec![ProviderCapability::AudioTranscription],
                 ..ModelInfo::default()
             };
-        }
-        if let Some(info) = crate::core::providers::registry::catalog_policy::catalog_model_info(
-            &self.provider_name,
-            model_id,
-        ) {
-            return info;
         }
         let mut info = self.model_registry.get_model_info(model_id);
         if self.provider_name != "xai" && super::models::is_xai_priced_model(model_id) {
@@ -902,8 +910,7 @@ impl LLMProvider for OpenAILikeProvider {
     }
 
     fn models(&self) -> &[ModelInfo] {
-        crate::core::providers::registry::catalog_policy::catalog_model_infos(&self.provider_name)
-            .unwrap_or(&[])
+        &[]
     }
 
     fn supports_model(&self, model: &str) -> bool {
@@ -915,11 +922,7 @@ impl LLMProvider for OpenAILikeProvider {
                 .model_registry
                 .is_known_model(&self.config.get_effective_model(model));
         }
-        crate::core::providers::registry::catalog_policy::catalog_provider_supports_model(
-            &self.provider_name,
-            model,
-        )
-        .unwrap_or(true)
+        true
     }
 
     async fn chat_completion(
@@ -1064,9 +1067,6 @@ impl LLMProvider for OpenAILikeProvider {
             .await
         {
             Ok(response) if response.status().is_success() => HealthStatus::Healthy,
-            Ok(_) if crate::core::providers::registry::catalog_policy::health_failure_is_unhealthy(
-                &self.provider_name,
-            ) => HealthStatus::Unhealthy,
             Ok(_) => HealthStatus::Degraded,
             Err(_) => HealthStatus::Unhealthy,
         }
@@ -1088,20 +1088,6 @@ impl LLMProvider for OpenAILikeProvider {
             return result;
         }
         let model_info = self.get_model_info(model);
-        if self.config.provider_name == "meta_llama"
-            && crate::core::providers::registry::catalog_policy::catalog_model_info(
-                &self.provider_name,
-                model,
-            )
-            .is_some()
-            && (model_info.input_cost_per_1k_tokens.is_none()
-                || model_info.output_cost_per_1k_tokens.is_none())
-        {
-            return Err(ProviderError::invalid_request(
-                "meta_llama",
-                format!("pricing is unavailable for model '{model}'"),
-            ));
-        }
         let input_cost = model_info
             .input_cost_per_1k_tokens
             .map(|cost| (input_tokens as f64 / 1000.0) * cost)
@@ -1113,21 +1099,14 @@ impl LLMProvider for OpenAILikeProvider {
         Ok(input_cost + output_cost)
     }
     fn get_supported_openai_params(&self, _model: &str) -> &'static [&'static str] {
-        crate::core::providers::registry::catalog_policy::catalog_provider_supported_openai_params(
-            &self.provider_name,
-        )
+        COMMON_OPENAI_PARAMS
     }
     async fn map_openai_params(
         &self,
         params: HashMap<String, Value>,
         _model: &str,
     ) -> Result<HashMap<String, Value>, ProviderError> {
-        Ok(
-            crate::core::providers::registry::catalog_policy::filter_openai_params(
-                &self.provider_name,
-                params,
-            ),
-        )
+        Ok(params)
     }
     async fn transform_request(
         &self,

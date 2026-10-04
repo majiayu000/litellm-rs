@@ -313,3 +313,7 @@ and have not yet been established for this follow-up.
 ### 2026-10-04 F10 remaining static catalog review
 
 The [remaining static catalog audit](../audit/remaining-static-model-catalog-2026-10-04.md) accounts for the 35 remaining Azure AI mapped identities, all 16 former GitHub Models, Lambda, Nova/Meta/v0 defaults, native audio records and non-Gemini Vertex metadata. Confirmed shutdowns are separate from unverified protocols. Native-only Azure protocols are pricing-only; price amounts are unchanged. Default and relevant feature suites plus clippy passed locally; current PR CI/review is pending. No paid supplier availability or release is claimed.
+
+### F16 final removal batch (2026-10-04)
+
+旧 core Realtime 库、MCP/A2A 客户端及过期导出/聚合配置已移除；保留当前网关消费的配置、错误、domain/schema 支持。停用选择器的空目录 hook 和 Meta/v0 特殊策略已删除。全部 37 条当前 core registry 声明已对照 startup/routes/features/README，见 [逐项核对](../audit/subsystem-reconciliation-2026-10-04.md)。本地验证和最终 CI/合并状态按本项 PR 记录；尚未发布新版本。
