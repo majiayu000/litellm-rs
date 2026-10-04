@@ -138,3 +138,15 @@ passthrough providers and historical price rows are not static callable catalogs
 - 54 pricing/catalog Python tests and pinned-source sync check passed. Price amounts are unchanged.
 - Tests cover native-only Azure mapping rejection, explicit capability projection, removal of retired audio declarations, unverified selector rejection, and Vertex rejection before authentication/transport while retaining customer-endpoint token counting.
 - PR CI/review is still required; this file does not claim a merge or release.
+
+## Final transport reconciliation
+
+Azure AI native JSON responses now retain complete tool/function calls, and SSE
+responses retain indexed tool deltas and fragmented legacy function arguments.
+Legacy function request fields use the existing model-specific parameter gate;
+non-tool models reject them before transport. Local HTTP fixtures exercise both
+native response paths. The model-less OpenAILike Azure AI fallback retains its
+configured-name chat/stream route without fabricating a catalog or pricing
+identity; known pricing-only IDs still undergo the authority check.
+The provider-specific GH837 migration guide now documents disabled Nova/Meta/v0
+selectors and retired GitHub Models instead of promising catalog equivalence.

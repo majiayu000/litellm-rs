@@ -273,6 +273,13 @@ impl AzureAIChatUtils {
             })?;
         }
 
+        if let Some(functions) = &request.functions {
+            azure_request["functions"] = json!(functions);
+        }
+        if let Some(function_call) = &request.function_call {
+            azure_request["function_call"] = function_call.clone();
+        }
+
         Ok(azure_request)
     }
 
@@ -416,8 +423,22 @@ impl AzureAIChatUtils {
             thinking: None,
             audio: None,
             name: message_data["name"].as_str().map(|s| s.to_string()),
-            function_call: None, // NOTE: function call parsing not yet implemented
-            tool_calls: None,    // NOTE: tool call parsing not yet implemented
+            function_call: serde_json::from_value(message_data["function_call"].clone()).map_err(
+                |error| {
+                    ProviderError::response_parsing(
+                        "azure_ai",
+                        format!("Invalid function call: {error}"),
+                    )
+                },
+            )?,
+            tool_calls: serde_json::from_value(message_data["tool_calls"].clone()).map_err(
+                |error| {
+                    ProviderError::response_parsing(
+                        "azure_ai",
+                        format!("Invalid tool calls: {error}"),
+                    )
+                },
+            )?,
             tool_call_id: message_data["tool_call_id"].as_str().map(|s| s.to_string()),
         };
 
@@ -501,16 +522,30 @@ impl AzureAIChatUtils {
                 .iter()
                 .enumerate()
                 .map(|(index, choice)| {
-                    // NOTE: proper streaming choice transformation not yet implemented
-                    // For now, create a basic structure
-                    crate::core::types::responses::ChatStreamChoice {
+                    Ok(crate::core::types::responses::ChatStreamChoice {
                         index: index as u32,
                         delta: crate::core::types::responses::ChatDelta {
                             role: None,
                             content: choice["delta"]["content"].as_str().map(|s| s.to_string()),
                             thinking: None,
-                            function_call: None,
-                            tool_calls: None,
+                            function_call: serde_json::from_value(
+                                choice["delta"]["function_call"].clone(),
+                            )
+                            .map_err(|error| {
+                                ProviderError::response_parsing(
+                                    "azure_ai",
+                                    format!("Invalid function delta: {error}"),
+                                )
+                            })?,
+                            tool_calls: serde_json::from_value(
+                                choice["delta"]["tool_calls"].clone(),
+                            )
+                            .map_err(|error| {
+                                ProviderError::response_parsing(
+                                    "azure_ai",
+                                    format!("Invalid tool deltas: {error}"),
+                                )
+                            })?,
                             audio: None,
                         },
                         finish_reason: match choice["finish_reason"].as_str() {
@@ -522,9 +557,9 @@ impl AzureAIChatUtils {
                             _ => None,
                         },
                         logprobs: None,
-                    }
+                    })
                 })
-                .collect()
+                .collect::<Result<Vec<_>, ProviderError>>()?
         } else {
             vec![]
         };

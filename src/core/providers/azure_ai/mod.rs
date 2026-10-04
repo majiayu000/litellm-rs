@@ -51,9 +51,9 @@ const PHI_4_CHAT_PARAMS: &[&str] = &["temperature", "max_tokens", "top_p", "freq
 #[rustfmt::skip]
 const CHAT_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "stream"];
 #[rustfmt::skip]
-const CHAT_TOOL_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "tools", "tool_choice"];
+const CHAT_TOOL_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "tools", "tool_choice", "functions", "function_call"];
 #[rustfmt::skip]
-const CHAT_TOOL_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "tools", "tool_choice", "stream"];
+const CHAT_TOOL_STREAM_PARAMS: &[&str] = &["temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "tools", "tool_choice", "functions", "function_call", "stream"];
 
 /// Main Azure AI provider following unified architecture
 #[derive(Debug, Clone)]
@@ -180,6 +180,8 @@ impl AzureAIProvider {
             (request.stream || streaming).then_some("stream"),
             request.tools.as_ref().map(|_| "tools"),
             request.tool_choice.as_ref().map(|_| "tool_choice"),
+            request.functions.as_ref().map(|_| "functions"),
+            request.function_call.as_ref().map(|_| "function_call"),
         ];
         self.ensure_params_supported(&request.model, params.into_iter().flatten())
     }

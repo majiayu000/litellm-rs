@@ -48,6 +48,17 @@ impl GatewayIdentityAuthority {
             Provider::OpenAILike(openai_like)
                 if openai_like.config().provider_name == "azure_ai" =>
             {
+                // The model-less compatible route uses its configured provider name.
+                // It has no catalog identity; known catalog models still bind below.
+                if mapping.is_none()
+                    && wire_model == provider_name
+                    && matches!(
+                        self.catalog.resolve_model("azure_ai", wire_model),
+                        CatalogResolution::Unknown
+                    )
+                {
+                    return Ok(());
+                }
                 (
                     "azure_ai",
                     openai_like.config().get_effective_model(wire_model),
