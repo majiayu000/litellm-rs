@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-04
+
+### Fixed
+
+- Generate the release fixture CA from an explicit configuration, declaring its
+  extension once. LibreSSL can append duplicate CA extensions when `-addext`
+  repeats the system config; rustls rejects that certificate at gateway startup.
+  Preserve TLS verification and prepare a new immutable candidate after the
+  v0.8.1 Intel macOS artifact smoke failed (#1403).
+
 ## [0.8.1] - 2026-10-04
 
 ### Fixed

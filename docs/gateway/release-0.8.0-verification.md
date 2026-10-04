@@ -1,7 +1,8 @@
 # 0.8 release verification (F18)
 
-Issue #1403. Status: correcting the 0.8.0 artifact smoke failure with a new
-0.8.1 candidate. The immutable v0.8.0 tag is retained; macOS smoke failed before
+Issue #1403. Status: preparing candidate 0.8.2 after Intel macOS rejected the
+0.8.1 test CA. The v0.8.0/v0.8.1 tags and draft/failure history are retained;
+macOS smoke failed before
 crates.io and public GitHub release publication. The 0.8 line is a pre-1.0 minor
 release because accepted changes remove public APIs and change default features.
 
@@ -11,9 +12,11 @@ The candidate includes the accepted parity work through #1441, the remaining
 model audit #1442 and unused-interface reconciliation #1443. The complete release
 notes are in CHANGELOG.md. The first accepted immutable commit is `1ab0b47cc5e6f78d6ab9638921f3f739a56749b0`,
 tagged as v0.8.0 after #1444 final-head 15 checks passed and all reviews were
-resolved. Candidate 0.8.1 changes only version/install metadata and the local
-release fixture; production Rust behavior and the shipped profile are unchanged.
-Its accepted commit and published identifiers will be recorded after verification.
+resolved. The current candidate is 0.8.2: it adds only version/install metadata
+and explicit fixture CA configuration to accepted 0.8.1, retaining its mock
+DNS/logging correction. Production Rust behavior and the shipped profile are
+unchanged. The 0.8.2 accepted commit and published identifiers remain pending
+and will be recorded after verification.
 PR branch heads are preparation evidence and do not substitute for that commit.
 
 The shared shipped profile is:
@@ -117,8 +120,16 @@ release_smoke_dir=$(mktemp -d)
 mkdir "$release_smoke_dir/certs"
 python3 -m venv "$release_smoke_dir/venv"
 "$release_smoke_dir/venv/bin/pip" install requests==2.32.5 PyYAML==6.0.3
+cat > "$release_smoke_dir/certs/ca.cnf" <<'EOF'
+[req]
+distinguished_name=req_dn
+x509_extensions=v3_ca
+[req_dn]
+[v3_ca]
+basicConstraints=critical,CA:true
+EOF
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-  -subj /CN=ReleaseSmokeCA -addext basicConstraints=critical,CA:true \
+  -config "$release_smoke_dir/certs/ca.cnf" -subj /CN=ReleaseSmokeCA \
   -keyout "$release_smoke_dir/certs/mock-ca-key.pem" \
   -out "$release_smoke_dir/certs/mock-ca.pem"
 openssl req -new -newkey rsa:2048 -nodes -subj /CN=release-mock \
@@ -189,8 +200,8 @@ when finished. No test certificate or private key is committed.
 - Accepted ARM64 local release image: `sha256:f0ecb5675257f6a6a607e4e5249e4db5f0716a720361c7f702451f4e6ef16cab`. Full OCI revision equals the accepted commit; appuser, 0.8.0 version and packaged config validation checked. This local image ID is not a published GHCR manifest digest.
 - Tag-triggered existing [Release run 37198981030](https://github.com/majiayu000/litellm-rs/actions/runs/37198981030) targets the accepted commit. Windows, Linux GNU and optional musl artifact smoke passed. Both macOS artifact
   smoke jobs failed; GitHub release remains draft and crates.io publication was
-  skipped. Docker publication is independent and still pending; this is not a
-  completed release.
+  skipped. The superseded Docker build was canceled before completion. The tag and
+  draft/failure history are retained; this is not a completed release.
 
 The exact shipped profile unifies reqwest's native roots through locked
 object_store 0.13.2. rustls-native-certs reads the test-only SSL_CERT_FILE before
@@ -221,3 +232,46 @@ library tests, 1 ignored, plus integration/doc tests) and all-target clippy.
 The exact shipped profile passed full tests (11,010 library tests, 1 ignored,
 plus integration/doc tests) and all-target clippy. These local source checks
 do not substitute for the corrected macOS artifact smoke or publication.
+
+## 0.8.1 accepted source and publication acceptance
+
+- Accepted source/tag: [28362c09613d075a67f9a6dae18fb06e44b19c8c](https://github.com/majiayu000/litellm-rs/commit/28362c09613d075a67f9a6dae18fb06e44b19c8c), v0.8.1.
+- [Correction PR #1445](https://github.com/majiayu000/litellm-rs/pull/1445) final head `2d1e4324dd1f5d7da6e878bad430c832513d4976`: all 15 checks succeeded, all review threads resolved, then merged.
+- Clean accepted-source exact-profile `cargo package --locked` verification passed. Local package SHA-256: `7171498fba27747de9b3d794fac2d4555cba8f7dcf59dbaedf8ef256ada65f7e`. Embedded VCS metadata equals the accepted clean commit; native protocol routes and both OpenAPI files are present.
+- Installed the unpacked accepted crate into a new empty root using `--debug --locked --bin gateway --no-default-features` and the exact profile. Actual binary reports `gateway 0.8.1`; packaged config validation and all 8 native TLS protocol checks passed. This precedes optimized registry installation.
+- [Tag-triggered Release run 37206902557](https://github.com/majiayu000/litellm-rs/actions/runs/37206902557) targets the accepted source. Exact shipped-profile full tests/clippy and all-features compile checks passed. Windows, ARM64 macOS, Linux GNU and optional musl artifact smoke passed. Intel macOS built successfully but rejected the generated fixture CA at startup; its failure log exposed the native-root-store panic. crates.io/public GitHub release were not published; the superseded Docker build was canceled.
+
+Downloaded 0.8.1 ARM64 macOS, Windows, Linux GNU and musl archives matched their
+SHA-256 sidecars and GitHub asset digests; each contains its single executable
+with the expected architecture. The actual ARM64 macOS download passed version,
+config and all 8 native TLS checks. The actual GNU download passed 11 checks,
+including MCP tools/list and A2A caller-owned tasks, on an isolated Docker network.
+These partial artifacts do not constitute a completed release.
+
+## 0.8.2 CA fixture correction
+
+Intel macOS rejected the 0.8.1 fixture root certificate with `zero valid
+certificates found in native root store`. Locked reqwest returns this error when
+native certificates load but every DER certificate is rejected by rustls.
+Reproducing the generation command with LibreSSL 3.3.6 and a default config
+already containing v3_ca emitted two Basic Constraints extensions and caused
+the downloaded accepted gateway to panic with that exact error. A plain local
+config without that default did not fail. The runner's original certificate is
+unavailable; the reproduction explains the platform-config sensitivity, and the
+corrected Intel run must verify its result.
+
+The CA now uses an explicit fixture config with its extension declared once,
+without appending -addext to the platform defaults. Production TLS and the
+trusted boundary are unchanged. Candidate 0.8.2 includes the earlier 0.8.0
+changes and 0.8.1 DNS/logging correction; it does not move either existing tag.
+
+The exact corrected workflow certificate block was executed with LibreSSL 3.3.6
+and OpenSSL 3.6.3, forcing a default OPENSSL_CONF already containing v3_ca in
+both cases. Each emitted one Basic Constraints extension, and the actual
+downloaded gateway passed all 8 native TLS protocol checks with each certificate
+set. Cross-platform 0.8.2 acceptance remains required.
+
+The 0.8.2 preparation worktree passed fmt/check, default full tests (7,125
+library tests, 1 ignored, plus integration/docs) and all-target clippy, plus
+the exact shipped-profile full tests (11,010 library tests, 1 ignored, plus
+integration/docs) and all-target clippy.
