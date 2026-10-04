@@ -10,7 +10,6 @@ from urllib.parse import urlsplit
 import secrets
 import requests, yaml
 
-SEEN = []
 
 def read_frame(stream):
     header = stream.read(2)
@@ -55,7 +54,7 @@ class Mock(http.server.BaseHTTPRequestHandler):
             if opcode == 9:
                 send_frame(self.wfile, body, opcode=10); continue
             if opcode != 1: continue
-            event = json.loads(body); SEEN.append({'path':self.path,'type':event['type']})
+            event = json.loads(body)
             if event['type'] == 'session.update':
                 send_frame(self.wfile, json.dumps({'type':'session.updated','session':event['session']}))
             elif event['type'] == 'response.create':
@@ -65,7 +64,6 @@ class Mock(http.server.BaseHTTPRequestHandler):
                 send_frame(self.wfile,json.dumps({'type':'response.done','response':{'id':'release-response','status':'completed','usage':usage}}))
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['content-length'])))
-        SEEN.append({'path':self.path,'model':body.get('model'),'method':body.get('method')})
         if body.get('mock_error'): return self.reply({'error':{'message':'release capacity unavailable'}},429)
         if self.path.endswith('/responses/input_tokens'): return self.reply({'object':'response.input_tokens','input_tokens':12})
         if self.path.endswith('/responses/compact'): return self.reply({'id':'compact-release','object':'response.compaction','output':[{'type':'compaction','id':'cmp-release','encrypted_content':'opaque=='}],'usage':{'input_tokens':12,'output_tokens':3,'total_tokens':15}})
