@@ -196,6 +196,8 @@ impl LLMProvider for AzureAIProvider {
             ProviderCapability::ChatCompletionStream,
             ProviderCapability::Embeddings,
             ProviderCapability::ImageGeneration,
+            ProviderCapability::ToolCalling,
+            ProviderCapability::FunctionCalling,
         ]
     }
 
@@ -534,7 +536,8 @@ mod tests {
         assert!(caps.contains(&ProviderCapability::ChatCompletionStream));
         assert!(caps.contains(&ProviderCapability::Embeddings));
         assert!(caps.contains(&ProviderCapability::ImageGeneration));
-        assert_eq!(caps.len(), 4);
+        assert!(caps.contains(&ProviderCapability::ToolCalling));
+        assert!(caps.contains(&ProviderCapability::FunctionCalling));
     }
 
     #[test]

@@ -957,3 +957,43 @@ async fn xai_multi_agent_is_not_a_chat_deployment() {
         );
     }
 }
+
+#[cfg(feature = "providers-extra")]
+#[tokio::test]
+async fn audited_azure_ai_tools_are_routable_only_for_tool_models() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::types::model::ProviderCapability;
+    let config = ProviderConfig {
+        name: "azure-tool-test".into(),
+        provider_type: "azure_ai".into(),
+        api_key: "test-key".into(),
+        base_url: Some("https://test.services.ai.azure.com/models".into()),
+        models: vec![
+            "gpt-5.4".into(),
+            "gpt-5.5".into(),
+            "grok-4".into(),
+            "Phi-4".into(),
+        ],
+        ..Default::default()
+    };
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default().unwrap(),
+    );
+    let router = Router::from_gateway_config_with_pricing(&[config], None, pricing)
+        .await
+        .unwrap();
+    for model in ["gpt-5.4", "gpt-5.5", "grok-4", "Phi-4"] {
+        for capability in [
+            ProviderCapability::ToolCalling,
+            ProviderCapability::FunctionCalling,
+        ] {
+            assert_eq!(
+                router
+                    .select_deployment_lease_for_capability(model, &capability)
+                    .is_ok(),
+                model != "Phi-4",
+                "{model}: {capability:?}"
+            );
+        }
+    }
+}
