@@ -219,12 +219,13 @@ impl CallbackLifecycle {
 
     pub(super) fn complete_pricing_usage(
         &self,
-        usage: Option<&PricingUsage>,
+        usage: Option<&crate::core::types::responses::Usage>,
+        pricing_usage: Option<&PricingUsage>,
         outcome: &'static str,
     ) {
         self.complete(
             usage.map(|usage| (usage.prompt_tokens, usage.completion_tokens)),
-            usage,
+            pricing_usage,
             outcome,
         );
     }
@@ -500,7 +501,11 @@ mod tests {
             "final-provider",
             "final-model",
         );
-        lifecycle.complete_usage(None, "success");
+        lifecycle.complete_pricing_usage(
+            Some(&crate::core::types::responses::Usage::new(12, 3)),
+            None,
+            "success",
+        );
         lifecycle.fail("late error", "provider_error");
         let rendered = dispatcher
             .render_prometheus_metrics()
@@ -517,6 +522,13 @@ mod tests {
         ));
         assert!(!rendered.contains("litellm_requests_total{model=\"first-model\""));
         assert!(rendered.contains("litellm_active_requests 0"));
+        assert!(rendered.contains(
+            "litellm_input_tokens_total{model=\"final-model\",provider=\"final-provider\"} 12"
+        ));
+        assert!(rendered.contains(
+            "litellm_output_tokens_total{model=\"final-model\",provider=\"final-provider\"} 3"
+        ));
+        assert!(!rendered.contains("litellm_cost_usd_total{model=\"final-model\""));
     }
 
     #[tokio::test]

@@ -123,12 +123,23 @@ fn calculate_usage_cost_with_rates(
         + one_hour_cost
         + cache_read_tokens as f64 * cache_read_rate)
         * geo_multiplier;
-    let tool_cost = anthropic_search_cost(
+    let mut tool_cost = anthropic_search_cost(
         requested_provider,
         model,
         model_info,
         usage.web_search_requests.unwrap_or(0),
     )?;
+    if let Some(calls) = usage.file_search_requests.filter(|calls| *calls > 0) {
+        if requested_provider != "openai" || usage.billing_mode != PricingBillingMode::Standard {
+            return Err(GatewayError::Config(format!(
+                "Verified Responses file search pricing unavailable for {requested_provider}/{model}"
+            )));
+        }
+        // https://developers.openai.com/api/docs/pricing
+        // $2.50 per 1,000 calls. Storage is an account-level charge, not
+        // created by this request; retrieved input uses ordinary token rates.
+        tool_cost += f64::from(calls) * 0.0025;
+    }
     let audio_cost = priced_extra_units(
         model_info,
         model,
@@ -522,6 +533,23 @@ mod tests {
         assert!(
             service
                 .calculate_loaded_usage_cost_for_provider("openai", "gpt-4o-mini", &usage)
+                .is_err()
+        );
+    }
+    #[test]
+    fn openai_file_search_calls_add_a_separate_charge_to_token_usage() {
+        let service = super::super::PricingService::with_embedded_default().unwrap();
+        let mut usage = PricingUsage::new(100, 10);
+        usage.file_search_requests = Some(2);
+        let cost = service
+            .calculate_loaded_usage_cost_for_provider("openai", "gpt-4o-mini", &usage)
+            .unwrap();
+        assert!((cost.total_cost - (100.0 * 0.00000015 + 10.0 * 0.0000006 + 0.005)).abs() < 1e-12);
+        assert_eq!(cost.tool_cost, 0.005);
+        assert_eq!(cost.usage.total_tokens, 110);
+        assert!(
+            service
+                .calculate_loaded_usage_cost_for_provider("anthropic", "claude-opus-5", &usage)
                 .is_err()
         );
     }

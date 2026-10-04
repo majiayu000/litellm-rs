@@ -322,7 +322,11 @@ async fn create(
         .inspect_err(|error| {
             callback.fail(error.to_string(), "guardrail_error");
         })?;
-    callback.complete_pricing_usage(usage.as_ref().map(|usage| &usage.pricing), "success");
+    callback.complete_pricing_usage(
+        usage.as_ref().map(|usage| &usage.normalized),
+        usage.as_ref().map(|usage| &usage.pricing),
+        "success",
+    );
     Ok(HttpResponse::Ok().json(value))
 }
 

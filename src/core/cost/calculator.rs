@@ -260,6 +260,7 @@ fn pricing_usage_from_cost_usage(usage: &UsageTokens) -> PricingUsage {
         cache_creation_tokens: None,
         cache_creation_1h_tokens: None,
         web_search_requests: None,
+        file_search_requests: None,
         cache_read_tokens: None,
         audio_tokens: usage.audio_tokens,
         output_audio_tokens: None,

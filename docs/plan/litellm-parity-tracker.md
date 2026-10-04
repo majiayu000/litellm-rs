@@ -14,7 +14,7 @@
 | F02 | P1 | Cloudflare 错误语义 | HTTP 401/429/5xx 和 success=false 返回对应错误；畸形成功响应不能变成空成功；覆盖真实 HTTP 模拟测试 | 完成 | [#1365](https://github.com/majiayu000/litellm-rs/issues/1365) / [PR #1367](https://github.com/majiayu000/litellm-rs/pull/1367)；91 项相关测试、默认全量测试/check/clippy 通过；全部 CI 通过、无未解决 review；已合并 `01f15630`；一次 Gemini 测试超时，定向复测 9 项通过且同提交 CI 重跑通过，未将偶发超时误报为已修复 |
 | F03 | P1 | Cloudflare 现代聊天协议与流式 | 使用官方兼容接口；文本、工具、多模态、用量、流式及中途错误按支持能力正确传递；文档和能力声明一致 | 完成 | [#1368](https://github.com/majiayu000/litellm-rs/issues/1368)；[PR #1369](https://github.com/majiayu000/litellm-rs/pull/1369)；聊天/流式本地 HTTP 测试、默认全量测试/check/clippy 通过；审查后的 88 项 provider 测试与 clippy 通过；全部 CI 通过，review 已解决；已合并 `4b4a4dd4` |
 | F04 | P1 | Bedrock 逐模型能力与计费 | 审核 generic_converse 全部条目；修正上下文、输出、视觉、推理、profile 与价格；消除通用虚假默认值和重复价格源 | 完成 | [#1370](https://github.com/majiayu000/litellm-rs/issues/1370)；逐项核对 39 张 AWS 模型卡及官网定价；修正通用参数、移除 Sonic 聊天声明、统一计费来源；382 项 Bedrock 测试通过；[PR #1371](https://github.com/majiayu000/litellm-rs/pull/1371)；默认全量测试/check/clippy 及全部 CI 已通过，无未解决 review；已合并 `e77391fe` |
-| F05 | P1 | 原生 Responses 请求通路 | 支持该协议的供应商真正调用原生 endpoint；保留工具、推理、原生事件、用量及错误；经过现有鉴权、路由、预算和记录链路 | 进行中 | [#1372](https://github.com/majiayu000/litellm-rs/issues/1372)；#1374 原生请求已合并 f62c5adb，#1377 路由已合并 ac0ad6a9；验收 head `c44b48d4`，全部 15 项 CI 成功、审查线程解决后合并 `93d51613`。 F09：验收 head `d61979f9`，全部 15 项 CI 成功、审查线程解决后合并 `35bd932a`。 原生 JSON/SSE、function/custom 工具、推理和媒体计数经过既有鉴权/路由/预算/记录链。托管工具、动态远程输入、隐藏上下文和非标准服务档位明确拒绝，未知账单不伪记实际费用。 |
+| F05 | P1 | 原生 Responses 请求通路 | 支持该协议的供应商真正调用原生 endpoint；保留工具、推理、原生事件、用量及错误；经过现有鉴权、路由、预算和记录链路 | 进行中 | [#1372](https://github.com/majiayu000/litellm-rs/issues/1372)；#1374 原生请求已合并 f62c5adb，#1377 路由已合并 ac0ad6a9；验收 head `c44b48d4`，全部 15 项 CI 成功、审查线程解决后合并 `93d51613`。 F09：验收 head `d61979f9`，全部 15 项 CI 成功、审查线程解决后合并 `35bd932a`。 原生 JSON/SSE、function/custom 工具、推理和媒体计数经过既有鉴权/路由/预算/记录链。新增有界 OpenAI file_search 的 JSON/SSE 调用、按模型上下文预留及终态逐调用费用结算；其他托管工具、动态远程输入和非标准服务档位继续拒绝。未知账单不伪记实际费用。该后续的合并/发行仍待实际回执。 |
 | F06 | P1 | Responses 模型与供应商路由 | OpenAI、Copilot、Bedrock 原生协议分别按官方 endpoint/model 支持矩阵路由；Responses-only 模型和工具不被送往 chat/completions | 完成 | [#1375](https://github.com/majiayu000/litellm-rs/issues/1375) / [PR #1377](https://github.com/majiayu000/litellm-rs/pull/1377)，验收 head `e1623efe`。111 个 OpenAI 端点证据、Copilot 动态 supported_endpoints、Bedrock Runtime/Mantle 地址、签名和计费身份已接通；Responses-only 不回退聊天。修正自动合并重引入的 Chat 能力回退，按精确 provider/pricing_key 保留独立目录审核决定，重建摘要。52 项 Python、同步/check、18 项原生 HTTP 及联合 clippy 通过。该 head 的 15 项 CI 全绿、线程清零后以 merge commit `ac0ad6a9` 合并，保留堆叠祖先；#1375 已关闭，#1379 base 已改为 main。Copilot/Bedrock 生命周期仍不在首批范围。 |
 | F07 | P1 | Responses 跨副本持久状态 | 两个网关实例可读/删同一授权响应；重启后可恢复记录；租户隔离、TTL、后台状态及取消语义有测试 | 完成 | [#1378](https://github.com/majiayu000/litellm-rs/issues/1378) / [#1379](https://github.com/majiayu000/litellm-rs/pull/1379)；验收 head `c44b48d4`，全部 15 项 CI 成功、审查线程解决后合并 `93d51613`。 POST 前 SQL 持久化结算责任；恢复只 GET，不重新生成。SQLite runtime/server/worker 停止后两个新 startup worker 恢复并只结算一次；不是实际 Postgres 重启、OS kill 或通用 exactly-once 证明。后台 provider/model 限额要求共享 SQL/Redis；进程内 key budget 拒绝，未知用量保留 reserved_unknown。当前 head 的 Main Full 37126573698 另核对成功。 |
 | F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 完成 | [#1380](https://github.com/majiayu000/litellm-rs/issues/1380) / [PR #1381](https://github.com/majiayu000/litellm-rs/pull/1381)，当前 `bb6ecc10` 已退出草稿：JSON/SSE、count_tokens、缓存 TTL、有界直接 web 工具及显式/继承 US 地区计费已接通；未知用量保留承诺但账单记为 unpriced。22 项集成、默认完整检查、gateway/sqlite/mcp 完整测试（9780 通过/1 忽略）、clippy 和 all-features check 通过。前轮五项审查修复已推送，默认 7270 项库测试/1 忽略及联合完整检查通过；all-features check 属此前提交。新轮 Haiku 缓存价格、终态用量/JSON stop_reason、start envelope 与 guardrail 健康归因五项修复已推送，25 项 HTTP、52 项 Python/重复同步、默认完整及 gateway/sqlite/mcp 完整检查通过，review 清零；随后原分支整合 f62c5adb，当前 `bb6ecc10` 的 15 项 CI 全绿且 review 清零，已合并 `7336a20e` 并自动关闭 #1380；本轮 25 项原生 Messages HTTP 测试通过；另 Sonnet 4.5 1M beta 审查经官方 2026-04-30 退役说明确认不适用，保留 200k。 |
@@ -294,3 +294,19 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 [命令/提交/结果记录](verification-2026-10-03-pr-triage.md)与[完整日志/可携带清单/CI回执/SHA-256](verification-2026-10-03-pr-triage.tar.gz)随原台账 PR 入库。源码构建只在本任务独立 worktree；root 的既有未提交文件保留。当前组必须完成才入成功归档，失败/未完成/空筛选与旧 head 单列。
 
 未运行实际 Postgres 重启或 OS kill；SQLite 双 startup worker 与持久收据测试不等于所有部署 exactly-once。没有供应商付费调用或最终候选产物发布。文档只校验原 18 项验收条件、范围/链接、表格和日志归档，不重复运行 Rust。
+
+
+### 2026-10-04 #1372 bounded file-search follow-up
+
+Reuse the existing native OpenAI transport, input counting, pricing snapshot,
+provider/model/key reservations and settlement. File-search call limits remain
+native `max_tool_calls`; terminal completed output calls contribute $0.0025 each.
+Background tool recovery and other hosted tools remain outside this accepted
+implementation. Details: [native billing scope](../providers/native-responses-billing.md).
+
+Fresh checks on this implementation: fmt/check/default full tests/default and
+`gateway,sqlite` all-target clippy passed; all 39 `native_responses_routes` HTTP
+tests passed. Build/test debug information and incremental artifacts were disabled
+via `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`;
+features and behavior were unchanged. CI/review/merge/release outcomes are separate
+and have not yet been established for this follow-up.

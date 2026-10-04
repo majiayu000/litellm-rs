@@ -288,7 +288,11 @@ pub(super) fn response(
                 "Upstream Messages stream failed",
             ));
         } else if terminal {
-            callback.complete_pricing_usage(usage.as_ref().map(|u| &u.pricing), "success");
+            callback.complete_pricing_usage(
+                usage.as_ref().map(|u| &u.normalized),
+                usage.as_ref().map(|u| &u.pricing),
+                "success",
+            );
             lease.finish_success(
                 usage
                     .as_ref()

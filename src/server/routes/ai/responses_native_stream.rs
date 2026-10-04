@@ -28,6 +28,7 @@ pub(super) fn response(
             model,
             deployment,
             pricing,
+            file_search_calls,
             reservation,
             key_reservation,
             storage,
@@ -40,6 +41,7 @@ pub(super) fn response(
             response,
             storage,
             usage,
+            pricing_usage,
             terminal,
             upstream_failed,
             failure,
@@ -52,6 +54,7 @@ pub(super) fn response(
             Some(&deployment),
             None,
             background.then_some(started + std::time::Duration::from_secs(540)),
+            file_search_calls,
         )
         .await;
         if background
@@ -78,6 +81,7 @@ pub(super) fn response(
                 model,
                 deployment,
                 pricing,
+                file_search_calls,
                 reservation,
                 key_reservation,
                 storage,
@@ -107,6 +111,7 @@ pub(super) fn response(
                 &model,
                 pricing,
                 usage.as_ref(),
+                pricing_usage.clone(),
                 reservation,
                 key_reservation,
                 facts,
@@ -134,7 +139,7 @@ pub(super) fn response(
                 "Upstream response failed",
             ));
         } else if terminal {
-            callback.complete_usage(usage.as_ref(), "success");
+            callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");
             lease.finish_success(
                 usage
                     .as_ref()
@@ -154,6 +159,7 @@ struct StreamResult {
     response: reqwest::Response,
     storage: Option<super::NativeResponseStorage>,
     usage: Option<super::Usage>,
+    pricing_usage: Option<crate::core::pricing_service::PricingUsage>,
     terminal: bool,
     upstream_failed: bool,
     failure: Option<ProviderError>,
@@ -169,9 +175,11 @@ async fn forward(
     deployment: Option<&str>,
     expected_id: Option<&str>,
     deadline: Option<tokio::time::Instant>,
+    file_search_calls: Option<u32>,
 ) -> StreamResult {
     let mut frames = Frames::default();
     let mut usage = None;
+    let mut pricing_usage = None;
     let mut terminal = false;
     let mut upstream_failed = false;
     let mut failure = None;
@@ -236,6 +244,11 @@ async fn forward(
                             terminal = true;
                             upstream_failed = event == "response.failed";
                             usage = value.get("response").and_then(response_usage);
+                            pricing_usage = value.get("response").zip(usage.as_ref()).and_then(
+                                |(value, usage)| {
+                                    super::request::pricing_usage(value, usage, file_search_calls)
+                                },
+                            );
                         } else if event == "error" {
                             terminal = true;
                             upstream_failed = true;
@@ -351,6 +364,7 @@ async fn forward(
         response,
         storage,
         usage,
+        pricing_usage,
         terminal,
         upstream_failed,
         failure,
@@ -375,6 +389,7 @@ pub(super) fn resume(
             &provider,
             deployment.as_deref(),
             Some(&id),
+            None,
             None,
         )
         .await;
