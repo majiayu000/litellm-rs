@@ -74,6 +74,9 @@ class Mock(http.server.BaseHTTPRequestHandler):
             return self.reply(value)
         if self.path.endswith('/messages/count_tokens'): return self.reply({'input_tokens':12})
         if self.path.endswith('/messages'): return self.reply({'id':'msg-release','type':'message','role':'assistant','model':body['model'],'content':[{'type':'text','text':'release hello'}],'stop_reason':'end_turn','stop_sequence':None,'usage':{'input_tokens':12,'output_tokens':3},'release_native_marker':True})
+        if ':streamGenerateContent' in self.path:
+            value={'candidates':[{'content':{'role':'model','parts':[{'text':'release hello'}]},'finishReason':'STOP','index':0}],'usageMetadata':{'promptTokenCount':12,'candidatesTokenCount':3,'totalTokenCount':15},'modelVersion':'gemini-3.5-flash'}
+            return self.reply(('event: message\ndata: '+json.dumps(value)+'\n\n').encode(),content_type='text/event-stream')
         if ':generateContent' in self.path: return self.reply({'candidates':[{'content':{'role':'model','parts':[{'text':'release hello'}]},'finishReason':'STOP','index':0}],'usageMetadata':{'promptTokenCount':12,'candidatesTokenCount':3,'totalTokenCount':15},'modelVersion':'gemini-3.5-flash'})
         if self.path.endswith('/chat/completions'): return self.reply({'id':'chat-release','object':'chat.completion','created':1700000000,'model':body['model'],'choices':[{'index':0,'message':{'role':'assistant','content':'release hello'},'finish_reason':'stop'}],'usage':{'prompt_tokens':12,'completion_tokens':3,'total_tokens':15}})
         if self.path.endswith('/mcp'): return self.reply({'jsonrpc':'2.0','id':body['id'],'result':{'tools':[],'release_native_marker':True}})
@@ -125,9 +128,14 @@ def smoke(gateway, integrations=False, database=None):
     r=post('responses','/v1/responses',response); assert r.json()['release_native_marker']
     r=post('responses-sse','/v1/responses',{**response,'stream':True}); assert 'response.completed' in r.text, r.text
     r=post('file-search','/v1/responses',{**response,'tools':[{'type':'file_search','vector_store_ids':['vs-release']}],'max_tool_calls':1}); assert r.json()['output'][-1]['type']=='file_search_call'
+    r=post('responses-compact','/v1/responses/compact',{'model':'gpt-4o-mini','input':[{'type':'compaction','encrypted_content':'opaque=='}]}); assert r.json()['object']=='response.compaction' and r.json()['output'][0]['encrypted_content']=='opaque=='
     r=post('responses-error','/v1/responses',{**response,'mock_error':True},expected=429); assert r.headers['retry-after']=='9'
     r=post('messages','/v1/messages',{'model':'claude-haiku-4-5-20251001','messages':[{'role':'user','content':'hello'}],'max_tokens':32},headers={'anthropic-version':'2023-06-01'}); assert r.json()['release_native_marker']
     r=post('gemini','/v1beta/models/gemini-3.5-flash:generateContent',{'contents':[{'role':'user','parts':[{'text':'hello'}]}],'generationConfig':{'maxOutputTokens':32}}); assert r.json()['candidates'][0]['content']['parts'][0]['text']=='release hello'
+    r=post('gemini-sse','/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse',{'contents':[{'role':'user','parts':[{'text':'hello'}]}],'generationConfig':{'maxOutputTokens':32}})
+    assert r.headers['content-type'].startswith('text/event-stream'),r.headers
+    events=[json.loads(line.removeprefix('data: ')) for line in r.text.splitlines() if line.startswith('data: ')]
+    assert events[0]['candidates'][0]['content']['parts'][0]['text']=='release hello' and events[-1]['usageMetadata']['totalTokenCount']==15,events
     if integrations:
         r=post('mcp','/smoke/mcp',{'jsonrpc':'2.0','id':1,'method':'tools/list','params':{'_meta':{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{}}}},headers={'accept':'application/json, text/event-stream','MCP-Protocol-Version':'2026-07-28','Mcp-Method':'tools/list'}); assert r.json()['result']['release_native_marker']
         r=post('a2a-send','/a2a/smoke',{'jsonrpc':'2.0','id':1,'method':'SendMessage','params':{'message':{'role':'ROLE_USER','messageId':username,'parts':[{'text':'hello'}]}}},headers={'A2A-Version':'1.0'}); assert r.json()['result']['task']['id']=='task-'+username
