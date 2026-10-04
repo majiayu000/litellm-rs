@@ -380,7 +380,6 @@ async fn compact_rejects_unknown_output_bounds_and_invalid_cache_write_usage() {
 }
 
 #[cfg(feature = "providers-extended")]
-#[cfg(feature = "providers-extended")]
 #[tokio::test]
 async fn compact_skips_higher_priority_non_openai_responses_deployments() {
     let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
@@ -425,6 +424,57 @@ async fn compact_skips_higher_priority_non_openai_responses_deployments() {
     let value: Value = test::read_body_json(response).await;
     assert_eq!(status, StatusCode::OK, "{value}");
     assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    assert_eq!(copilot.state.total_requests.load(Ordering::Relaxed), 0);
+    handle.stop(false).await;
+}
+
+#[cfg(feature = "providers-extended")]
+#[tokio::test]
+async fn file_search_skips_higher_priority_non_openai_responses_deployments() {
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        config.gateway.router.strategy =
+            litellm_rs::core::router::config::RoutingStrategy::PriorityBased;
+        config.gateway.providers[0].priority = 1;
+    })
+    .await;
+    upstream.output.lock().unwrap()["output"] = json!([]);
+    let router = state.unified_router();
+    let provider =
+        litellm_rs::core::providers::github_copilot::GitHubCopilotProvider::new(Default::default())
+            .await
+            .unwrap();
+    router.add_deployment(litellm_rs::core::router::deployment::Deployment::new(
+        "copilot-test".into(),
+        litellm_rs::core::providers::Provider::GitHubCopilot(provider),
+        "gpt-4o-mini".into(),
+        "gpt-4o-mini".into(),
+    ));
+    let copilot = router.get_deployment("copilot-test").unwrap();
+    assert!(
+        copilot
+            .provider
+            .capabilities()
+            .contains(&litellm_rs::core::types::model::ProviderCapability::Responses)
+    );
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(file_search_request(false))
+            .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let value: Value = test::read_body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+    assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
     assert_eq!(copilot.state.total_requests.load(Ordering::Relaxed), 0);
     handle.stop(false).await;
 }
