@@ -213,7 +213,7 @@ async fn create_native(
         &model,
         ProviderCapability::Responses,
         |deployment| {
-            (!compact || matches!(&deployment.provider, crate::core::providers::Provider::OpenAI(_)))
+            (!(compact || file_search_calls.is_some()) || matches!(&deployment.provider, crate::core::providers::Provider::OpenAI(_)))
                 && previous.as_ref().is_none_or(|(record, _)| {
                 record.deployment_id.as_deref() == Some(deployment.id.as_str())
                     && deployment.provider.native_response_binding() == record.deployment_binding
@@ -231,9 +231,6 @@ async fn create_native(
                 let owner = owner.clone();
                 async move {
                     body["model"] = model.clone().into();
-                    if file_search_calls.is_some() && !matches!(&provider, crate::core::providers::Provider::OpenAI(_)) {
-                        return Err(ProviderError::not_supported("responses", "file_search requires a verified OpenAI billing contract"));
-                    }
                     let provider_name = provider.name().to_string();
                     let pricing = spend::request_pricing_for_provider(
                         &state.budgeted.pricing(),

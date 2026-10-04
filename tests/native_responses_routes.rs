@@ -380,6 +380,7 @@ async fn compact_rejects_unknown_output_bounds_and_invalid_cache_write_usage() {
 }
 
 #[cfg(feature = "providers-extended")]
+#[cfg(feature = "providers-extended")]
 #[tokio::test]
 async fn compact_skips_higher_priority_non_openai_responses_deployments() {
     let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
