@@ -121,6 +121,9 @@ impl VertexAIProvider {
         request: ChatRequest,
         _context: RequestContext,
     ) -> Result<ChatResponse, VertexAIError> {
+        if !super::is_vertex_gemini_chat_model(&request.model, self.config.enable_experimental) {
+            return Err(ProviderError::model_not_found("vertex_ai", &request.model));
+        }
         let model = super::parse_vertex_model(&request.model);
         let is_catalog_gemini =
             super::is_vertex_gemini_catalog_model(&request.model, self.config.enable_experimental);
@@ -252,8 +255,10 @@ impl VertexAIProvider {
         model: &str,
         messages: &[Value],
     ) -> Result<usize, VertexAIError> {
-        if super::parse_vertex_model(model).is_gemini()
-            && !super::is_vertex_gemini_catalog_model(model, self.config.enable_experimental)
+        let parsed = super::parse_vertex_model(model);
+        if parsed.is_partner_model()
+            || (parsed.is_gemini()
+                && !super::is_vertex_gemini_catalog_model(model, self.config.enable_experimental))
         {
             return Err(ProviderError::model_not_found("vertex_ai", model));
         }
@@ -580,9 +585,6 @@ impl LLMProvider for VertexAIProvider {
         if super::is_vertex_gemini_chat_model(&request.model, self.config.enable_experimental) {
             self.gemini_transformer
                 .transform_chat_request(&request, &model)
-        } else if model.is_partner_model() {
-            self.partner_transformer
-                .transform_chat_request(&request, &model)
         } else {
             Err(ProviderError::model_not_found("vertex_ai", &request.model))
         }
@@ -613,9 +615,6 @@ impl LLMProvider for VertexAIProvider {
         let model = super::parse_vertex_model(raw_model);
         if super::is_vertex_gemini_chat_model(raw_model, self.config.enable_experimental) {
             self.gemini_transformer
-                .transform_chat_response(response_json, &model)
-        } else if model.is_partner_model() {
-            self.partner_transformer
                 .transform_chat_response(response_json, &model)
         } else {
             Err(ProviderError::model_not_found(

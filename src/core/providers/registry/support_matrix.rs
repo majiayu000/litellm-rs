@@ -102,6 +102,26 @@ const CATALOG_HTTP_SUPPORT: ProviderLegacyAdapterSupport = row(
 /// additional legacy completion adapters.
 pub static LEGACY_ADAPTER_MATRIX: &[ProviderLegacyAdapterSupport] = &[
     row(
+        "v0",
+        [U, U, U, U, U, U, U, U, U],
+        "Model API contract is no longer published in current docs; default model and protocol unverified.",
+    ),
+    row(
+        "lambda_ai",
+        [U, U, U, U, U, U, U, U, U],
+        "Shared inference retired on 2025-09-25.",
+    ),
+    row(
+        "meta_llama",
+        [U, U, U, U, U, U, U, U, U],
+        "Default Llama API transport is not verified against the current Meta Model API.",
+    ),
+    row(
+        "amazon_nova",
+        [U, U, U, U, U, U, U, U, U],
+        "Default transport is unverified; use native Bedrock for supported Nova models.",
+    ),
+    row(
         "perplexity",
         [U, U, U, U, U, U, U, U, U],
         "Sonar Chat Completions retired; Agent API has no runtime adapter yet.",

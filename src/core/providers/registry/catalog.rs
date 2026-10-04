@@ -151,11 +151,8 @@ const LEMONADE_CAPABILITIES: &[ProviderCapability] = &[
     ProviderCapability::AudioTranscription,
     ProviderCapability::TextToSpeech,
 ];
-pub(crate) const AMAZON_NOVA_CATALOG_CAPABILITIES: &[ProviderCapability] = &[
-    ProviderCapability::ChatCompletion,
-    ProviderCapability::ChatCompletionStream,
-    ProviderCapability::ToolCalling,
-];
+
+// Historical Nova pricing helpers. These do not register callable models or a transport.
 pub(crate) const AMAZON_NOVA_SUPPORTS_STREAMING: bool = true;
 pub(crate) const AMAZON_NOVA_SUPPORTS_TOOLS: bool = true;
 pub(crate) struct AmazonNovaCatalogModel {
@@ -233,12 +230,6 @@ pub(crate) const AMAZON_NOVA_MODEL_ALIASES: &[(&str, &str)] = &[
     ("nova-micro", "amazon.nova-micro-v1:0"),
     ("nova-premier", "amazon.nova-premier-v1:0"),
 ];
-static AMAZON_NOVA_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-    AMAZON_NOVA_CATALOG_MODELS
-        .iter()
-        .map(amazon_nova_model_info_from_entry)
-        .collect()
-});
 pub(crate) fn amazon_nova_catalog_model(model: &str) -> Option<&'static AmazonNovaCatalogModel> {
     let canonical = AMAZON_NOVA_MODEL_ALIASES
         .iter()
@@ -247,9 +238,6 @@ pub(crate) fn amazon_nova_catalog_model(model: &str) -> Option<&'static AmazonNo
     AMAZON_NOVA_CATALOG_MODELS
         .iter()
         .find(|entry| entry.model_id == canonical)
-}
-pub(crate) fn amazon_nova_catalog_model_infos() -> &'static [ModelInfo] {
-    &AMAZON_NOVA_MODEL_INFOS
 }
 pub(crate) fn amazon_nova_catalog_model_info(model: &str) -> Option<ModelInfo> {
     amazon_nova_catalog_model(model).map(amazon_nova_model_info_from_entry)
@@ -511,28 +499,6 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             "https://api.friendli.ai/v1",
             "FRIENDLIAI_API_KEY",
         ),
-        ProviderDefinition {
-            capabilities: super::catalog_policy::META_LLAMA_CAPABILITIES,
-            ..def_chat(
-                "meta_llama",
-                "Meta Llama API",
-                "https://api.llama.com/compat/v1",
-                "META_LLAMA_API_KEY",
-            )
-        },
-        ProviderDefinition {
-            capabilities: super::catalog_policy::V0_CAPABILITIES,
-            ..def_chat("v0", "Vercel v0", "https://api.v0.dev/v1", "V0_API_KEY")
-        },
-        ProviderDefinition {
-            capabilities: AMAZON_NOVA_CATALOG_CAPABILITIES,
-            ..def_chat(
-                "amazon_nova",
-                "Amazon Nova",
-                "https://api.nova.amazon.com/v1",
-                "AMAZON_NOVA_API_KEY",
-            )
-        },
         // xAI publishes OpenAI-compatible chat endpoints; model IDs are
         // passed through instead of enumerated in this static provider catalog.
         ProviderDefinition {
@@ -749,12 +715,6 @@ fn build_catalog() -> HashMap<&'static str, ProviderDefinition> {
             )
         },
         def_chat("yi", "Yi", "https://api.lingyiwanwu.com/v1", "YI_API_KEY"),
-        def_chat(
-            "lambda_ai",
-            "Lambda AI",
-            "https://api.lambdalabs.com/v1",
-            "LAMBDA_API_KEY",
-        ),
         ProviderDefinition {
             capabilities: EMBEDDING_CATALOG_CAPABILITIES,
             alternate_auth_env_vars: &["OVH_AI_ENDPOINTS_ACCESS_TOKEN"],
@@ -840,31 +800,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn amazon_nova_catalog_runtime_exposes_models_and_pricing() {
-        use crate::core::providers::openai_like::{OpenAILikeConfig, OpenAILikeProvider};
-        use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-        let provider = OpenAILikeProvider::new_for_catalog(
-            OpenAILikeConfig::with_api_key("https://8.8.8.8/v1", "catalog-runtime-test-key")
-                .with_provider_name("amazon_nova"),
-            AMAZON_NOVA_CATALOG_CAPABILITIES,
-        )
-        .await
-        .expect("catalog provider must construct");
-        assert_eq!(provider.models().len(), 5);
-        for model in ["amazon.nova-pro-v1:0", "nova-pro"] {
-            let cost = provider
-                .calculate_cost(model, 1_000, 1_000)
-                .await
-                .expect("pricing");
-            assert!((cost - 0.004).abs() < f64::EPSILON);
-        }
-        let unknown = provider
-            .calculate_cost("grok-4.3", 1_000, 1_000)
-            .await
-            .unwrap();
-        assert_eq!(unknown, 0.0);
-    }
     #[test]
     fn test_xai_openai_compatible_pass_through_definition() {
         let Some(definition) = get_definition("xai") else {
@@ -936,33 +871,6 @@ mod tests {
             let canonical_definition =
                 get_definition(canonical).expect("canonical catalog definition should exist");
             assert_eq!(definition.capabilities, canonical_definition.capabilities);
-        }
-    }
-
-    #[test]
-    fn issue_606_openai_like_candidates_are_catalog_entries() {
-        let expected = [
-            (
-                "meta_llama",
-                "https://api.llama.com/compat/v1",
-                "META_LLAMA_API_KEY",
-            ),
-            ("v0", "https://api.v0.dev/v1", "V0_API_KEY"),
-            (
-                "amazon_nova",
-                "https://api.nova.amazon.com/v1",
-                "AMAZON_NOVA_API_KEY",
-            ),
-        ];
-
-        for (name, base_url, auth_env_var) in expected {
-            let Some(definition) = get_definition(name) else {
-                panic!("{name} provider definition should be registered");
-            };
-            assert_eq!(definition.base_url, base_url);
-            assert_eq!(definition.auth_env_var, auth_env_var);
-            assert_eq!(definition.auth_type, AuthType::Bearer);
-            assert!(!definition.skip_api_key);
         }
     }
 }

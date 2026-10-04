@@ -45,33 +45,9 @@ impl Provider {
                                         model.model_info.capabilities.contains(capability)
                                     })
                             }
-                            "azure_ai" => {
-                                provider
-                                    .get_model_registry()
-                                    .supports_capability(catalog_model, capability)
-                                    || provider.model_identity.as_ref().is_some_and(|binding| {
-                                        binding
-                                            .pricing()
-                                            .get_model_info_for_provider("azure_ai", catalog_model)
-                                            .is_some_and(|(_, metadata)| match capability {
-                                                ProviderCapability::ChatCompletion => {
-                                                    metadata.mode == "chat"
-                                                }
-                                                ProviderCapability::ChatCompletionStream => {
-                                                    metadata.mode == "chat"
-                                                        && metadata.supports_streaming
-                                                            != Some(false)
-                                                }
-                                                ProviderCapability::Embeddings => {
-                                                    metadata.mode == "embedding"
-                                                }
-                                                ProviderCapability::ImageGeneration => {
-                                                    metadata.mode == "image_generation"
-                                                }
-                                                _ => false,
-                                            })
-                                    })
-                            }
+                            "azure_ai" => identity
+                                .catalog_capabilities()
+                                .is_some_and(|caps| caps.contains(capability)),
                             _ => false,
                         }
                 }
@@ -184,6 +160,11 @@ impl Provider {
                 .iter()
                 .find(|model_info| model_info.id == model)
                 .is_some_and(|model_info| model_info.capabilities.contains(capability)),
+            #[cfg(feature = "providers-extra")]
+            Provider::VertexAI(provider) => provider
+                .models()
+                .iter()
+                .any(|info| info.id == model && info.capabilities.contains(capability)),
             Provider::Deepgram(provider) => provider
                 .models()
                 .iter()

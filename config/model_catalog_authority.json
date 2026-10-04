@@ -1,10 +1,10 @@
 {
   "_metadata": {
     "schema_version": 1,
-    "revision": "responses-endpoint-and-retirement-review-20261003",
-    "decision_source_sha256": "f11f42da8a76fe12351bc183c14eec261a23e52b33467853ba05b0830a47d583",
+    "revision": "2026-10-04-remaining-static-catalog",
+    "decision_source_sha256": "6bfea713765882049eabf6fb5dec84b2a23c336547e5e2965b89352e3efdef1f",
     "pricing_universe_sha256": "d742cde2ad856944b98a883392dad41c9cf38fd7ecc0715b8a7bada94f4eb109",
-    "classification_sha256": "fa7187381bc90127da44179afdee681cfcd00ab1556f980f9dfb099082425db1",
+    "classification_sha256": "adc6a6cfc1d750c0f384e969a60d2b0f6f69315ab11f93569a7bb738d9b54202",
     "total_entry_count": 4569,
     "enforced_providers": [
       "azure",
@@ -73,8 +73,8 @@
         "unreviewed": 0
       },
       "azure_ai": {
-        "callable": 35,
-        "pricing_only": 47,
+        "callable": 23,
+        "pricing_only": 59,
         "unreviewed": 59
       },
       "azure_text": {
@@ -5098,9 +5098,17 @@
       "pricing_key": "azure_ai/Cohere-embed-v3-english",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Cohere-embed-v3-english",
+      "endpoints": [
+        "embeddings"
+      ],
+      "capabilities": [
+        "embeddings"
+      ],
       "aliases": []
     },
     {
@@ -5108,9 +5116,17 @@
       "pricing_key": "azure_ai/Cohere-embed-v3-multilingual",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Cohere-embed-v3-multilingual",
+      "endpoints": [
+        "embeddings"
+      ],
+      "capabilities": [
+        "embeddings"
+      ],
       "aliases": []
     },
     {
@@ -5136,9 +5152,17 @@
       "pricing_key": "azure_ai/FLUX-1.1-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "FLUX-1.1-pro",
+      "endpoints": [
+        "image_generation"
+      ],
+      "capabilities": [
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -5146,9 +5170,17 @@
       "pricing_key": "azure_ai/FLUX.1-Kontext-pro",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "FLUX.1-Kontext-pro",
+      "endpoints": [
+        "image_generation"
+      ],
+      "capabilities": [
+        "image_generation"
+      ],
       "aliases": []
     },
     {
@@ -5331,9 +5363,18 @@
       "pricing_key": "azure_ai/Llama-3.3-70B-Instruct",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Llama-3.3-70B-Instruct",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
@@ -5341,9 +5382,18 @@
       "pricing_key": "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
@@ -5351,9 +5401,18 @@
       "pricing_key": "azure_ai/Llama-4-Scout-17B-16E-Instruct",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Llama-4-Scout-17B-16E-Instruct",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
@@ -5522,9 +5581,17 @@
       "pricing_key": "azure_ai/Phi-4",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Phi-4",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion"
+      ],
       "aliases": []
     },
     {
@@ -5532,9 +5599,18 @@
       "pricing_key": "azure_ai/Phi-4-mini-instruct",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Phi-4-mini-instruct",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
@@ -5542,9 +5618,18 @@
       "pricing_key": "azure_ai/Phi-4-mini-reasoning",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Phi-4-mini-reasoning",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
@@ -5552,9 +5637,18 @@
       "pricing_key": "azure_ai/Phi-4-multimodal-instruct",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Phi-4-multimodal-instruct",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
@@ -5562,20 +5656,29 @@
       "pricing_key": "azure_ai/Phi-4-reasoning",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-008",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "Phi-4-reasoning",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream"
+      ],
       "aliases": []
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-fable-5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-fable-5",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
@@ -5589,62 +5692,62 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-haiku-4-5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-haiku-4-5",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-opus-4-5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-opus-4-5",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-opus-4-6",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-opus-4-6",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-opus-4-7",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-opus-4-7",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-opus-4-8",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-opus-4-8",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-opus-5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-opus-5",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
@@ -5658,32 +5761,32 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-sonnet-4-5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-sonnet-4-5",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-sonnet-4-6",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-sonnet-4-6",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-sonnet-5",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-008"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "claude-sonnet-5",
-      "aliases": []
+      "reason": "Current Foundry model uses native Messages; azure_ai has no Messages adapter."
     },
     {
       "provider": "azure_ai",
@@ -5735,10 +5838,15 @@
       "pricing_key": "azure_ai/cohere-rerank-v4.0-fast",
       "decision": "callable",
       "evidence_sources": [
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004",
         "refresh-azure-openai"
       ],
       "catalog_model_id": "Cohere-rerank-v4.0-fast",
       "endpoints": [
+        "rerank"
+      ],
+      "capabilities": [
         "rerank"
       ],
       "aliases": []
@@ -5748,10 +5856,15 @@
       "pricing_key": "azure_ai/cohere-rerank-v4.0-pro",
       "decision": "callable",
       "evidence_sources": [
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004",
         "refresh-azure-openai"
       ],
       "catalog_model_id": "Cohere-rerank-v4.0-pro",
       "endpoints": [
+        "rerank"
+      ],
+      "capabilities": [
         "rerank"
       ],
       "aliases": []
@@ -5858,9 +5971,17 @@
       "pricing_key": "azure_ai/embed-v-4-0",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "embed-v-4-0",
+      "endpoints": [
+        "embeddings"
+      ],
+      "capabilities": [
+        "embeddings"
+      ],
       "aliases": []
     },
     {
@@ -5876,9 +5997,20 @@
       "pricing_key": "azure_ai/gpt-5.4",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "gpt-5.4",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -5894,9 +6026,20 @@
       "pricing_key": "azure_ai/gpt-5.4-mini",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "gpt-5.4-mini",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -5912,9 +6055,20 @@
       "pricing_key": "azure_ai/gpt-5.4-nano",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "gpt-5.4-nano",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -5928,12 +6082,12 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/gpt-5.4-pro",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "gpt-5.4-pro",
-      "aliases": []
+      "reason": "Responses-only model; azure_ai has no native Responses adapter."
     },
     {
       "provider": "azure_ai",
@@ -5948,9 +6102,20 @@
       "pricing_key": "azure_ai/gpt-5.5",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "gpt-5.5",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -6029,9 +6194,20 @@
       "pricing_key": "azure_ai/gpt-oss-120b",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "gpt-oss-120b",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -6055,9 +6231,20 @@
       "pricing_key": "azure_ai/grok-4",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "grok-4",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -6115,9 +6302,20 @@
       "pricing_key": "azure_ai/grok-4.3",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "grok-4.3",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -6134,9 +6332,20 @@
       "pricing_key": "azure_ai/grok-code-fast-1",
       "decision": "callable",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-009",
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
       "catalog_model_id": "grok-code-fast-1",
+      "endpoints": [
+        "chat_completions"
+      ],
+      "capabilities": [
+        "chat_completion",
+        "chat_completion_stream",
+        "function_calling",
+        "tool_calling"
+      ],
       "aliases": []
     },
     {
@@ -6192,12 +6401,12 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/mistral-document-ai-2512",
-      "decision": "callable",
+      "decision": "pricing_only",
       "evidence_sources": [
-        "evidence-009"
+        "evidence-azure-current-20261004",
+        "evidence-azure-partners-20261004"
       ],
-      "catalog_model_id": "mistral-document-ai-2512",
-      "aliases": []
+      "reason": "Current OCR model uses document/image-to-text protocol; azure_ai has no OCR adapter."
     },
     {
       "provider": "azure_ai",

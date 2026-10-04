@@ -123,8 +123,8 @@ fn pricing_backed_chat_identity_exposes_catalog_parameters() {
     let params = provider.get_supported_openai_params("wire-llama");
     assert!(params.contains(&"temperature"));
     assert!(params.contains(&"stop"));
-    assert!(params.contains(&"tools"));
-    assert!(params.contains(&"tool_choice"));
+    assert!(!params.contains(&"tools"));
+    assert!(!params.contains(&"tool_choice"));
     assert!(params.contains(&"stream"));
 }
 
@@ -527,4 +527,41 @@ async fn configured_router_keeps_current_foundry_modalities_and_rejects_old_alia
         old.is_err(),
         "historical prices must not grant current routing capabilities"
     );
+}
+
+#[test]
+fn native_only_azure_protocols_cannot_regain_chat_through_price_mapping() {
+    use crate::core::providers::model_identity::{
+        ModelIdentityMapping, validate_deployment_identity,
+    };
+    use crate::core::providers::registry::model_catalog_authority::CatalogAuthority;
+    let pricing = crate::core::pricing_service::PricingService::with_embedded_default().unwrap();
+    let catalog = CatalogAuthority::from_embedded().unwrap();
+    for model in [
+        "claude-sonnet-5",
+        "claude-opus-4-7",
+        "gpt-5.4-pro",
+        "mistral-document-ai-2512",
+    ] {
+        let target = format!("azure_ai/{model}");
+        assert!(
+            pricing
+                .get_model_info_for_provider("azure_ai", model)
+                .is_some()
+        );
+        let mapping = ModelIdentityMapping::new(Some(target), None);
+        let result = validate_deployment_identity(
+            "azure-test",
+            "azure_ai",
+            "customer-deployment",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        );
+        assert!(
+            result.is_err(),
+            "native protocol {model} was promoted from its price row"
+        );
+    }
 }

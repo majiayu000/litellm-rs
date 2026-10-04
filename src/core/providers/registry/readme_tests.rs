@@ -181,10 +181,6 @@ fn expected_readme_tier2_row(entry: &ProviderRegistryEntry) -> Option<ExpectedRe
             "native factory (`providers-extended`)",
             ["✅", "✅", "✅", "–", "–"],
         )),
-        ProviderType::MetaLlama | ProviderType::V0 | ProviderType::AmazonNova => Some(expected(
-            "catalog-only (`OpenAILike`)",
-            ["✅", "✅", "–", "–", "–"],
-        )),
         _ => None,
     }
 }

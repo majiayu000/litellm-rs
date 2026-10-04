@@ -204,15 +204,15 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::V0,
         "v0",
         &[],
-        ProviderDispatchKind::CatalogOpenAiLike,
-        true,
+        ProviderDispatchKind::UnsupportedEnum,
+        false,
     ),
     entry(
         ProviderType::MetaLlama,
         "meta_llama",
         &["llama", "meta-llama"],
-        ProviderDispatchKind::CatalogOpenAiLike,
-        true,
+        ProviderDispatchKind::UnsupportedEnum,
+        false,
     ),
     entry(
         ProviderType::Ollama,
@@ -311,8 +311,8 @@ pub static PROVIDER_TYPE_REGISTRY: &[ProviderRegistryEntry] = &[
         ProviderType::AmazonNova,
         "amazon_nova",
         &["amazon-nova", "nova"],
-        ProviderDispatchKind::CatalogOpenAiLike,
-        true,
+        ProviderDispatchKind::UnsupportedEnum,
+        false,
     ),
     entry(
         ProviderType::GitHub,
@@ -665,14 +665,13 @@ mod tests {
             ProviderDispatchKind::ExplicitOpenAiLike
         );
         for provider_type in [
-            ProviderType::MetaLlama,
             ProviderType::V0,
+            ProviderType::MetaLlama,
             ProviderType::AmazonNova,
         ] {
             assert_eq!(
                 dispatch_kind_for(&provider_type),
-                ProviderDispatchKind::CatalogOpenAiLike,
-                "{provider_type:?} should be catalog-only metadata"
+                ProviderDispatchKind::UnsupportedEnum
             );
         }
         assert_eq!(

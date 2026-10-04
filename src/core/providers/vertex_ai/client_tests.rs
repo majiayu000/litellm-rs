@@ -936,3 +936,31 @@ async fn custom_gemini_named_endpoint_remains_callable_for_token_counting() {
     assert_eq!(result.unwrap(), 7);
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn historical_partner_metadata_never_enables_native_vertex_transport() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    for model in [
+        "claude-3-haiku@20240307",
+        "claude-3-opus@20240229",
+        "claude-3-5-sonnet@20241022",
+        "ai21/jamba-1.5-large",
+        "ai21/jamba-1.5-mini",
+        "claude-sonnet-4-6",
+        "meta/llama-4-scout-17b-16e-instruct",
+    ] {
+        assert!(!provider.models().iter().any(|info| info.id == model));
+        let error = provider
+            .chat_completion_internal(ChatRequest::new(model), RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::ModelNotFound { .. }));
+        let error = provider
+            .transform_request(ChatRequest::new(model), RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::ModelNotFound { .. }));
+    }
+}

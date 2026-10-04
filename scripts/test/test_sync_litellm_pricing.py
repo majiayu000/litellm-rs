@@ -968,8 +968,9 @@ class CatalogAuthorityTests(unittest.TestCase):
         # Scheduled imports may add pending rows, but cannot change reviewed ones.
         # Retirement review #1373 moved 20 entries to historical pricing only.
         # Azure moved one callable alias and five pending rows to pricing-only.
-        self.assertEqual(target_counts["callable"], 150)
-        self.assertEqual(target_counts["pricing_only"], 435)
+        # Twelve native-only Azure protocols have no executable Azure AI adapter.
+        self.assertEqual(target_counts["callable"], 138)
+        self.assertEqual(target_counts["pricing_only"], 447)
         self.assertGreaterEqual(target_counts["unreviewed"], 71)
         # Preserve the reviewed Responses endpoint contracts after the merge.
         expected_contracts = sorted(

@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn test_b2_second_batch_selectors_are_supported() {
-        for selector in ["compactifai", "aleph_alpha", "yi", "lambda_ai"] {
+        for selector in ["compactifai", "aleph_alpha", "yi"] {
             assert!(
                 is_provider_selector_supported(selector),
                 "Expected selector '{}' to be supported",
@@ -692,7 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_b2_second_batch_create_provider_from_name() {
-        for provider_name in ["compactifai", "aleph_alpha", "yi", "lambda_ai"] {
+        for provider_name in ["compactifai", "aleph_alpha", "yi"] {
             let config = crate::config::models::provider::ProviderConfig {
                 name: provider_name.to_string(),
                 provider_type: "".to_string(),
@@ -713,7 +713,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_b2_second_batch_create_provider_from_provider_type() {
-        for provider_type in ["compactifai", "aleph_alpha", "yi", "lambda_ai"] {
+        for provider_type in ["compactifai", "aleph_alpha", "yi"] {
             let config = crate::config::models::provider::ProviderConfig {
                 name: "openai".to_string(),
                 provider_type: provider_type.to_string(),

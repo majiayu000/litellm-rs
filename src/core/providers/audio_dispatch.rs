@@ -406,16 +406,6 @@ impl ElevenLabsProvider {
                         ProviderCapability::AudioTranscription,
                         "audio_second",
                     ),
-                    (
-                        "scribe_v1",
-                        ProviderCapability::AudioTranscription,
-                        "audio_second",
-                    ),
-                    (
-                        "scribe_v1_experimental",
-                        ProviderCapability::AudioTranscription,
-                        "audio_second",
-                    ),
                     ("eleven_v3", ProviderCapability::TextToSpeech, "character"),
                     (
                         "eleven_multilingual_v2",

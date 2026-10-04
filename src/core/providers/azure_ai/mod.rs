@@ -250,21 +250,16 @@ impl LLMProvider for AzureAIProvider {
                                 )
                             })
                     }
-                    (Some("azure_ai"), Some(model_id)) => {
-                        azure_ai_features(model_id).or_else(|| {
-                            binding
-                                .pricing()
-                                .get_model_info_for_provider("azure_ai", model_id)
-                                .filter(|(_, metadata)| metadata.mode == "chat")
-                                .map(|(_, metadata)| {
-                                    (
-                                        metadata.supports_function_calling.unwrap_or(false),
-                                        metadata.supports_streaming.unwrap_or(true),
-                                        false,
-                                    )
-                                })
-                        })
-                    }
+                    (Some("azure_ai"), Some(model_id)) => identity
+                        .catalog_capabilities()
+                        .filter(|caps| caps.contains(&ProviderCapability::ChatCompletion))
+                        .map(|caps| {
+                            (
+                                caps.contains(&ProviderCapability::ToolCalling),
+                                caps.contains(&ProviderCapability::ChatCompletionStream),
+                                model_id == "Phi-4",
+                            )
+                        }),
                     _ => None,
                 }
             }
