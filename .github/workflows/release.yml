@@ -183,8 +183,16 @@ jobs:
         release_smoke_dir="$RUNNER_TEMP/release-artifact-smoke"
         mkdir -p "$release_smoke_dir/certs"
         python -m pip install requests==2.32.5 PyYAML==6.0.3
+        cat > "$release_smoke_dir/certs/ca.cnf" <<'EOF'
+        [req]
+        distinguished_name=req_dn
+        x509_extensions=v3_ca
+        [req_dn]
+        [v3_ca]
+        basicConstraints=critical,CA:true
+        EOF
         MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-          -subj /CN=ReleaseSmokeCA -addext basicConstraints=critical,CA:true \
+          -config "$release_smoke_dir/certs/ca.cnf" -subj /CN=ReleaseSmokeCA \
           -keyout "$release_smoke_dir/certs/mock-ca-key.pem" \
           -out "$release_smoke_dir/certs/mock-ca.pem"
         MSYS_NO_PATHCONV=1 openssl req -new -newkey rsa:2048 -nodes \
