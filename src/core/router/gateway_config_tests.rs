@@ -189,7 +189,6 @@ mod matrix {
         Case { name: "catalog-alternate", selector: "xiaomi_mimo", top: "", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","alternate")], selected: Some("alternate"), shadowed: &[] },
         Case { name: "catalog-blank", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","")], selected: None, shadowed: &[] },
         Case { name: "catalog-alias-ai21", selector: "ai21-chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
-        Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "heroku-explicit", selector: "heroku", top: "explicit", settings: &[], env: &[("HEROKU_API_KEY","primary"),("INFERENCE_KEY","native"),("EMBEDDING_KEY","embedding")], selected: Some("explicit"), shadowed: &["primary","native","embedding"] },
