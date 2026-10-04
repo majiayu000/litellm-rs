@@ -256,8 +256,11 @@ impl VertexAIProvider {
         messages: &[Value],
     ) -> Result<usize, VertexAIError> {
         let parsed = super::parse_vertex_model(model);
-        if parsed.is_partner_model()
-            || (parsed.is_gemini()
+        if (parsed.is_partner_model() && parsed.model_id() == model)
+            || ((parsed.is_gemini() && parsed.model_id() == model
+                || crate::core::providers::gemini::get_gemini_registry()
+                    .get_model_spec(model)
+                    .is_some())
                 && !super::is_vertex_gemini_catalog_model(model, self.config.enable_experimental))
         {
             return Err(ProviderError::model_not_found("vertex_ai", model));
@@ -284,7 +287,7 @@ impl VertexAIProvider {
         if super::is_vertex_gemini_chat_model(model, self.config.enable_experimental) {
             return self.build_google_catalog_model_url(model, "countTokens", false);
         }
-        let model_obj = super::parse_vertex_model(model);
+        let model_obj = super::VertexAIModel::Custom(model.to_string());
         self.build_url(&model_obj, "countTokens", false)
     }
 }

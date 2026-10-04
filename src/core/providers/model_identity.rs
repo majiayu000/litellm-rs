@@ -92,7 +92,6 @@ impl DeploymentProviderBinding {
 }
 
 impl DeploymentModelIdentity {
-    #[cfg(feature = "providers-extra")]
     pub(crate) fn catalog_capabilities(&self) -> Option<&[ProviderCapability]> {
         self.capability.as_ref()?.capabilities.as_deref()
     }
