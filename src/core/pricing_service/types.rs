@@ -103,6 +103,8 @@ pub struct PricingUsage {
     pub cache_creation_1h_tokens: Option<u32>,
     /// Anthropic server-side search calls (charged separately from tokens).
     pub web_search_requests: Option<u32>,
+    /// OpenAI Responses file-search calls, excluding vector-store storage.
+    pub file_search_requests: Option<u32>,
     pub cache_read_tokens: Option<u32>,
     pub audio_tokens: Option<u32>,
     pub output_audio_tokens: Option<u32>,
@@ -124,6 +126,7 @@ impl PricingUsage {
             cache_creation_tokens: None,
             cache_creation_1h_tokens: None,
             web_search_requests: None,
+            file_search_requests: None,
             cache_read_tokens: None,
             audio_tokens: None,
             output_audio_tokens: None,
@@ -170,6 +173,7 @@ impl From<&crate::core::types::responses::Usage> for PricingUsage {
             cache_creation_tokens: prompt_details.and_then(|details| details.cache_creation_tokens),
             cache_creation_1h_tokens: None,
             web_search_requests: None,
+            file_search_requests: None,
             cache_read_tokens: prompt_details.and_then(|details| details.cache_read_tokens),
             audio_tokens: prompt_details.and_then(|details| details.audio_tokens),
             output_audio_tokens: completion_details.and_then(|details| details.audio_tokens),

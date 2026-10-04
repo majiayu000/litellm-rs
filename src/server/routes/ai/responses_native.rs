@@ -81,6 +81,7 @@ struct NativeCall {
     model: String,
     deployment: String,
     pricing: spend::RequestPricing,
+    file_search_calls: Option<u32>,
     reservation: Option<UnifiedBudgetReservation>,
     key_reservation: Option<BudgetReservation>,
     storage: Option<NativeResponseStorage>,
@@ -150,7 +151,14 @@ async fn create_native(
     let previous =
         lifecycle::previous_response(&state.storage.database, &body, owner.as_ref()).await?;
     let retained_prompt_tokens = previous.as_ref().map_or(0, |(_, tokens)| *tokens);
-    let needs_input_count = request::validate(&body)?;
+    let billing_scope = request::validate(&body)?;
+    let needs_input_count = billing_scope.count_input;
+    let file_search_calls = billing_scope.file_search_calls;
+    if compact && file_search_calls.is_some() {
+        return Err(GatewayError::validation(
+            "file_search is not supported by compaction",
+        ));
+    }
     let requested_model = body
         .get("model")
         .and_then(Value::as_str)
@@ -223,6 +231,9 @@ async fn create_native(
                 let owner = owner.clone();
                 async move {
                     body["model"] = model.clone().into();
+                    if file_search_calls.is_some() && !matches!(&provider, crate::core::providers::Provider::OpenAI(_)) {
+                        return Err(ProviderError::not_supported("responses", "file_search requires a verified OpenAI billing contract"));
+                    }
                     let provider_name = provider.name().to_string();
                     let pricing = spend::request_pricing_for_provider(
                         &state.budgeted.pricing(),
@@ -283,7 +294,12 @@ async fn create_native(
                             budgeted::ApiKeyBudgetPolicy::FromProviderReservation,
                         )
                         .reserve_for_call(|_| {
-                            if let Some(input_tokens) = counted_input {
+                            if let Some(calls) = file_search_calls {
+                                reserve_file_search_budget(
+                                    &pricing, &limits, &provider_name, &model,
+                                    counted_input, budget_request.max_tokens, calls,
+                                )
+                            } else if let Some(input_tokens) = counted_input {
                                 spend::reserve_completion_budget_with_counted_input(
                                     &pricing,
                                     &state.config().gateway.pricing,
@@ -341,6 +357,7 @@ async fn create_native(
                         model,
                         deployment,
                         pricing,
+                        file_search_calls,
                         reservation,
                         key_reservation,
                         storage,
@@ -377,6 +394,7 @@ async fn create_native(
         model,
         deployment,
         pricing,
+        file_search_calls,
         reservation,
         key_reservation,
         mut storage,
@@ -408,13 +426,19 @@ async fn create_native(
     }
     let value = serde_json::from_slice::<Value>(&bytes);
     let usage = value.as_ref().ok().and_then(response_usage);
+    let pricing_usage = value
+        .as_ref()
+        .ok()
+        .zip(usage.as_ref())
+        .and_then(|(value, usage)| request::pricing_usage(value, usage, file_search_calls));
     settle(
         state,
         &context,
         &provider,
         &model,
         pricing,
-        usage.as_ref(),
+        usage.as_ref().filter(|_| pricing_usage.is_some()),
+        pricing_usage.clone(),
         reservation,
         key_reservation,
         crate::core::request_ledger::current_facts(),
@@ -480,8 +504,52 @@ async fn create_native(
                 callback.fail(error.to_string(), "storage_error");
             })?;
     }
-    callback.complete_usage(usage.as_ref(), "success");
+    callback.complete_pricing_usage(pricing_usage.as_ref(), "success");
     Ok(HttpResponse::Ok().json(value))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reserve_file_search_budget(
+    pricing: &spend::RequestPricing,
+    limits: &crate::core::budget::UnifiedBudgetLimits,
+    provider: &str,
+    model: &str,
+    counted_input: Option<u32>,
+    max_output: Option<u32>,
+    calls: u32,
+) -> Result<Option<UnifiedBudgetReservation>, ProviderError> {
+    let context_tokens = pricing
+        .model_info()
+        .and_then(|info| info.max_input_tokens)
+        .filter(|limit| *limit > 0)
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "responses",
+                "file_search requires verified model context and pricing bounds",
+            )
+        })?;
+    let input = context_tokens
+        .checked_mul(calls)
+        .and_then(|tokens| counted_input?.checked_add(tokens))
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "responses",
+                "file_search input reservation exceeds supported range",
+            )
+        })?;
+    let estimate = pricing
+        .estimate_completion(input, max_output)
+        .map_err(|error| ProviderError::configuration("responses", error.to_string()))?;
+    let mut tool_usage = crate::core::pricing_service::PricingUsage::new(0, 0);
+    tool_usage.file_search_requests = Some(calls);
+    let tool_cost = pricing
+        .calculate_usage(&tool_usage)
+        .map_err(|error| ProviderError::configuration("responses", error.to_string()))?
+        .tool_cost;
+    limits
+        .reserve_spend(provider, model, estimate.max_cost + tool_cost)
+        .map(Some)
+        .map_err(|error| spend::reservation_error_to_provider_error(error, provider, model))
 }
 
 fn budget_request(body: &Value, model: &str) -> ChatCompletionRequest {
@@ -592,6 +660,7 @@ async fn settle(
     model: &str,
     pricing: spend::RequestPricing,
     usage: Option<&Usage>,
+    pricing_usage: Option<crate::core::pricing_service::PricingUsage>,
     reservation: Option<UnifiedBudgetReservation>,
     key_reservation: Option<BudgetReservation>,
     facts: Option<SharedRequestLedgerFacts>,
@@ -635,6 +704,7 @@ async fn settle(
         reservation,
         key_reservation,
     )
+    .with_pricing_usage(pricing_usage)
     .with_ledger_facts(facts);
     spend::record_completion_spend_with_reservation_with_policy(
         &budgeted.pricing(),

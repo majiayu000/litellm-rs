@@ -4,6 +4,8 @@ Unreleased work for issue #1372 / PR #1374, verified 2026-10-03. This is a bound
 
 ## Supported request scope
 
+- Bounded native OpenAI `file_search` is supported for JSON/SSE requests with an explicit `max_tool_calls`; see the follow-up scope below.
+
 - Text, instructions, reasoning and client-executed `function` / `custom` tools retain native JSON and SSE fields. Standard OpenAI service tier is sent explicitly so a project priority-tier default cannot silently change rates. Requests selecting another tier are rejected.
 - Inline image data, uploaded image IDs, inline PDFs and uploaded PDF IDs use `POST /responses/input_tokens` on the selected OpenAI deployment before generation. Its strict integer count enters the existing prompt-plus-output budget reservation, replacing local multimodal estimates. The count includes the complete input, instructions, tool definitions, reasoning/text settings and any supplied predecessor. The inference request is not replaced by the count projection.
 - Opaque inline reasoning/compaction data also requires counting. Server-side item references are rejected because this path has no owner binding for them. Remote image/file URLs are rejected: their bytes can change between counting and generation. Uploaded file contents or inline bytes must remain available to the provider; upstream rejection is preserved.
@@ -12,7 +14,7 @@ Unreleased work for issue #1372 / PR #1374, verified 2026-10-03. This is a bound
 
 ## Explicitly unsupported charges
 
-Hosted web/file search, code interpreter/containers, image generation, remote MCP, hosted shell/computer tools and unknown tool types are rejected even if a caller hopes they will not be selected. Prompt templates, conversation handles, explicit containers and context-management settings are rejected because they can introduce context or charges outside this reservation. Audio/video input pricing is not implemented here.
+Hosted web search, code interpreter/containers, image generation, remote MCP, hosted shell/computer tools and unknown tool types are rejected even if a caller hopes they will not be selected. Prompt templates, conversation handles, explicit containers and context-management settings are rejected because they can introduce context or charges outside this reservation. Audio/video input pricing is not implemented here.
 
 OpenAI bills search calls and retrieved content, file-search calls/storage, container sessions and generated images separately from ordinary response token totals. This gateway does not infer those charges from tool transport, a price-table row, or an output token total. No new hosted-tool tariff configuration or generic billing engine was added.
 
@@ -37,3 +39,48 @@ Decision: adapt the official count endpoint and reuse existing catalog pricing, 
 Validation uses local HTTP servers with no paid provider calls: image/PDF/file-ID JSON and SSE preservation; count-body projection; count errors/malformed counts; budget refusal before generation; hosted-tool/remote-input rejection; completed/incomplete/failed/unknown/error settlement; unknown actual key usage. Real supplier-account calls were not run.
 
 Completed local checks for this batch: `cargo fmt --check`, `cargo check`, `cargo test` (7,266 library tests passed, 1 ignored, plus integration/doctests), `cargo clippy --all-targets -- -D warnings`, `cargo clippy --features gateway,sqlite --all-targets -- -D warnings`, `cargo test --features gateway,sqlite --test native_responses_routes` (16 passed), and `cargo test --features gateway,sqlite --lib responses_native` (5 passed). CI, merge and release are separate outcomes.
+
+
+## Bounded OpenAI file search (#1372 follow-up, 2026-10-04)
+
+`file_search` is supported on the native OpenAI path for synchronous JSON and
+SSE requests with an explicit positive `max_tool_calls`. The original vector
+store IDs, filters, result limit, tool choice, tool fields and native events are
+forwarded unchanged. Other compatible providers, compaction and background
+file-search recovery remain unsupported; other hosted tools are still rejected.
+
+Admission counts the original processed input on the selected deployment and
+reserves that input plus one verified model context window per possible tool
+call, the bounded output, and $0.0025 per possible file-search call. The context
+allowance conservatively covers additional model turns and retrieved content;
+it does not assume the default chunk size or infer a token bound from
+`max_num_results`. Missing model pricing/context, count failures, overflow or
+insufficient provider/model/key budget prevent generation. This reuses the
+existing request pricing snapshot and a single provider/key reservation.
+
+Settlement combines validated native token/cache usage with distinct completed
+`file_search_call` output items. SSE progress events and the request maximum are
+not billed as executed calls. Missing/ambiguous call data, unsuccessful tool
+statuses, duplicate IDs, calls beyond the admitted limit, missing token usage
+and interruptions retain the reservation and record unknown actual cost. This
+preserves the original response/error semantics; a reserved budget is never
+presented as an invoice. Existing vector-store storage charges are account-level
+charges and are outside this gateway request, which does not create/upload stores.
+
+Verified: [OpenAI pricing](https://developers.openai.com/api/docs/pricing) lists
+$2.50 per 1,000 Responses file-search calls and separate storage charges;
+[Responses parameters](https://platform.openai.com/docs/api-reference/responses/create)
+define `max_tool_calls` across built-in tools;
+[file search](https://developers.openai.com/api/docs/guides/tools-file-search)
+shows native `file_search_call` output items and retrieval options.
+
+Decision: adapt these wire units into existing `PricingUsage` and request budget
+settlement. No tariff configuration, SDK, generic tool billing layer or new
+recovery schema was added. Web search was not selected because its content-token
+billing needs a separate verified normalization contract. Local mock HTTP tests
+exercise the gateway; no paid supplier-account call has been run.
+
+Fresh follow-up verification: `cargo fmt --check`, `cargo check --locked`,
+`cargo test --locked`, default all-target clippy, `gateway,sqlite` all-target
+clippy, and all 39 native Responses HTTP tests passed. CI, merge, supplier-account
+calls and release acceptance are separate from these local results.
