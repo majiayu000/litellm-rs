@@ -1,6 +1,6 @@
 # LiteLLM 差距补齐清单
 
-更新日期：2026-10-04（北京时间）。后续 [#1441](https://github.com/majiayu000/litellm-rs/pull/1441) 与 [#1442](https://github.com/majiayu000/litellm-rs/pull/1442) 已验收合并；当前接受 main 为 `46476786a09b6030ab58aee4c4e8acb173c9b7b2`。当前 3 个开放 issue（#1440、#1402、#1403）、2 个开放 PR（#1443、#1444）；后者仍是发行准备。下方历史快照保留当时状态，当前回执以本节和后续验收记录为准。
+更新日期：2026-10-04（北京时间）。后续 [#1441](https://github.com/majiayu000/litellm-rs/pull/1441) 与 [#1442](https://github.com/majiayu000/litellm-rs/pull/1442) 已验收合并；清理 #1443 已合并，当前接受 main 为 `14d51e9a5c15710cc20efb16776dcf17e6865dcd`。当前 2 个开放 issue（#1440、#1403）、1 个开放 PR（#1444，发行准备）。下方历史快照保留当时状态，当前回执以本节和后续验收记录为准。
 
 本文件是 F01–F18 的执行台账。已合并与已发布分别记录；当前正式版本仍为 v0.7.0。下方保留原始验收条件、实际源码/检查/合并记录和剩余事项。
 
@@ -25,7 +25,7 @@
 | F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 完成 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)，`a1f718bb`：MCP 2026-07-28 无状态 POST、工具/资源/提示词、MRTR/SSE、命名权限、Origin/出站限制、并发/超时和断流已接通。新增前缀同名路由、配置导出脱敏、空/旧通用权限拒绝及 Tasks taskId 路由头回归；最新 22 项路由测试、fmt 和特性 all-target clippy 通过。前一提交 bf8434ab 默认完整检查（7219 通过/1 忽略）及 gateway/sqlite/mcp 完整测试/clippy 通过；提交 a1f718bb 的 15 项 CI 全绿，review 清零；已合并 ceff7f39。无旧协议、OAuth 获取、聚合或外部工具计费；无网关会话亲和要求。范围见 [文档](https://github.com/majiayu000/litellm-rs/blob/a1f718bb771f5974d212450c813ac4c87bd85b9d/docs/gateway/mcp.md)。 |
 | F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 完成 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)，`9a3d19be`：补 server Message context、任意 JSON data、畸形 URL 导出脱敏、终态订阅拒绝及 SSE 禁止缓冲。41 项路由、默认完整检查、gateway/sqlite/a2a/mcp 完整测试（9990 通过/1 忽略，另有集成/doc）及 clippy 通过，五条对应 review 已解决；此前 c29db734 的 15 项 CI 全绿；最新六条协议 review 及其验证见本行后续记录。进程内归属需实例亲和、重启拒绝旧归属，无 push/list/扩展卡片/代理计费。见 [不可变范围文档](https://github.com/majiayu000/litellm-rs/blob/c29db734e312f040c4ef62d3225bb4000f2a4f91/docs/gateway/a2a.md)。 最新 9a3d19be 六条新 review 已处理、43 项路由、默认完整 7267/1 忽略和 gateway/sqlite/a2a/mcp 完整 9992/1 忽略及 clippy 通过，已推送；9a3d19be 的 15 项 CI 全绿、review 清零，已合并 `7919b463` 并自动关闭 #1392；F18 单独验证发行产物。 |
 | F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 完成 | [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) / [#1405](https://github.com/majiayu000/litellm-rs/pull/1405)；验收 head `5d691d1f`，全部 15 项 CI 成功、审查线程解决后合并 `20640a48`。 [不可变范围文档](https://github.com/majiayu000/litellm-rs/blob/5d691d1f61f2beef12dc6d7971818ddfadb32f6d/docs/gateway/realtime.md)。首批只支持 OpenAI 手动文本/音频/客户端函数 WebSocket。明确排除自动 VAD、转写会话、图片、托管 MCP、切换模型、开启内容检查的会话和崩溃结算。逐响应检查 live 身份/部署/健康/准入；完整 session ack 核对手动模式、输出上限和工具范围。终态与所有转发操作的供应商错误保留健康分类，未知状态不计成功；不可表达的 key cap 在上游连接前返回400且不扣供应商健康。当前默认全套和定向/两套 clippy 结果按精确提交归档；4cc4e4fc 额外全套的既有 moderation 挂起不计通过。 |
-| F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 待验收 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / [#1443](https://github.com/majiayu000/litellm-rs/pull/1443)；移除未用 core Realtime 库及 MCP/A2A 旧客户端/导出，保留真实配置/错误/domain 类型。37 条 registry 对照真实 startup/routes/features/README，旧协议指南改为实际 HTTP 入口。默认全套、相关特性测试和两套 clippy 已本地通过；当前 head 的发行特性 CI 成功，CI Fast moderation 鉴权测试超时正在同提交重跑；无未解决审查线程。当前未合并、未发布。见 [核对记录](../audit/subsystem-reconciliation-2026-10-04.md)。 |
+| F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 完成 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / [#1443](https://github.com/majiayu000/litellm-rs/pull/1443)；最终 head `671672c0ed4c96848447c7db4d0c2d87d7cca133` 的 15 项 CI 成功、审查线程解决后合并 `14d51e9a5c15710cc20efb16776dcf17e6865dcd`，issue 已关闭。移除未用 core Realtime 库及 MCP/A2A 旧客户端/导出，保留真实配置/错误/domain 类型；37 条 registry 与 startup/routes/features/README 对齐，旧协议指南改为实际 HTTP 入口。默认全套、相关特性测试和两套 clippy 本地通过。CI Fast 首次 moderation 鉴权测试超时，同提交重跑通过；根因未确认。见 [核对记录](../audit/subsystem-reconciliation-2026-10-04.md)；尚未发布。 |
 | F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 完成 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395) 已于 2026-10-03 合并（`cb76a186`）。同机、同上游、4 workers、并发 64 的三轮对照及直连基线共 9 个样本零请求错误；原始数据/环境/限制随报告提交。12 项运行器行为测试、14 项现有 benchmark 契约测试、默认完整 Rust 检查及全部 CI 通过，审查线程已解决。结果仅适用于报告中的本地模拟负载，不宣称通用倍数，见 [已合并报告](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison.md)及[原始证据包](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison-20261003.json.gz)。 |
 | F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 进行中 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403) / [#1444](https://github.com/majiayu000/litellm-rs/pull/1444)；0.8.0 版本/Cargo.lock/changelog/install 已准备。默认全套及 clippy、精确 shipped-profile 全套及 clippy、clean package 与空根 debug 安装通过；安装包 8 项协议、实际 ARM64 release 容器 11 项协议及 appuser/config/health 验证通过。预验收 SHA、checksum、镜像 ID 和可复现脚本见 [发行验收](../gateway/release-0.8.0-verification.md)。最终 accepted commit、跨平台产物与真实 GitHub/crates/GHCR/Homebrew 发布尚未完成，正式版本仍 v0.7.0。 |
 
@@ -167,10 +167,10 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 
 已建立 #1402；首批 #1404 已合并 e6677a0b。随对应功能合并更新声明，最终集中复核。
 
-- [ ] 逐项核对 subsystem_registry、README、Cargo feature、网关挂载和发行特性，区分库类型、默认启用、可选路由和已发布能力。
-- [ ] 处理写明 0.7 移除但仍存在的废弃接口；根据已落地替代入口做最小清理，不扩展成架构重写或新增兼容层。
-- [ ] MCP/A2A/Realtime 等文档中的范围、认证、存储、计费和部署限制与实际行为一致；测试仅针对真实变更，不为文字调整添加机械测试。
-- [ ] 记录本项 PR 和验证后关闭 F16；新增声明不能领先于对应实现验收。
+- [x] 逐项核对 subsystem_registry、README、Cargo feature、网关挂载和发行特性，区分库类型、默认启用、可选路由和已发布能力。
+- [x] 处理写明 0.7 移除但仍存在的废弃接口；根据已落地替代入口做最小清理，不扩展成架构重写或新增兼容层。
+- [x] MCP/A2A/Realtime 等文档中的范围、认证、存储、计费和部署限制与实际行为一致；测试仅针对真实变更，不为文字调整添加机械测试。
+- [x] 记录本项 PR 和验证后关闭 F16；新增声明不能领先于对应实现验收。
 
 ## F18 发布和安装验收
 
@@ -318,4 +318,4 @@ The [remaining static catalog audit](../audit/remaining-static-model-catalog-202
 
 ### F16 final removal batch (2026-10-04)
 
-旧 core Realtime 库、MCP/A2A 客户端及过期导出/聚合配置已移除；保留当前网关消费的配置、错误、domain/schema 支持。停用选择器的空目录 hook 和 Meta/v0 特殊策略已删除。全部 37 条当前 core registry 声明已对照 startup/routes/features/README，见 [逐项核对](../audit/subsystem-reconciliation-2026-10-04.md)。本地验证和最终 CI/合并状态按本项 PR 记录；尚未发布新版本。
+旧 core Realtime 库、MCP/A2A 客户端及过期导出/聚合配置已移除；保留当前网关消费的配置、错误、domain/schema 支持。停用选择器的空目录 hook 和 Meta/v0 特殊策略已删除。全部 37 条当前 core registry 声明已对照 startup/routes/features/README，见 [逐项核对](../audit/subsystem-reconciliation-2026-10-04.md)。本地验证和最终 CI/合并状态按 #1443 记录；最终 15 项 CI 成功、审查解决后合并 14d51e9a，#1402 已关闭；尚未发布新版本。
