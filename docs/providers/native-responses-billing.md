@@ -18,7 +18,7 @@ Hosted web search, code interpreter/containers, image generation, remote MCP, ho
 
 OpenAI bills search calls and retrieved content, file-search calls/storage, container sessions and generated images separately from ordinary response token totals. This gateway does not infer those charges from tool transport, a price-table row, or an output token total. No new hosted-tool tariff configuration or generic billing engine was added.
 
-Completed, incomplete and failed terminal responses use validated input/output/cached/reasoning usage; reasoning is already included in output tokens and is not billed twice. Missing or malformed usage, interrupted SSE and native error events retain the conservative reservation in provider/model and key budget accounting. The request ledger retains unknown usage/cost, and key usage records an unpriced request with zero inferred actual tokens/cost. That reserved upper bound is budget protection, not a supplier invoice. Stateless unknown outcomes have no upstream recovery job; F07 separately persists background recovery obligations.
+Completed, incomplete and failed terminal responses use validated input/output/cached/reasoning usage; reasoning is already included in output tokens and is not billed twice. Missing or malformed usage, interrupted SSE and native error events retain the conservative reservation in provider/model and key budget accounting. The request ledger retains unknown cost; valid token usage remains available to the ledger, key statistics and callbacks even when tool-call charges are unknown. Key usage records an unpriced request without inventing actual cost or missing token counts. That reserved upper bound is budget protection, not a supplier invoice. Stateless unknown outcomes have no upstream recovery job; F07 separately persists background recovery obligations.
 
 Compaction selects OpenAI deployments only, even when a model group contains another Responses-capable provider. Because compact has no output-limit parameter, its reservation uses the selected pricing snapshot's verified model maximum output tokens. Missing bounds are rejected before generation. Only the default service tier is supported.
 
@@ -81,6 +81,8 @@ billing needs a separate verified normalization contract. Local mock HTTP tests
 exercise the gateway; no paid supplier-account call has been run.
 
 Fresh follow-up verification: `cargo fmt --check`, `cargo check --locked`,
-`cargo test --locked`, default all-target clippy, `gateway,sqlite` all-target
-clippy, and all 39 native Responses HTTP tests passed. CI, merge, supplier-account
+`cargo test --locked`, default all-target clippy, `gateway,sqlite,providers-extended` all-target
+clippy, all 42 native Responses HTTP tests and all seven callback tests passed. CI, merge, supplier-account
 calls and release acceptance are separate from these local results.
+
+When `max_output_tokens` is omitted, file-search admission uses the verified model maximum output tokens. Missing model output bounds are rejected before generation; it never uses the generic 100-token estimate for this hosted-tool path.

@@ -2009,6 +2009,71 @@ fn file_search_request(streaming: bool) -> Value {
 }
 
 #[tokio::test]
+async fn native_file_search_without_output_limit_reserves_catalog_bound() {
+    use litellm_rs::core::budget::{ProviderLimitConfig, ResetPeriod};
+    for streaming in [false, true] {
+        for budget in [0.5, 4.0] {
+            let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+            state.pricing.add_custom_model(
+                "gpt-4o-mini".into(),
+                serde_json::from_value(json!({
+                    "litellm_provider":"openai", "mode":"chat",
+                    "max_input_tokens":128000, "max_output_tokens":32000,
+                    "input_cost_per_token":0.0, "output_cost_per_token":0.0001
+                }))
+                .unwrap(),
+            );
+            state.budget_limits.providers.set_provider_limit(
+                "native-test",
+                ProviderLimitConfig::new(budget, ResetPeriod::Monthly),
+            );
+            {
+                let mut output = upstream.output.lock().unwrap();
+                output["output"] = json!([]);
+                output["usage"] =
+                    json!({"input_tokens":12,"output_tokens":20000,"total_tokens":20012});
+            }
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let mut body = file_search_request(streaming);
+            body.as_object_mut().unwrap().remove("max_output_tokens");
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/responses")
+                    .set_json(body)
+                    .to_request(),
+            )
+            .await;
+            if budget < 3.205 {
+                assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+                assert!(upstream.seen.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(response.status(), StatusCode::OK);
+                let _ = test::read_body(response).await;
+                assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+                assert!(
+                    (state
+                        .budget_limits
+                        .providers
+                        .get_provider_usage("native-test")
+                        .unwrap()
+                        .current_spend
+                        - 2.0)
+                        .abs()
+                        < 1e-10
+                );
+            }
+            handle.stop(false).await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn native_file_search_preserves_wire_and_settles_observed_calls_once() {
     use litellm_rs::core::{
         budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
@@ -2233,7 +2298,14 @@ async fn native_file_search_unknown_calls_retain_reservation_and_unpriced_key_us
                 .to_request();
             req.extensions_mut()
                 .insert(RequestContext::new().with_api_key(key_id));
-            let response = test::call_service(&app, req).await;
+            let facts = Arc::new(Mutex::new(
+                litellm_rs::core::request_ledger::RequestLedgerFacts::default(),
+            ));
+            let response = litellm_rs::core::request_ledger::scope_facts(
+                facts.clone(),
+                test::call_service(&app, req),
+            )
+            .await;
             assert_eq!(response.status(), StatusCode::OK);
             let _ = test::read_body(response).await;
             let reserved =
@@ -2251,7 +2323,13 @@ async fn native_file_search_unknown_calls_retain_reservation_and_unpriced_key_us
             );
             let usage = state.key_manager.get_usage_stats(key_id).await.unwrap();
             assert_eq!(usage.unpriced_requests, 1);
+            assert_eq!(usage.total_tokens, 15);
             assert_eq!(usage.total_cost, 0.0);
+            let settled = litellm_rs::core::request_ledger::snapshot_facts(&facts);
+            assert_eq!(settled.prompt_tokens, Some(12));
+            assert_eq!(settled.completion_tokens, Some(3));
+            assert_eq!(settled.total_tokens, Some(15));
+            assert_eq!(settled.cost, None);
             handle.stop(false).await;
         }
     }
@@ -2262,6 +2340,7 @@ async fn native_file_search_missing_price_or_context_never_generates() {
     for row in [
         json!({"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.00000015,"output_cost_per_token":0.0000006}),
         json!({"litellm_provider":"openai","mode":"chat","max_input_tokens":128000,"max_output_tokens":16384}),
+        json!({"litellm_provider":"openai","mode":"chat","max_input_tokens":128000,"input_cost_per_token":0.00000015,"output_cost_per_token":0.0000006}),
     ] {
         let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
         state
@@ -2273,11 +2352,13 @@ async fn native_file_search_missing_price_or_context_never_generates() {
                 .configure(litellm_rs::server::routes::ai::configure_routes),
         )
         .await;
+        let mut body = file_search_request(false);
+        body.as_object_mut().unwrap().remove("max_output_tokens");
         let response = test::call_service(
             &app,
             test::TestRequest::post()
                 .uri("/v1/responses")
-                .set_json(file_search_request(false))
+                .set_json(body)
                 .to_request(),
         )
         .await;

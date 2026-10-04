@@ -116,7 +116,9 @@ pub(super) async fn response(
                 &model,
                 pricing,
                 usage.as_ref(),
-                None,
+                usage
+                    .as_ref()
+                    .map(crate::core::pricing_service::PricingUsage::from),
                 reservation,
                 key_reservation,
                 facts,

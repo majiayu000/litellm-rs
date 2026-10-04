@@ -434,7 +434,7 @@ async fn create_native(
         &provider,
         &model,
         pricing,
-        usage.as_ref().filter(|_| pricing_usage.is_some()),
+        usage.as_ref(),
         pricing_usage.clone(),
         reservation,
         key_reservation,
@@ -501,7 +501,7 @@ async fn create_native(
                 callback.fail(error.to_string(), "storage_error");
             })?;
     }
-    callback.complete_pricing_usage(pricing_usage.as_ref(), "success");
+    callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");
     Ok(HttpResponse::Ok().json(value))
 }
 
@@ -534,8 +534,17 @@ fn reserve_file_search_budget(
                 "file_search input reservation exceeds supported range",
             )
         })?;
+    let output = max_output
+        .or_else(|| pricing.model_info().and_then(|info| info.max_output_tokens))
+        .filter(|limit| *limit > 0)
+        .ok_or_else(|| {
+            ProviderError::invalid_request(
+                "responses",
+                "file_search requires a verified model output bound or max_output_tokens",
+            )
+        })?;
     let estimate = pricing
-        .estimate_completion(input, max_output)
+        .estimate_completion(input, Some(output))
         .map_err(|error| ProviderError::configuration("responses", error.to_string()))?;
     let mut tool_usage = crate::core::pricing_service::PricingUsage::new(0, 0);
     tool_usage.file_search_requests = Some(calls);
@@ -665,8 +674,8 @@ async fn settle(
     let budgeted = &state.budgeted;
     let limits = budgeted.budget_limits();
     let keys = budgeted.key_manager();
-    if usage.is_none() {
-        spend::capture_ledger_settlement(facts.as_ref(), provider, model, None, None);
+    if pricing_usage.is_none() {
+        spend::capture_ledger_settlement(facts.as_ref(), provider, model, usage, None);
         // Preserve the budget upper bound without presenting it as an actual bill.
         if let Some(reservation) = reservation {
             let reserved = reservation.reserved_amount();
@@ -686,7 +695,11 @@ async fn settle(
             && let Err(error) = keys
                 .record_usage_record(
                     key_id,
-                    crate::core::keys::UsageRecord::unpriced(0, 0.0, "responses_usage_unknown"),
+                    crate::core::keys::UsageRecord::unpriced(
+                        usage.map_or(0, |usage| u64::from(usage.total_tokens)),
+                        0.0,
+                        "responses_usage_unknown",
+                    ),
                 )
                 .await
         {

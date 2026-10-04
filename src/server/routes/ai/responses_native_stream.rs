@@ -110,7 +110,7 @@ pub(super) fn response(
                 &provider,
                 &model,
                 pricing,
-                usage.as_ref().filter(|_| pricing_usage.is_some()),
+                usage.as_ref(),
                 pricing_usage.clone(),
                 reservation,
                 key_reservation,
@@ -139,7 +139,7 @@ pub(super) fn response(
                 "Upstream response failed",
             ));
         } else if terminal {
-            callback.complete_pricing_usage(pricing_usage.as_ref(), "success");
+            callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");
             lease.finish_success(
                 usage
                     .as_ref()
