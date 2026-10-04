@@ -48,21 +48,27 @@ impl GatewayIdentityAuthority {
             Provider::OpenAILike(openai_like)
                 if openai_like.config().provider_name == "azure_ai" =>
             {
-                // The model-less compatible route uses its configured provider name.
-                // It has no catalog identity; known catalog models still bind below.
+                let effective = openai_like.config().get_effective_model(wire_model);
+                let pricing_key = if ModelIdRef::parse(&effective).provider() == Some("azure_ai") {
+                    effective.clone()
+                } else {
+                    format!("azure_ai/{effective}")
+                };
+                // Explicit custom deployments and the model-less configured-name route
+                // have no catalog privilege. Known price-only/unreviewed rows still bind.
                 if mapping.is_none()
-                    && wire_model == provider_name
                     && matches!(
-                        self.catalog.resolve_model("azure_ai", wire_model),
+                        self.catalog.resolve_model("azure_ai", &effective),
                         CatalogResolution::Unknown
                     )
+                    && self
+                        .catalog
+                        .decision_for_pricing_key("azure_ai", &pricing_key)
+                        .is_none()
                 {
                     return Ok(());
                 }
-                (
-                    "azure_ai",
-                    openai_like.config().get_effective_model(wire_model),
-                )
+                ("azure_ai", effective)
             }
             Provider::OpenAILike(openai_like) if openai_like.config().provider_name == "xai" => {
                 let configured = openai_like.config().get_effective_model(wire_model);

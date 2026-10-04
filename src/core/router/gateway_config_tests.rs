@@ -1001,28 +1001,33 @@ async fn audited_azure_ai_tools_are_routable_only_for_tool_models() {
 #[tokio::test]
 async fn model_less_azure_ai_compatible_route_keeps_dynamic_chat() {
     use crate::core::types::model::ProviderCapability;
-    let config = crate::config::models::provider::ProviderConfig {
-        name: "customer-azure-endpoint".into(),
-        provider_type: "azure_ai".into(),
-        api_key: "test-key".into(),
-        base_url: Some("https://test.services.ai.azure.com/models".into()),
-        models: vec![],
-        ..Default::default()
-    };
-    let pricing = std::sync::Arc::new(
-        crate::core::pricing_service::PricingService::with_embedded_default().unwrap(),
-    );
-    let router = Router::from_gateway_config_with_pricing(&[config], None, pricing)
-        .await
-        .unwrap();
-    for capability in [
-        ProviderCapability::ChatCompletion,
-        ProviderCapability::ChatCompletionStream,
+    for (models, route) in [
+        (vec![], "customer-azure-endpoint"),
+        (vec!["team-chat".into()], "team-chat"),
     ] {
-        assert!(
-            router
-                .select_deployment_lease_for_capability("customer-azure-endpoint", &capability)
-                .is_ok()
+        let config = crate::config::models::provider::ProviderConfig {
+            name: "customer-azure-endpoint".into(),
+            provider_type: "azure_ai".into(),
+            api_key: "test-key".into(),
+            base_url: Some("https://test.services.ai.azure.com/models".into()),
+            models,
+            ..Default::default()
+        };
+        let pricing = std::sync::Arc::new(
+            crate::core::pricing_service::PricingService::with_embedded_default().unwrap(),
         );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing)
+            .await
+            .unwrap();
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability(route, &capability)
+                    .is_ok()
+            );
+        }
     }
 }

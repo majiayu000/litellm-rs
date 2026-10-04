@@ -145,8 +145,8 @@ Azure AI native JSON responses now retain complete tool/function calls, and SSE
 responses retain indexed tool deltas and fragmented legacy function arguments.
 Legacy function request fields use the existing model-specific parameter gate;
 non-tool models reject them before transport. Local HTTP fixtures exercise both
-native response paths. The model-less OpenAILike Azure AI fallback retains its
-configured-name chat/stream route without fabricating a catalog or pricing
-identity; known pricing-only IDs still undergo the authority check.
+native response paths. The OpenAILike Azure AI fallback retains explicit custom model names and its
+model-less configured-name chat/stream route without fabricating a catalog or
+pricing identity; known pricing-only IDs still undergo the authority check.
 The provider-specific GH837 migration guide now documents disabled Nova/Meta/v0
 selectors and retired GitHub Models instead of promising catalog equivalence.
