@@ -98,3 +98,7 @@ all-target clippy, plus feature-enabled library tests and all-target clippy with
 `gateway,sqlite,mcp-validation,a2a,websockets,providers-extra`. The existing MCP,
 A2A and Realtime HTTP/WebSocket tests verify their retained paths. No production
 credentials or paid upstream calls were used. The final local default suite and all-target clippy passed; the feature-enabled library suite passed 10,522 tests with one ignored. A wider feature integration run was stopped after a batch fixture did not terminate; the batch and moderation cases subsequently passed independently and in their parallel HTTP suites. This does not establish the intermittent hang root cause. CI/merge evidence is recorded in the PR.
+
+The public protocol guides now point to the executable HTTP routes and qualified
+configuration types. Obsolete client/registry/permission examples were removed,
+and the Rust architecture comparison no longer advertises their removed entry.
