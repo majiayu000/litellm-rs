@@ -189,7 +189,6 @@ mod matrix {
         Case { name: "catalog-alternate", selector: "xiaomi_mimo", top: "", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","alternate")], selected: Some("alternate"), shadowed: &[] },
         Case { name: "catalog-blank", selector: "xiaomi_mimo", top: " ", settings: &[], env: &[("MIMO_API_KEY"," "),("XIAOMI_API_KEY","")], selected: None, shadowed: &[] },
         Case { name: "catalog-alias-ai21", selector: "ai21-chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
-        Case { name: "catalog-alias-github", selector: "github-models", top: "", settings: &[], env: &[("GITHUB_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-ai21-env", selector: "ai21_chat", top: "", settings: &[], env: &[("AI21_API_KEY","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "catalog-huggingface-env", selector: "hugging_face", top: "", settings: &[], env: &[("HF_TOKEN","primary")], selected: Some("primary"), shadowed: &[] },
         Case { name: "heroku-explicit", selector: "heroku", top: "explicit", settings: &[], env: &[("HEROKU_API_KEY","primary"),("INFERENCE_KEY","native"),("EMBEDDING_KEY","embedding")], selected: Some("explicit"), shadowed: &["primary","native","embedding"] },
@@ -955,5 +954,80 @@ async fn xai_multi_agent_is_not_a_chat_deployment() {
                 .select_deployment_lease_for_capability("grok-4.20-multi-agent-0309", &capability)
                 .is_err()
         );
+    }
+}
+
+#[cfg(feature = "providers-extra")]
+#[tokio::test]
+async fn audited_azure_ai_tools_are_routable_only_for_tool_models() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::types::model::ProviderCapability;
+    let config = ProviderConfig {
+        name: "azure-tool-test".into(),
+        provider_type: "azure_ai".into(),
+        api_key: "test-key".into(),
+        base_url: Some("https://test.services.ai.azure.com/models".into()),
+        models: vec![
+            "gpt-5.4".into(),
+            "gpt-5.5".into(),
+            "grok-4".into(),
+            "Phi-4".into(),
+        ],
+        ..Default::default()
+    };
+    let pricing = std::sync::Arc::new(
+        crate::core::pricing_service::PricingService::with_embedded_default().unwrap(),
+    );
+    let router = Router::from_gateway_config_with_pricing(&[config], None, pricing)
+        .await
+        .unwrap();
+    for model in ["gpt-5.4", "gpt-5.5", "grok-4", "Phi-4"] {
+        for capability in [
+            ProviderCapability::ToolCalling,
+            ProviderCapability::FunctionCalling,
+        ] {
+            assert_eq!(
+                router
+                    .select_deployment_lease_for_capability(model, &capability)
+                    .is_ok(),
+                model != "Phi-4",
+                "{model}: {capability:?}"
+            );
+        }
+    }
+}
+
+#[cfg(not(feature = "providers-extra"))]
+#[tokio::test]
+async fn model_less_azure_ai_compatible_route_keeps_dynamic_chat() {
+    use crate::core::types::model::ProviderCapability;
+    for (models, route) in [
+        (vec![], "customer-azure-endpoint"),
+        (vec!["team-chat".into()], "team-chat"),
+    ] {
+        let config = crate::config::models::provider::ProviderConfig {
+            name: "customer-azure-endpoint".into(),
+            provider_type: "azure_ai".into(),
+            api_key: "test-key".into(),
+            base_url: Some("https://test.services.ai.azure.com/models".into()),
+            models,
+            ..Default::default()
+        };
+        let pricing = std::sync::Arc::new(
+            crate::core::pricing_service::PricingService::with_embedded_default().unwrap(),
+        );
+        let router = Router::from_gateway_config_with_pricing(&[config], None, pricing)
+            .await
+            .unwrap();
+        for capability in [
+            ProviderCapability::ChatCompletion,
+            ProviderCapability::ChatCompletionStream,
+        ] {
+            assert!(
+                router
+                    .select_deployment_lease_for_capability(route, &capability)
+                    .is_ok()
+            );
+        }
     }
 }

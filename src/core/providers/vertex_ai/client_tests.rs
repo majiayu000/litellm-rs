@@ -909,30 +909,77 @@ fn test_vertex_ai_error_api_error() {
 
 #[tokio::test]
 async fn custom_gemini_named_endpoint_remains_callable_for_token_counting() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut bytes = vec![0; 4096];
-        let len = socket.read(&mut bytes).await.unwrap();
-        let request = String::from_utf8_lossy(&bytes[..len]);
-        assert!(request.starts_with("POST /gemini-3.7-flash-preview:countTokens "));
-        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"totalTokens\":7}").await.unwrap();
-    });
-    let provider = VertexAIProvider::new(VertexAIProviderConfig {
-        api_base: Some(format!("http://{address}")),
-        endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
-        ..test_vertex_provider_config()
-    })
-    .await
-    .unwrap();
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        provider.count_tokens("gemini-3.7-flash-preview", &[]),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result.unwrap(), 7);
-    server.await.unwrap();
+    for model in [
+        "gemini-3.7-flash-preview",
+        "team-gemini-2.5-pro-endpoint",
+        "my-claude-3-haiku-endpoint",
+    ] {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![0; 4096];
+            let len = socket.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..len]);
+            assert!(request.starts_with(&format!("POST /{model}:countTokens ")));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"totalTokens\":7}").await.unwrap();
+        });
+        let provider = VertexAIProvider::new(VertexAIProviderConfig {
+            api_base: Some(format!("http://{address}")),
+            endpoint_access: crate::core::net::ProviderEndpointAccess::PrivateNetwork,
+            ..test_vertex_provider_config()
+        })
+        .await
+        .unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            provider.count_tokens(model, &[]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.unwrap(), 7);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn historical_partner_metadata_never_enables_native_vertex_transport() {
+    let provider = VertexAIProvider::new(test_vertex_provider_config())
+        .await
+        .unwrap();
+    let dispatch = crate::core::providers::Provider::VertexAI(provider.clone());
+    for (model, capability) in [
+        (
+            "text-embedding-004",
+            crate::core::types::model::ProviderCapability::Embeddings,
+        ),
+        (
+            "imagen-3",
+            crate::core::types::model::ProviderCapability::ImageGeneration,
+        ),
+    ] {
+        assert!(dispatch.supports_capability_for_model(model, &capability));
+    }
+    for model in [
+        "claude-3-haiku@20240307",
+        "claude-3-opus@20240229",
+        "claude-3-5-sonnet@20241022",
+        "ai21/jamba-1.5-large",
+        "ai21/jamba-1.5-mini",
+        "claude-sonnet-4-6",
+        "meta/llama-4-scout-17b-16e-instruct",
+    ] {
+        assert!(!provider.models().iter().any(|info| info.id == model));
+        let error = provider
+            .chat_completion_internal(ChatRequest::new(model), RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::ModelNotFound { .. }));
+        let error = provider
+            .transform_request(ChatRequest::new(model), RequestContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::ModelNotFound { .. }));
+    }
 }

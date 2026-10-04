@@ -310,3 +310,6 @@ tests passed. Build/test debug information and incremental artifacts were disabl
 via `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`;
 features and behavior were unchanged. CI/review/merge/release outcomes are separate
 and have not yet been established for this follow-up.
+### 2026-10-04 F10 remaining static catalog review
+
+The [remaining static catalog audit](../audit/remaining-static-model-catalog-2026-10-04.md) accounts for the 35 remaining Azure AI mapped identities, all 16 former GitHub Models, Lambda, Nova/Meta/v0 defaults, native audio records and non-Gemini Vertex metadata. Confirmed shutdowns are separate from unverified protocols. Native-only Azure protocols are pricing-only; price amounts are unchanged. Default and relevant feature suites plus clippy passed locally; current PR CI/review is pending. No paid supplier availability or release is claimed.

@@ -22,9 +22,7 @@ use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
 use crate::core::providers::provider_type::ProviderType;
-use crate::core::providers::registry::{
-    self as provider_registry, ProviderDispatchKind, catalog_policy,
-};
+use crate::core::providers::registry::{self as provider_registry, ProviderDispatchKind};
 use crate::core::providers::{Provider, create_provider};
 use std::collections::{HashMap, HashSet};
 
@@ -199,8 +197,7 @@ impl Router {
         let mut staged = Vec::new();
         let mut canonical_models = HashSet::new();
         let mut generated_deployment_ids = HashSet::new();
-        let mut effective_model_aliases = model_aliases.clone();
-        let mut catalog_model_aliases = HashMap::new();
+        let effective_model_aliases = model_aliases.clone();
 
         for provider_config in providers {
             provider_config
@@ -238,16 +235,7 @@ impl Router {
             } else {
                 default_models(&provider, identity_authority)
             };
-            catalog_policy::canonicalize_models(provider.name(), &mut models);
-
             let uses_provider_name_fallback = models.is_empty();
-            catalog_policy::extend_model_aliases(
-                provider.name(),
-                &provider_name,
-                uses_configured_models,
-                &models,
-                &mut catalog_model_aliases,
-            );
             let preserves_configured_name_route = !uses_configured_models
                 && crate::core::providers::registry::catalog_policy::preserves_configured_name_route(
                     provider.name(),
@@ -295,12 +283,6 @@ impl Router {
                     legacy_metadata.clone(),
                     provider_name.clone(),
                 ));
-            }
-        }
-
-        for (alias, target) in catalog_model_aliases {
-            if !canonical_models.contains(&alias) {
-                effective_model_aliases.entry(alias).or_insert(target);
             }
         }
 

@@ -204,7 +204,6 @@ async fn missing_text_provider_chat_stream_and_error_contracts() {
 #[tokio::test]
 async fn catalog_text_provider_wire_ids_remain_lossless() {
     let cases = [
-        ("meta_llama", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
         ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
         (
             "fireworks",

@@ -114,10 +114,10 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `sambanova` | 当前官方 embeddings/Whisper 仅 SambaStack，公共云未开放；旧日文云端点说明不可当现行证据 |
 | `heroku` | 文本 embeddings；float→raw、HTTP input_type→上游 input_type；须模型 add-on 对应 URL/key；图片参数待适配 |
 | `friendliai` | 已核验：serverless 转写按 tokens 用量，与当前音频秒计费不同，未接入；dedicated embeddings/images 不在默认 base |
-| `meta_llama` | 待核验；本批未扩展非聊天声明 |
-| `v0` | 待核验；本批未扩展非聊天声明 |
-| `amazon_nova` | 待核验；本批未扩展非聊天声明 |
-| `github` | 待核验；本批未扩展非聊天声明 |
+| `meta_llama` | 旧默认协议没有当前官方依据，移出可构造目录；Meta Model API 与开源 Llama 不混同 |
+| `v0` | 当前 Model API 页面跳转、AI SDK 合同/源码移除；默认模型/协议未确认，移出可构造目录；不据此认定服务退役 |
+| `amazon_nova` | 旧默认端点无官方依据，移出可构造目录；当前 Nova 通过既有 Bedrock 适配 |
+| `github`（已移出目录） | GitHub Models 服务已整体退役，具名选择器构造即拒绝；[官方证据与范围](../audit/github-models-retirement-2026-10-03.md)。Copilot 单独核验 |
 | `xai` | 原生 `/stt` 转写 grok-voice-transcribe-2.0；图片与 TTS 尚待原生适配，见下方 |
 | `vllm` | embeddings、音频转写/翻译；须部署对应 pooling/Whisper 模型，Turbo 不支持翻译 |
 | `hosted_vllm` | 同 vllm；已有显式 API key 会发送 Bearer |
@@ -151,7 +151,7 @@ SambaNova 当前官方文档明确将 embeddings 和 Whisper 音频限定于 Sam
 | `maritalk` | 官方明确无自身 embeddings，推荐第三方 DeepInfra；图片/音频协议未确认 |
 | `siliconflow` | 文本 embeddings；图片 images/timings 与当前通用response不同，音频计费待核验，不先声明 |
 | `yi` | 官方页面/RSC 只确认聊天资料，独立 embeddings/images/audio 未确认 |
-| `lambda_ai` | 官方确认共享推理于 2025-09-25 退役，交 F10 #1373 清理；不扩非聊天能力；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
+| `lambda_ai` | 共享推理于 2025-09-25 退役，已移出可构造目录；[依据](../audit/remaining-compatible-selectors-2026-10-03.md) |
 | `ovhcloud` | 文本 embeddings；官方统一 oai.endpoints base；图片/音频原生协议尚未接入 |
 
 选择器别名沿用 `canonical_catalog_name`，例如 hugging_face、aimlapi、ai21_chat 等不另建重复审核项。

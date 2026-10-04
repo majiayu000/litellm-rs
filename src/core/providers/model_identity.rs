@@ -2,7 +2,6 @@ use crate::core::pricing_service::{PricingService, PricingSnapshot};
 use crate::core::providers::registry::model_catalog_authority::{
     CatalogAuthority, CatalogResolution,
 };
-#[cfg(feature = "gateway")]
 use crate::core::types::model::ProviderCapability;
 use crate::core::types::model_id::ModelIdRef;
 use serde::{Deserialize, Serialize};
@@ -38,6 +37,7 @@ pub(crate) struct ExactPricingIdentity {
 pub(crate) struct ExactCapabilityIdentity {
     provider: String,
     model: String,
+    capabilities: Option<Vec<ProviderCapability>>,
 }
 
 impl ExactPricingIdentity {
@@ -92,6 +92,10 @@ impl DeploymentProviderBinding {
 }
 
 impl DeploymentModelIdentity {
+    pub(crate) fn catalog_capabilities(&self) -> Option<&[ProviderCapability]> {
+        self.capability.as_ref()?.capabilities.as_deref()
+    }
+
     pub(crate) fn new(
         wire_model: impl Into<String>,
         capability: Option<ExactCapabilityIdentity>,
@@ -290,6 +294,7 @@ pub(crate) fn validate_deployment_identity(
                 Some(ExactCapabilityIdentity {
                     provider: canonical_provider.to_string(),
                     model: model.catalog_model_id().to_string(),
+                    capabilities: model.explicit_capabilities().map(<[_]>::to_vec),
                 }),
                 pricing_identity,
             ))
@@ -358,6 +363,7 @@ fn validate_capability_target(
         CatalogResolution::Callable(model) => Ok(ExactCapabilityIdentity {
             provider: capability_provider.to_string(),
             model: model.catalog_model_id().to_string(),
+            capabilities: model.explicit_capabilities().map(<[_]>::to_vec),
         }),
         CatalogResolution::PricingOnly => Err(invalid_field(
             provider_name,

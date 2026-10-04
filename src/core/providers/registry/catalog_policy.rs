@@ -1,24 +1,12 @@
 //! Provider-scoped compatibility policy for catalog-backed native duplicates.
 
-use std::{collections::HashMap, sync::LazyLock};
+use std::collections::HashMap;
 
 use serde_json::Value;
 
 use crate::core::providers::base::HttpErrorMapper;
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::model::{ModelInfo, ProviderCapability};
-
-pub(crate) const META_LLAMA_CAPABILITIES: &[ProviderCapability] = &[
-    ProviderCapability::ChatCompletion,
-    ProviderCapability::ChatCompletionStream,
-    ProviderCapability::ToolCalling,
-];
-pub(crate) const V0_CAPABILITIES: &[ProviderCapability] = &[
-    ProviderCapability::ChatCompletion,
-    ProviderCapability::ChatCompletionStream,
-    ProviderCapability::ToolCalling,
-    ProviderCapability::FunctionCalling,
-];
+use crate::core::types::model::ModelInfo;
 
 const COMMON_OPENAI_PARAMS: &[&str] = &[
     "messages",
@@ -77,222 +65,16 @@ const V0_OPENAI_PARAMS: &[&str] = &[
     "user",
     "seed",
 ];
-struct CatalogModel {
-    id: &'static str,
-    name: &'static str,
-    provider: &'static str,
-    context: u32,
-    output: Option<u32>,
-    multimodal: bool,
-    input_cost: Option<f64>,
-    output_cost: Option<f64>,
+pub(crate) fn catalog_model_infos(_provider: &str) -> Option<&'static [ModelInfo]> {
+    None
 }
 
-const META_LLAMA_MODELS: &[CatalogModel] = &[
-    catalog_model(
-        "llama4-scout",
-        "Llama 4 Scout",
-        "meta",
-        10_000_000,
-        Some(128_000),
-        true,
-        Some(0.00008),
-        Some(0.0003),
-    ),
-    catalog_model(
-        "llama4-maverick",
-        "Llama 4 Maverick",
-        "meta",
-        1_000_000,
-        Some(128_000),
-        true,
-        Some(0.00020),
-        Some(0.0006),
-    ),
-    catalog_model(
-        "llama3.3-70b",
-        "Llama 3.3 70B",
-        "meta",
-        128_000,
-        Some(32_000),
-        false,
-        Some(0.0006),
-        Some(0.0006),
-    ),
-    catalog_model(
-        "llama3.2-1b",
-        "Llama 3.2 1B",
-        "meta",
-        128_000,
-        None,
-        false,
-        None,
-        None,
-    ),
-    catalog_model(
-        "llama3.2-3b",
-        "Llama 3.2 3B",
-        "meta",
-        128_000,
-        None,
-        false,
-        None,
-        None,
-    ),
-    catalog_model(
-        "llama3.2-11b-vision",
-        "Llama 3.2 11B Vision",
-        "meta",
-        128_000,
-        None,
-        true,
-        None,
-        None,
-    ),
-    catalog_model(
-        "llama3.2-90b-vision",
-        "Llama 3.2 90B Vision",
-        "meta",
-        128_000,
-        None,
-        true,
-        None,
-        None,
-    ),
-    catalog_model(
-        "llama3.1-8b",
-        "Llama 3.1 8B",
-        "meta",
-        128_000,
-        None,
-        false,
-        None,
-        None,
-    ),
-    catalog_model(
-        "llama3.1-405b",
-        "Llama 3.1 405B",
-        "meta",
-        128_000,
-        None,
-        false,
-        Some(0.002),
-        Some(0.002),
-    ),
-    catalog_model(
-        "llama3.1-70b",
-        "Llama 3.1 70B",
-        "meta",
-        128_000,
-        None,
-        false,
-        Some(0.001),
-        Some(0.001),
-    ),
-];
-const V0_MODELS: &[CatalogModel] = &[catalog_model(
-    "v0-default",
-    "V0 Default Model",
-    "v0",
-    32_768,
-    Some(8_192),
-    false,
-    Some(0.1),
-    Some(0.2),
-)];
-
-static META_LLAMA_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-    META_LLAMA_MODELS
-        .iter()
-        .map(catalog_model_info_from_entry)
-        .collect()
-});
-static V0_MODEL_INFOS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
-    V0_MODELS
-        .iter()
-        .map(catalog_model_info_from_entry)
-        .collect()
-});
-
-#[allow(clippy::too_many_arguments)]
-const fn catalog_model(
-    id: &'static str,
-    name: &'static str,
-    provider: &'static str,
-    context: u32,
-    output: Option<u32>,
-    multimodal: bool,
-    input_cost: Option<f64>,
-    output_cost: Option<f64>,
-) -> CatalogModel {
-    CatalogModel {
-        id,
-        name,
-        provider,
-        context,
-        output,
-        multimodal,
-        input_cost,
-        output_cost,
-    }
+pub(crate) fn catalog_model_info(_provider: &str, _model_id: &str) -> Option<ModelInfo> {
+    None
 }
 
-fn catalog_model_info_from_entry(model: &CatalogModel) -> ModelInfo {
-    let capabilities = if model.provider == "v0" {
-        V0_CAPABILITIES.to_vec()
-    } else {
-        META_LLAMA_CAPABILITIES.to_vec()
-    };
-    ModelInfo {
-        id: model.id.to_string(),
-        name: model.name.to_string(),
-        provider: model.provider.to_string(),
-        max_context_length: model.context,
-        max_output_length: model.output,
-        supports_streaming: true,
-        supports_tools: true,
-        supports_multimodal: model.multimodal,
-        input_cost_per_1k_tokens: model.input_cost,
-        output_cost_per_1k_tokens: model.output_cost,
-        currency: "USD".to_string(),
-        capabilities,
-        ..Default::default()
-    }
-}
-
-pub(crate) fn catalog_model_infos(provider: &str) -> Option<&'static [ModelInfo]> {
-    match provider {
-        "amazon_nova" => Some(super::catalog::amazon_nova_catalog_model_infos()),
-        "github" => Some(super::github_policy::github_catalog_model_infos()),
-        "meta_llama" => Some(&META_LLAMA_MODEL_INFOS),
-        "v0" => Some(&V0_MODEL_INFOS),
-        _ => None,
-    }
-}
-
-pub(crate) fn catalog_model_info(provider: &str, model_id: &str) -> Option<ModelInfo> {
-    match provider {
-        "amazon_nova" => super::catalog::amazon_nova_catalog_model_info(model_id),
-        "github" => super::github_policy::github_catalog_model_info(model_id),
-        "meta_llama" => {
-            find_catalog_model(META_LLAMA_MODELS, model_id).map(catalog_model_info_from_entry)
-        }
-        "v0" => find_catalog_model(V0_MODELS, v0_canonical_model(model_id))
-            .map(catalog_model_info_from_entry),
-        _ => None,
-    }
-}
-
-pub(crate) fn catalog_provider_supports_model(provider: &str, model_id: &str) -> Option<bool> {
-    match provider {
-        "meta_llama" => Some(
-            META_LLAMA_MODELS
-                .iter()
-                .any(|model| model_id == model.id || model_id.contains(model.id)),
-        ),
-        "v0" => Some(true),
-        _ => None,
-    }
+pub(crate) fn catalog_provider_supports_model(_provider: &str, _model_id: &str) -> Option<bool> {
+    None
 }
 
 pub(crate) fn catalog_provider_supported_openai_params(provider: &str) -> &'static [&'static str] {
@@ -345,42 +127,6 @@ pub(crate) fn preserves_configured_name_route(provider: &str) -> bool {
     provider == "meta_llama"
 }
 
-pub(crate) fn extend_model_aliases(
-    provider: &str,
-    configured_name: &str,
-    uses_configured_models: bool,
-    models: &[String],
-    aliases: &mut HashMap<String, String>,
-) {
-    let target = "v0-default";
-    if provider != "v0" || !models.iter().any(|model| model == target) {
-        return;
-    }
-
-    aliases
-        .entry("v0".to_string())
-        .or_insert_with(|| target.to_string());
-    if !uses_configured_models && configured_name != target {
-        aliases
-            .entry(configured_name.to_string())
-            .or_insert_with(|| target.to_string());
-    }
-}
-
-pub(crate) fn canonicalize_models(provider: &str, models: &mut Vec<String>) {
-    if provider != "v0" {
-        return;
-    }
-
-    for model in models.iter_mut() {
-        if model == "v0" {
-            *model = "v0-default".to_string();
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    models.retain(|model| seen.insert(model.clone()));
-}
-
 pub(crate) fn organization_header(provider: &str) -> &'static str {
     match provider {
         "meta_llama" => "X-Organization-ID",
@@ -400,260 +146,19 @@ pub(crate) fn catalog_error_response(
     }
 }
 
-fn find_catalog_model(models: &'static [CatalogModel], id: &str) -> Option<&'static CatalogModel> {
-    models.iter().find(|model| model.id == id)
-}
-
-fn v0_canonical_model(model: &str) -> &str {
-    if model == "v0" { "v0-default" } else { model }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::models::provider::ProviderConfig;
-    use crate::core::providers::openai_like::OpenAILikeProvider;
-    use crate::core::providers::registry::catalog::get_definition;
-    use crate::core::router::unified::Router;
-    use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
-    use crate::core::types::chat::ChatRequest;
-    use crate::core::types::context::RequestContext;
-    use crate::core::types::tools::ResponseFormat;
-
-    #[tokio::test]
-    async fn meta_llama_catalog_runtime_preserves_models_and_filtering() {
-        let models = catalog_model_infos("meta_llama").expect("Meta catalog models");
-        assert_eq!(models.len(), 10);
-        assert_eq!(models[0].provider, "meta");
-        assert_eq!(models[0].max_context_length, 10_000_000);
-        assert_eq!(models[0].input_cost_per_1k_tokens, Some(0.00008));
-        assert!(
-            catalog_provider_supports_model("meta_llama", "meta_llama/llama3.2-11b-vision")
-                == Some(true)
-        );
-        assert!(catalog_provider_supports_model("meta_llama", "gpt-4") == Some(false));
-
-        let filtered = filter_openai_params(
-            "meta_llama",
-            HashMap::from([("service_tier".to_string(), Value::from("flex"))]),
-        );
-        assert!(!filtered.contains_key("service_tier"));
-
-        let definition = get_definition("meta_llama").expect("Meta catalog definition");
-        let provider = OpenAILikeProvider::new_for_catalog(
-            definition
-                .to_openai_like_config(Some("test-key"), None)
-                .with_provider_name("meta_llama"),
-            definition.capabilities,
-        )
-        .await
-        .expect("Meta catalog runtime");
-        assert_eq!(provider.models().len(), 10);
-        assert!(!provider.supports_model("gpt-4"));
-        for model in models {
-            assert!(provider.supports_model(&model.id));
+    #[test]
+    fn unverified_catalogs_have_no_static_callable_models() {
+        for provider in ["meta_llama", "amazon_nova", "v0", "github"] {
+            assert!(catalog_model_infos(provider).is_none());
+            assert!(catalog_model_info(provider, "v0-default").is_none());
         }
-        let priced_cost = provider
-            .calculate_cost("llama4-scout", 1_000, 1_000)
-            .await
-            .expect("priced Meta catalog model");
-        assert!((priced_cost - 0.00038).abs() < 1e-12);
-        assert!(matches!(
-            provider.calculate_cost("llama3.2-1b", 1_000, 1_000).await,
-            Err(ProviderError::InvalidRequest { provider, message })
-                if provider == "meta_llama" && message.contains("pricing is unavailable")
-        ));
-        let request = ChatRequest {
-            model: "llama4-scout".to_string(),
-            service_tier: Some("flex".to_string()),
-            response_format: Some(ResponseFormat {
-                format_type: "json_object".to_string(),
-                json_schema: None,
-                response_type: None,
-            }),
-            ..Default::default()
-        };
-        let body = provider
-            .transform_request(request, RequestContext::default())
-            .await
-            .expect("Meta request transforms");
-        assert!(body.get("service_tier").is_none());
-        assert!(body.get("response_format").is_none());
     }
-
-    #[tokio::test]
-    async fn v0_catalog_runtime_preserves_alias_metadata_pricing_and_capabilities() {
-        let canonical = catalog_model_info("v0", "v0-default").expect("canonical V0 model");
-        let alias = catalog_model_info("v0", "v0").expect("V0 alias");
-        assert_eq!(canonical.id, alias.id);
-        assert_eq!(canonical.max_context_length, 32_768);
-        assert_eq!(canonical.max_output_length, Some(8_192));
-        assert_eq!(canonical.input_cost_per_1k_tokens, Some(0.1));
-        assert_eq!(canonical.output_cost_per_1k_tokens, Some(0.2));
-        assert_eq!(V0_CAPABILITIES.len(), 4);
-        assert!(
-            canonical
-                .capabilities
-                .contains(&ProviderCapability::FunctionCalling)
-        );
-        assert!(health_failure_is_unhealthy("v0"));
-        assert!(matches!(
-            catalog_error_response("v0", 404, r#"{"error":{"message":"missing"}}"#),
-            Some(ProviderError::ModelNotFound { provider, .. }) if provider == "v0"
-        ));
-        assert!(matches!(
-            catalog_error_response("meta_llama", 408, "request timeout"),
-            Some(ProviderError::Timeout { provider, .. }) if provider == "meta_llama"
-        ));
-
-        let definition = get_definition("v0").expect("V0 catalog definition");
-        let provider = OpenAILikeProvider::new_for_catalog(
-            definition
-                .to_openai_like_config(Some("test-key"), None)
-                .with_provider_name("v0"),
-            definition.capabilities,
-        )
-        .await
-        .expect("V0 catalog runtime");
-        assert_eq!(provider.models().len(), 1);
-        assert!(
-            provider
-                .models()
-                .iter()
-                .any(|model| model.id == canonical.id)
-        );
-        assert!(!provider.models().iter().any(|model| model.id == "v0"));
-        assert_eq!(provider.get_model_info("v0").id, "v0-default");
-        let cost = provider
-            .calculate_cost("v0", 1_000, 1_000)
-            .await
-            .expect("V0 catalog pricing");
-        assert!((cost - 0.3).abs() < f64::EPSILON);
-    }
-
     #[test]
     fn unscoped_catalog_params_remain_passthrough() {
         let params = HashMap::from([("provider_extension".to_string(), Value::from(true))]);
         assert_eq!(filter_openai_params("openrouter", params.clone()), params);
-    }
-
-    #[tokio::test]
-    async fn v0_catalog_registers_canonical_and_provider_alias_routes() {
-        let router = Router::from_gateway_config(
-            &[ProviderConfig {
-                name: "frontend".to_string(),
-                provider_type: "v0".to_string(),
-                api_key: "test-key".to_string(),
-                ..ProviderConfig::default()
-            }],
-            None,
-        )
-        .await
-        .expect("V0 router should build");
-
-        assert_eq!(router.list_models(), vec!["v0-default".to_string()]);
-        assert_eq!(router.resolve_model_name("v0"), "v0-default");
-        assert_eq!(router.resolve_model_name("frontend"), "v0-default");
-        let canonical = router
-            .select_deployment_lease("v0-default")
-            .expect("canonical route");
-        let v0_alias = router
-            .select_deployment_lease("v0")
-            .expect("v0 alias route");
-        let configured_alias = router
-            .select_deployment_lease("frontend")
-            .expect("configured-name alias route");
-        assert_eq!(canonical.deployment_id(), v0_alias.deployment_id());
-        assert_eq!(canonical.deployment_id(), configured_alias.deployment_id());
-
-        let meta_router = Router::from_gateway_config(
-            &[ProviderConfig {
-                name: "llama_frontend".to_string(),
-                provider_type: "meta_llama".to_string(),
-                api_key: "test-key".to_string(),
-                ..ProviderConfig::default()
-            }],
-            None,
-        )
-        .await
-        .expect("Meta router should build");
-        assert!(
-            meta_router
-                .list_models()
-                .contains(&"llama_frontend".to_string())
-        );
-        for model in META_LLAMA_MODELS {
-            assert!(
-                meta_router.select_deployment_lease(model.id).is_ok(),
-                "default Meta router should resolve {}",
-                model.id
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn v0_configured_spellings_share_one_canonical_deployment() {
-        for models in [
-            vec!["v0".to_string()],
-            vec!["v0-default".to_string()],
-            vec!["v0".to_string(), "v0-default".to_string()],
-        ] {
-            let router = Router::from_gateway_config(
-                &[ProviderConfig {
-                    name: "frontend".to_string(),
-                    provider_type: "v0".to_string(),
-                    api_key: "test-key".to_string(),
-                    models,
-                    ..ProviderConfig::default()
-                }],
-                None,
-            )
-            .await
-            .expect("configured V0 spellings should canonicalize without alias collisions");
-
-            assert_eq!(router.list_models(), vec!["v0-default".to_string()]);
-            assert_eq!(router.resolve_model_name("v0"), "v0-default");
-            let canonical = router
-                .select_deployment_lease("v0-default")
-                .expect("canonical V0 route");
-            let alias = router
-                .select_deployment_lease("v0")
-                .expect("V0 alias route");
-            assert_eq!(canonical.deployment_id(), alias.deployment_id());
-        }
-    }
-
-    #[tokio::test]
-    async fn v0_provider_name_alias_does_not_shadow_a_canonical_model() {
-        let router = Router::from_gateway_config(
-            &[
-                ProviderConfig {
-                    name: "frontend".to_string(),
-                    provider_type: "v0".to_string(),
-                    api_key: "test-key".to_string(),
-                    ..ProviderConfig::default()
-                },
-                ProviderConfig {
-                    name: "primary".to_string(),
-                    provider_type: "openai".to_string(),
-                    api_key: "sk-test".to_string(),
-                    models: vec!["frontend".to_string()],
-                    ..ProviderConfig::default()
-                },
-            ],
-            None,
-        )
-        .await
-        .expect("canonical model should take priority over an implicit V0 alias");
-
-        assert_eq!(router.resolve_model_name("frontend"), "frontend");
-        assert_eq!(
-            router
-                .select_deployment_lease("frontend")
-                .expect("canonical frontend route")
-                .deployment_id(),
-            "primary-frontend"
-        );
-        assert!(router.select_deployment_lease("v0-default").is_ok());
     }
 }

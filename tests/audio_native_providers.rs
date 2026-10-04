@@ -488,7 +488,7 @@ mod tests {
         assert!(matches!(error, ProviderError::NotSupported { .. }));
 
         let elevenlabs = native_provider(ProviderType::ElevenLabs, &mock.base_url, 5).await;
-        assert!(elevenlabs.supports_capability_for_model(
+        assert!(!elevenlabs.supports_capability_for_model(
             "scribe_v1_experimental",
             &ProviderCapability::AudioTranscription
         ));

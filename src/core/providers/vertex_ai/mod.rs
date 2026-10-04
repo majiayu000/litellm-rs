@@ -226,6 +226,8 @@ pub enum VertexAIModel {
     // Gemini 1.0 models (legacy)
     GeminiUltra, // gemini-ultra (deprecated)
 
+    // Historical partner metadata for helper callers; not the callable Vertex catalog.
+    // Native partner protocol dispatch requires separate verification.
     // Partner models - Claude
     ClaudeOpus47,   // claude-opus-4-7
     ClaudeOpus46,   // claude-opus-4-6@20260114

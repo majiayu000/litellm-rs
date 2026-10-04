@@ -1,69 +1,28 @@
-# GH837 provider 0.6 → 0.7 迁移
+# GH837 provider migration: accepted 0.8 scope
 
-## `amazon_nova`
+This replaces the former 0.6 → 0.7 removal plan with the accepted 0.8 behavior.
+Published 0.7.0 retained its deprecated native symbols; 0.8 removes the unused
+native modules and verifies whether their former catalog transports remain callable.
 
-### 时间线
+## `amazon_nova`, `meta_llama` and `v0`
 
-- 0.6.x：`providers-extended` 下的 native `amazon_nova` module 已标记
-  deprecated，但 `AmazonNovaConfig`、`AmazonNovaErrorMapper`、
-  `AmazonNovaModel`、`AmazonNovaModelRegistry` 与 `AmazonNovaProvider`
-  的公开 symbol、构造签名和既有运行时行为保持不变。
-- 0.7.0：在 version workflow 与 public compatibility gate 通过后，移除
-  duplicate native module，保留 `amazon_nova` catalog route。这是公开 Rust
-  API 的 breaking change，不是运行时 provider 降级。
-
-### Catalog 等价策略
-
-Catalog route 保留 native 的固定 endpoint
-`https://api.nova.amazon.com/v1`、Bearer auth 与
-`AMAZON_NOVA_API_KEY` contract，并只声明 native provider 已实现的 chat、
-streaming chat 与 tool-calling capabilities。
-
-Catalog policy 是模型、能力、价格与 alias 的唯一权威；保留的 native registry
-仅是 0.6 compatibility projection。Catalog 保留五个 canonical model：Nova 2
-Lite、Pro、Lite、Micro 与 Premier，以及各自的 context/output limits、token
-pricing、tool 和 multimodal metadata。缺少其中任一项都不满足后续 0.7.0
-demotion gate。
-
-### 迁移
-
-通过 gateway/provider configuration 使用 `amazon_nova` selector 的调用方无需
-更改 selector。直接 import native Rust types 的下游 crate 应在 0.7.0 前迁移到
-registry/catalog construction path；不要复制 native module 或依赖其内部 macro
-实现。
+The named selectors are disabled. Their former default endpoints/model IDs do
+not have a verified current protocol contract. Provider construction fails;
+removing the duplicate native modules does not establish catalog equivalence.
+Use the existing `bedrock` provider for its supported Nova models. For a verified
+OpenAI-compatible endpoint, configure `openai_compatible` with the actual endpoint,
+credentials and wire model. A native v0 Platform integration is not implemented.
+See the [model-by-model audit](../audit/remaining-static-model-catalog-2026-10-04.md).
+Historical Nova prices remain pricing metadata and do not enable a transport.
 
 ## `github`
 
-### 时间线
-
-- 0.6.x：`providers-extended` 下的 native `github` module 已标记 deprecated，
-  但 `GitHubConfig`、`GitHubError`、`GitHubModel`、`GitHubProvider` 与
-  `get_available_models` / `get_model_info` 的公开 symbol、构造签名和既有运行时
-  行为保持不变。
-- 0.7.0：在 version workflow 与 public compatibility gate 通过后，移除 duplicate
-  native module，保留 `github` catalog route（`github_copilot` 是不同 scope，
-  不受影响）。这是公开 Rust API 的 breaking change，不是运行时 provider 降级。
-
-### Catalog 等价策略
-
-Catalog route 保留 native 的固定 endpoint `GITHUB_MODELS_API_BASE`
-（`https://models.inference.ai.azure.com`）、Bearer auth 与 `GITHUB_TOKEN`
-contract，并只声明 native provider 已实现的 chat、streaming chat 与 tool-calling
-capabilities。Health 由 OpenAI-compatible catalog route 的标准 `/models` 探针
-提供，没有 github 专属 health 机制。
-
-Catalog policy（`registry::github_policy`）是模型、能力与价格的唯一权威；保留的
-native registry 仅是 0.6 compatibility projection。Catalog 保留全部 16 个 canonical
-model（OpenAI gpt-4o/gpt-4o-mini/o1-preview/o1-mini、Meta Llama 3.1 405B/70B/8B、
-Mistral Large/Small、Cohere Command R+/R、AI21 Jamba 1.5 Large/Mini、Phi 3.5
-MoE/Mini/Vision），以及各自的 context/output limits、token pricing 与 tool /
-multimodal metadata。缺少其中任一项都不满足后续 0.7.0 demotion gate。
-
-### 迁移
-
-通过 gateway/provider configuration 使用 `github` selector 的调用方无需更改
-selector。直接 import native Rust types 的下游 crate 应在 0.7.0 前迁移到
-registry/catalog construction path；不要复制 native module。
+GitHub Models retired on 2026-07-30. The `github` / `github-models` selectors and
+all 16 former static models are not callable. Remove these deployments or choose
+another supported provider; do not migrate to the former catalog route or reuse
+its old endpoint. `github_copilot` remains a separate native provider.
+See the [official-source retirement audit](../audit/github-models-retirement-2026-10-03.md).
+Direct Rust imports of the removed modules must also be removed.
 
 ## `custom_api`
 
@@ -72,7 +31,7 @@ registry/catalog construction path；不要复制 native module。
 - 0.6.x：`providers-extended` 下的 `custom_api` module、`CustomHttpxConfig`、
   `CustomApiErrorMapper` 与 `CustomHttpxProvider` 已标记 deprecated。公开
   symbol、构造签名与既有运行时行为保持不变。
-- 0.7.0：在 version workflow 与 public compatibility gate 通过后，删除该公开
+- 0.8.0：在 version workflow 与 public compatibility gate 通过后，删除该公开
   module 和 native implementation。这是明确的 breaking change。
 
 ### 产品边界
@@ -92,4 +51,4 @@ registry/catalog construction path；不要复制 native module。
    在进入 gateway 前转换为受支持的 provider contract。
 
 不要依赖恢复 `custom_api` 目录、复制其 macro-generated provider，或把动态任意
-endpoint 静默包装为 canonical provider。0.7.0 迁移应选择上述明确拥有者之一。
+endpoint 静默包装为 canonical provider。0.8.0 迁移应选择上述明确拥有者之一。

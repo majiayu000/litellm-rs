@@ -2,13 +2,7 @@ use crate::core::providers::{Provider, ProviderType, registry as provider_regist
 
 #[tokio::test]
 async fn issue_606_catalogified_candidates_use_catalog_runtime_path() {
-    for provider_type in [
-        ProviderType::MetaLlama,
-        ProviderType::V0,
-        ProviderType::AmazonNova,
-        ProviderType::GitHub,
-        ProviderType::Custom("together".to_string()),
-    ] {
+    for provider_type in [ProviderType::Custom("together".to_string())] {
         let expected_capabilities =
             provider_registry::catalog_definition_for_provider_type(&provider_type)
                 .expect("catalogified provider should have a definition")
@@ -30,4 +24,45 @@ async fn issue_606_catalogified_candidates_use_catalog_runtime_path() {
         assert_eq!(provider.name(), provider_type.to_string());
         assert_eq!(provider.capabilities(), expected_capabilities);
     }
+}
+
+#[tokio::test]
+async fn retired_github_models_selectors_fail_before_transport() {
+    use crate::config::models::provider::ProviderConfig;
+    use crate::core::providers::{ProviderError, create_provider};
+    for selector in [
+        "github",
+        "github-models",
+        "lambda_ai",
+        "v0",
+        "meta_llama",
+        "llama",
+        "meta-llama",
+        "amazon_nova",
+        "amazon-nova",
+        "nova",
+    ] {
+        assert!(!provider_registry::is_tier1_provider(selector));
+        assert!(provider_registry::get_definition(selector).is_none());
+        let result = create_provider(ProviderConfig {
+            name: selector.into(),
+            api_key: "test-token".into(),
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            if selector == "lambda_ai" {
+                matches!(result, Err(ProviderError::InvalidRequest { .. }))
+            } else {
+                matches!(result, Err(ProviderError::NotImplemented { .. }))
+            },
+            "{selector}"
+        );
+    }
+    assert!(provider_registry::catalog_policy::catalog_model_infos("github").is_none());
+    assert!(provider_registry::catalog_policy::catalog_model_info("github", "gpt-4o").is_none());
+    assert_ne!(
+        provider_registry::canonical_selector("github_copilot"),
+        "github"
+    );
 }

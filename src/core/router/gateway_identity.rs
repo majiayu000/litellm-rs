@@ -45,6 +45,31 @@ impl GatewayIdentityAuthority {
         mapping: Option<&ModelIdentityMapping>,
     ) -> Result<(), RouterError> {
         let (identity_provider, identity_model) = match provider {
+            Provider::OpenAILike(openai_like)
+                if openai_like.config().provider_name == "azure_ai" =>
+            {
+                let effective = openai_like.config().get_effective_model(wire_model);
+                let pricing_key = if ModelIdRef::parse(&effective).provider() == Some("azure_ai") {
+                    effective.clone()
+                } else {
+                    format!("azure_ai/{effective}")
+                };
+                // Explicit custom deployments and the model-less configured-name route
+                // have no catalog privilege. Known price-only/unreviewed rows still bind.
+                if mapping.is_none()
+                    && matches!(
+                        self.catalog.resolve_model("azure_ai", &effective),
+                        CatalogResolution::Unknown
+                    )
+                    && self
+                        .catalog
+                        .decision_for_pricing_key("azure_ai", &pricing_key)
+                        .is_none()
+                {
+                    return Ok(());
+                }
+                ("azure_ai", effective)
+            }
             Provider::OpenAILike(openai_like) if openai_like.config().provider_name == "xai" => {
                 let configured = openai_like.config().get_effective_model(wire_model);
                 let has_double_xai_qualifier = |model: &str| {
@@ -141,6 +166,11 @@ pub(super) fn default_models(
 }
 
 fn identity_provider(provider: &Provider) -> Option<&'static str> {
+    if let Provider::OpenAILike(provider) = provider
+        && provider.config().provider_name == "azure_ai"
+    {
+        return Some("azure_ai");
+    }
     match provider.provider_type() {
         ProviderType::OpenAI => Some("openai"),
         #[cfg(feature = "providers-extra")]
@@ -244,6 +274,44 @@ mod tests {
             PricingService::with_embedded_default().expect("embedded pricing should load"),
         );
         GatewayIdentityAuthority::new(pricing).expect("identity authority")
+    }
+
+    #[tokio::test]
+    async fn azure_ai_compatible_fallback_obeys_catalog_decisions() {
+        use crate::core::types::model::ProviderCapability;
+        for model in [
+            "claude-sonnet-4-6",
+            "gpt-5.4-pro",
+            "mistral-document-ai-2512",
+            "Phi-4",
+        ] {
+            let config = OpenAILikeConfig::new("https://test.services.ai.azure.com/models")
+                .with_provider_name("azure_ai")
+                .with_skip_api_key(true);
+            let mut provider = Provider::OpenAILike(OpenAILikeProvider::new(config).await.unwrap());
+            let result = authority().bind("azure-ai-fallback", &mut provider, model, None);
+            if model == "Phi-4" {
+                result.unwrap();
+                assert!(
+                    provider
+                        .supports_capability_for_model(model, &ProviderCapability::ChatCompletion)
+                );
+                assert!(
+                    !provider
+                        .supports_capability_for_model(model, &ProviderCapability::ToolCalling)
+                );
+            } else {
+                if result.is_ok() {
+                    assert!(
+                        !provider.supports_capability_for_model(
+                            model,
+                            &ProviderCapability::ChatCompletion
+                        ),
+                        "native-only identity {model} became callable on the compatible adapter"
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]

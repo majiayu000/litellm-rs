@@ -370,3 +370,79 @@ fn test_usage_fails_closed_without_losing_legal_zero_or_range() {
     );
     assert_eq!(usage.total_tokens, u32::MAX);
 }
+
+#[test]
+fn native_tool_and_function_payloads_survive_response_conversion() {
+    let function = json!({"name": "lookup", "arguments": "{\"city\":\"Paris\"}"});
+    let tool = json!({"id": "call-1", "type": "function", "function": function});
+    let response = AzureAIChatUtils::transform_response(
+        json!({
+            "choices": [{"message": {"role": "assistant", "content": null,
+                "tool_calls": [tool], "function_call": function}, "finish_reason": "tool_calls"}]
+        }),
+        "gpt-5.4",
+    )
+    .unwrap();
+    let message = &response.choices[0].message;
+    assert_eq!(
+        serde_json::to_value(&message.tool_calls).unwrap(),
+        json!([tool])
+    );
+    assert_eq!(
+        serde_json::to_value(&message.function_call).unwrap(),
+        function
+    );
+}
+
+#[test]
+fn native_tool_and_function_deltas_preserve_fragment_indices() {
+    for delta in [
+        json!({"tool_calls": [{"index": 2, "id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": ""}}]}),
+        json!({"tool_calls": [{"index": 2, "function": {"arguments": "{\"city\":"}}]}),
+        json!({"function_call": {"arguments": "\"Paris\"}"}}),
+    ] {
+        let chunk = AzureAIChatUtils::transform_streaming_chunk(
+            json!({"choices": [{"delta": delta}]}),
+            "gpt-5.4",
+        )
+        .unwrap();
+        let converted = serde_json::to_value(&chunk.choices[0].delta).unwrap();
+        for (field, value) in delta.as_object().unwrap() {
+            assert_eq!(&converted[field], value);
+        }
+    }
+}
+
+#[test]
+fn malformed_native_calls_return_parsing_errors_instead_of_empty_content() {
+    assert!(matches!(
+        AzureAIChatUtils::transform_response(
+            json!({"choices": [{"message": {
+                "tool_calls": [{"id": "incomplete"}]
+            }}]}),
+            "gpt-5.4"
+        ),
+        Err(ProviderError::ResponseParsing { .. })
+    ));
+    assert!(
+        AzureAIChatUtils::transform_streaming_chunk(
+            json!({"choices": [{"delta": {
+                "tool_calls": [{"index": "bad"}]
+            }}]}),
+            "gpt-5.4"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn native_legacy_function_request_fields_are_forwarded() {
+    let mut request = create_test_request();
+    request.functions = Some(vec![
+        json!({"name": "lookup", "parameters": {"type": "object"}}),
+    ]);
+    request.function_call = Some(json!({"name": "lookup"}));
+    let converted = AzureAIChatUtils::transform_request(&request).unwrap();
+    assert_eq!(converted["functions"], json!(request.functions));
+    assert_eq!(converted["function_call"], json!(request.function_call));
+}

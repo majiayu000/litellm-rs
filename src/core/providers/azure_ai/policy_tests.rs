@@ -69,6 +69,8 @@ fn supported_parameters_follow_exact_model_capabilities() {
         "stop",
         "tools",
         "tool_choice",
+        "functions",
+        "function_call",
         "stream",
     ] {
         assert!(params.contains(&param), "missing {param}");
@@ -123,8 +125,8 @@ fn pricing_backed_chat_identity_exposes_catalog_parameters() {
     let params = provider.get_supported_openai_params("wire-llama");
     assert!(params.contains(&"temperature"));
     assert!(params.contains(&"stop"));
-    assert!(params.contains(&"tools"));
-    assert!(params.contains(&"tool_choice"));
+    assert!(!params.contains(&"tools"));
+    assert!(!params.contains(&"tool_choice"));
     assert!(params.contains(&"stream"));
 }
 
@@ -243,6 +245,8 @@ async fn phi_4_rejects_unsupported_params_at_map_and_transform_boundaries() {
     for field in [
         "tools",
         "tool_choice",
+        "functions",
+        "function_call",
         "stream",
         "max_completion_tokens",
         "unknown_field",
@@ -527,4 +531,130 @@ async fn configured_router_keeps_current_foundry_modalities_and_rejects_old_alia
         old.is_err(),
         "historical prices must not grant current routing capabilities"
     );
+}
+
+#[test]
+fn native_only_azure_protocols_cannot_regain_chat_through_price_mapping() {
+    use crate::core::providers::model_identity::{
+        ModelIdentityMapping, validate_deployment_identity,
+    };
+    use crate::core::providers::registry::model_catalog_authority::CatalogAuthority;
+    let pricing = crate::core::pricing_service::PricingService::with_embedded_default().unwrap();
+    let catalog = CatalogAuthority::from_embedded().unwrap();
+    for model in [
+        "claude-sonnet-5",
+        "claude-opus-4-7",
+        "gpt-5.4-pro",
+        "mistral-document-ai-2512",
+    ] {
+        let target = format!("azure_ai/{model}");
+        assert!(
+            pricing
+                .get_model_info_for_provider("azure_ai", model)
+                .is_some()
+        );
+        let mapping = ModelIdentityMapping::new(Some(target), None);
+        let result = validate_deployment_identity(
+            "azure-test",
+            "azure_ai",
+            "customer-deployment",
+            Some(&mapping),
+            None,
+            &catalog,
+            &pricing.snapshot(),
+        );
+        assert!(
+            result.is_err(),
+            "native protocol {model} was promoted from its price row"
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_chat_http_preserves_tool_calls_and_streamed_function_fragments() {
+    use futures::StreamExt;
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        for streaming in [false, true] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut buffer = [0; 4096];
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let len: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse().unwrap())
+                        })
+                        .unwrap();
+                    if bytes.len() < end + 4 + len {
+                        continue;
+                    }
+                    assert_eq!(
+                        headers.lines().next().unwrap(),
+                        "POST /chat/completions HTTP/1.1"
+                    );
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&bytes[end + 4..end + 4 + len]).unwrap();
+                    assert_eq!(body["functions"][0]["name"], "lookup");
+                    assert_eq!(body["function_call"], json!({"name": "lookup"}));
+                    let (content_type, response) = if streaming {
+                        (
+                            "text/event-stream",
+                            format!(
+                                "data: {}\n\ndata: [DONE]\n\n",
+                                json!({"id": "stream", "choices": [{"delta": {"function_call": {"name": "lookup", "arguments": "{}"}}, "finish_reason": "function_call"}]})
+                            ),
+                        )
+                    } else {
+                        ("application/json", json!({"id": "chat", "choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]}, "finish_reason": "tool_calls"}]}).to_string())
+                    };
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+                    break;
+                }
+            }
+        }
+    });
+    let provider = AzureAIProvider::new(policy_config(
+        &format!("http://{address}"),
+        ProviderEndpointAccess::PrivateNetwork,
+    ))
+    .unwrap();
+    let request: ChatRequest = serde_json::from_value(json!({"model": "gpt-4o", "messages": [{"role": "user", "content": "lookup"}], "functions": [{"name": "lookup"}], "function_call": {"name": "lookup"}})).unwrap();
+    let response = provider
+        .chat_completion(request.clone(), RequestContext::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        response.choices[0].message.tool_calls.as_ref().unwrap()[0]
+            .function
+            .name,
+        "lookup"
+    );
+    let mut stream = provider
+        .chat_completion_stream(request, RequestContext::default())
+        .await
+        .unwrap();
+    let chunk = stream.next().await.unwrap().unwrap();
+    assert_eq!(
+        chunk.choices[0]
+            .delta
+            .function_call
+            .as_ref()
+            .unwrap()
+            .arguments
+            .as_deref(),
+        Some("{}")
+    );
+    assert!(stream.next().await.is_none());
+    upstream.await.unwrap();
 }
