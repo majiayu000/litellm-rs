@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-04
+
+### Fixed
+
+- Start the release smoke's local TLS mock without reverse DNS. macOS runners
+  can stall in Python HTTPServer's hostname lookup before listening. Report
+  child logs on smoke failures while preserving the original exception (#1403).
+- Retry publication with a new immutable candidate. The v0.8.0 tag remains;
+  macOS artifact smoke failed before crates.io/public GitHub release publication.
+  The accepted 0.8.0 changes below are included in this candidate.
+
 ## [0.8.0] - 2026-10-04
 
 ### Added

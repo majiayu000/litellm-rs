@@ -5,7 +5,7 @@ Requires requests and PyYAML. TLS certificates and a fresh fixture directory are
 supplied by the caller; no vendor API, production credential, or user database
 is used. See docs/gateway/release-0.8.0-verification.md for commands.
 """
-import argparse, base64, hashlib, http.server, json, os, pathlib, socket, sqlite3, ssl, struct, subprocess, sys, time
+import argparse, base64, hashlib, http.server, json, os, pathlib, socket, socketserver, sqlite3, ssl, struct, subprocess, sys, time
 from urllib.parse import urlsplit
 import secrets
 import requests, yaml
@@ -158,25 +158,40 @@ if __name__=='__main__':
     if a.mode in ('local','remote-config') and not a.packaged: p.error('--packaged is required for configuration')
     if a.mode=='local' and not a.binary: p.error('--binary is required for local')
     if a.mode=='mock':
-        httpd=http.server.ThreadingHTTPServer(('0.0.0.0',urlsplit(a.base).port or 443),Mock); ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(certificates/'mock-cert.pem',certificates/'mock-key.pem'); httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True); httpd.serve_forever()
+        httpd=http.server.ThreadingHTTPServer(('0.0.0.0',urlsplit(a.base).port or 443),Mock,bind_and_activate=False)
+        # HTTPServer.server_bind calls getfqdn, which can stall on macOS runners.
+        # The fixture needs no reverse DNS; bind directly and set its own name.
+        socketserver.TCPServer.server_bind(httpd)
+        httpd.server_name='release-mock'; httpd.server_port=httpd.server_address[1]
+        ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(certificates/'mock-cert.pem',certificates/'mock-key.pem'); httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True)
+        httpd.server_activate(); httpd.serve_forever()
     elif a.mode=='remote-config': print(config(a.base,a.packaged,target,a.gateway,True))
     elif a.mode=='remote-smoke': print(json.dumps(smoke(a.gateway,True,database=target/'smoke.sqlite'),indent=2))
     else:
         if (target/'smoke.sqlite').exists(): raise FileExistsError('Use a fresh fixture directory; smoke.sqlite already exists')
         cfg=config(a.base,a.packaged,target,a.gateway)
-        with (target/'mock.log').open('w') as mocklog, (target/'gateway.log').open('w') as log:
-            mock=subprocess.Popen([sys.executable,str(pathlib.Path(__file__)), 'mock', '--directory', str(target), '--certificates', str(certificates), '--base', a.base],stdout=mocklog,stderr=subprocess.STDOUT)
-            process=None
-            try:
-                time.sleep(.3)
-                env=os.environ.copy(); env['SSL_CERT_FILE']=str(certificates/'mock-ca.pem'); env['LITELLM_DATA_DIR']=str(target/'data')
-                process=subprocess.Popen([a.binary,'--config',str(cfg)],env=env,stdout=log,stderr=subprocess.STDOUT)
-                report=smoke(a.gateway,database=target/'smoke.sqlite'); (target/'results.json').write_text(json.dumps(report,indent=2)); print(json.dumps(report,indent=2))
-            finally:
-                if process is not None:
-                    process.terminate()
-                    try: process.wait(timeout=10)
-                    except subprocess.TimeoutExpired: process.kill(); process.wait()
-                mock.terminate()
-                try: mock.wait(timeout=5)
-                except subprocess.TimeoutExpired: mock.kill(); mock.wait()
+        try:
+            with (target/'mock.log').open('w') as mocklog, (target/'gateway.log').open('w') as log:
+                mock=subprocess.Popen([sys.executable,str(pathlib.Path(__file__)), 'mock', '--directory', str(target), '--certificates', str(certificates), '--base', a.base],stdout=mocklog,stderr=subprocess.STDOUT)
+                process=None
+                try:
+                    time.sleep(.3)
+                    env=os.environ.copy(); env['SSL_CERT_FILE']=str(certificates/'mock-ca.pem'); env['LITELLM_DATA_DIR']=str(target/'data')
+                    process=subprocess.Popen([a.binary,'--config',str(cfg)],env=env,stdout=log,stderr=subprocess.STDOUT)
+                    report=smoke(a.gateway,database=target/'smoke.sqlite'); (target/'results.json').write_text(json.dumps(report,indent=2)); print(json.dumps(report,indent=2))
+                finally:
+                    if process is not None:
+                        process.terminate()
+                        try: process.wait(timeout=10)
+                        except subprocess.TimeoutExpired: process.kill(); process.wait()
+                    mock.terminate()
+                    try: mock.wait(timeout=5)
+                    except subprocess.TimeoutExpired: mock.kill(); mock.wait()
+        except Exception:
+            for filename in ('mock.log','gateway.log'):
+                print(f'--- {filename} ---',file=sys.stderr)
+                try:
+                    print('\n'.join((target/filename).read_text(errors='replace').splitlines()[-80:]),file=sys.stderr)
+                except OSError as error:
+                    print(f'Could not read fixture log: {error}',file=sys.stderr)
+            raise
