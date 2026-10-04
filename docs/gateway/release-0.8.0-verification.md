@@ -1,9 +1,12 @@
 # 0.8 release verification (F18)
 
-Issue #1403. Status: preparing candidate 0.8.2 after Intel macOS rejected the
-0.8.1 test CA. The v0.8.0/v0.8.1 tags and draft/failure history are retained;
-macOS smoke failed before
-crates.io and public GitHub release publication. The 0.8 line is a pre-1.0 minor
+Issue #1403. Status: 0.8.2 is publicly released and its actual distributions
+are verified. [GitHub Release](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.2),
+[crates.io](https://crates.io/crates/litellm-rs/0.8.2), GHCR linux/amd64 and
+linux/arm64, and the Homebrew formula all identify the accepted source below.
+The earlier v0.8.0/v0.8.1 tags and drafts retain their macOS fixture failure
+history; those versions were not published to crates.io or as public GitHub
+releases. The 0.8 line is a pre-1.0 minor
 release because accepted changes remove public APIs and change default features.
 
 ## Candidate scope
@@ -12,11 +15,12 @@ The candidate includes the accepted parity work through #1441, the remaining
 model audit #1442 and unused-interface reconciliation #1443. The complete release
 notes are in CHANGELOG.md. The first accepted immutable commit is `1ab0b47cc5e6f78d6ab9638921f3f739a56749b0`,
 tagged as v0.8.0 after #1444 final-head 15 checks passed and all reviews were
-resolved. The current candidate is 0.8.2: it adds only version/install metadata
+resolved. The published version is 0.8.2: it adds only version/install metadata
 and explicit fixture CA configuration to accepted 0.8.1, retaining its mock
 DNS/logging correction. Production Rust behavior and the shipped profile are
-unchanged. The 0.8.2 accepted commit and published identifiers remain pending
-and will be recorded after verification.
+unchanged. The accepted 0.8.2 commit is
+`3dcc0aa9d7f0c2a585fe26fdf1ea6cc9bfd99b43`; verified publication identifiers
+are recorded in the 0.8.2 acceptance section below.
 PR branch heads are preparation evidence and do not substitute for that commit.
 
 The shared shipped profile is:
@@ -55,8 +59,8 @@ Linux x86_64 GNU, Windows x86_64 MSVC, macOS x86_64 and macOS ARM64; Linux x86_6
 musl is explicitly optional. Intel macOS uses the native macos-15-intel runner;
 ARM64 macOS uses macos-latest, matching the [official runner architectures](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 The existing publisher executes version/config and the local protocol harness
-against each built executable before uploading its archive; publication-run
-results are still pending. Each archive has a SHA-256 sidecar. GHCR ships
+against each built executable before uploading its archive; all five 0.8.2
+native jobs passed those checks. Each archive has a SHA-256 sidecar. GHCR ships
 linux/amd64 and linux/arm64 manifests; Docker Hub is optional. Actual crates.io
 upload, GitHub public release and Homebrew formula must be checked separately
 from job success or skip status.
@@ -257,8 +261,8 @@ Reproducing the generation command with LibreSSL 3.3.6 and a default config
 already containing v3_ca emitted two Basic Constraints extensions and caused
 the downloaded accepted gateway to panic with that exact error. A plain local
 config without that default did not fail. The runner's original certificate is
-unavailable; the reproduction explains the platform-config sensitivity, and the
-corrected Intel run must verify its result.
+unavailable; the reproduction explains the platform-config sensitivity. The
+corrected 0.8.2 Intel macOS job passed its actual executable smoke.
 
 The CA now uses an explicit fixture config with its extension declared once,
 without appending -addext to the platform defaults. Production TLS and the
@@ -269,9 +273,51 @@ The exact corrected workflow certificate block was executed with LibreSSL 3.3.6
 and OpenSSL 3.6.3, forcing a default OPENSSL_CONF already containing v3_ca in
 both cases. Each emitted one Basic Constraints extension, and the actual
 downloaded gateway passed all 8 native TLS protocol checks with each certificate
-set. Cross-platform 0.8.2 acceptance remains required.
+set. All five native 0.8.2 jobs subsequently passed version/config and 8 checks.
 
 The 0.8.2 preparation worktree passed fmt/check, default full tests (7,125
 library tests, 1 ignored, plus integration/docs) and all-target clippy, plus
 the exact shipped-profile full tests (11,010 library tests, 1 ignored, plus
 integration/docs) and all-target clippy.
+
+## 0.8.2 accepted source and artifact acceptance
+
+- Accepted source/tag: [3dcc0aa9d7f0c2a585fe26fdf1ea6cc9bfd99b43](https://github.com/majiayu000/litellm-rs/commit/3dcc0aa9d7f0c2a585fe26fdf1ea6cc9bfd99b43), v0.8.2.
+- [CA correction PR #1446](https://github.com/majiayu000/litellm-rs/pull/1446) final head `d83bd30ce624c10552b4751ba62d60fb7361dbc6`: all 15 checks succeeded, both review threads resolved, then merged. An earlier superseded CI run stalled in audio_routes; the final full run passed, and the hang root cause is not declared fixed.
+- Clean accepted-source exact-profile `cargo package --locked` verification passed. Local package SHA-256: `6abcdb2695d898145d8bb673775a5472e910db49657c312b9e5e7f69ce90fd05`. Embedded VCS metadata identifies the same clean accepted commit; package contents include native routes, embedded model/pricing JSON and both OpenAPI files.
+- Installed the unpacked accepted package in an empty root with `--debug --locked --bin gateway --no-default-features` and the exact shipped profile. Version reports `gateway 0.8.2`; packaged config validation and all 8 native protocol checks passed using the corrected LibreSSL-generated TLS certificates.
+- The [published registry crate](https://crates.io/crates/litellm-rs/0.8.2) became available at `2026-10-04T18:40:23.971761Z`. The actual downloaded crate matches the local package SHA-256 above and its clean VCS commit. The exact README registry command completed an optimized installation into a new empty root with `--locked --bin gateway --no-default-features` and the shipped profile; installed version/config and all 8 native TLS checks passed.
+- [Existing Release publisher run 37218359967](https://github.com/majiayu000/litellm-rs/actions/runs/37218359967), attempt 2, targets the accepted tag. Exact-profile full tests (11,010 library tests passed, 1 ignored, plus integration/doc tests), all-target clippy and all-features compile checks passed. All five native artifact jobs passed, including Intel macOS. The first attempt hit its declared 45-minute limit in an audio-route test after library tests passed; the API reports cancellation and the annotation identifies the time limit. Retrying that job at the same source passed. The intermittent hang root cause remains unconfirmed.
+- [Public GitHub Release](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.2) was published at `2026-10-04T20:22:19Z`; it is neither draft nor prerelease and records the accepted full commit. All 12 publisher jobs in attempt 2 completed successfully, including actual crates.io upload, GHCR build/push, GitHub publication and Homebrew update. Docker Hub was skipped because its optional credentials are absent.
+- Downloaded all five actual archives; SHA-256 sidecars and GitHub asset digests match, with one executable of the expected architecture per archive. The ARM64 macOS download passed version/config and all 8 native TLS checks; the GNU download passed all 11 protocols, including MCP/A2A, in an isolated container network. GNU and musl downloaded binaries both report `gateway 0.8.2`. After publication, all five archives and their sidecars were downloaded again through the public release URLs; every checksum still matches the table below.
+
+| Archive | SHA-256 |
+| --- | --- |
+| Linux x86_64 GNU | `7c6d95b194c8a52f74f087688c342e2d01d3958af9029575eea0ea018808ace6` |
+| Linux x86_64 musl | `94bee56b5b3555ece046ec392311776643cb3fa5e0aab2d51001fb57a710da12` |
+| macOS ARM64 | `22bcdfe1c8ffa207cacfba256994a029c181c9072233bc2d69d6371d8083190b` |
+| macOS x86_64 | `e19fd47ec83694306a147223950d73e2b49c22b91b855ab05eb1ce2463026cf2` |
+| Windows x86_64 MSVC | `1263151a49ea04302787863491ce46fa73cee040cab028a598dedc09c3cdd463` |
+
+Published image `ghcr.io/majiayu000/litellm-rs:0.8.2` has these immutable digests:
+
+| Manifest | Digest |
+| --- | --- |
+| Multi-platform index | `sha256:551f138599554d00b9959f54d07cb0c00ec797cb59e6d114f3669ec36b8c09b3` |
+| linux/amd64 | `sha256:7727bde482796a63d80c890de84a78cb9f6bc7e477d85647591dafd456a68b1c` |
+| linux/arm64 | `sha256:042c2f2bf89194ed26a4e241803ace818f6baad7e75af56de5801828eb463008` |
+
+The actual images were pulled by digest and inspected independently: each has
+the expected architecture, full accepted OCI revision, version 0.8.2, appuser
+and gateway command. Both passed executable version, packaged config validation,
+startup, the declared health probe and all 11 TLS mock protocol checks on
+separate internal networks. ARM64 ran natively; amd64 ran under local Docker
+emulation. Image config IDs are distinct from the manifest digests above.
+
+The actual [Homebrew formula at ad285f87487f12f984cff02ab223d49d8a6e8afd](https://github.com/majiayu000/homebrew-tap/blob/ad285f87487f12f984cff02ab223d49d8a6e8afd/Formula/rust-litellm-gateway.rb)
+selects version 0.8.2 and the public ARM64/Intel macOS archive URLs with exactly
+the two SHA-256 values above. Its install method copies the verified gateway;
+Ruby syntax was checked by the publisher. Formula content and both public
+downloads were verified separately from job status. A host-wide Homebrew install
+and `brew test` were not performed; the optimized clean registry install and
+actual archive execution are the installation/runtime evidence.

@@ -1,8 +1,8 @@
 # LiteLLM 差距补齐清单
 
-更新日期：2026-10-04（北京时间）。后续 [#1441](https://github.com/majiayu000/litellm-rs/pull/1441) 与 [#1442](https://github.com/majiayu000/litellm-rs/pull/1442) 已验收合并；清理 #1443 与发行准备 #1444 已合并，发行夹具修正 #1445 也已合并，当前接受 main 为 `28362c09613d075a67f9a6dae18fb06e44b19c8c`。当前 2 个开放 issue（#1440、#1403）。v0.8.0 tag 已固定，但 macOS 产物冒烟失败，crate/public release 尚未发布；v0.8.1 的 ARM64 macOS/Windows/Linux 产物冒烟通过，但 Intel macOS 拒绝夹具 CA；正在准备固定 CA 配置的 0.8.2 候选。下方历史快照保留当时状态，当前回执以本节和后续验收记录为准。
+更新日期：2026-10-05（北京时间）。#1441、#1442、#1443 已验收合并，分别关闭 #1372、#1373、#1402。发行准备 #1444 及夹具修正 #1445/#1446 均已合并；[v0.8.2](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.2) 已正式发布，源码固定为 `3dcc0aa9d7f0c2a585fe26fdf1ea6cc9bfd99b43`。五个平台归档、公开 crate 干净安装、GHCR 双架构实际镜像和 Homebrew formula 均已验收，F18 完成。剩余功能实现为 #1440 Nebius 图片；当前价格/用量依据不足，尚未开放。v0.8.0/v0.8.1 的 tag、draft 和失败回执保留。下方历史快照保留当时状态，当前回执以本节及最终发行验收为准；issue/PR 状态以 GitHub 为准。
 
-本文件是 F01–F18 的执行台账。已合并与已发布分别记录；当前正式版本仍为 v0.7.0。下方保留原始验收条件、实际源码/检查/合并记录和剩余事项。
+本文件是 F01–F18 的执行台账。已合并与已发布分别记录；当前正式版本为 v0.8.2，已验收的功能范围以 F18 发行记录为准。下方保留原始验收条件、实际源码/检查/合并记录和剩余事项。
 
 本清单记录此次审计发现的全部缺口。参考 BerriAI/litellm 的实现和官方协议，模型事实以供应商官方资料为准；不把价格表中的模型自动当作可调用模型。
 
@@ -14,7 +14,7 @@
 | F02 | P1 | Cloudflare 错误语义 | HTTP 401/429/5xx 和 success=false 返回对应错误；畸形成功响应不能变成空成功；覆盖真实 HTTP 模拟测试 | 完成 | [#1365](https://github.com/majiayu000/litellm-rs/issues/1365) / [PR #1367](https://github.com/majiayu000/litellm-rs/pull/1367)；91 项相关测试、默认全量测试/check/clippy 通过；全部 CI 通过、无未解决 review；已合并 `01f15630`；一次 Gemini 测试超时，定向复测 9 项通过且同提交 CI 重跑通过，未将偶发超时误报为已修复 |
 | F03 | P1 | Cloudflare 现代聊天协议与流式 | 使用官方兼容接口；文本、工具、多模态、用量、流式及中途错误按支持能力正确传递；文档和能力声明一致 | 完成 | [#1368](https://github.com/majiayu000/litellm-rs/issues/1368)；[PR #1369](https://github.com/majiayu000/litellm-rs/pull/1369)；聊天/流式本地 HTTP 测试、默认全量测试/check/clippy 通过；审查后的 88 项 provider 测试与 clippy 通过；全部 CI 通过，review 已解决；已合并 `4b4a4dd4` |
 | F04 | P1 | Bedrock 逐模型能力与计费 | 审核 generic_converse 全部条目；修正上下文、输出、视觉、推理、profile 与价格；消除通用虚假默认值和重复价格源 | 完成 | [#1370](https://github.com/majiayu000/litellm-rs/issues/1370)；逐项核对 39 张 AWS 模型卡及官网定价；修正通用参数、移除 Sonic 聊天声明、统一计费来源；382 项 Bedrock 测试通过；[PR #1371](https://github.com/majiayu000/litellm-rs/pull/1371)；默认全量测试/check/clippy 及全部 CI 已通过，无未解决 review；已合并 `e77391fe` |
-| F05 | P1 | 原生 Responses 请求通路 | 支持该协议的供应商真正调用原生 endpoint；保留工具、推理、原生事件、用量及错误；经过现有鉴权、路由、预算和记录链路 | 完成 | [#1372](https://github.com/majiayu000/litellm-rs/issues/1372) / [#1441](https://github.com/majiayu000/litellm-rs/pull/1441)；最终 head `e9dea54c557810bd3006b28c8f4a803d71a0fe68` 的 15 项 CI 成功、审查线程解决后合并 `fe036814c932654c9cc03e8ed8e7a36fe1572b25`，issue 已关闭。原生 JSON/SSE、function/custom、推理和既有生命周期之外，新增同步有界 OpenAI file_search；按工具/模型上下文预留，终态 distinct completed call 按每次 $0.0025 结算，未知账单保留预留。42 项原生 HTTP、7 项 callback 及默认全套/相关 clippy 通过。后台工具、其他托管工具及非标准档位仍排除；尚未发布。 |
+| F05 | P1 | 原生 Responses 请求通路 | 支持该协议的供应商真正调用原生 endpoint；保留工具、推理、原生事件、用量及错误；经过现有鉴权、路由、预算和记录链路 | 完成 | [#1372](https://github.com/majiayu000/litellm-rs/issues/1372) / [#1441](https://github.com/majiayu000/litellm-rs/pull/1441)；最终 head `e9dea54c557810bd3006b28c8f4a803d71a0fe68` 的 15 项 CI 成功、审查线程解决后合并 `fe036814c932654c9cc03e8ed8e7a36fe1572b25`，issue 已关闭。原生 JSON/SSE、function/custom、推理和既有生命周期之外，新增同步有界 OpenAI file_search；按工具/模型上下文预留，终态 distinct completed call 按每次 $0.0025 结算，未知账单保留预留。42 项原生 HTTP、7 项 callback 及默认全套/相关 clippy 通过。后台工具、其他托管工具及非标准档位仍排除；已随 v0.8.2 发布。 |
 | F06 | P1 | Responses 模型与供应商路由 | OpenAI、Copilot、Bedrock 原生协议分别按官方 endpoint/model 支持矩阵路由；Responses-only 模型和工具不被送往 chat/completions | 完成 | [#1375](https://github.com/majiayu000/litellm-rs/issues/1375) / [PR #1377](https://github.com/majiayu000/litellm-rs/pull/1377)，验收 head `e1623efe`。111 个 OpenAI 端点证据、Copilot 动态 supported_endpoints、Bedrock Runtime/Mantle 地址、签名和计费身份已接通；Responses-only 不回退聊天。修正自动合并重引入的 Chat 能力回退，按精确 provider/pricing_key 保留独立目录审核决定，重建摘要。52 项 Python、同步/check、18 项原生 HTTP 及联合 clippy 通过。该 head 的 15 项 CI 全绿、线程清零后以 merge commit `ac0ad6a9` 合并，保留堆叠祖先；#1375 已关闭，#1379 base 已改为 main。Copilot/Bedrock 生命周期仍不在首批范围。 |
 | F07 | P1 | Responses 跨副本持久状态 | 两个网关实例可读/删同一授权响应；重启后可恢复记录；租户隔离、TTL、后台状态及取消语义有测试 | 完成 | [#1378](https://github.com/majiayu000/litellm-rs/issues/1378) / [#1379](https://github.com/majiayu000/litellm-rs/pull/1379)；验收 head `c44b48d4`，全部 15 项 CI 成功、审查线程解决后合并 `93d51613`。 POST 前 SQL 持久化结算责任；恢复只 GET，不重新生成。SQLite runtime/server/worker 停止后两个新 startup worker 恢复并只结算一次；不是实际 Postgres 重启、OS kill 或通用 exactly-once 证明。后台 provider/model 限额要求共享 SQL/Redis；进程内 key budget 拒绝，未知用量保留 reserved_unknown。当前 head 的 Main Full 37126573698 另核对成功。 |
 | F08 | P1 | Anthropic 原生 Messages 网关 | 提供 /v1/messages；工具、thinking、流式、错误、用量和鉴权符合原生协议；文档/OpenAPI/路由一致 | 完成 | [#1380](https://github.com/majiayu000/litellm-rs/issues/1380) / [PR #1381](https://github.com/majiayu000/litellm-rs/pull/1381)，当前 `bb6ecc10` 已退出草稿：JSON/SSE、count_tokens、缓存 TTL、有界直接 web 工具及显式/继承 US 地区计费已接通；未知用量保留承诺但账单记为 unpriced。22 项集成、默认完整检查、gateway/sqlite/mcp 完整测试（9780 通过/1 忽略）、clippy 和 all-features check 通过。前轮五项审查修复已推送，默认 7270 项库测试/1 忽略及联合完整检查通过；all-features check 属此前提交。新轮 Haiku 缓存价格、终态用量/JSON stop_reason、start envelope 与 guardrail 健康归因五项修复已推送，25 项 HTTP、52 项 Python/重复同步、默认完整及 gateway/sqlite/mcp 完整检查通过，review 清零；随后原分支整合 f62c5adb，当前 `bb6ecc10` 的 15 项 CI 全绿且 review 清零，已合并 `7336a20e` 并自动关闭 #1380；本轮 25 项原生 Messages HTTP 测试通过；另 Sonnet 4.5 1M beta 审查经官方 2026-04-30 退役说明确认不适用，保留 200k。 |
@@ -25,9 +25,9 @@
 | F13 | P2 | MCP 网关 | 把现有 MCP 能力接入 HTTP 网关；工具发现/调用与资源/提示词、鉴权、连接关闭有端到端测试；传输支持如实列出 | 完成 | [#1388](https://github.com/majiayu000/litellm-rs/issues/1388) / [PR #1391](https://github.com/majiayu000/litellm-rs/pull/1391)，`a1f718bb`：MCP 2026-07-28 无状态 POST、工具/资源/提示词、MRTR/SSE、命名权限、Origin/出站限制、并发/超时和断流已接通。新增前缀同名路由、配置导出脱敏、空/旧通用权限拒绝及 Tasks taskId 路由头回归；最新 22 项路由测试、fmt 和特性 all-target clippy 通过。前一提交 bf8434ab 默认完整检查（7219 通过/1 忽略）及 gateway/sqlite/mcp 完整测试/clippy 通过；提交 a1f718bb 的 15 项 CI 全绿，review 清零；已合并 ceff7f39。无旧协议、OAuth 获取、聚合或外部工具计费；无网关会话亲和要求。范围见 [文档](https://github.com/majiayu000/litellm-rs/blob/a1f718bb771f5974d212450c813ac4c87bd85b9d/docs/gateway/mcp.md)。 |
 | F14 | P2 | A2A 网关 | 接通 agent card、任务提交/查询/取消及事件流；代理鉴权、租户隔离和错误有端到端测试 | 完成 | [#1392](https://github.com/majiayu000/litellm-rs/issues/1392) / [PR #1393](https://github.com/majiayu000/litellm-rs/pull/1393)，`9a3d19be`：补 server Message context、任意 JSON data、畸形 URL 导出脱敏、终态订阅拒绝及 SSE 禁止缓冲。41 项路由、默认完整检查、gateway/sqlite/a2a/mcp 完整测试（9990 通过/1 忽略，另有集成/doc）及 clippy 通过，五条对应 review 已解决；此前 c29db734 的 15 项 CI 全绿；最新六条协议 review 及其验证见本行后续记录。进程内归属需实例亲和、重启拒绝旧归属，无 push/list/扩展卡片/代理计费。见 [不可变范围文档](https://github.com/majiayu000/litellm-rs/blob/c29db734e312f040c4ef62d3225bb4000f2a4f91/docs/gateway/a2a.md)。 最新 9a3d19be 六条新 review 已处理、43 项路由、默认完整 7267/1 忽略和 gateway/sqlite/a2a/mcp 完整 9992/1 忽略及 clippy 通过，已推送；9a3d19be 的 15 项 CI 全绿、review 清零，已合并 `7919b463` 并自动关闭 #1392；F18 单独验证发行产物。 |
 | F15 | P2 | Realtime 网关 | 接通 WebSocket 双向代理；供应商配置、鉴权、事件/关闭/错误传递有测试；首批支持范围明确 | 完成 | [#1397](https://github.com/majiayu000/litellm-rs/issues/1397) / [#1405](https://github.com/majiayu000/litellm-rs/pull/1405)；验收 head `5d691d1f`，全部 15 项 CI 成功、审查线程解决后合并 `20640a48`。 [不可变范围文档](https://github.com/majiayu000/litellm-rs/blob/5d691d1f61f2beef12dc6d7971818ddfadb32f6d/docs/gateway/realtime.md)。首批只支持 OpenAI 手动文本/音频/客户端函数 WebSocket。明确排除自动 VAD、转写会话、图片、托管 MCP、切换模型、开启内容检查的会话和崩溃结算。逐响应检查 live 身份/部署/健康/准入；完整 session ack 核对手动模式、输出上限和工具范围。终态与所有转发操作的供应商错误保留健康分类，未知状态不计成功；不可表达的 key cap 在上游连接前返回400且不扣供应商健康。当前默认全套和定向/两套 clippy 结果按精确提交归档；4cc4e4fc 额外全套的既有 moderation 挂起不计通过。 |
-| F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 完成 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / [#1443](https://github.com/majiayu000/litellm-rs/pull/1443)；最终 head `671672c0ed4c96848447c7db4d0c2d87d7cca133` 的 15 项 CI 成功、审查线程解决后合并 `14d51e9a5c15710cc20efb16776dcf17e6865dcd`，issue 已关闭。移除未用 core Realtime 库及 MCP/A2A 旧客户端/导出，保留真实配置/错误/domain 类型；37 条 registry 与 startup/routes/features/README 对齐，旧协议指南改为实际 HTTP 入口。默认全套、相关特性测试和两套 clippy 本地通过。CI Fast 首次 moderation 鉴权测试超时，同提交重跑通过；根因未确认。见 [核对记录](../audit/subsystem-reconciliation-2026-10-04.md)；尚未发布。 |
+| F16 | P2 | 过时声明与未落地子系统 | 逐项核对 subsystem_registry 和 README；完成上述能力后同步状态，清理已到移除版本的废弃接口，避免“声明支持却不可用” | 完成 | [#1402](https://github.com/majiayu000/litellm-rs/issues/1402) / [#1443](https://github.com/majiayu000/litellm-rs/pull/1443)；最终 head `671672c0ed4c96848447c7db4d0c2d87d7cca133` 的 15 项 CI 成功、审查线程解决后合并 `14d51e9a5c15710cc20efb16776dcf17e6865dcd`，issue 已关闭。移除未用 core Realtime 库及 MCP/A2A 旧客户端/导出，保留真实配置/错误/domain 类型；37 条 registry 与 startup/routes/features/README 对齐，旧协议指南改为实际 HTTP 入口。默认全套、相关特性测试和两套 clippy 本地通过。CI Fast 首次 moderation 鉴权测试超时，同提交重跑通过；根因未确认。见 [核对记录](../audit/subsystem-reconciliation-2026-10-04.md)；已随 v0.8.2 发布。 |
 | F17 | P2 | 可复现的 LiteLLM 对比基准 | 同机器、同模拟上游和相同负载比较吞吐/延迟/错误率/内存；保存命令、版本和样本，不用 Rust 语言推断性能结论 | 完成 | [#1394](https://github.com/majiayu000/litellm-rs/issues/1394) / [PR #1395](https://github.com/majiayu000/litellm-rs/pull/1395) 已于 2026-10-03 合并（`cb76a186`）。同机、同上游、4 workers、并发 64 的三轮对照及直连基线共 9 个样本零请求错误；原始数据/环境/限制随报告提交。12 项运行器行为测试、14 项现有 benchmark 契约测试、默认完整 Rust 检查及全部 CI 通过，审查线程已解决。结果仅适用于报告中的本地模拟负载，不宣称通用倍数，见 [已合并报告](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison.md)及[原始证据包](https://github.com/majiayu000/litellm-rs/blob/cb76a1866dd7f50664cae7a1389c0c3b38861840/docs/benchmarks/litellm-comparison-20261003.json.gz)。 |
-| F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 进行中 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403) / [#1444](https://github.com/majiayu000/litellm-rs/pull/1444)；0.8.0 版本/Cargo.lock/changelog/install 已验收并固定 tag；Windows/Linux 产物冒烟通过，但两种 macOS 冒烟失败，0.8.1 已修正 mock 反向 DNS 并通过 ARM64 macOS 等平台；Intel macOS 的夹具 CA 失败正在以 0.8.2 固定 CA 配置。默认全套及 clippy、精确 shipped-profile 全套及 clippy、clean package 与空根 debug 安装通过；安装包 8 项协议、实际 ARM64 release 容器 11 项协议及 appuser/config/health 验证通过。预验收 SHA、checksum、镜像 ID 和可复现脚本见 [发行验收](../gateway/release-0.8.0-verification.md)。0.8.0 accepted commit 已固定；0.8.1 accepted commit 已固定为 `28362c09`；0.8.2 accepted commit、全平台产物与真实 GitHub/crates/GHCR/Homebrew 发布尚未完成，正式版本仍 v0.7.0。 |
+| F18 | P1 | 发布与安装产物 | 所有已验收能力进入版本发行包；验证 crate、安装说明及容器内容；记录实际发布版本/提交，不能只凭 main 已合并声称已发布 | 完成 | [#1403](https://github.com/majiayu000/litellm-rs/issues/1403)；正式版本 [v0.8.2](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.2)，不可变源码 `3dcc0aa9d7f0c2a585fe26fdf1ea6cc9bfd99b43`。默认全套/两套 clippy、精确 shipped-profile 全套、clean package 通过；实际公开 crate 的准确 README 命令在空安装根中完成优化构建，版本/config/8 项 TLS 协议通过。五平台 native 归档构建与冒烟通过，公开下载/sidecar/asset digest 一致；GHCR amd64/arm64 均按 digest 拉取，实际 appuser/版本/config/health 和 11 项协议通过。Homebrew 实际 formula/两种 macOS URL/checksum 验收。发行 run 37218359967 第 2 次全 12 jobs 成功；首次 45 分钟超时和同提交成功重跑分开记录，挂起根因未确认。完整 SHA/checksum/digest/平台及范围见 [发行验收](../gateway/release-0.8.0-verification.md)。v0.8.0/v0.8.1 失败候选保持原 tag/draft。 |
 
 ## 执行与验收记录
 
@@ -174,16 +174,16 @@ Responses 旧堆叠 `#1374 → #1377 → #1379 → #1383` 只记录历史依赖�
 
 ## F18 发布和安装验收
 
-已建立 #1403；先准备版本变更及可审阅产物。是否已经发布必须以实际发行记录为准。
+[#1403](https://github.com/majiayu000/litellm-rs/issues/1403) 的实际发行和安装验收已完成；版本 v0.8.2、源码 `3dcc0aa9`，详见 [发行回执](../gateway/release-0.8.0-verification.md)。
 
-- [ ] 确定待发布版本和不可变候选提交，逐项列出纳入的已验收能力、合并提交及仍不支持的范围。
-- [ ] 确认候选提交的默认完整测试、clippy、发行特性测试和跨平台构建成功；当前 main 的取消记录不能作为成功证据。
-- [ ] 核对发布 workflow 与容器使用同一已验证特性集；特别检查 a2a 是否纳入，分别冒烟验证 MCP/A2A/Realtime 及已验收原生路由。
-- [ ] 核对 cargo package 的文件、版本和 feature，在干净环境按 crate 安装说明构建并运行最小示例，确认新公开 API 可用。
-- [ ] 验证各声明支持平台的压缩包内容、可执行文件、版本输出及启动；检查容器架构、入口、标签、digest 和实际路由。
-- [ ] 从干净环境执行安装说明中的准确命令；README、release notes、crate 和镜像标签指向同一版本与功能范围。
-- [ ] 完成发布前审阅要求后执行既定发布流程；记录真实版本、tag、commit、crate 页面、二进制校验和及镜像 digest，验证可下载/安装的产物。
-- [ ] 更新 F18 和每项发布记录；未进入产物的能力保持“已合并、未发布”，不标成已发布。
+- [x] 确定待发布版本和不可变候选提交，逐项列出纳入的已验收能力、合并提交及仍不支持的范围。
+- [x] 确认候选提交的默认完整测试、clippy、发行特性测试和跨平台构建成功；当前 main 的取消记录不能作为成功证据。
+- [x] 核对发布 workflow 与容器使用同一已验证特性集；特别检查 a2a 是否纳入，分别冒烟验证 MCP/A2A/Realtime 及已验收原生路由。
+- [x] 核对 cargo package 的文件、版本和 feature，在干净环境按 crate 安装说明构建并运行最小示例，确认新公开 API 可用。
+- [x] 验证各声明支持平台的压缩包内容、可执行文件、版本输出及启动；检查容器架构、入口、标签、digest 和实际路由。
+- [x] 从干净环境执行安装说明中的准确命令；README、release notes、crate 和镜像标签指向同一版本与功能范围。
+- [x] 完成发布前审阅要求后执行既定发布流程；记录真实版本、tag、commit、crate 页面、二进制校验和及镜像 digest，验证可下载/安装的产物。
+- [x] 更新 F18 和每项发布记录；未进入产物的能力保持“已合并、未发布”，不标成已发布。
 
 ## 每个实现 PR 的共同验收
 
@@ -319,3 +319,9 @@ The [remaining static catalog audit](../audit/remaining-static-model-catalog-202
 ### F16 final removal batch (2026-10-04)
 
 旧 core Realtime 库、MCP/A2A 客户端及过期导出/聚合配置已移除；保留当前网关消费的配置、错误、domain/schema 支持。停用选择器的空目录 hook 和 Meta/v0 特殊策略已删除。全部 37 条当前 core registry 声明已对照 startup/routes/features/README，见 [逐项核对](../audit/subsystem-reconciliation-2026-10-04.md)。本地验证和最终 CI/合并状态按 #1443 记录；最终 15 项 CI 成功、审查解决后合并 14d51e9a，#1402 已关闭；尚未发布新版本。
+
+### F18 正式发行回执（2026-10-05 北京时间）
+
+0.8.2 在 `2026-10-04T20:22:19Z` 公开发布，包含此前已接受的网关能力及 #1441/#1442/#1443 修正；各条目的协议/计费/存储限制继续适用，Nebius 图片等未接受范围仍不支持。GitHub/crates/GHCR/Homebrew 的实际标识与下载/安装/运行证据见 [完整发行验收](../gateway/release-0.8.0-verification.md)。上面的“未发布”表述属于相应历史验收时点，本回执更新正式发行状态。
+
+剩余 #1440：官方图片 OpenAPI 的 width/height 和 data/id 契约已取得，但当前 Flux Schnell 可调用/计费依据仍不足；固定 LiteLLM `bb4f7211d71e0c757b6a3f16ba3885fc34376028` 的价格表没有 Nebius image_generation/Flux 条目。公开 Token Factory 目录搜索无结果不证明退役，历史价格不能作为当前结算价。Computer Use 访问遇到新增 GitHub OAuth 资料/邮箱只读授权，待用户确认；未创建 API key 或进行付费调用。

@@ -46,7 +46,7 @@ provider keys and auth enabled. The explicit `sqlite` feature enables the storag
 The registry install selects the same feature profile as release archives and
 containers, including MCP, A2A and Realtime. Binary and example config versions
 must match. See the [0.8 artifact verification](docs/gateway/release-0.8.0-verification.md)
-for candidate and publication evidence.
+for source and published-artifact verification.
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
@@ -66,12 +66,12 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 
 ## Container distribution status
 
-The 0.8.2 candidate targets the [versioned crate](https://crates.io/crates/litellm-rs/0.8.2),
+Version 0.8.2 is published as the [versioned crate](https://crates.io/crates/litellm-rs/0.8.2),
 [GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.2)
 and `ghcr.io/majiayu000/litellm-rs:0.8.2` (Linux amd64/arm64). They share the
 shipped gateway feature profile documented below. Prefer a versioned image tag
 or immutable digest; `latest` is mutable. Docker Hub publication is optional.
-Candidate checks and actual publication identifiers are recorded separately in
+Source checks and actual publication identifiers are recorded separately in
 the [0.8 verification record](docs/gateway/release-0.8.0-verification.md).
 
 ## Rust Crate
