@@ -10,16 +10,13 @@ pub(super) fn build_request_headers(config: &OpenAILikeConfig) -> Vec<HeaderPair
         headers.push(header("Authorization", format!("Bearer {api_key}")));
     }
 
-    let organization_header = (config.provider_name == "meta_llama"
-        || config.base.organization.is_some())
-    .then(|| {
-        crate::core::providers::registry::catalog_policy::organization_header(&config.provider_name)
-    });
+    let organization_header = config
+        .base
+        .organization
+        .as_ref()
+        .map(|_| "OpenAI-Organization");
     if let Some(org) = &config.base.organization {
-        let name = crate::core::providers::registry::catalog_policy::organization_header(
-            &config.provider_name,
-        );
-        headers.push(header(name, org.clone()));
+        headers.push(header("OpenAI-Organization", org.clone()));
     }
 
     for (key, value) in &config.base.headers {

@@ -236,11 +236,7 @@ impl Router {
                 default_models(&provider, identity_authority)
             };
             let uses_provider_name_fallback = models.is_empty();
-            let preserves_configured_name_route = !uses_configured_models
-                && crate::core::providers::registry::catalog_policy::preserves_configured_name_route(
-                    provider.name(),
-                );
-            if uses_provider_name_fallback || preserves_configured_name_route {
+            if uses_provider_name_fallback {
                 models.push(provider_name.clone());
             }
 
@@ -249,9 +245,7 @@ impl Router {
                 if !seen_provider_models.insert(model.clone()) {
                     continue;
                 }
-                let is_configured_name_route =
-                    preserves_configured_name_route && model == provider_name;
-                let deployment_id = if uses_provider_name_fallback || is_configured_name_route {
+                let deployment_id = if uses_provider_name_fallback {
                     provider_name.clone()
                 } else {
                     format!("{}-{}", provider_name, model)

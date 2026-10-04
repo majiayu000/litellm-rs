@@ -166,7 +166,7 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         name: "observability",
         decision: SubsystemDecision::Wired,
         runtime_path: Some("AppState RuntimeObservability callback dispatcher"),
-        note: "RuntimeObservability is wired to real LLM callbacks; all other legacy exports are deprecated library-only compatibility surfaces for 0.6.",
+        note: "RuntimeObservability is the canonical callback dispatcher; retained redaction helpers protect provider configuration output.",
     },
     CoreSubsystem {
         name: "pricing",
@@ -191,12 +191,6 @@ pub const CORE_SUBSYSTEMS: &[CoreSubsystem] = &[
         decision: SubsystemDecision::Wired,
         runtime_path: Some("RateLimitMiddleware"),
         note: "Global rate limiter is initialized by the server app factory.",
-    },
-    CoreSubsystem {
-        name: "realtime",
-        decision: SubsystemDecision::FeatureGated,
-        runtime_path: Some("Cargo feature: websockets"),
-        note: "GET /v1/realtime is a manual OpenAI text/audio/function WebSocket gateway; deprecated core client is separate. Automatic VAD, transcription, images and hosted MCP are unsupported.",
     },
     CoreSubsystem {
         name: "request_ledger",

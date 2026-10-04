@@ -15,7 +15,7 @@ use the breaking-release path in `.github/workflows/version-bump.yml`.
 | `core::mcp` | Originally deprecated as a library-only surface | Retained: `gateway,mcp` mounts authenticated Streamable HTTP; see [MCP gateway](../gateway/mcp.md) |
 | `core::a2a` | Deprecated default-off library feature; no gateway routes in this source revision | Pending the dedicated gateway implementation |
 | `core::webhooks` | Deprecated default-off library feature | Removed with the `webhooks` feature; independent budget-alert delivery remains |
-| `core::realtime` | Deprecated default-off `websockets` library feature; no mounted route | Remove unless a separately approved runtime design supersedes the decision |
+| Former `core::realtime` | Removed unused legacy client/types | Use the separate `gateway,websockets` `/v1/realtime` HTTP gateway |
 | `core::batch::BatchProcessor` | Deprecated; `/v1/batches` continues to use the provider proxy | Processor removed; provider proxy and async batch helpers retained |
 | `core::semantic_cache` | Removed from unreleased source | Use deterministic `core::cache`; remove semantic cache fields |
 | `core::analytics` | Removed from unreleased source, including the `analytics` Cargo feature | Use runtime request metrics and callback integrations |
@@ -43,7 +43,7 @@ shipped as a patch release.
 
 Issue #1402 removes the unreachable BatchProcessor, duplicate VirtualKeyManager, unused UserManager and user-management Cargo feature, and resolved GH838 temporary-exemption constants/variant. Repository references were confined to the implementations, exports and compatibility-only tests. Batch async helpers, RuntimeVirtualKeyManager (canonical KeyManager), and user/team/virtual-key records remain because current runtime/storage paths consume them. This is a source-breaking removal, without replacement shims.
 
-Remaining F16 review: legacy retry helpers and realtime; the retained observability redaction helpers still protect provider configuration output. A2A/MCP/Realtime declarations follow their respective gateway implementations. Removal of the three unused managers does not complete the entire subsystem audit.
+The final F16 batch removes the legacy realtime library and unused MCP/A2A clients and re-exports. MCP/A2A configuration, domain/error and schema support remains; callers use the retained qualified module paths. The manual `/v1/realtime` route, MCP stateless proxy, A2A process-local ownership, callbacks and observability redaction remain wired. See [the complete subsystem reconciliation](../audit/subsystem-reconciliation-2026-10-04.md).
 
 ## Legacy observability and webhook removal
 

@@ -208,9 +208,6 @@ fn expected_attrs(sources: &Sources) -> BTreeMap<String, usize> {
     let mut expected = BTreeMap::from([
         ("src/core/traits/provider/llm_provider/sub_traits.rs".into(), 9),
         ("src/server/routes/mod.rs".into(), 1),
-        // GH838 compatibility adapters consume protocol modules deprecated for 0.7 removal.
-        ("src/utils/error/canonical.rs".into(), 4),
-        ("src/utils/error/gateway_error/conversions.rs".into(), 6),
     ]);
     for path in ["src/core/router/tests/concurrency_edge_case_tests.rs", "src/core/router/tests/execution_tests.rs",
         "src/core/router/tests/router_tests.rs", "src/core/router/tests/selection_tests.rs",
