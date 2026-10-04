@@ -35,8 +35,9 @@ changes and unsupported client events return explicit errors before transport.
 Only `function` tools are accepted; execution and any external charges are the
 client application's responsibility. This increment does not support Azure,
 Gemini, Bedrock, GPT-Live, WebRTC, SIP, browser ephemeral tokens or Responses
-WebSocket mode. It does not implement the deprecated `core::realtime` client;
-removal of those separate legacy types remains tracked in [#1402](https://github.com/majiayu000/litellm-rs/issues/1402).
+WebSocket mode. The unused `core::realtime` client and its separate legacy types
+have been removed; the executable entry is `server::routes::ai::realtime`.
+See the [subsystem reconciliation](../audit/subsystem-reconciliation-2026-10-04.md).
 
 Both peers' close codes/reasons and request-scoped native events are retained.
 Frames use bounded buffers, with the existing server body-size setting as the
