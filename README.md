@@ -32,10 +32,10 @@ cargo run --bin gateway --features sqlite
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --version 0.8.0 --locked --bin gateway --no-default-features \
+cargo install litellm-rs --version 0.8.1 --locked --bin gateway --no-default-features \
   --features postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.8.0/config/gateway.dev.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.8.1/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
@@ -45,7 +45,7 @@ uses the local `vllm` catalog provider. Use
 provider keys and auth enabled. The explicit `sqlite` feature enables the storage needed by the gateway binary.
 The registry install selects the same feature profile as release archives and
 containers, including MCP, A2A and Realtime. Binary and example config versions
-must match. See the [0.8.0 artifact verification](docs/gateway/release-0.8.0-verification.md)
+must match. See the [0.8 artifact verification](docs/gateway/release-0.8.0-verification.md)
 for candidate and publication evidence.
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
@@ -66,13 +66,13 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 
 ## Container distribution status
 
-The 0.8.0 distributions use the [versioned crate](https://crates.io/crates/litellm-rs/0.8.0),
-[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.0)
-and `ghcr.io/majiayu000/litellm-rs:0.8.0` (Linux amd64/arm64). They share the
+The 0.8.1 candidate targets the [versioned crate](https://crates.io/crates/litellm-rs/0.8.1),
+[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.1)
+and `ghcr.io/majiayu000/litellm-rs:0.8.1` (Linux amd64/arm64). They share the
 shipped gateway feature profile documented below. Prefer a versioned image tag
 or immutable digest; `latest` is mutable. Docker Hub publication is optional.
 Candidate checks and actual publication identifiers are recorded separately in
-the [0.8.0 verification record](docs/gateway/release-0.8.0-verification.md).
+the [0.8 verification record](docs/gateway/release-0.8.0-verification.md).
 
 ## Rust Crate
 

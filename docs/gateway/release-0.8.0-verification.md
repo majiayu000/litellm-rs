@@ -1,16 +1,20 @@
-# 0.8.0 release verification (F18)
+# 0.8 release verification (F18)
 
-Issue #1403. Status: candidate preparation; no 0.8.0 tag or artifact has been
-published yet. Version 0.8.0 is a pre-1.0 minor release because accepted changes
-remove public APIs and change the default Cargo feature profile.
+Issue #1403. Status: correcting the 0.8.0 artifact smoke failure with a new
+0.8.1 candidate. The immutable v0.8.0 tag is retained; macOS smoke failed before
+crates.io and public GitHub release publication. The 0.8 line is a pre-1.0 minor
+release because accepted changes remove public APIs and change default features.
 
 ## Candidate scope
 
 The candidate includes the accepted parity work through #1441, the remaining
 model audit #1442 and unused-interface reconciliation #1443. The complete release
-notes are in CHANGELOG.md. The immutable accepted commit and published artifact
-identifiers will be recorded here after validation/publication; PR branch heads
-are preparation evidence and are not substitutes for that commit.
+notes are in CHANGELOG.md. The first accepted immutable commit is `1ab0b47cc5e6f78d6ab9638921f3f739a56749b0`,
+tagged as v0.8.0 after #1444 final-head 15 checks passed and all reviews were
+resolved. Candidate 0.8.1 changes only version/install metadata and the local
+release fixture; production Rust behavior and the shipped profile are unchanged.
+Its accepted commit and published identifiers will be recorded after verification.
+PR branch heads are preparation evidence and do not substitute for that commit.
 
 The shared shipped profile is:
 
@@ -174,3 +178,46 @@ database access. Run one smoke per fresh gateway process: the intentional 429
 can put a deployment into its normal cooldown. Inspect Docker health and image
 revision/version/user separately, and remove only the task's containers/network
 when finished. No test certificate or private key is committed.
+
+## 0.8.0 accepted commit and package verification
+
+- Accepted source/tag: [1ab0b47cc5e6f78d6ab9638921f3f739a56749b0](https://github.com/majiayu000/litellm-rs/commit/1ab0b47cc5e6f78d6ab9638921f3f739a56749b0), v0.8.0.
+- [Preparation PR #1444](https://github.com/majiayu000/litellm-rs/pull/1444) final head 7fc30ff31e4a00365641fe165d2bfd2d95c20573: 15 successful checks, all review threads resolved. Source acceptance is separate from publishing.
+- Clean exact-profile `cargo package --locked` verification passed on the accepted commit. Cargo.toml/Cargo.lock contain 0.8.0; .cargo_vcs_info.json identifies that same clean commit.
+- Accepted local crate SHA-256: `fa5518a655f753ee8841c61d9ff4956f7866aa65bc184d9656f004cda9d6d0ff`. Package inspection confirmed native Responses/Messages/Realtime, MCP/A2A routes, embedded prices/catalog and both OpenAPI files.
+- Installed the accepted unpacked crate into a new empty root with `--debug --locked --no-default-features` and the exact shipped profile. Actual installed binary version and all 8 local TLS protocol checks passed. Registry/release-mode installation remains a separate check.
+- Accepted ARM64 local release image: `sha256:f0ecb5675257f6a6a607e4e5249e4db5f0716a720361c7f702451f4e6ef16cab`. Full OCI revision equals the accepted commit; appuser, 0.8.0 version and packaged config validation checked. This local image ID is not a published GHCR manifest digest.
+- Tag-triggered existing [Release run 37198981030](https://github.com/majiayu000/litellm-rs/actions/runs/37198981030) targets the accepted commit. Windows, Linux GNU and optional musl artifact smoke passed. Both macOS artifact
+  smoke jobs failed; GitHub release remains draft and crates.io publication was
+  skipped. Docker publication is independent and still pending; this is not a
+  completed release.
+
+The exact shipped profile unifies reqwest's native roots through locked
+object_store 0.13.2. rustls-native-certs reads the test-only SSL_CERT_FILE before
+platform roots; this explains the real binary/container TLS results. No system
+trust store, production TLS settings or certificate verification was modified.
+
+## 0.8.1 artifact smoke correction
+
+The macOS jobs built and validated the executable but failed in the local
+protocol fixture. GitHub runner maintainers [reproduced a roughly 35-second
+Python HTTPServer reverse-DNS stall before listening](https://github.com/actions/runner-images/issues/14409#issuecomment-5034633535).
+Our mock used that same constructor path. This is a supported explanation for
+the fixture delay; the corrected macOS run must establish the actual result.
+
+The mock now binds through TCPServer, sets its local server name and activates
+its TLS listener without the unused hostname lookup. A regression run with
+`socket.getfqdn` forced to fail still established a listening socket. The actual
+accepted 0.8.0 installed gateway passed all 8 native protocol checks with the
+corrected mock in a virtualenv and alternate ports. A missing-binary run
+preserved FileNotFoundError, printed both child logs and released the mock port.
+Logs are read after both children stop and the parent's write handles close;
+an early-exiting child also preserved the startup exception and its log marker.
+No timeout increase or runner/system security change was made. Cross-platform
+0.8.1 artifact and registry results remain required.
+
+The 0.8.1 preparation worktree passed fmt/check, default full tests (7,125
+library tests, 1 ignored, plus integration/doc tests) and all-target clippy.
+The exact shipped profile passed full tests (11,010 library tests, 1 ignored,
+plus integration/doc tests) and all-target clippy. These local source checks
+do not substitute for the corrected macOS artifact smoke or publication.
