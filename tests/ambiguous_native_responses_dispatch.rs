@@ -1,7 +1,7 @@
 #![cfg(all(feature = "gateway", feature = "sqlite"))]
 
 #[path = "common/providers.rs"]
-mod provider_fixtures;
+pub mod provider_fixtures;
 
 use actix_web::{App, HttpMessage, http::StatusCode, test, web};
 use litellm_rs::{
