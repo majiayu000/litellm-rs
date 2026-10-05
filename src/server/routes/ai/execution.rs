@@ -484,7 +484,12 @@ where
 
 /// Carry operation safety separately from whether response bytes were received.
 /// A native creation may already exist upstream before its response headers arrive.
-pub(super) async fn execute_stream_with_selected_deployment_matching_with_idempotency<T, F, Fut, P>(
+pub(super) async fn execute_stream_with_selected_deployment_matching_with_idempotency<
+    T,
+    F,
+    Fut,
+    P,
+>(
     router: Arc<UnifiedRouter>,
     requested_model: &str,
     capability: ProviderCapability,

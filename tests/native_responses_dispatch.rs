@@ -108,7 +108,12 @@ impl Upstream {
                 }
             }
         });
-        Self { base, posts, bodies, task }
+        Self {
+            base,
+            posts,
+            bodies,
+            task,
+        }
     }
 }
 
@@ -118,7 +123,8 @@ async fn gateway(upstream: &Upstream, dir: Option<&tempfile::TempDir>) -> HttpSe
     config.gateway.storage.database.auto_migrate = true;
     if let Some(dir) = dir {
         config.gateway.storage.database.url = format!(
-            "sqlite://{}?mode=rwc", dir.path().join("dispatch.db").display()
+            "sqlite:{}?mode=rwc",
+            dir.path().join("dispatch.db").display()
         );
     }
     config.gateway.storage.redis.enabled = false;
@@ -127,8 +133,11 @@ async fn gateway(upstream: &Upstream, dir: Option<&tempfile::TempDir>) -> HttpSe
     config.gateway.auth.allow_anonymous = true;
     config.gateway.pricing.source = None;
     let mut provider = provider_fixtures::mock_provider_config(
-        "native-test", "openai", "sk-test-not-a-real-key-12345678901234567890",
-        &upstream.base, vec!["gpt-4o-mini".into()],
+        "native-test",
+        "openai",
+        "sk-test-not-a-real-key-12345678901234567890",
+        &upstream.base,
+        vec!["gpt-4o-mini".into()],
     );
     provider.timeout = 1;
     provider.retry.base_delay = 1;
@@ -141,7 +150,8 @@ async fn gateway(upstream: &Upstream, dir: Option<&tempfile::TempDir>) -> HttpSe
         serde_json::from_value(json!({
             "litellm_provider":"openai", "mode":"chat", "max_output_tokens":1,
             "input_cost_per_token":0.0, "output_cost_per_token":1.0
-        })).unwrap(),
+        }))
+        .unwrap(),
     );
     server
 }
@@ -157,20 +167,34 @@ fn body(mode: &str) -> Value {
 
 async fn budget_context(state: &AppState) -> (RequestContext, uuid::Uuid, BudgetScope) {
     state.budget_limits.providers.set_provider_limit(
-        "native-test", ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        "native-test",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
     );
     state.budget_limits.models.set_model_limit(
-        "gpt-4o-mini", ModelLimitConfig::new(10.0, ResetPeriod::Monthly),
+        "gpt-4o-mini",
+        ModelLimitConfig::new(10.0, ResetPeriod::Monthly),
     );
     let scope = BudgetScope::ApiKey("dispatch-test".into());
-    let budget = state.budget_manager.create_budget(
-        scope.clone(), BudgetConfig::new("dispatch-test", 10.0),
-    ).await.unwrap();
-    let (key_id, _) = state.key_manager.generate_key(CreateKeyConfig {
-        name: "dispatch-test".into(), ..Default::default()
-    }).await.unwrap();
-    (RequestContext::new().with_api_key(key_id)
-        .with_api_key_budget(budget.id.parse().unwrap()), key_id, scope)
+    let budget = state
+        .budget_manager
+        .create_budget(scope.clone(), BudgetConfig::new("dispatch-test", 10.0))
+        .await
+        .unwrap();
+    let (key_id, _) = state
+        .key_manager
+        .generate_key(CreateKeyConfig {
+            name: "dispatch-test".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    (
+        RequestContext::new()
+            .with_api_key(key_id)
+            .with_api_key_budget(budget.id.parse().unwrap()),
+        key_id,
+        scope,
+    )
 }
 
 #[tokio::test]
@@ -181,27 +205,55 @@ async fn foreground_ambiguous_dispatch_retains_unknown_budgets() {
             let server = gateway(&upstream, None).await;
             let state = server.state();
             let (context, key_id, scope) = budget_context(state).await;
-            let app = test::init_service(App::new().app_data(web::Data::new(state.clone()))
-                .configure(litellm_rs::server::routes::ai::configure_routes)).await;
-            let path = if mode == "compact" { "/v1/responses/compact" } else { "/v1/responses" };
-            let req = test::TestRequest::post().uri(path).set_json(body(mode)).to_request();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let path = if mode == "compact" {
+                "/v1/responses/compact"
+            } else {
+                "/v1/responses"
+            };
+            let req = test::TestRequest::post()
+                .uri(path)
+                .set_json(body(mode))
+                .to_request();
             req.extensions_mut().insert(context);
             let response = test::call_service(&app, req).await;
             assert!(!response.status().is_success());
             let _ = test::read_body(response).await;
             for spend in [
-                state.budget_limits.providers.get_provider_usage("native-test").unwrap().current_spend,
-                state.budget_limits.models.get_model_usage("gpt-4o-mini").unwrap().current_spend,
+                state
+                    .budget_limits
+                    .providers
+                    .get_provider_usage("native-test")
+                    .unwrap()
+                    .current_spend,
+                state
+                    .budget_limits
+                    .models
+                    .get_model_usage("gpt-4o-mini")
+                    .unwrap()
+                    .current_spend,
                 state.budget_manager.get_current_spend(&scope),
             ] {
-                assert!((spend - 1.0).abs() < 1e-12, "{mode} lost reserved upper bound: {spend}");
+                assert!(
+                    (spend - 1.0).abs() < 1e-12,
+                    "{mode} lost reserved upper bound: {spend}"
+                );
             }
             let usage = state.key_manager.get_usage_stats(key_id).await.unwrap();
             assert_eq!(usage.total_requests, 1);
             assert_eq!(usage.unpriced_requests, 1);
             assert_eq!(usage.total_tokens, 0);
             assert_eq!(usage.total_cost, 0.0);
-            assert_eq!(upstream.posts.load(Ordering::SeqCst), 1, "{mode} replayed POST");
+            assert_eq!(
+                upstream.posts.load(Ordering::SeqCst),
+                1,
+                "{mode} replayed POST"
+            );
         }
     }
 }
@@ -211,14 +263,32 @@ async fn foreground_ambiguous_dispatch_is_not_replayed() {
     for mode in ["unary", "stream", "compact"] {
         let upstream = Upstream::start(Reply::Disconnect).await;
         let server = gateway(&upstream, None).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(server.state().clone()))
-            .configure(litellm_rs::server::routes::ai::configure_routes)).await;
-        let path = if mode == "compact" { "/v1/responses/compact" } else { "/v1/responses" };
-        let response = test::call_service(&app, test::TestRequest::post().uri(path)
-            .set_json(body(mode)).to_request()).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(server.state().clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let path = if mode == "compact" {
+            "/v1/responses/compact"
+        } else {
+            "/v1/responses"
+        };
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(path)
+                .set_json(body(mode))
+                .to_request(),
+        )
+        .await;
         assert!(!response.status().is_success());
         let _ = test::read_body(response).await;
-        assert_eq!(upstream.posts.load(Ordering::SeqCst), 1, "{mode} replayed POST");
+        assert_eq!(
+            upstream.posts.load(Ordering::SeqCst),
+            1,
+            "{mode} replayed POST"
+        );
     }
 }
 
@@ -229,19 +299,54 @@ async fn foreground_known_rejection_releases_budgets() {
         let server = gateway(&upstream, None).await;
         let state = server.state();
         let (context, key_id, scope) = budget_context(state).await;
-        let app = test::init_service(App::new().app_data(web::Data::new(state.clone()))
-            .configure(litellm_rs::server::routes::ai::configure_routes)).await;
-        let path = if mode == "compact" { "/v1/responses/compact" } else { "/v1/responses" };
-        let req = test::TestRequest::post().uri(path).set_json(body(mode)).to_request();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let path = if mode == "compact" {
+            "/v1/responses/compact"
+        } else {
+            "/v1/responses"
+        };
+        let req = test::TestRequest::post()
+            .uri(path)
+            .set_json(body(mode))
+            .to_request();
         req.extensions_mut().insert(context);
         let response = test::call_service(&app, req).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let _ = test::read_body(response).await;
         assert_eq!(upstream.posts.load(Ordering::SeqCst), 1);
-        assert_eq!(state.budget_limits.providers.get_provider_usage("native-test").unwrap().current_spend, 0.0);
-        assert_eq!(state.budget_limits.models.get_model_usage("gpt-4o-mini").unwrap().current_spend, 0.0);
+        assert_eq!(
+            state
+                .budget_limits
+                .providers
+                .get_provider_usage("native-test")
+                .unwrap()
+                .current_spend,
+            0.0
+        );
+        assert_eq!(
+            state
+                .budget_limits
+                .models
+                .get_model_usage("gpt-4o-mini")
+                .unwrap()
+                .current_spend,
+            0.0
+        );
         assert_eq!(state.budget_manager.get_current_spend(&scope), 0.0);
-        assert_eq!(state.key_manager.get_usage_stats(key_id).await.unwrap().unpriced_requests, 0);
+        assert_eq!(
+            state
+                .key_manager
+                .get_usage_stats(key_id)
+                .await
+                .unwrap()
+                .unpriced_requests,
+            0
+        );
     }
 }
 
@@ -256,25 +361,56 @@ async fn background_ambiguous_dispatch_keeps_one_durable_unknown_obligation() {
         let dir = tempfile::tempdir().unwrap();
         let server = gateway(&upstream, Some(&dir)).await;
         let state = server.state();
-        let mut user = User::new("dispatch-owner".into(), "dispatch@example.com".into(), "unused-hash".into());
+        let mut user = User::new(
+            "dispatch-owner".into(),
+            "dispatch@example.com".into(),
+            "unused-hash".into(),
+        );
         user.status = UserStatus::Active;
         state.storage.database.create_user(&user).await.unwrap();
-        let (key, _) = state.auth.api_key().create_key(
-            Some(user.metadata.id), None, "dispatch".into(), vec!["api.chat".into()]
-        ).await.unwrap();
-        let app = test::init_service(App::new().app_data(web::Data::new(state.clone()))
-            .configure(litellm_rs::server::routes::ai::configure_routes)).await;
+        let (key, _) = state
+            .auth
+            .api_key()
+            .create_key(
+                Some(user.metadata.id),
+                None,
+                "dispatch".into(),
+                vec!["api.chat".into()],
+            )
+            .await
+            .unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
         let mut body = body(mode);
         body["background"] = json!(true);
-        let req = test::TestRequest::post().uri("/v1/responses").set_json(body).to_request();
-        req.extensions_mut().insert(RequestContext::new().with_api_key(key.metadata.id));
+        let req = test::TestRequest::post()
+            .uri("/v1/responses")
+            .set_json(body)
+            .to_request();
+        req.extensions_mut()
+            .insert(RequestContext::new().with_api_key(key.metadata.id));
         let response = test::call_service(&app, req).await;
         assert!(!response.status().is_success());
         let _ = test::read_body(response).await;
-        assert_eq!(upstream.posts.load(Ordering::SeqCst), 1, "{mode} replayed POST");
+        assert_eq!(
+            upstream.posts.load(Ordering::SeqCst),
+            1,
+            "{mode} replayed POST"
+        );
         assert_eq!(upstream.bodies.lock().unwrap()[0]["background"], true);
-        let rows = Entity::find().all(state.storage.database.connection()).await.unwrap();
-        assert_eq!(rows.len(), 1, "one creation must retain one dispatch obligation");
+        let rows = Entity::find()
+            .all(state.storage.database.connection())
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "one creation must retain one dispatch obligation"
+        );
         let row = rows.into_iter().next().unwrap();
         assert_eq!(row.outcome, "pending");
         assert!(!row.complete);
@@ -286,17 +422,35 @@ async fn background_ambiguous_dispatch_keeps_one_durable_unknown_obligation() {
         active.deadline = Set(0);
         active.lease_until = Set(0);
         active.next_attempt = Set(0);
-        active.update(state.storage.database.connection()).await.unwrap();
+        active
+            .update(state.storage.database.connection())
+            .await
+            .unwrap();
         let settled = tokio::time::timeout(Duration::from_secs(8), async {
             loop {
-                let row = Entity::find_by_id(&id).one(state.storage.database.connection()).await.unwrap().unwrap();
-                if row.complete { break row; }
+                let row = Entity::find_by_id(&id)
+                    .one(state.storage.database.connection())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if row.complete {
+                    break row;
+                }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(settled.outcome, "reserved_unknown");
         assert_eq!(settled.cost, Some(settled.reserved));
-        let usage = state.storage.database.find_api_key_by_id(key.metadata.id).await.unwrap().unwrap().usage_stats;
+        let usage = state
+            .storage
+            .database
+            .find_api_key_by_id(key.metadata.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .usage_stats;
         assert_eq!(usage.unpriced_requests, 1);
         assert_eq!(usage.total_tokens, 0);
         assert_eq!(usage.total_cost, 0.0);
