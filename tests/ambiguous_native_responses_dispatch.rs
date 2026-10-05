@@ -131,7 +131,8 @@ async fn gateway(upstream: &Upstream, dir: Option<&tempfile::TempDir>) -> HttpSe
     config.gateway.auth.enable_jwt = false;
     config.gateway.auth.enable_api_key = false;
     config.gateway.auth.allow_anonymous = true;
-    config.gateway.pricing.source = None;
+    // Keep the standard embedded catalog during startup: deployment pricing
+    // identity is frozen before the fixture overrides its rates below.
     let mut provider = provider_fixtures::mock_provider_config(
         "native-test",
         "openai",
@@ -222,8 +223,10 @@ async fn foreground_ambiguous_dispatch_retains_unknown_budgets() {
                 .to_request();
             req.extensions_mut().insert(context);
             let response = test::call_service(&app, req).await;
-            assert!(!response.status().is_success());
-            let _ = test::read_body(response).await;
+            let status = response.status();
+            let error = test::read_body(response).await;
+            let error = String::from_utf8_lossy(&error);
+            assert!(!status.is_success(), "{mode}: {error}");
             for spend in [
                 state
                     .budget_limits
@@ -241,7 +244,7 @@ async fn foreground_ambiguous_dispatch_retains_unknown_budgets() {
             ] {
                 assert!(
                     (spend - 1.0).abs() < 1e-12,
-                    "{mode} lost reserved upper bound: {spend}"
+                    "{mode} lost reserved upper bound: {spend}; response: {error}"
                 );
             }
             let usage = state.key_manager.get_usage_stats(key_id).await.unwrap();
@@ -252,7 +255,7 @@ async fn foreground_ambiguous_dispatch_retains_unknown_budgets() {
             assert_eq!(
                 upstream.posts.load(Ordering::SeqCst),
                 1,
-                "{mode} replayed POST"
+                "{mode} must dispatch exactly once: {error}"
             );
         }
     }
@@ -282,12 +285,14 @@ async fn foreground_ambiguous_dispatch_is_not_replayed() {
                 .to_request(),
         )
         .await;
-        assert!(!response.status().is_success());
-        let _ = test::read_body(response).await;
+        let status = response.status();
+        let error = test::read_body(response).await;
+        let error = String::from_utf8_lossy(&error);
+        assert!(!status.is_success(), "{mode}: {error}");
         assert_eq!(
             upstream.posts.load(Ordering::SeqCst),
             1,
-            "{mode} replayed POST"
+            "{mode} must dispatch exactly once: {error}"
         );
     }
 }
@@ -316,8 +321,10 @@ async fn foreground_known_rejection_releases_budgets() {
             .to_request();
         req.extensions_mut().insert(context);
         let response = test::call_service(&app, req).await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let _ = test::read_body(response).await;
+        let status = response.status();
+        let error = test::read_body(response).await;
+        let error = String::from_utf8_lossy(&error);
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{mode}: {error}");
         assert_eq!(upstream.posts.load(Ordering::SeqCst), 1);
         assert_eq!(
             state
@@ -394,12 +401,14 @@ async fn background_ambiguous_dispatch_keeps_one_durable_unknown_obligation() {
         req.extensions_mut()
             .insert(RequestContext::new().with_api_key(key.metadata.id));
         let response = test::call_service(&app, req).await;
-        assert!(!response.status().is_success());
-        let _ = test::read_body(response).await;
+        let status = response.status();
+        let error = test::read_body(response).await;
+        let error = String::from_utf8_lossy(&error);
+        assert!(!status.is_success(), "{mode}: {error}");
         assert_eq!(
             upstream.posts.load(Ordering::SeqCst),
             1,
-            "{mode} replayed POST"
+            "{mode} must dispatch exactly once: {error}"
         );
         assert_eq!(upstream.bodies.lock().unwrap()[0]["background"], true);
         let rows = Entity::find()
@@ -412,6 +421,7 @@ async fn background_ambiguous_dispatch_keeps_one_durable_unknown_obligation() {
             "one creation must retain one dispatch obligation"
         );
         let row = rows.into_iter().next().unwrap();
+        assert_eq!(row.reserved, 1.0);
         assert_eq!(row.outcome, "pending");
         assert!(!row.complete);
         assert!(row.response_id.is_none());
@@ -442,7 +452,7 @@ async fn background_ambiguous_dispatch_keeps_one_durable_unknown_obligation() {
         .await
         .unwrap();
         assert_eq!(settled.outcome, "reserved_unknown");
-        assert_eq!(settled.cost, Some(settled.reserved));
+        assert_eq!(settled.cost, Some(1.0));
         let usage = state
             .storage
             .database
