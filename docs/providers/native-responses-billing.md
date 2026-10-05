@@ -86,3 +86,21 @@ clippy, all 42 native Responses HTTP tests and all seven callback tests passed. 
 calls and release acceptance are separate from these local results.
 
 When `max_output_tokens` is omitted, file-search admission uses the verified model maximum output tokens. Missing model output bounds are rejected before generation; it never uses the generic 100-token estimate for this hosted-tool path.
+
+## Ambiguous dispatches
+
+Native Responses creation and compaction are non-idempotent even before response
+headers arrive. The gateway does not retry or fail over their provider-operation
+errors; ordinary chat retry behavior and safe pre-call budget/unpriced fallback
+are unchanged. There is no assumed upstream idempotency-key contract.
+
+A foreground network failure or response-header timeout retains its provider,
+model and API-key budget upper bounds through unknown-usage settlement. API-key
+actual cost/tokens remain unknown rather than treating the reservation as a bill.
+Known foreground rejection, such as HTTP 401, releases its reservation. Background
+creation retains its one durable dispatch obligation for existing reconciliation;
+missing response headers do not cause another POST or another obligation.
+
+Mock HTTP regression tests receive the complete POST before closing the connection
+or withholding headers. They cover unary/streaming creation, compaction, known
+rejection, and background reconciliation without paid provider calls.
