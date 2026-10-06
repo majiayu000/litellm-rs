@@ -11,7 +11,11 @@ use litellm_rs::{
             responses::{ChatChunk, ChatResponse},
         },
     },
-    sdk::{LLMClient, errors::SDKError, types::Message},
+    sdk::{
+        LLMClient,
+        errors::SDKError,
+        types::{Content, Message, Role},
+    },
 };
 use std::{
     collections::VecDeque,
@@ -115,7 +119,12 @@ fn fixture(
     (client, router, dropped)
 }
 fn request() -> Vec<Message> {
-    vec![Message::user("hello")]
+    vec![Message {
+        role: Role::User,
+        content: Some(Content::Text("hello".into())),
+        name: None,
+        tool_calls: None,
+    }]
 }
 
 fn assert_counts(deployment: &Deployment, success: u64, failures: u64, tokens: u64) {
