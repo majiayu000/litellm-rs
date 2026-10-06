@@ -43,7 +43,7 @@ fn test_create_key_config_from_request() {
     assert!(config.description.is_some());
 }
 
-fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
+pub(super) fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
     use crate::core::models::Metadata;
     use crate::core::models::UsageStats;
     use crate::core::models::user::preferences::UserPreferences;
@@ -111,7 +111,7 @@ fn make_api_key(id: Uuid, user_id: Option<Uuid>, team_id: Option<Uuid>) -> ApiKe
     }
 }
 
-async fn auth_enabled_test_state() -> web::Data<AppState> {
+pub(super) async fn auth_enabled_test_state() -> web::Data<AppState> {
     let mut config = crate::config::Config::default();
     config
         .gateway
