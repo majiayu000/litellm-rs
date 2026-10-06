@@ -232,8 +232,9 @@ impl StreamingDeploymentLease {
             }
             _ => CooldownReason::ConsecutiveFailures,
         };
+        self.router.record_local_failure(&self.deployment, reason);
         self.router
-            .record_failure_with_reason_for_deployment_async(&self.deployment, reason)
+            .record_failure_circuit_for_deployment_async(&self.deployment, reason)
             .await;
     }
 

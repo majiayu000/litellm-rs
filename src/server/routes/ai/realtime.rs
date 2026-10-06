@@ -792,7 +792,11 @@ async fn relay(
             .finish_interrupted(tokens, failure.then_some(&error))
             .await;
     } else if failure {
-        lease.finish_failure_with_tokens(&error, 0).await;
+        // An idle socket has already finalized its generation lease. A new
+        // transport failure is a separate provider event, not a second attempt
+        // to complete that generation.
+        lease.record_provider_event_failure(&error).await;
+        lease.finish_neutral(0).await;
     } else {
         lease.finish_neutral(0).await;
     }
