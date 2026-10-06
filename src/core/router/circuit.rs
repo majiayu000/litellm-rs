@@ -70,7 +70,11 @@ impl CircuitBackend {
         }
     }
 
-    pub(crate) fn observe(&self, deployment: &Deployment, config: &RouterConfig) -> CircuitObserve {
+    pub(crate) async fn observe_async(
+        &self,
+        deployment: &Deployment,
+        config: &RouterConfig,
+    ) -> CircuitObserve {
         #[cfg(not(feature = "gateway"))]
         let _ = (deployment, config);
         match self {
@@ -103,7 +107,7 @@ impl CircuitBackend {
                 {
                     return CircuitObserve::Shared(entry.0);
                 }
-                match invoke(pool, &deployment.id, probe_token, config, "observe", 0) {
+                match invoke(pool, &deployment.id, probe_token, config, "observe", 0).await {
                     Ok(state) => {
                         cache.insert(deployment.id.clone(), (state, Instant::now()));
                         CircuitObserve::Shared(state)
@@ -114,24 +118,25 @@ impl CircuitBackend {
         }
     }
 
-    pub(crate) fn record_failure(
+    pub(crate) async fn record_failure_async(
         &self,
         deployment: &Deployment,
         config: &RouterConfig,
         reason: CooldownReason,
     ) -> CircuitWrite {
         self.write(deployment, config, "fail", reason_code(reason))
+            .await
     }
 
-    pub(crate) fn record_success(
+    pub(crate) async fn record_success_async(
         &self,
         deployment: &Deployment,
         config: &RouterConfig,
     ) -> CircuitWrite {
-        self.write(deployment, config, "ok", 0)
+        self.write(deployment, config, "ok", 0).await
     }
 
-    fn write(
+    async fn write(
         &self,
         deployment: &Deployment,
         config: &RouterConfig,
@@ -166,7 +171,7 @@ impl CircuitBackend {
                 probe_token,
                 allow_degraded,
                 cache,
-            } => match invoke(pool, &deployment.id, probe_token, config, op, reason) {
+            } => match invoke(pool, &deployment.id, probe_token, config, op, reason).await {
                 Ok(state) => {
                     cache.insert(deployment.id.clone(), (state, Instant::now()));
                     CircuitWrite::Applied(state)
@@ -252,7 +257,7 @@ fn redis_loss_observe(deployment_id: &str, allow_degraded: bool) -> CircuitObser
 }
 
 #[cfg(feature = "gateway")]
-fn invoke(
+async fn invoke(
     pool: &std::sync::Arc<crate::storage::redis::RedisPool>,
     deployment_id: &str,
     token: &str,
@@ -286,6 +291,7 @@ fn invoke(
         )
         .await
     })
+    .await
 }
 
 #[cfg(feature = "gateway")]
@@ -322,7 +328,7 @@ fn circuit_io_handle() -> tokio::runtime::Handle {
 }
 
 #[cfg(feature = "gateway")]
-fn run_redis<T>(
+async fn run_redis<T>(
     deployment_id: &str,
     operation: &'static str,
     fut: impl std::future::Future<Output = crate::utils::error::gateway_error::Result<T>>
@@ -332,11 +338,13 @@ fn run_redis<T>(
 where
     T: Send + 'static,
 {
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    circuit_io_handle().spawn(async move {
-        let _ = tx.send(fut.await);
+    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+    let permit = SLOTS.acquire().await.map_err(|_| ())?;
+    let task = circuit_io_handle().spawn(async move {
+        let _permit = permit;
+        fut.await
     });
-    match rx.recv() {
+    match task.await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(err)) => {
             warn!(
@@ -362,7 +370,34 @@ mod tests {
     async fn run_redis_does_not_panic_on_current_thread_runtime() {
         let result = run_redis("probe", "probe", async {
             Ok::<i64, crate::utils::error::gateway_error::GatewayError>(7)
-        });
+        })
+        .await;
         assert_eq!(result.expect("current_thread redis bridge"), 7);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn redis_wait_keeps_the_request_worker_polling() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            let _ = sender.send(7);
+        });
+        let result = run_redis("worker-progress", "probe", async move {
+            tokio::time::timeout(std::time::Duration::from_secs(2), receiver)
+                .await
+                .map_err(|_| {
+                    crate::utils::error::gateway_error::GatewayError::Internal(
+                        "request worker stopped polling".into(),
+                    )
+                })?
+                .map_err(|_| {
+                    crate::utils::error::gateway_error::GatewayError::Internal(
+                        "peer dropped".into(),
+                    )
+                })
+        })
+        .await;
+        assert_eq!(result.unwrap(), 7);
+        peer.await.unwrap();
     }
 }

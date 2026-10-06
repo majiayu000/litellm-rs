@@ -84,13 +84,16 @@ impl Router {
         while attempt <= max_attempts {
             let start = std::time::Instant::now();
 
-            let mut deployment_lease = match self.select_retry_candidate(
-                snapshot,
-                model_name,
-                capability,
-                &excluded_budget_deployments,
-                &mut tried_deployments,
-            ) {
+            let mut deployment_lease = match self
+                .select_retry_candidate(
+                    snapshot,
+                    model_name,
+                    capability,
+                    &excluded_budget_deployments,
+                    &mut tried_deployments,
+                )
+                .await
+            {
                 Ok(lease) => lease,
                 Err(router_err) => {
                     if matches!(
@@ -137,18 +140,20 @@ impl Router {
             match result {
                 Ok((value, tokens_used)) => {
                     let model_used = selected_deployment.model.clone();
-                    self.record_success_for_deployment(
+                    deployment_lease.commit_admission_async(tokens_used).await;
+                    self.record_success_for_deployment_async(
                         deployment_lease.deployment(),
                         tokens_used,
                         latency_us,
-                    );
-                    deployment_lease.commit_admission(tokens_used);
+                    )
+                    .await;
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
                 Err(err) => {
                     if retryable_budget_scope(&err).is_some() {
                         excluded_budget_deployments.insert(deployment_id);
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         last_error = Some(err);
                         continue;
@@ -164,11 +169,13 @@ impl Router {
                         // Use ConsecutiveFailures so the deployment only enters
                         // cooldown after exceeding allowed_fails threshold,
                         // giving retries a chance to succeed.
-                        self.record_failure_with_reason_for_deployment(
+                        self.record_failure_with_reason_for_deployment_async(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
-                        );
+                        )
+                        .await;
                         tried_deployments.insert(deployment_id);
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         last_error = Some(err);
                         attempt += 1;
@@ -178,10 +185,12 @@ impl Router {
                         continue;
                     } else {
                         let cooldown_reason = infer_cooldown_reason(&err);
-                        self.record_failure_with_reason_for_deployment(
+                        self.record_failure_with_reason_for_deployment_async(
                             deployment_lease.deployment(),
                             cooldown_reason,
-                        );
+                        )
+                        .await;
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         return Err((err, attempt));
                     }
@@ -202,7 +211,7 @@ impl Router {
         ))
     }
 
-    fn select_retry_candidate(
+    async fn select_retry_candidate(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,
@@ -210,28 +219,33 @@ impl Router {
         excluded_budget_deployments: &HashSet<String>,
         tried_deployments: &mut HashSet<String>,
     ) -> Result<DeploymentLease, RouterError> {
-        let select = |prefer_untried: bool| {
+        let select = async |prefer_untried: bool| {
             let is_candidate = |deployment: &Deployment| {
                 !excluded_budget_deployments.contains(deployment.id.as_str())
                     && (!prefer_untried || !tried_deployments.contains(deployment.id.as_str()))
             };
             match capability {
-                Some(capability) => self
-                    .select_deployment_lease_for_capability_matching_in_snapshot(
+                Some(capability) => {
+                    self.select_deployment_lease_for_capability_matching_in_snapshot(
                         snapshot,
                         model_name,
                         capability,
                         is_candidate,
-                    ),
-                None => self.select_deployment_lease_matching_in_snapshot(
-                    snapshot,
-                    model_name,
-                    is_candidate,
-                ),
+                    )
+                    .await
+                }
+                None => {
+                    self.select_deployment_lease_matching_in_snapshot(
+                        snapshot,
+                        model_name,
+                        is_candidate,
+                    )
+                    .await
+                }
             }
         };
 
-        match select(true) {
+        match select(true).await {
             Ok(lease) => Ok(lease),
             Err(err)
                 if !tried_deployments.is_empty()
@@ -241,7 +255,7 @@ impl Router {
                             | RouterError::NoAvailableDeployment(_)
                     ) =>
             {
-                match select(false) {
+                match select(false).await {
                     Ok(lease) => {
                         tried_deployments.clear();
                         Ok(lease)
@@ -271,13 +285,16 @@ impl Router {
         let mut tried_deployments = HashSet::new();
 
         while attempt <= max_attempts {
-            let deployment_lease = match self.select_retry_candidate(
-                snapshot,
-                model_name,
-                Some(capability),
-                &excluded_budget_deployments,
-                &mut tried_deployments,
-            ) {
+            let mut deployment_lease = match self
+                .select_retry_candidate(
+                    snapshot,
+                    model_name,
+                    Some(capability),
+                    &excluded_budget_deployments,
+                    &mut tried_deployments,
+                )
+                .await
+            {
                 Ok(lease) => lease,
                 Err(router_err) => {
                     if matches!(
@@ -314,6 +331,7 @@ impl Router {
                 Err(err) => {
                     if retryable_budget_scope(&err).is_some() {
                         excluded_budget_deployments.insert(deployment_id);
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         last_operation_error = Some(err);
                         continue;
@@ -326,11 +344,13 @@ impl Router {
                         RetryContext::stream_pre_output(attempt, max_attempts),
                     );
                     if retry_decision.should_retry {
-                        self.record_failure_with_reason_for_deployment(
+                        self.record_failure_with_reason_for_deployment_async(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
-                        );
+                        )
+                        .await;
                         tried_deployments.insert(deployment_id);
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         last_operation_error = Some(err);
                         attempt += 1;
@@ -341,10 +361,12 @@ impl Router {
                     }
 
                     let cooldown_reason = infer_cooldown_reason(&err);
-                    self.record_failure_with_reason_for_deployment(
+                    self.record_failure_with_reason_for_deployment_async(
                         deployment_lease.deployment(),
                         cooldown_reason,
-                    );
+                    )
+                    .await;
+                    deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     return Err(err);
                 }
@@ -545,7 +567,7 @@ impl Router {
     {
         let start = std::time::Instant::now();
 
-        let mut deployment_lease = self.select_deployment_lease(model_name)?;
+        let mut deployment_lease = self.select_deployment_lease_async(model_name).await?;
         let selected_deployment = deployment_lease.clone_deployment();
         let deployment_id = selected_deployment.id.clone();
 
@@ -556,12 +578,13 @@ impl Router {
         match result {
             Ok((value, tokens_used)) => {
                 let model_used = selected_deployment.model.clone();
-                self.record_success_for_deployment(
+                deployment_lease.commit_admission_async(tokens_used).await;
+                self.record_success_for_deployment_async(
                     deployment_lease.deployment(),
                     tokens_used,
                     latency_us,
-                );
-                deployment_lease.commit_admission(tokens_used);
+                )
+                .await;
                 drop(deployment_lease);
 
                 Ok(build_execution_result(
@@ -575,10 +598,12 @@ impl Router {
             }
             Err(err) => {
                 let cooldown_reason = infer_cooldown_reason(&err);
-                self.record_failure_with_reason_for_deployment(
+                self.record_failure_with_reason_for_deployment_async(
                     deployment_lease.deployment(),
                     cooldown_reason,
-                );
+                )
+                .await;
+                deployment_lease.cancel_admission_async().await;
                 drop(deployment_lease);
 
                 Err(provider_error_to_router_error(err, model_name))

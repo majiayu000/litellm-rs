@@ -303,7 +303,7 @@ pub(super) async fn handle_streaming_chat_completion(
                                                 idle_timeout_secs
                                             ),
                                         );
-                                        lease.finish_failure(&error);
+                                        lease.finish_failure(&error).await;
                                     }
                                     callback.fail(
                                         format!("stream idle timeout after {}s", idle_timeout_secs),
@@ -354,7 +354,7 @@ pub(super) async fn handle_streaming_chat_completion(
                                             );
                                         }
                                         if let Some(lease) = lease.take() {
-                                            lease.finish_failure(&e);
+                                            lease.finish_failure(&e).await;
                                         }
                                         callback.fail(e.to_string(), "conversion_error");
                                         settle_after_upstream_output!();
@@ -401,7 +401,7 @@ pub(super) async fn handle_streaming_chat_completion(
                                                 "router",
                                                 format!("Serialization error: {}", e),
                                             );
-                                            lease.finish_failure(&error);
+                                            lease.finish_failure(&error).await;
                                         }
                                         callback.fail(
                                             format!("Serialization error: {}", e),
@@ -423,7 +423,7 @@ pub(super) async fn handle_streaming_chat_completion(
                                     info!("Client disconnected before error event could be sent");
                                 }
                                 if let Some(lease) = lease.take() {
-                                    lease.finish_failure(&e);
+                                    lease.finish_failure(&e).await;
                                 }
                                 callback.fail(e.to_string(), "provider_error");
                                 settle_after_upstream_output!();
@@ -530,7 +530,7 @@ pub(super) async fn handle_streaming_chat_completion(
                         .await;
                     callback.complete_usage(final_usage.as_ref(), "success");
                     if let Some(lease) = lease.take() {
-                        lease.finish_success(tokens_used);
+                        lease.finish_success(tokens_used).await;
                     }
                     return;
                 }

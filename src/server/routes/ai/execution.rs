@@ -41,40 +41,49 @@ impl StreamingDeploymentLease {
         }
     }
 
-    pub(super) fn finish_success(mut self, tokens_used: u64) {
-        self.complete_response(tokens_used, None);
+    pub(super) async fn finish_success(mut self, tokens_used: u64) {
+        self.complete_response(tokens_used, None).await;
     }
 
-    pub(super) fn complete_response(&mut self, tokens_used: u64, error: Option<&ProviderError>) {
+    pub(super) async fn complete_response(
+        &mut self,
+        tokens_used: u64,
+        error: Option<&ProviderError>,
+    ) {
         if let Some(error) = error {
-            self.complete_failure(error, tokens_used);
+            self.complete_failure(error, tokens_used).await;
             return;
         }
         if self.finalized {
             return;
         }
         let latency_us = self.started_at.elapsed().as_micros() as u64;
-        self.router
-            .record_success_for_deployment(&self.deployment, tokens_used, latency_us);
         if let Some(hold) = self.hold.take() {
-            self.admission.settle(&hold, tokens_used);
+            self.admission.settle_async(&hold, tokens_used).await;
         }
+        self.router
+            .record_success_for_deployment_async(&self.deployment, tokens_used, latency_us)
+            .await;
         self.release();
     }
 
-    pub(super) fn finish_failure(self, error: &ProviderError) {
-        self.finish_failure_with_tokens(error, 0);
+    pub(super) async fn finish_failure(self, error: &ProviderError) {
+        self.finish_failure_with_tokens(error, 0).await;
     }
 
-    pub(super) fn finish_failure_with_tokens(mut self, error: &ProviderError, tokens_used: u64) {
-        self.complete_failure(error, tokens_used);
+    pub(super) async fn finish_failure_with_tokens(
+        mut self,
+        error: &ProviderError,
+        tokens_used: u64,
+    ) {
+        self.complete_failure(error, tokens_used).await;
     }
 
-    fn complete_failure(&mut self, error: &ProviderError, tokens_used: u64) {
+    async fn complete_failure(&mut self, error: &ProviderError, tokens_used: u64) {
         if tokens_used > 0 {
             self.deployment.record_partial_tokens(tokens_used);
             if let Some(hold) = self.hold.take() {
-                self.admission.settle(&hold, tokens_used);
+                self.admission.settle_async(&hold, tokens_used).await;
             }
         }
         // Mid-stream failures cannot be retried. Preserve fail-fast cooldowns
@@ -88,12 +97,14 @@ impl StreamingDeploymentLease {
             _ => CooldownReason::ConsecutiveFailures,
         };
         self.router
-            .record_failure_with_reason_for_deployment(&self.deployment, cooldown_reason);
+            .record_failure_with_reason_for_deployment_async(&self.deployment, cooldown_reason)
+            .await;
+        self.cancel_admission().await;
         self.release();
     }
 
     #[cfg(feature = "websockets")]
-    pub(super) fn record_provider_event_failure(&mut self, error: &ProviderError) {
+    pub(super) async fn record_provider_event_failure(&mut self, error: &ProviderError) {
         let inferred = infer_cooldown_reason(error);
         let reason = match inferred {
             CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
@@ -102,11 +113,12 @@ impl StreamingDeploymentLease {
             _ => CooldownReason::ConsecutiveFailures,
         };
         self.router
-            .record_failure_with_reason_for_deployment(&self.deployment, reason);
+            .record_failure_with_reason_for_deployment_async(&self.deployment, reason)
+            .await;
     }
 
     #[cfg(feature = "websockets")]
-    pub(super) fn refresh_realtime_deployment(
+    pub(super) async fn refresh_realtime_deployment(
         &mut self,
         router: Arc<UnifiedRouter>,
     ) -> Result<(), ProviderError> {
@@ -139,6 +151,7 @@ impl StreamingDeploymentLease {
         }
         // Transport/account/model are unchanged. Admission and health now belong
         // to the live router, including its current RPM/TPM/parallel policy.
+        self.cancel_admission().await;
         self.release();
         self.router = router;
         self.deployment = deployment;
@@ -146,13 +159,18 @@ impl StreamingDeploymentLease {
     }
 
     #[cfg(feature = "websockets")]
-    pub(super) fn begin_response(&mut self, estimated_tokens: u64) -> Result<(), ProviderError> {
+    pub(super) async fn begin_response(
+        &mut self,
+        estimated_tokens: u64,
+    ) -> Result<(), ProviderError> {
         // The handshake and each generation are separate admission boundaries.
         // Idle sockets do not hold a generation's parallel-request slot.
+        self.cancel_admission().await;
         self.release();
         let mut selected = self
             .router
-            .select_pinned_response_lease(&self.deployment, estimated_tokens)
+            .select_pinned_response_lease_async(&self.deployment, estimated_tokens)
+            .await
             .map_err(router_error_to_provider_error)?;
         (self.admission, self.hold) = selected.take_admission();
         let _ = selected.into_deployment_id();
@@ -162,32 +180,37 @@ impl StreamingDeploymentLease {
     }
 
     #[cfg(feature = "websockets")]
-    pub(super) fn finish_neutral(&mut self, tokens_used: u64) {
+    pub(super) async fn finish_neutral(&mut self, tokens_used: u64) {
         if tokens_used > 0 {
             self.deployment.record_partial_tokens(tokens_used);
         }
         if let Some(hold) = self.hold.take() {
-            self.admission.settle(&hold, tokens_used);
+            self.admission.settle_async(&hold, tokens_used).await;
         }
         self.release();
     }
 
     #[cfg(feature = "websockets")]
-    pub(super) fn cancel_response(&mut self) {
+    pub(super) async fn cancel_response(&mut self) {
+        self.cancel_admission().await;
         self.release();
     }
 
     #[cfg(feature = "websockets")]
-    pub(super) fn finish_interrupted(&mut self, tokens_used: u64, error: Option<&ProviderError>) {
+    pub(super) async fn finish_interrupted(
+        &mut self,
+        tokens_used: u64,
+        error: Option<&ProviderError>,
+    ) {
         if self.finalized {
             return;
         }
         self.deployment.record_interrupted_usage(tokens_used);
         if let Some(hold) = self.hold.take() {
-            self.admission.settle(&hold, tokens_used);
+            self.admission.settle_async(&hold, tokens_used).await;
         }
         if let Some(error) = error {
-            self.complete_failure(error, 0);
+            self.complete_failure(error, 0).await;
         } else {
             self.release();
         }
@@ -200,10 +223,16 @@ impl StreamingDeploymentLease {
     fn release(&mut self) {
         if !self.finalized {
             UnifiedRouter::release_selected_deployment(&self.deployment);
-            if let Some(hold) = self.hold.take() {
-                self.admission.cancel(&hold);
-            }
+            // The hold's RAII cleanup uses the bounded background queue. Drop
+            // must never wait for Redis on an HTTP worker.
+            self.hold.take();
             self.finalized = true;
+        }
+    }
+
+    async fn cancel_admission(&mut self) {
+        if let Some(hold) = self.hold.take() {
+            self.admission.cancel_async(&hold).await;
         }
     }
 }
@@ -263,25 +292,31 @@ where
         // candidate was tried once, fall back to the pool minus budget
         // exclusions so single-deployment setups still get same-target
         // retries. When even that pool is empty, fail closed below.
-        let mut deployment_lease = match router.select_deployment_lease_for_capability_matching(
-            requested_model,
-            &capability,
-            |deployment| {
-                !excluded_budget_deployments.contains(deployment.id.as_str())
-                    && !tried_deployments.contains(deployment.id.as_str())
-                    && is_candidate(deployment)
-            },
-        ) {
+        let mut deployment_lease = match router
+            .select_deployment_lease_for_capability_matching_async(
+                requested_model,
+                &capability,
+                |deployment| {
+                    !excluded_budget_deployments.contains(deployment.id.as_str())
+                        && !tried_deployments.contains(deployment.id.as_str())
+                        && is_candidate(deployment)
+                },
+            )
+            .await
+        {
             Ok(lease) => lease,
             Err(RouterError::UnsupportedCapability { .. }) if !tried_deployments.is_empty() => {
-                match router.select_deployment_lease_for_capability_matching(
-                    requested_model,
-                    &capability,
-                    |deployment| {
-                        !excluded_budget_deployments.contains(deployment.id.as_str())
-                            && is_candidate(deployment)
-                    },
-                ) {
+                match router
+                    .select_deployment_lease_for_capability_matching_async(
+                        requested_model,
+                        &capability,
+                        |deployment| {
+                            !excluded_budget_deployments.contains(deployment.id.as_str())
+                                && is_candidate(deployment)
+                        },
+                    )
+                    .await
+                {
                     Ok(lease) => {
                         // Opening the full pool starts a new sweep. Forget the
                         // previous sweep so a failure here advances to the
@@ -352,12 +387,14 @@ where
         match operation.clone()(provider, selected_model, selected_deployment_id).await {
             Ok((value, tokens_used)) => {
                 let latency_us = started_at.elapsed().as_micros() as u64;
-                router.record_success_for_deployment(
-                    deployment_lease.deployment(),
-                    tokens_used,
-                    latency_us,
-                );
-                deployment_lease.commit_admission(tokens_used);
+                deployment_lease.commit_admission_async(tokens_used).await;
+                router
+                    .record_success_for_deployment_async(
+                        deployment_lease.deployment(),
+                        tokens_used,
+                        latency_us,
+                    )
+                    .await;
                 drop(deployment_lease);
                 return Ok(value);
             }
@@ -368,6 +405,7 @@ where
                     false,
                 ) {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
+                    deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     last_operation_error = Some(err);
                     continue;
@@ -380,13 +418,16 @@ where
                     RetryContext::unary(attempt, max_attempts),
                 );
                 if retry_decision.should_retry {
-                    router.record_failure_with_reason_for_deployment(
-                        deployment_lease.deployment(),
-                        crate::core::router::CooldownReason::ConsecutiveFailures,
-                    );
+                    router
+                        .record_failure_with_reason_for_deployment_async(
+                            deployment_lease.deployment(),
+                            crate::core::router::CooldownReason::ConsecutiveFailures,
+                        )
+                        .await;
                     // Do not pick this deployment again in this request while
                     // another candidate is available.
                     tried_deployments.insert(deployment_lease.clone_deployment_id());
+                    deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     last_operation_error = Some(err);
                     attempt += 1;
@@ -397,10 +438,13 @@ where
                 }
 
                 let cooldown_reason = infer_cooldown_reason(&err);
-                router.record_failure_with_reason_for_deployment(
-                    deployment_lease.deployment(),
-                    cooldown_reason,
-                );
+                router
+                    .record_failure_with_reason_for_deployment_async(
+                        deployment_lease.deployment(),
+                        cooldown_reason,
+                    )
+                    .await;
+                deployment_lease.cancel_admission_async().await;
                 drop(deployment_lease);
                 return Err(GatewayError::Provider(err));
             }
@@ -487,25 +531,31 @@ where
         // Prefer deployments this request has not already tried; when every
         // candidate was tried once, fall back to the full pool so
         // single-deployment setups still get same-target retries.
-        let mut deployment_lease = match router.select_deployment_lease_for_capability_matching(
-            requested_model,
-            &capability,
-            |deployment| {
-                !excluded_budget_deployments.contains(deployment.id.as_str())
-                    && !tried_deployments.contains(deployment.id.as_str())
-                    && is_candidate(deployment)
-            },
-        ) {
+        let mut deployment_lease = match router
+            .select_deployment_lease_for_capability_matching_async(
+                requested_model,
+                &capability,
+                |deployment| {
+                    !excluded_budget_deployments.contains(deployment.id.as_str())
+                        && !tried_deployments.contains(deployment.id.as_str())
+                        && is_candidate(deployment)
+                },
+            )
+            .await
+        {
             Ok(lease) => lease,
             Err(RouterError::UnsupportedCapability { .. }) if !tried_deployments.is_empty() => {
-                match router.select_deployment_lease_for_capability_matching(
-                    requested_model,
-                    &capability,
-                    |deployment| {
-                        !excluded_budget_deployments.contains(deployment.id.as_str())
-                            && is_candidate(deployment)
-                    },
-                ) {
+                match router
+                    .select_deployment_lease_for_capability_matching_async(
+                        requested_model,
+                        &capability,
+                        |deployment| {
+                            !excluded_budget_deployments.contains(deployment.id.as_str())
+                                && is_candidate(deployment)
+                        },
+                    )
+                    .await
+                {
                     Ok(lease) => {
                         // Opening the full pool starts a new sweep. Forget the
                         // previous sweep so a failure here advances to the
@@ -593,6 +643,7 @@ where
                     true,
                 ) {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
+                    deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     last_operation_error = Some(err);
                     continue;
@@ -605,13 +656,16 @@ where
                     RetryContext::stream_pre_output(attempt, max_attempts),
                 );
                 if retry_decision.should_retry {
-                    router.record_failure_with_reason_for_deployment(
-                        deployment_lease.deployment(),
-                        crate::core::router::CooldownReason::ConsecutiveFailures,
-                    );
+                    router
+                        .record_failure_with_reason_for_deployment_async(
+                            deployment_lease.deployment(),
+                            crate::core::router::CooldownReason::ConsecutiveFailures,
+                        )
+                        .await;
                     // Do not pick this deployment again in this request while
                     // another candidate is available.
                     tried_deployments.insert(deployment_lease.clone_deployment_id());
+                    deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     last_operation_error = Some(err);
                     attempt += 1;
@@ -624,11 +678,14 @@ where
                 let cooldown_reason = infer_cooldown_reason(&err);
                 // Local caller policy errors do not describe provider health.
                 if !matches!(err, ProviderError::InvalidRequest { .. }) {
-                    router.record_failure_with_reason_for_deployment(
-                        deployment_lease.deployment(),
-                        cooldown_reason,
-                    );
+                    router
+                        .record_failure_with_reason_for_deployment_async(
+                            deployment_lease.deployment(),
+                            cooldown_reason,
+                        )
+                        .await;
                 }
+                deployment_lease.cancel_admission_async().await;
                 drop(deployment_lease);
                 return Err(GatewayError::Provider(err));
             }

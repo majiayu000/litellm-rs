@@ -391,7 +391,7 @@ async fn test_execute_stream_holds_deployment_active_until_success() {
     assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
     drop(deployment);
 
-    lease.finish_success(42);
+    lease.finish_success(42).await;
 
     let deployment = router
         .get_deployment("deployment-1")
@@ -437,7 +437,7 @@ async fn test_execute_stream_records_stream_failure() {
     .expect("stream creation should succeed");
 
     let error = ProviderError::rate_limit("test", Some(1));
-    lease.finish_failure(&error);
+    lease.finish_failure(&error).await;
 
     let deployment = router
         .get_deployment("deployment-1")
@@ -484,7 +484,7 @@ async fn test_execute_stream_excludes_provider_budget_failures() {
         .get_deployment("primary-budget-exhausted")
         .expect("primary deployment should exist");
     assert_eq!(primary.state.fail_requests.load(Ordering::Relaxed), 0);
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 #[tokio::test]
@@ -579,7 +579,9 @@ async fn stream_finalization_transient_failure_gated_by_thresholds() {
 
     // A first mid-stream transient failure only counts toward the breaker
     // thresholds; it must not cool the deployment down on its own.
-    lease.finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"));
+    lease
+        .finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"))
+        .await;
 
     let deployment = router
         .get_deployment("deployment-1")
@@ -617,7 +619,9 @@ async fn stream_finalization_failures_trip_cooldown_after_allowed_fails() {
         )
         .await
         .expect("stream creation should succeed");
-        lease.finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"));
+        lease
+            .finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"))
+            .await;
     }
 
     let deployment = router
@@ -662,7 +666,7 @@ async fn stream_finalization_fail_fast_errors_trip_immediate_cooldown() {
         )
         .await
         .expect("stream creation should succeed");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
 
         let deployment = router
             .get_deployment("deployment-1")
@@ -762,11 +766,11 @@ async fn cancelled_realtime_admission_restores_shared_rpm() {
     .await
     .unwrap();
     // As on an idle Realtime socket, release the handshake before each generation.
-    lease.cancel_response();
+    lease.cancel_response().await;
     for _ in 0..3 {
-        lease.begin_response(1).unwrap();
+        lease.begin_response(1).await.unwrap();
         // A rejected budget never forwards the generation and must cancel RPM.
-        lease.cancel_response();
+        lease.cancel_response().await;
     }
     pool.delete(&RedisPool::admission_key(&id)).await.unwrap();
 }
