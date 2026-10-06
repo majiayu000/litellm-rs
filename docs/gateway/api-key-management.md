@@ -35,3 +35,23 @@ it does not require a management grant to verify the key being presented.
 Unknown/foreign-key probing requires an explicit `keys.list_all` or admin grant
 on an API key, rather than an inherited owner role. Authentication-disabled
 development mode is unchanged.
+
+## Delegating management authority
+
+`api_keys.write` permits ordinary key creation, updates, and rotation within the
+caller's existing ownership scope. It does not permit a restricted automation
+key to inherit global authority from its administrator owner.
+
+Creating a key with management permissions, upgrading a key to those permissions,
+or rotating an existing management key requires both an administrator owner and
+global admin authority on the presented API key (`is_admin`, `*`, or
+`system.admin`). An operation alias such as `api.system.admin` and `use:api`
+are not global admin grants. Management permissions include `keys.list_all`, `users.manage`, `config.manage`,
+`teams.manage`, and `analytics.admin`, as well as global admin grants. Rotation
+uses this same rule because it returns a new secret carrying the target's
+permissions. Authenticated administrator sessions retain their existing grant
+ability; a global API-key grant does not remove owner restrictions.
+
+This boundary concerns management/admin grants. It does not introduce general
+child-key attenuation for model allowlists, budgets, token limits, or target
+scope, nor change those existing ownership and policy rules.

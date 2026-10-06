@@ -6,7 +6,7 @@ use crate::core::models::user::types::{User, UserRole};
 use crate::core::types::context::{RequestContext, SharedRequestContext};
 use crate::server::middleware::extract_auth_method_with_api_key_header;
 use crate::server::routes::ApiResponse;
-use crate::server::routes::ai::check_permission;
+use crate::server::routes::ai::{api_key_has_admin_permission_checked, check_permission};
 use crate::server::state::AppState;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use tracing::error;
@@ -37,6 +37,19 @@ fn auth_can_grant_management_access(auth: &AuthResult) -> bool {
         .as_ref()
         .map(|user| user.has_role(&UserRole::Admin))
         .unwrap_or(false)
+        && auth.api_key.as_ref().is_none_or(|key| {
+            // Ownership never restores global authority omitted from the
+            // presented automation credential. Sessions keep the owner rule.
+            api_key_has_admin_permission_checked(key).unwrap_or(false)
+        })
+}
+
+pub(super) fn management_key_grant_allowed(
+    auth: Option<&AuthResult>,
+    permissions: &KeyPermissions,
+) -> bool {
+    !permissions_grant_management_access(permissions)
+        || auth.map(auth_can_grant_management_access).unwrap_or(true)
 }
 
 pub(super) fn check_ownership(
@@ -228,13 +241,11 @@ pub(super) fn resolve_create_key_scope(
         .unwrap_or(false);
 
     if let Some(ref user) = auth.user {
-        let is_admin = user.has_role(&UserRole::Admin);
-        if is_admin {
-            return Ok((requested_user_id, requested_team_id));
-        }
-
-        if requests_management_key {
+        if requests_management_key && !auth_can_grant_management_access(auth) {
             return Err("Only admin can create API keys with management permissions");
+        }
+        if user.has_role(&UserRole::Admin) {
+            return Ok((requested_user_id, requested_team_id));
         }
 
         match (requested_user_id, requested_team_id) {
@@ -271,11 +282,7 @@ pub(super) fn validate_update_key_permissions(
         return Ok(());
     };
 
-    if !permissions_grant_management_access(permissions) {
-        return Ok(());
-    }
-
-    if auth.map(auth_can_grant_management_access).unwrap_or(true) {
+    if management_key_grant_allowed(auth, permissions) {
         return Ok(());
     }
 

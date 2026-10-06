@@ -315,3 +315,160 @@ async fn logged_in_users_keep_their_existing_key_management_workflow() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[actix_web::test]
+async fn management_key_grants_require_both_owner_and_credential_admin_authority() {
+    let state = auth_enabled_test_state().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .wrap(AuthMiddleware)
+            .configure(configure_routes),
+    )
+    .await;
+    for role in [UserRole::Admin, UserRole::User] {
+        let user = seed_user(&state, role.clone()).await;
+        for (caller_permissions, credential_admin) in [
+            (
+                KeyPermissions {
+                    custom_permissions: vec!["api_keys.write".into()],
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                KeyPermissions {
+                    custom_permissions: vec!["api_keys.write".into(), "use:api".into()],
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                KeyPermissions {
+                    custom_permissions: vec!["api_keys.write".into(), "api.system.admin".into()],
+                    ..Default::default()
+                },
+                false,
+            ),
+            (KeyPermissions::admin(), true),
+            (
+                KeyPermissions {
+                    custom_permissions: vec!["system.admin".into()],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                KeyPermissions {
+                    custom_permissions: vec!["*".into()],
+                    ..Default::default()
+                },
+                true,
+            ),
+        ] {
+            let may_grant = role == UserRole::Admin && credential_admin;
+            let (_, credential) = seed_key(&state, &user, caller_permissions).await;
+            for permissions in [
+                json!({"is_admin": true}),
+                json!({"custom_permissions": ["system.admin"]}),
+                json!({"custom_permissions": ["*"]}),
+                json!({"custom_permissions": ["api.keys.list_all"]}),
+                json!({"custom_permissions": ["users.manage"]}),
+            ] {
+                let (target_id, _) = seed_key(&state, &user, KeyPermissions::default()).await;
+                for (method, path) in [
+                    (Method::POST, "/v1/keys".to_string()),
+                    (Method::PUT, format!("/v1/keys/{target_id}")),
+                ] {
+                    let response = test::call_service(
+                        &app,
+                        test::TestRequest::default()
+                            .method(method.clone())
+                            .uri(&path)
+                            .insert_header(("x-api-key", credential.clone()))
+                            .set_json(
+                                json!({"name":"delegated management", "permissions":permissions}),
+                            )
+                            .to_request(),
+                    )
+                    .await;
+                    if may_grant {
+                        assert!(
+                            response.status().is_success(),
+                            "{role:?} {method} {permissions}: {} {:?}",
+                            response.status(),
+                            test::read_body(response).await
+                        );
+                    } else {
+                        assert_eq!(
+                            response.status(),
+                            StatusCode::FORBIDDEN,
+                            "{role:?} {method} {permissions}"
+                        );
+                    }
+                }
+                let (management_id, _) = seed_key(
+                    &state,
+                    &user,
+                    serde_json::from_value(permissions.clone()).unwrap(),
+                )
+                .await;
+                let response = test::call_service(
+                    &app,
+                    test::TestRequest::post()
+                        .uri(&format!("/v1/keys/{management_id}/rotate"))
+                        .insert_header(("x-api-key", credential.clone()))
+                        .to_request(),
+                )
+                .await;
+                if may_grant {
+                    assert!(response.status().is_success(), "management rotation");
+                } else {
+                    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                    assert_eq!(
+                        state
+                            .key_manager
+                            .get_key(management_id)
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .status,
+                        KeyStatus::Active,
+                        "denied rotation must not revoke the target"
+                    );
+                }
+            }
+            // A write-only automation credential still manages ordinary keys.
+            let (ordinary_id, _) = seed_key(&state, &user, KeyPermissions::default()).await;
+            for (method, path, body) in [
+                (
+                    Method::POST,
+                    "/v1/keys".to_string(),
+                    json!({"name":"ordinary child"}),
+                ),
+                (
+                    Method::PUT,
+                    format!("/v1/keys/{ordinary_id}"),
+                    json!({"name":"ordinary update"}),
+                ),
+                (
+                    Method::POST,
+                    format!("/v1/keys/{ordinary_id}/rotate"),
+                    json!({}),
+                ),
+            ] {
+                let response = test::call_service(
+                    &app,
+                    test::TestRequest::default()
+                        .method(method)
+                        .uri(&path)
+                        .insert_header(("x-api-key", credential.clone()))
+                        .set_json(body)
+                        .to_request(),
+                )
+                .await;
+                assert!(response.status().is_success(), "ordinary key {path}");
+            }
+        }
+    }
+}

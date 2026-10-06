@@ -3,8 +3,8 @@
 use super::access::{
     auth_result_from_request_extensions, authenticate_management_request,
     check_auth_result_ownership, check_ownership, filter_and_paginate_keys,
-    invalidate_api_key_auth_cache, is_auth_enabled, resolve_create_key_scope,
-    validate_create_key_rate_limits, validate_update_key_permissions,
+    invalidate_api_key_auth_cache, is_auth_enabled, management_key_grant_allowed,
+    resolve_create_key_scope, validate_create_key_rate_limits, validate_update_key_permissions,
     validate_update_key_rate_limits, verify_key_access_allowed, verify_unknown_key_access_allowed,
 };
 use super::types::{
@@ -558,6 +558,15 @@ pub async fn rotate_key(
             key_id, existing_key.user_id, existing_key.team_id
         );
         let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+        return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
+    }
+
+    // Rotation discloses a newly minted secret with the target's existing
+    // authority, so it uses the same grant ceiling as create/update.
+    if !management_key_grant_allowed(auth_opt.as_ref(), &existing_key.permissions) {
+        let error_response = KeyErrorResponse::forbidden(
+            "Only admin can rotate API keys with management permissions",
+        );
         return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
