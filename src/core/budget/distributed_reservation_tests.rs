@@ -99,6 +99,49 @@ mod redis {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn model_reservation_capacity_is_infrastructure_failure_and_rolls_back_provider() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("provider-capacity-rollback");
+        let model = unique("model-capacity");
+        let limits = seeded(pool.clone(), &provider, &model, 100.0);
+        let key = RedisPool::budget_lease_key("model", &model);
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let _: i64 = redis::Script::new(
+            r#"
+            for i = 1, tonumber(ARGV[1]) do
+              redis.call('HSET', KEYS[1], 'p:orphan-' .. i, '1:100:0')
+            end
+            return 1
+            "#,
+        )
+        .key(&key)
+        .arg(crate::storage::redis::budget::MAX_UNSETTLED_BUDGET_LEASES)
+        .invoke_async(&mut conn)
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            limits.reserve_spend(&provider, &model, 10.0),
+            Err(BudgetReservationError::BackendUnavailable)
+        ));
+        let state: (i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["c", "o"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(state, (0, 0), "capacity refusal must not change spend");
+        limits
+            .providers
+            .reserve_provider_spend(&provider, 100.0)
+            .expect("a model infrastructure failure must roll back its provider reservation")
+            .cancel();
+        cleanup(&pool, &provider, &model).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn settle_and_cancel_keep_committed_and_outstanding_distinct() {
         let Some(pool) = live_redis_pool().await else {
             return;

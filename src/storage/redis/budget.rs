@@ -11,10 +11,15 @@ use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+/// Bound live plus pending reservation identities for each budget. Durable
+/// Responses receipts have a separate replay contract and do not use this cap.
+pub(crate) const MAX_UNSETTLED_BUDGET_LEASES: usize = 65_536;
+
 const BUDGET_LEASE_SCRIPT: &str = r#"
 local op = ARGV[1]
 local now = tonumber(ARGV[2]) or 0
 local period_epoch = tonumber(ARGV[3]) or -1
+local max_unsettled = tonumber(ARGV[9]) or 0
 
 local function release_leases()
   local fields = redis.call('HGETALL', KEYS[1])
@@ -60,9 +65,11 @@ end
 local function reclaim()
   local committed, outstanding, epoch = read_state()
   local fields = redis.call('HGETALL', KEYS[1])
+  local unsettled = 0
   for i = 1, #fields, 2 do
     local field = fields[i]
-    if string.sub(field, 1, 2) == 'l:' then
+    local kind = string.sub(field, 1, 2)
+    if kind == 'l:' then
       local amount, expiry, lease_epoch = string.match(fields[i + 1], '^(%d+):(%d+):(%-?%d+)$')
       amount = tonumber(amount)
       expiry = tonumber(expiry)
@@ -73,20 +80,27 @@ local function reclaim()
           if outstanding < 0 then outstanding = 0 end
         end
         -- Reclaim only capacity. A late actual charge must still be accepted.
-        redis.call('HSET', KEYS[1], 'p:' .. string.sub(field, 3), fields[i + 1])
+        -- If a pending field already exists, its scan entry counts it once.
+        unsettled = unsettled + redis.call(
+          'HSET', KEYS[1], 'p:' .. string.sub(field, 3), fields[i + 1]
+        )
         redis.call('HDEL', KEYS[1], field)
       elseif amount == nil or expiry == nil or lease_epoch == nil then
         redis.call('HDEL', KEYS[1], field)
+      else
+        unsettled = unsettled + 1
       end
+    elseif kind == 'p:' then
+      unsettled = unsettled + 1
     end
   end
   redis.call('HSET', KEYS[1], 'o', outstanding)
-  return committed, outstanding, epoch
+  return committed, outstanding, epoch, unsettled
 end
 
 seed(tonumber(ARGV[6]) or 0)
 maybe_period_reset()
-local committed, outstanding, epoch = reclaim()
+local committed, outstanding, epoch, unsettled = reclaim()
 
 if op == 'reset' then
   local force = tonumber(ARGV[5]) or 0
@@ -101,6 +115,11 @@ if op == 'reset' then
 end
 
 if op == 'reserve' then
+  -- Unfinished identities cannot be aged out without losing late actual cost.
+  -- Stop accepting new work at capacity; terminal operations remain available.
+  if unsettled >= max_unsettled then
+    return {-2, committed, outstanding}
+  end
   local amount = tonumber(ARGV[4]) or 0
   local max = tonumber(ARGV[5]) or 0
   if committed + outstanding + amount > max then
@@ -252,6 +271,11 @@ fn parse_budget_lease_state(values: Vec<i64>) -> Result<BudgetLeaseState> {
             values.len()
         )));
     }
+    if values[0] == -2 {
+        return Err(GatewayError::Unavailable(format!(
+            "Redis budget reservation capacity reached ({MAX_UNSETTLED_BUDGET_LEASES} unfinished leases)"
+        )));
+    }
     if values[0] < 0 {
         return Err(GatewayError::Storage(
             "Redis budget-lease script returned an error status".to_string(),
@@ -298,6 +322,7 @@ impl RedisPool {
             .arg(args.seed_committed)
             .arg(args.lease_id)
             .arg(args.ttl_ms)
+            .arg(MAX_UNSETTLED_BUDGET_LEASES)
             .invoke_async(&mut conn)
             .await
             .map_err(GatewayError::from)?;
@@ -436,8 +461,163 @@ mod tests {
 
         let denied = parse_budget_lease_state(vec![0, 10, 0]).unwrap();
         assert!(!denied.allowed);
+        assert!(matches!(
+            parse_budget_lease_state(vec![-2, 0, 0]),
+            Err(GatewayError::Unavailable(_))
+        ));
         assert!(parse_budget_lease_state(vec![-1, 0, 0]).is_err());
         assert!(parse_budget_lease_state(vec![1, 0]).is_err());
+    }
+
+    async fn expect_reservation_capacity_error(
+        pool: &RedisPool,
+        key: &str,
+        now_ms: i64,
+        period_epoch: i64,
+    ) {
+        let error = pool
+            .budget_reserve(BudgetReserveArgs {
+                key,
+                amount: 1,
+                max: 100,
+                seed_committed: 0,
+                period_epoch,
+                lease_id: "denied",
+                now_ms,
+                ttl_ms: 1_000,
+            })
+            .await
+            .expect_err("unfinished reservation metadata must have a hard capacity");
+        assert!(matches!(error, GatewayError::Unavailable(_)));
+    }
+
+    #[tokio::test]
+    async fn reservation_capacity_preserves_late_settlement_and_releases_terminal_slots() {
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return;
+        };
+        let pool = RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap();
+        let key = RedisPool::budget_lease_key("provider", &uuid::Uuid::new_v4().to_string());
+        let mut conn = pool.open_live_connection().await.unwrap();
+
+        // Seed a pre-upgrade hash one identity over capacity in one command,
+        // avoiding quadratic fixture setup through thousands of full scans.
+        let _: i64 = redis::Script::new(
+            r#"
+            redis.call('HSET', KEYS[1], 'c', 0, 'o', 2, 'e', 10,
+              'l:live', '1:999999999:10', 'l:expires', '1:1100:10',
+              'p:late', '10:100:10', 'p:excess', '1:100:10', 'r:durable', 7)
+            for i = 1, tonumber(ARGV[1]) - 3 do
+              redis.call('HSET', KEYS[1], 'p:orphan-' .. i, '1:100:10')
+            end
+            return 1
+            "#,
+        )
+        .key(&key)
+        .arg(MAX_UNSETTLED_BUDGET_LEASES)
+        .invoke_async(&mut conn)
+        .await
+        .unwrap();
+
+        expect_reservation_capacity_error(&pool, &key, 1_000, 10).await;
+        let state = pool
+            .budget_cancel(&key, 1, 10, "excess", 1_001)
+            .await
+            .unwrap();
+        assert_eq!((state.committed, state.outstanding), (0, 2));
+        expect_reservation_capacity_error(&pool, &key, 1_002, 10).await;
+        // Expiry releases monetary capacity, but must still count its pending identity.
+        expect_reservation_capacity_error(&pool, &key, 1_100, 10).await;
+
+        let late_now = 2 * 24 * 60 * 60 * 1_000;
+        for force in [false, true] {
+            let state = pool.budget_reset(&key, 11, late_now, force).await.unwrap();
+            assert_eq!((state.committed, state.outstanding), (0, 0));
+            expect_reservation_capacity_error(&pool, &key, late_now, 11).await;
+        }
+        let fields: usize = redis::cmd("HLEN")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(fields, MAX_UNSETTLED_BUDGET_LEASES + 4);
+
+        // A reservation older than 24 hours remains settleable. A repeated
+        // finish neither charges twice nor releases an additional identity slot.
+        for _ in 0..2 {
+            let state = pool
+                .budget_settle(&key, 10, 4, 10, "late", late_now + 1)
+                .await
+                .unwrap();
+            assert_eq!((state.committed, state.outstanding), (4, 0));
+        }
+        for lease_id in ["new-cancelled", "new-live"] {
+            let state = pool
+                .budget_reserve(BudgetReserveArgs {
+                    key: &key,
+                    amount: 3,
+                    max: 100,
+                    seed_committed: 0,
+                    period_epoch: 11,
+                    lease_id,
+                    now_ms: late_now + 2,
+                    ttl_ms: 1_000,
+                })
+                .await
+                .expect("a terminal operation must free one reservation slot");
+            assert_eq!((state.committed, state.outstanding), (4, 3));
+            expect_reservation_capacity_error(&pool, &key, late_now + 2, 11).await;
+            if lease_id == "new-cancelled" {
+                pool.budget_cancel(&key, 3, 11, lease_id, late_now + 2)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        for expected_applied in [true, false] {
+            let state = pool
+                .budget_settle_response(&key, 1, 2, 10, "orphan-1", late_now + 3)
+                .await
+                .unwrap();
+            assert_eq!(state.allowed, expected_applied);
+            assert_eq!((state.committed, state.outstanding), (6, 3));
+        }
+        let state = pool
+            .budget_reserve(BudgetReserveArgs {
+                key: &key,
+                amount: 2,
+                max: 100,
+                seed_committed: 0,
+                period_epoch: 11,
+                lease_id: "after-response",
+                now_ms: late_now + 4,
+                ttl_ms: 1_000,
+            })
+            .await
+            .expect("durable receipts do not consume unfinished reservation capacity");
+        assert_eq!((state.committed, state.outstanding), (6, 5));
+        expect_reservation_capacity_error(&pool, &key, late_now + 4, 11).await;
+        let duplicate = pool
+            .budget_settle(&key, 10, 4, 10, "late", late_now + 5)
+            .await
+            .unwrap();
+        assert_eq!((duplicate.committed, duplicate.outstanding), (6, 5));
+        let receipts: (i64, i64, Option<i64>) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["r:durable", "r:orphan-1", "r:late"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(receipts, (7, 2, None));
+        pool.delete(&key).await.unwrap();
     }
 
     #[tokio::test]
@@ -531,6 +711,7 @@ mod tests {
                     .arg(0)
                     .arg(lease)
                     .arg(100)
+                    .arg(MAX_UNSETTLED_BUDGET_LEASES)
                     .invoke_async(&mut conn)
                     .await
                     .unwrap();

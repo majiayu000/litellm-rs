@@ -30,13 +30,42 @@ any pending marker when it settles.
 
 Pending metadata for a permanently abandoned request remains until reconciliation
 or explicit cancellation. This preserves late-settlement correctness; operators
-must not delete pending fields on a timer while still accepting late costs. Redis
-eviction, administrative key deletion and reservations already reclaimed by an
+must not delete pending fields on a timer while still accepting late costs.
+
+Each budget permits at most 65,536 unfinished reservation fields (`l:` plus `p:`).
+The existing reclamation scan counts these fields without another hash scan.
+At this limit, a new reservation fails closed with the infrastructure error
+`BudgetReservationError::BackendUnavailable`, carrying the metadata-capacity
+reason in the backend log. It follows existing backend-unavailable handling,
+rather than reporting that the monetary budget has been exhausted. The rejected
+reservation adds no outstanding spend or reservation field.
+
+Settlement and cancellation remain available at or above the limit and release
+identity capacity. Expiry, period rollover and manual budget resets do not free
+identity slots; an actual charge can still arrive after 24 hours or after a reset.
+An existing hash above the limit accepts no new reservations until terminal
+operations reduce its unfinished field count below the limit. Permanently
+abandoned reservations therefore require reconciliation before admission can
+resume. Ordinary completed requests leave no receipt and do not consume this
+capacity.
+
+The limit applies only to unfinished reservations. Durable Responses `r:` receipts
+are excluded and retain their existing SQL recovery and replay semantics, even
+when the unfinished reservation capacity is full. This change does not bound the
+entire budget hash or its scan cost when durable receipts accumulate.
+
+Redis eviction, administrative key deletion and reservations already reclaimed by an
 older binary cannot be recovered by this change. A rolling upgrade is complete
-only once all replicas use the new expiry/reset behavior.
+only once all replicas use the new expiry/reset behavior and reservation-capacity
+check; older replicas do not enforce the new capacity limit.
 
 Regression coverage uses the production Lua script against real Redis, with
 synthetic timestamps for exact expiry, duplicate finish, cancellation, never-reset
-budgets, rollover and manual reset. A manager-level test also keeps a request alive
-past its short test lease, creates a new reservation through another manager, and
+budgets, rollover and manual reset. Capacity coverage seeds real Redis at and
+above the production limit, preserves late settlement beyond 24 hours, and checks
+that terminal operations restore admission while durable replay remains
+idempotent. A manager-level capacity failure also verifies infrastructure error
+classification and rollback of the provider reservation when the model is full.
+A manager-level test keeps a request alive past its short test lease, creates a
+new reservation through another manager, and
 verifies that late settlement records actual spend without releasing the new hold.
