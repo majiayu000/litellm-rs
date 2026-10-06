@@ -108,7 +108,7 @@ mod redis {
         let limits = seeded(pool.clone(), &provider, &model, 100.0);
         let key = RedisPool::budget_lease_key("model", &model);
         let mut conn = pool.open_live_connection().await.unwrap();
-        let _: i64 = redis::Script::new(
+        let _: i64 = ::redis::Script::new(
             r#"
             for i = 1, tonumber(ARGV[1]) do
               redis.call('HSET', KEYS[1], 'p:orphan-' .. i, '1:100:0')
@@ -126,7 +126,7 @@ mod redis {
             limits.reserve_spend(&provider, &model, 10.0),
             Err(BudgetReservationError::BackendUnavailable)
         ));
-        let state: (i64, i64) = redis::cmd("HMGET")
+        let state: (i64, i64) = ::redis::cmd("HMGET")
             .arg(&key)
             .arg(&["c", "o"])
             .query_async(&mut conn)
