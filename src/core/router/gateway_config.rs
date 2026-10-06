@@ -16,6 +16,7 @@ use super::deployment::{
 use super::error::RouterError;
 use super::gateway_aliases::normalize_model_aliases;
 use super::gateway_identity::{GatewayIdentityAuthority, default_models, take_identity_mappings};
+use super::runtime_state::GatewayRuntimeIdentity;
 use super::unified::Router;
 use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
@@ -220,6 +221,7 @@ impl Router {
             let configured_models = normalized_config.models.clone();
             let tags = normalized_config.tags.clone();
             let deployment_config = deployment_config_from_provider(&normalized_config)?;
+            let runtime_identity = GatewayRuntimeIdentity::for_provider(&normalized_config);
             let provider = create_provider(normalized_config).await.map_err(|e| {
                 RouterError::DeploymentNotFound(format!(
                     "Failed to create provider {}: {}",
@@ -265,18 +267,16 @@ impl Router {
                         identity_mappings.get(&model),
                     )?;
                 }
-                staged.push((
-                    create_deployment_from_config(
-                        &deployment_id,
-                        deployment_provider,
-                        &model,
-                        deployment_config.clone(),
-                        tags.clone(),
-                        provider_instance_identity.clone(),
-                    ),
-                    legacy_metadata.clone(),
-                    provider_name.clone(),
-                ));
+                let mut deployment = create_deployment_from_config(
+                    &deployment_id,
+                    deployment_provider,
+                    &model,
+                    deployment_config.clone(),
+                    tags.clone(),
+                    provider_instance_identity.clone(),
+                );
+                deployment.state.runtime_identity = Some(runtime_identity.for_model(&model));
+                staged.push((deployment, legacy_metadata.clone(), provider_name.clone()));
             }
         }
 

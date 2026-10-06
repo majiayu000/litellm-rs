@@ -19,6 +19,7 @@
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
+use super::runtime_state::GatewayRuntimeIdentity;
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
@@ -202,6 +203,7 @@ pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     minute_window_lock: Arc<RwLock<()>>,
     provider_instance_identity: ProviderInstanceIdentity,
+    pub(super) runtime_identity: Option<GatewayRuntimeIdentity>,
     probe_health: Arc<AtomicU8>,
     probe_last_checked_at_millis: Arc<AtomicU64>,
     probe_lifecycle: Arc<ProbeLifecycle>,
@@ -292,6 +294,7 @@ impl DeploymentState {
             }),
             minute_window_lock: Arc::new(RwLock::new(())),
             provider_instance_identity,
+            runtime_identity: None,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
             probe_lifecycle: Arc::new(ProbeLifecycle::new()),
@@ -392,6 +395,7 @@ impl DeploymentState {
             inner: Arc::clone(&self.inner),
             minute_window_lock: Arc::clone(&self.minute_window_lock),
             provider_instance_identity,
+            runtime_identity: self.runtime_identity.clone(),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
             probe_lifecycle: Arc::clone(&self.probe_lifecycle),
@@ -401,6 +405,20 @@ impl DeploymentState {
 
     pub(crate) fn provider_instance_identity(&self) -> ProviderInstanceIdentity {
         self.provider_instance_identity.clone()
+    }
+
+    /// Explicitly disabling probes removes probe-owned failure evidence while
+    /// preserving request failures, cooldown and resource occupancy.
+    #[cfg(feature = "gateway")]
+    pub(super) fn clear_disabled_probe_failure(&self) {
+        if self.probe_unhealthy.swap(false, Ordering::AcqRel) {
+            let _ = self.health.compare_exchange(
+                HealthStatus::Unhealthy as u8,
+                HealthStatus::Healthy as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
     }
 }
 
