@@ -487,19 +487,26 @@ mod tests {
         );
         let deployment = uuid::Uuid::new_v4().to_string();
         let key = RedisPool::admission_key(&deployment);
-        let state = pool
-            .admission_reserve(AdmissionReserveArgs {
-                key: &key,
-                max_parallel: 1,
-                max_rpm: -1,
-                max_tpm: 10,
-                rpm_inc: 0,
-                tpm_inc: 10,
-                lease_id: "settling",
-                ttl_ms: DEFAULT_LEASE_TTL_MS,
-            })
-            .await
-            .unwrap();
+        let worker_pool = pool.clone();
+        let worker_key = key.clone();
+        // The cached admission connection must be created on its long-lived
+        // owner runtime, not on this test's temporary current-thread runtime.
+        let state = run_redis(&deployment, "reserve", async move {
+            worker_pool
+                .admission_reserve(AdmissionReserveArgs {
+                    key: &worker_key,
+                    max_parallel: 1,
+                    max_rpm: -1,
+                    max_tpm: 10,
+                    rpm_inc: 0,
+                    tpm_inc: 10,
+                    lease_id: "settling",
+                    ttl_ms: DEFAULT_LEASE_TTL_MS,
+                })
+                .await
+        })
+        .await
+        .unwrap();
         assert!(state.allowed);
         let backend = AdmissionBackend::redis(pool.clone());
         let hold = AdmissionHold::new(pool.clone(), "settling".into(), deployment);
