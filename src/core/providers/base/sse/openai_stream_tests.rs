@@ -304,3 +304,49 @@ fn cloned_transformers_start_a_fresh_stream_lifecycle() {
     original.finish_stream().unwrap();
     assert_incomplete(original.clone().finish_stream().unwrap_err(), None);
 }
+
+#[tokio::test]
+async fn invalid_choice_event_preserves_its_own_usage_before_terminal_error() {
+    let first = event(json!([choice(0, Some("stop"))]), Value::Null);
+    let invalid = event(json!([choice(0, None)]), usage());
+    // Coalesced reads, separate reads, and an EOF-terminated final event all
+    // exercise different parser finalization paths.
+    for bodies in [
+        vec![format!("{first}{invalid}data: [DONE]\n\n")],
+        vec![first.clone(), invalid.clone()],
+        vec![first.clone(), invalid.trim_end().to_owned()],
+    ] {
+        let source = stream::iter(
+            bodies
+                .into_iter()
+                .map(|body| Ok::<_, reqwest::Error>(Bytes::from(body))),
+        );
+        let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("test"));
+        assert!(output.next().await.unwrap().unwrap().usage.is_none());
+        let recovered = output.next().await.unwrap().unwrap();
+        assert!(
+            recovered.choices.is_empty(),
+            "invalid content must not escape"
+        );
+        assert_eq!(recovered.usage.unwrap().total_tokens, 5);
+        match output.next().await.unwrap().unwrap_err() {
+            ProviderError::Streaming {
+                provider,
+                stream_type,
+                position,
+                message,
+                ..
+            } => {
+                assert_eq!(provider, "test");
+                assert_eq!(stream_type, "chat.completion");
+                assert_eq!(position, Some(0));
+                assert!(message.contains("after its terminal finish_reason"));
+            }
+            error => panic!("expected typed lifecycle error, got {error}"),
+        }
+        assert!(
+            output.next().await.is_none(),
+            "usage and error must not repeat"
+        );
+    }
+}

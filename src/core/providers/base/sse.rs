@@ -102,6 +102,13 @@ pub trait SSETransformer: Send + Sync {
         self.transform_chunk(data)
     }
 
+    /// Drain validated metadata from an event rejected by stream validation.
+    /// The stream emits this chunk before the terminal error. Implementations
+    /// must exclude rejected content and return each recovered chunk only once.
+    fn take_stream_error_chunk(&self) -> Option<ChatChunk> {
+        None
+    }
+
     fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
         Ok(None)
     }
@@ -190,6 +197,9 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
                     Ok(Some(chunk)) => batch.chunks.push(chunk),
                     Ok(None) => {}
                     Err(error) => {
+                        batch
+                            .chunks
+                            .extend(self.transformer.take_stream_error_chunk());
                         batch.error = Some(error);
                         break;
                     }
@@ -290,6 +300,11 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
             }
             Ok::<_, ProviderError>(())
         })();
+        if parsed.is_err() {
+            batch
+                .chunks
+                .extend(self.transformer.take_stream_error_chunk());
+        }
         let finalized = if self.stream_finished {
             Ok(None)
         } else {

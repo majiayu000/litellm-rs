@@ -18,6 +18,7 @@ pub struct OpenAICompatibleTransformer {
     /// Only the streaming entry point advances lifecycle state; stand-alone
     /// chunk conversion remains usable without constructing an entire stream.
     choices: Mutex<BTreeMap<u32, bool>>,
+    error_usage: Mutex<Option<ChatChunk>>,
 }
 
 impl Clone for OpenAICompatibleTransformer {
@@ -33,6 +34,7 @@ impl OpenAICompatibleTransformer {
         Self {
             provider,
             choices: Mutex::new(BTreeMap::new()),
+            error_usage: Mutex::new(None),
         }
     }
 
@@ -197,6 +199,19 @@ impl SSETransformer for OpenAICompatibleTransformer {
             })?;
             for choice in &chunk.choices {
                 if choices.get(&choice.index) == Some(&true) {
+                    // Usage is independently validated by transform_chunk.
+                    // Preserve it without accepting content from an event that
+                    // violates the choice lifecycle.
+                    if chunk.usage.is_some() {
+                        let mut usage_only = chunk.clone();
+                        usage_only.choices.clear();
+                        *self.error_usage.lock().map_err(|_| {
+                            self.lifecycle_error(
+                                None,
+                                "OpenAI-compatible usage state lock poisoned",
+                            )
+                        })? = Some(usage_only);
+                    }
                     return Err(self.lifecycle_error(
                         Some(choice.index),
                         "received a choice after its terminal finish_reason",
@@ -206,6 +221,10 @@ impl SSETransformer for OpenAICompatibleTransformer {
             }
         }
         Ok(chunk)
+    }
+
+    fn take_stream_error_chunk(&self) -> Option<ChatChunk> {
+        self.error_usage.lock().ok()?.take()
     }
 
     fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
