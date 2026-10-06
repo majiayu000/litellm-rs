@@ -222,11 +222,14 @@ async fn sdk_conversion_error_is_neutral_for_provider_health_and_retains_usage()
     assert!(output.next().await.is_none());
 }
 #[tokio::test]
-async fn sdk_completion_records_against_the_original_deployment_snapshot() {
+async fn sdk_completion_keeps_original_snapshot_after_deployment_id_is_removed_and_reused() {
     let (client, router, _) = fixture(vec![Ok(usage_chunk(1))]);
     let mut output = client.chat_stream(request()).await.unwrap();
     let original = router.get_deployment("completion").unwrap();
     let (_, replacement_router, _) = fixture(vec![]);
+    // In-place updates intentionally share the existing runtime counters.
+    // Remove/re-add the ID to create a distinct current admission owner.
+    assert!(router.remove_deployment("completion").is_some());
     router.add_deployment(
         replacement_router
             .get_deployment("completion")
@@ -234,11 +237,13 @@ async fn sdk_completion_records_against_the_original_deployment_snapshot() {
             .as_ref()
             .clone(),
     );
+    let replacement = router.get_deployment("completion").unwrap();
+    assert_eq!(original.state.active_requests.load(Ordering::Relaxed), 1);
+    assert_counts(&replacement, 0, 0, 0);
     while let Some(chunk) = output.next().await {
         chunk.unwrap();
     }
     assert_counts(&original, 1, 0, 12);
-    let replacement = router.get_deployment("completion").unwrap();
     assert!(!Arc::ptr_eq(&original, &replacement));
     assert_counts(&replacement, 0, 0, 0);
 }
