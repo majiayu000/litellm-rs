@@ -1,8 +1,10 @@
 //! Single-key Lua budget lease operations (cluster-safe: `KEYS[1]` only).
 //!
-//! Expiry and period reset release the lease's authority over budget counters.
-//! Ordinary lease completion is a no-op when absent. Durable Responses settlement
-//! uses its own receipt and can account for an already-expired lease exactly once.
+//! Expiry and period reset release outstanding capacity, but retain a pending
+//! marker until the reservation is settled or explicitly cancelled. Consuming
+//! either a live lease or a pending marker makes ordinary completion idempotent
+//! without storing a receipt for every successful request. Durable Responses
+//! additionally retain a receipt for replay after SQL recovery.
 
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
@@ -14,10 +16,11 @@ local op = ARGV[1]
 local now = tonumber(ARGV[2]) or 0
 local period_epoch = tonumber(ARGV[3]) or -1
 
-local function delete_leases()
+local function release_leases()
   local fields = redis.call('HGETALL', KEYS[1])
   for i = 1, #fields, 2 do
     if string.sub(fields[i], 1, 2) == 'l:' then
+      redis.call('HSET', KEYS[1], 'p:' .. string.sub(fields[i], 3), fields[i + 1])
       redis.call('HDEL', KEYS[1], fields[i])
     end
   end
@@ -49,7 +52,7 @@ local function maybe_period_reset()
   local _, _, epoch = read_state()
   -- A late finish carries its reservation's epoch and must not rewind the period.
   if period_epoch > epoch then
-    delete_leases()
+    release_leases()
     write_state(0, 0, period_epoch)
   end
 end
@@ -69,6 +72,8 @@ local function reclaim()
           outstanding = outstanding - amount
           if outstanding < 0 then outstanding = 0 end
         end
+        -- Reclaim only capacity. A late actual charge must still be accepted.
+        redis.call('HSET', KEYS[1], 'p:' .. string.sub(field, 3), fields[i + 1])
         redis.call('HDEL', KEYS[1], field)
       elseif amount == nil or expiry == nil or lease_epoch == nil then
         redis.call('HDEL', KEYS[1], field)
@@ -86,7 +91,7 @@ local committed, outstanding, epoch = reclaim()
 if op == 'reset' then
   local force = tonumber(ARGV[5]) or 0
   if force == 1 then
-    delete_leases()
+    release_leases()
     local new_epoch = epoch
     if period_epoch >= 0 then new_epoch = period_epoch end
     write_state(0, 0, new_epoch)
@@ -132,6 +137,7 @@ if op == 'settle_response' then
     end
     redis.call('HDEL', KEYS[1], field)
   end
+  redis.call('HDEL', KEYS[1], 'p:' .. ARGV[7])
   committed = committed + actual
   write_state(committed, outstanding, epoch)
   redis.call('HSET', KEYS[1], receipt, actual)
@@ -142,7 +148,12 @@ if op == 'settle' then
   local reserved = tonumber(ARGV[4]) or 0
   local actual = tonumber(ARGV[5]) or 0
   local field = 'l:' .. ARGV[7]
+  local pending = 'p:' .. ARGV[7]
   local lease = redis.call('HGET', KEYS[1], field)
+  if not lease and redis.call('HEXISTS', KEYS[1], pending) == 0 then
+    -- Already settled/cancelled, or not a reservation created by this backend.
+    return {1, committed, outstanding}
+  end
   if lease then
     local amount, _, lease_epoch = string.match(lease, '^(%d+):(%d+):(%-?%d+)$')
     amount = tonumber(amount) or reserved
@@ -152,8 +163,11 @@ if op == 'settle' then
       if outstanding < 0 then outstanding = 0 end
     end
     redis.call('HDEL', KEYS[1], field)
-    committed = committed + actual
   end
+  redis.call('HDEL', KEYS[1], pending)
+  -- The outstanding hold belongs to its reservation epoch. Actual spend is
+  -- charged to the current counter epoch, matching the in-process backend.
+  committed = committed + actual
   write_state(committed, outstanding, epoch)
   return {1, committed, outstanding}
 end
@@ -172,6 +186,9 @@ if op == 'cancel' then
     end
     redis.call('HDEL', KEYS[1], field)
   end
+  -- Explicit cancellation is terminal even after capacity has expired. A
+  -- racing settle/cancel is resolved atomically by whichever executes first.
+  redis.call('HDEL', KEYS[1], 'p:' .. ARGV[7])
   write_state(committed, outstanding, epoch)
   return {1, committed, outstanding}
 end
@@ -439,13 +456,23 @@ mod tests {
         .unwrap();
         let mut conn = pool.open_live_connection().await.unwrap();
 
-        for scenario in ["settled", "cancelled", "expired", "rollover"] {
+        for scenario in [
+            "settled",
+            "cancelled",
+            "expired",
+            "expiry_at_settlement",
+            "cancel_after_expiry",
+            "rollover",
+            "manual_reset",
+            "unknown",
+        ] {
             let key = RedisPool::budget_lease_key("provider", &uuid::Uuid::new_v4().to_string());
             let steps = match scenario {
                 "settled" => vec![
                     ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
                     ("settle", 1_001, 10, 10, 4, "old", 4, 0),
                     ("settle", 1_002, 10, 10, 4, "old", 4, 0),
+                    ("cancel", 1_003, 10, 10, 0, "old", 4, 0),
                 ],
                 "cancelled" => vec![
                     ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
@@ -456,15 +483,41 @@ mod tests {
                 "expired" => vec![
                     ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
                     ("reserve", 1_101, 10, 10, 10, "new", 0, 10),
-                    ("settle", 1_102, 10, 10, 4, "old", 0, 10),
-                    ("settle", 1_103, 10, 10, 3, "new", 3, 0),
+                    ("settle", 1_102, 10, 10, 4, "old", 4, 10),
+                    ("settle", 1_103, 10, 10, 4, "old", 4, 10),
+                    ("settle", 1_104, 10, 10, 3, "new", 7, 0),
                 ],
-                _ => vec![
+                "expiry_at_settlement" => vec![
+                    ("reserve", 1_000, -1, 10, 10, "old", 0, 10),
+                    ("settle", 1_100, -1, 10, 12, "old", 12, 0),
+                    ("settle", 1_101, -1, 10, 12, "old", 12, 0),
+                ],
+                "cancel_after_expiry" => vec![
+                    ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
+                    ("reserve", 1_100, 10, 10, 10, "new", 0, 10),
+                    ("cancel", 1_101, 10, 10, 0, "old", 0, 10),
+                    ("cancel", 1_102, 10, 10, 0, "old", 0, 10),
+                    ("settle", 1_103, 10, 10, 4, "old", 0, 10),
+                ],
+                "rollover" => vec![
                     ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
                     ("reserve", 1_001, 11, 10, 10, "new", 0, 10),
-                    ("settle", 1_002, 10, 10, 4, "old", 0, 10),
-                    ("cancel", 1_003, 10, 10, 0, "old", 0, 10),
-                    ("settle", 1_004, 11, 10, 3, "new", 3, 0),
+                    ("settle", 1_002, 10, 10, 4, "old", 4, 10),
+                    ("cancel", 1_003, 10, 10, 0, "old", 4, 10),
+                    ("settle", 1_004, 11, 10, 3, "new", 7, 0),
+                    ("reset", 1_005, 12, 0, 0, "", 0, 0),
+                    ("settle", 1_006, 10, 10, 4, "old", 0, 0),
+                ],
+                "manual_reset" => vec![
+                    ("reserve", 1_000, 10, 10, 10, "old", 0, 10),
+                    ("reset", 1_001, 10, 0, 1, "", 0, 0),
+                    ("reserve", 1_002, 10, 10, 10, "new", 0, 10),
+                    ("settle", 1_003, 10, 10, 4, "old", 4, 10),
+                    ("settle", 1_004, 10, 10, 3, "new", 7, 0),
+                ],
+                _ => vec![
+                    ("reserve", 1_000, 10, 10, 10, "new", 0, 10),
+                    ("settle", 1_001, 10, 10, 4, "old", 0, 10),
                 ],
             };
             for (op, now, epoch, amount, actual_or_max, lease, committed, outstanding) in steps {
@@ -489,6 +542,25 @@ mod tests {
                     "{scenario}: {op} {lease}"
                 );
             }
+            let pending: bool = redis::cmd("HEXISTS")
+                .arg(&key)
+                .arg("p:old")
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            assert!(
+                !pending,
+                "{scenario}: terminal operation must consume pending marker"
+            );
+            let ttl: i64 = redis::cmd("PTTL")
+                .arg(&key)
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(
+                ttl, -1,
+                "budget state must not expire with its capacity lease"
+            );
             redis::cmd("DEL")
                 .arg(&key)
                 .query_async::<i64>(&mut conn)

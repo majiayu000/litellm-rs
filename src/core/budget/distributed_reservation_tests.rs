@@ -181,6 +181,41 @@ mod redis {
         cleanup(&pool, &provider, &model).await;
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ordinary_settlement_after_expiry_preserves_new_reservations() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("provider-late-settlement");
+        let model = unique("model-late-settlement");
+        let creator = UnifiedBudgetLimits::new().with_redis_lease_ttl(pool.clone(), 1);
+        creator.providers.set_provider_limit(
+            &provider,
+            ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        creator
+            .models
+            .set_model_limit(&model, ModelLimitConfig::new(10.0, ResetPeriod::Monthly));
+
+        let old = creator.reserve_spend(&provider, &model, 8.0).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let other = seeded(pool.clone(), &provider, &model, 10.0);
+        let current = other.reserve_spend(&provider, &model, 6.0).unwrap();
+
+        old.settle(3.0).unwrap();
+        assert!(
+            other.reserve_spend(&provider, &model, 1.1).is_err(),
+            "late spend 3 plus the new outstanding 6 must leave only 1"
+        );
+        current.cancel();
+        other
+            .reserve_spend(&provider, &model, 7.0)
+            .expect("only actual spend must remain after cancelling the new hold")
+            .cancel();
+        assert!(other.reserve_spend(&provider, &model, 7.1).is_err());
+        cleanup(&pool, &provider, &model).await;
+    }
+
     fn seeded(redis: Arc<RedisPool>, provider: &str, model: &str, max: f64) -> UnifiedBudgetLimits {
         let limits = UnifiedBudgetLimits::new().with_redis(redis);
         limits.providers.set_provider_limit(
