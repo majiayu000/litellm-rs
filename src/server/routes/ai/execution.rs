@@ -70,30 +70,30 @@ impl StreamingDeploymentLease {
     /// Preserve a known terminal outcome only while accounting is pending.
     /// Normal completion stays owned by finish_success/finish_failure; dropping
     /// this wait retains the original lease's outcome and admission usage.
-    pub(super) async fn settle_terminal<F: std::future::Future>(
-        &mut self,
+    pub(super) fn settle_terminal<'a, F: std::future::Future + 'a>(
+        &'a mut self,
         tokens: u64,
-        error: Option<&ProviderError>,
+        error: Option<&'a ProviderError>,
         settlement: F,
-    ) -> F::Output {
+    ) -> impl std::future::Future<Output = F::Output> + 'a {
         let outcome = match error {
             Some(error) => self.failure_outcome(error, false),
             None => completion::TerminalOutcome::Success,
         };
-        self.settle_with_outcome(tokens, outcome, settlement).await
+        self.settle_with_outcome(tokens, outcome, settlement)
     }
 
-    pub(super) async fn settle_interrupted<F: std::future::Future>(
-        &mut self,
+    pub(super) fn settle_interrupted<'a, F: std::future::Future + 'a>(
+        &'a mut self,
         tokens: u64,
-        error: Option<&ProviderError>,
+        error: Option<&'a ProviderError>,
         settlement: F,
-    ) -> F::Output {
+    ) -> impl std::future::Future<Output = F::Output> + 'a {
         let outcome = match error {
             Some(error) => self.failure_outcome(error, true),
             None => completion::TerminalOutcome::Interrupted,
         };
-        self.settle_with_outcome(tokens, outcome, settlement).await
+        self.settle_with_outcome(tokens, outcome, settlement)
     }
 
     fn failure_outcome(
@@ -110,32 +110,38 @@ impl StreamingDeploymentLease {
         completion::TerminalOutcome::Failure(self.router.clone(), reason, interrupted)
     }
 
-    async fn settle_with_outcome<F: std::future::Future>(
-        &mut self,
+    fn settle_with_outcome<'a, F: std::future::Future + 'a>(
+        &'a mut self,
         tokens: u64,
         outcome: completion::TerminalOutcome,
         settlement: F,
-    ) -> F::Output {
-        if self.finalized {
-            return settlement.await;
+    ) -> impl std::future::Future<Output = F::Output> + 'a {
+        // Box before constructing any wrapper future. Async entry points would
+        // still capture the entire F before their first poll, inflating every
+        // enclosing route and stream future even for an unselected branch.
+        let settlement = Box::pin(settlement);
+        async move {
+            if self.finalized {
+                return settlement.await;
+            }
+            let completion = completion::UnaryCompletion::terminal(
+                self.deployment.clone(),
+                self.hold.clone(),
+                self.started_at,
+                tokens,
+                outcome,
+            );
+            let guard = TerminalSettlementGuard {
+                lease: self,
+                completion,
+                finished: false,
+            };
+            let result = completion::CURRENT
+                .scope(guard.completion.clone(), settlement)
+                .await;
+            guard.finish();
+            result
         }
-        let completion = completion::UnaryCompletion::terminal(
-            self.deployment.clone(),
-            self.hold.clone(),
-            self.started_at,
-            tokens,
-            outcome,
-        );
-        let guard = TerminalSettlementGuard {
-            lease: self,
-            completion,
-            finished: false,
-        };
-        let result = completion::CURRENT
-            .scope(guard.completion.clone(), settlement)
-            .await;
-        guard.finish();
-        result
     }
 
     pub(super) async fn finish_success(mut self, tokens_used: u64) {
@@ -370,15 +376,17 @@ impl Drop for StreamingDeploymentLease {
     }
 }
 
-pub(super) async fn settle_stream_terminal<F: std::future::Future>(
-    lease: Option<&mut StreamingDeploymentLease>,
+pub(super) fn settle_stream_terminal<'a, F: std::future::Future + 'a>(
+    lease: Option<&'a mut StreamingDeploymentLease>,
     tokens: u64,
-    error: Option<&ProviderError>,
+    error: Option<&'a ProviderError>,
     settlement: F,
-) -> F::Output {
+) -> impl std::future::Future<Output = F::Output> + 'a {
     match lease {
-        Some(lease) => lease.settle_terminal(tokens, error, settlement).await,
-        None => settlement.await,
+        Some(lease) => {
+            futures::future::Either::Left(lease.settle_terminal(tokens, error, settlement))
+        }
+        None => futures::future::Either::Right(Box::pin(settlement)),
     }
 }
 
@@ -527,7 +535,11 @@ where
         let result = completion::CURRENT
             .scope(
                 completion.clone(),
-                operation.clone()(provider, selected_model, selected_deployment_id),
+                Box::pin(operation.clone()(
+                    provider,
+                    selected_model,
+                    selected_deployment_id,
+                )),
             )
             .await;
         match result {

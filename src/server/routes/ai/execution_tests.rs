@@ -33,6 +33,69 @@ async fn build_test_router() -> UnifiedRouter {
     router
 }
 
+async fn large_pending_settlement(marker: &u8) {
+    let payload = [0_u8; 16 * 1024];
+    std::future::pending::<()>().await;
+    std::hint::black_box((payload, marker));
+}
+
+#[tokio::test]
+async fn settlement_wrappers_box_large_borrowing_futures_before_polling() {
+    let router = Arc::new(build_test_router().await);
+    let deployment = router.get_deployment("deployment-1").unwrap();
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        |_, _, _| async { Ok::<_, ProviderError>(()) },
+    )
+    .await
+    .unwrap();
+    let marker = 7_u8;
+    assert!(std::mem::size_of_val(&large_pending_settlement(&marker)) >= 16 * 1024);
+
+    let wait = lease.settle_terminal(42, None, large_pending_settlement(&marker));
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    let wait = lease.settle_interrupted(42, None, large_pending_settlement(&marker));
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    let wait = super::settle_stream_terminal(
+        Some(&mut lease),
+        42,
+        None,
+        large_pending_settlement(&marker),
+    );
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    let wait = super::settle_stream_terminal(None, 42, None, large_pending_settlement(&marker));
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    // Eager allocation must not eagerly create terminal accounting intent.
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+    drop(lease);
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn unary_scope_does_not_inline_a_large_operation_future() {
+    let router = UnifiedRouter::default();
+    let request = execute_with_selected_deployment(
+        &router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        |_, _, _| async {
+            let payload = [0_u8; 128 * 1024];
+            std::future::pending::<()>().await;
+            std::hint::black_box(payload);
+            Ok::<_, ProviderError>(((), 0))
+        },
+    );
+    assert!(std::mem::size_of_val(&request) < 128 * 1024);
+}
+
 async fn build_mixed_capability_router() -> UnifiedRouter {
     let router = UnifiedRouter::new(RouterConfig {
         routing_strategy: UnifiedRoutingStrategy::PriorityBased,
