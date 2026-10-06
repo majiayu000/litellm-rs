@@ -127,6 +127,13 @@ pub struct UnifiedSSEParser<T: SSETransformer> {
     /// previous network chunk so split multi-byte characters decode intact.
     pending_utf8: Vec<u8>,
     current_event: Option<SSEEvent>,
+    stream_finished: bool,
+}
+
+#[derive(Default)]
+struct SSEBatch {
+    chunks: Vec<ChatChunk>,
+    error: Option<ProviderError>,
 }
 
 impl<T: SSETransformer> UnifiedSSEParser<T> {
@@ -136,22 +143,26 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
             buffer: String::new(),
             pending_utf8: Vec::new(),
             current_event: None,
+            stream_finished: false,
         }
     }
 
     pub fn process_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError> {
-        self.process_bytes_with_mode(bytes, false)
+        let batch = self.process_bytes_with_mode(bytes, false);
+        match batch.error {
+            Some(error) => Err(error),
+            None => Ok(batch.chunks),
+        }
     }
 
-    fn process_stream_bytes(&mut self, bytes: &[u8]) -> Result<Vec<ChatChunk>, ProviderError> {
+    fn process_stream_bytes(&mut self, bytes: &[u8]) -> SSEBatch {
         self.process_bytes_with_mode(bytes, true)
     }
 
-    fn process_bytes_with_mode(
-        &mut self,
-        bytes: &[u8],
-        stream_mode: bool,
-    ) -> Result<Vec<ChatChunk>, ProviderError> {
+    fn process_bytes_with_mode(&mut self, bytes: &[u8], stream_mode: bool) -> SSEBatch {
+        if self.stream_finished {
+            return SSEBatch::default();
+        }
         let mut input = std::mem::take(&mut self.pending_utf8);
         input.extend_from_slice(bytes);
         let scan_start = input.len().saturating_sub(4);
@@ -167,7 +178,7 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         let text = String::from_utf8_lossy(&input);
         self.buffer.push_str(&text);
 
-        let mut chunks = Vec::new();
+        let mut batch = SSEBatch::default();
         let last_newline = self.buffer.rfind('\n');
 
         if let Some(pos) = last_newline {
@@ -175,12 +186,24 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
             let incomplete_part = self.buffer[pos + 1..].to_string();
             self.buffer = incomplete_part;
             for line in complete_part.lines() {
-                if let Some(chunk) = self.process_line(line, stream_mode)? {
-                    chunks.push(chunk);
+                match self.process_line(line, stream_mode) {
+                    Ok(Some(chunk)) => batch.chunks.push(chunk),
+                    Ok(None) => {}
+                    Err(error) => {
+                        batch.error = Some(error);
+                        break;
+                    }
+                }
+                if self.stream_finished {
+                    // [DONE] closes the protocol even when the HTTP body
+                    // stays open. Never interpret trailing bytes as a reply.
+                    self.buffer.clear();
+                    self.pending_utf8.clear();
+                    break;
                 }
             }
         }
-        Ok(chunks)
+        batch
     }
 
     fn process_line(
@@ -226,7 +249,7 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
     }
 
     fn process_event(
-        &self,
+        &mut self,
         event: SSEEvent,
         stream_mode: bool,
     ) -> Result<Option<ChatChunk>, ProviderError> {
@@ -235,6 +258,7 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         }
 
         if self.transformer.is_end_marker(&event.data) {
+            self.stream_finished = true;
             return if stream_mode {
                 self.transformer.finish_stream()
             } else {
@@ -249,32 +273,41 @@ impl<T: SSETransformer> UnifiedSSEParser<T> {
         }
     }
 
-    fn finish_stream(&mut self) -> Result<Vec<ChatChunk>, ProviderError> {
+    fn finish_stream(&mut self) -> SSEBatch {
+        if self.stream_finished {
+            return SSEBatch::default();
+        }
+        let mut batch = SSEBatch::default();
         let parsed = (|| {
-            let mut chunks = Vec::new();
             let pending = std::mem::take(&mut self.pending_utf8);
             self.buffer.push_str(&String::from_utf8_lossy(&pending));
             if !self.buffer.is_empty() {
                 let line = std::mem::take(&mut self.buffer);
-                chunks.extend(self.process_line(&line, true)?);
+                batch.chunks.extend(self.process_line(&line, true)?);
             }
             if let Some(event) = self.current_event.take() {
-                chunks.extend(self.process_event(event, true)?);
+                batch.chunks.extend(self.process_event(event, true)?);
             }
-            Ok::<_, ProviderError>(chunks)
+            Ok::<_, ProviderError>(())
         })();
-        match (parsed, self.transformer.finish_stream()) {
-            (Ok(mut chunks), Ok(chunk)) => {
-                chunks.extend(chunk);
-                Ok(chunks)
+        let finalized = if self.stream_finished {
+            Ok(None)
+        } else {
+            self.transformer.finish_stream()
+        };
+        self.stream_finished = true;
+        match (parsed, finalized) {
+            (Ok(()), Ok(chunk)) => batch.chunks.extend(chunk),
+            (Err(error), Ok(_)) | (Ok(()), Err(error)) => batch.error = Some(error),
+            (Err(parse), Err(lifecycle)) => {
+                batch.error = Some(combine_stream_errors(
+                    self.transformer.provider_name(),
+                    parse,
+                    lifecycle,
+                ))
             }
-            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
-            (Err(parse), Err(lifecycle)) => Err(combine_stream_errors(
-                self.transformer.provider_name(),
-                parse,
-                lifecycle,
-            )),
         }
+        batch
     }
 }
 
@@ -285,7 +318,7 @@ where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin,
     T: SSETransformer + Clone,
 {
-    inner: S,
+    inner: Option<S>,
     parser: UnifiedSSEParser<T>,
     chunk_buffer: VecDeque<ChatChunk>,
     pending_error: Option<ProviderError>,
@@ -299,7 +332,7 @@ where
 {
     pub fn new(stream: S, transformer: T) -> Self {
         Self {
-            inner: stream,
+            inner: Some(stream),
             parser: UnifiedSSEParser::new(transformer),
             chunk_buffer: VecDeque::new(),
             pending_error: None,
@@ -328,69 +361,76 @@ where
             return Poll::Ready(None);
         }
 
-        match Pin::new(&mut this.inner).poll_next(cx) {
-            Poll::Ready(Some(Ok(bytes))) => match this.parser.process_stream_bytes(&bytes) {
-                Ok(chunks) => {
-                    if chunks.is_empty() {
-                        cx.waker().wake_by_ref();
-                        Poll::Pending
+        let Some(inner) = this.inner.as_mut() else {
+            return Poll::Ready(None);
+        };
+        let batch = match Pin::new(inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => {
+                let mut batch = this.parser.process_stream_bytes(&bytes);
+                if let Some(error) = batch.error.take() {
+                    batch.error = Some(if this.parser.stream_finished {
+                        error
                     } else {
-                        if this.chunk_buffer.len() + chunks.len() > MAX_CHUNK_BUFFER_SIZE {
-                            this.finished = true;
-                            return Poll::Ready(Some(Err(ProviderError::network(
-                                this.parser.transformer.provider_name(),
-                                format!(
-                                    "SSE chunk buffer exceeded limit of {} chunks",
-                                    MAX_CHUNK_BUFFER_SIZE
-                                ),
-                            ))));
-                        }
-                        this.chunk_buffer.extend(chunks);
-                        if let Some(chunk) = this.chunk_buffer.pop_front() {
-                            Poll::Ready(Some(Ok(chunk)))
-                        } else {
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        }
-                    }
-                }
-                Err(error) => {
-                    let error = finalize_transform_error(&this.parser.transformer, error);
+                        finalize_transform_error(&this.parser.transformer, error)
+                    });
                     this.finished = true;
-                    Poll::Ready(Some(Err(error)))
                 }
-            },
+                this.finished |= this.parser.stream_finished;
+                batch
+            }
             Poll::Ready(Some(Err(error))) => {
                 let error = ProviderError::network(
                     this.parser.transformer.provider_name(),
                     format!("Stream error: {error}"),
                 );
                 this.finished = true;
-                match this.parser.finish_stream() {
-                    Ok(chunks) if !chunks.is_empty() => {
-                        this.chunk_buffer.extend(chunks);
-                        this.pending_error = Some(error);
-                        Poll::Ready(this.chunk_buffer.pop_front().map(Ok))
-                    }
-                    Ok(_) => Poll::Ready(Some(Err(error))),
-                    Err(finalization) => Poll::Ready(Some(Err(combine_stream_errors(
+                let mut batch = this.parser.finish_stream();
+                batch.error = Some(match batch.error {
+                    Some(finalization) => combine_stream_errors(
                         this.parser.transformer.provider_name(),
                         error,
                         finalization,
-                    )))),
-                }
+                    ),
+                    None => error,
+                });
+                batch
             }
             Poll::Ready(None) => {
                 this.finished = true;
-                match this.parser.finish_stream() {
-                    Ok(chunks) => {
-                        this.chunk_buffer.extend(chunks);
-                        Poll::Ready(this.chunk_buffer.pop_front().map(Ok))
-                    }
-                    Err(error) => Poll::Ready(Some(Err(error))),
-                }
+                this.parser.finish_stream()
             }
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => return Poll::Pending,
+        };
+
+        if this.finished {
+            // Release the upstream response as soon as the protocol ends; a
+            // keep-alive body must not retain a router lease after [DONE].
+            this.inner = None;
+        }
+        if this.chunk_buffer.len() + batch.chunks.len() > MAX_CHUNK_BUFFER_SIZE {
+            this.finished = true;
+            this.inner = None;
+            return Poll::Ready(Some(Err(ProviderError::network(
+                this.parser.transformer.provider_name(),
+                format!(
+                    "SSE chunk buffer exceeded limit of {} chunks",
+                    MAX_CHUNK_BUFFER_SIZE
+                ),
+            ))));
+        }
+        // A terminal error must follow already decoded content and usage,
+        // including events coalesced into the same HTTP read as the failure.
+        this.chunk_buffer.extend(batch.chunks);
+        this.pending_error = batch.error;
+        if let Some(chunk) = this.chunk_buffer.pop_front() {
+            Poll::Ready(Some(Ok(chunk)))
+        } else if let Some(error) = this.pending_error.take() {
+            Poll::Ready(Some(Err(error)))
+        } else if this.finished {
+            Poll::Ready(None)
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
         }
     }
 }
