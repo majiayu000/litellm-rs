@@ -24,10 +24,12 @@ const MANAGEMENT_PERMISSIONS: &[&str] = &[
 
 fn permissions_grant_management_access(permissions: &KeyPermissions) -> bool {
     permissions.is_admin
-        || permissions
-            .custom_permissions
-            .iter()
-            .any(|permission| MANAGEMENT_PERMISSIONS.contains(&permission.as_str()))
+        || permissions.custom_permissions.iter().any(|permission| {
+            // Match the same single `api.` alias accepted by
+            // check_permission; an alias must not bypass grant checks.
+            let operation = permission.strip_prefix("api.").unwrap_or(permission);
+            MANAGEMENT_PERMISSIONS.contains(&operation)
+        })
 }
 
 fn auth_can_grant_management_access(auth: &AuthResult) -> bool {

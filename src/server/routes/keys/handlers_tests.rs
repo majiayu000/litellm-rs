@@ -361,6 +361,27 @@ fn test_resolve_create_key_scope_admin_can_create_management_key() {
 }
 
 #[test]
+fn management_permission_aliases_cannot_bypass_admin_grant_checks() {
+    let auth = make_user_auth(make_user(UserRole::User, vec![]));
+    for permission in ["api.keys.list_all", "api.users.manage", "api.config.manage"] {
+        let permissions = KeyPermissions {
+            custom_permissions: vec![permission.to_string()],
+            ..Default::default()
+        };
+        let create = create_request_with_permissions(Some(permissions.clone()));
+        assert!(
+            resolve_create_key_scope(&auth, &create).is_err(),
+            "{permission}"
+        );
+        let update = update_request_with_permissions(Some(permissions));
+        assert!(
+            validate_update_key_permissions(Some(&auth), &update).is_err(),
+            "{permission}"
+        );
+    }
+}
+
+#[test]
 fn test_resolve_create_key_scope_manager_can_target_own_team() {
     let team_id = Uuid::new_v4();
     let manager = make_user(UserRole::Manager, vec![team_id]);
