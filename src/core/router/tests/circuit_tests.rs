@@ -199,8 +199,16 @@ mod redis {
             assert_eq!(b.get_healthy_deployments("gpt-4"), vec![id.clone()]);
             a.record_success(&id, 4, 1_000);
             a.record_failure_with_reason(&id, CooldownReason::RateLimit);
+        });
+        // The first query populated B's existing 50 ms circuit cache. Let it
+        // expire on the outer Tokio runtime before observing A's shared write.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        futures::executor::block_on(async {
+            assert!(matches!(
+                b.select_deployment_lease("gpt-4"),
+                Err(RouterError::NoAvailableDeployment(_))
+            ));
             assert!(b.get_healthy_deployments("gpt-4").is_empty());
-            assert!(b.select_deployment_lease("gpt-4").is_err());
         });
         cleanup(&pool, &id).await;
     }
