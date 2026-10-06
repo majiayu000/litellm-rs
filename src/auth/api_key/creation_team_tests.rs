@@ -3,9 +3,10 @@ use crate::auth::{AuthMethod, AuthSystem};
 use crate::config::models::{auth::AuthConfig, storage::StorageConfig};
 use crate::core::models::team::{Team, TeamStatus};
 use crate::core::models::user::types::UserStatus;
+use crate::core::teams::TeamRepository;
 use crate::core::types::context::RequestContext;
 use crate::storage::database::entities::user as user_entity;
-use sea_orm::{ConnectionTrait, EntityTrait};
+use sea_orm::{ConnectionTrait, EntityTrait, Statement};
 
 async fn fixture() -> (ApiKeyHandler, SeaOrmTeamRepository) {
     let mut config = StorageConfig::default();
@@ -253,4 +254,87 @@ async fn team_lookup_failures_propagate_without_affecting_keys_without_a_team() 
             .unwrap()
             .is_valid
     );
+}
+
+#[tokio::test]
+async fn legacy_only_team_verification_does_not_create_canonical_records() {
+    let (handler, repository) = fixture().await;
+    let team = repository
+        .create(Team::new("legacy-only-auth".into(), None))
+        .await
+        .unwrap();
+    let db = handler.storage.db().connection();
+    // Keep only the legacy mirror, as in an installation awaiting migration.
+    // This fixture has exactly one team and an isolated in-memory database.
+    db.execute_unprepared("DELETE FROM teams").await.unwrap();
+    let (_, raw_key) = handler
+        .create_key(
+            None,
+            Some(team.id()),
+            "legacy-team-key".into(),
+            vec!["api.chat".into()],
+        )
+        .await
+        .unwrap();
+
+    assert!(handler.verify_key(&raw_key).await.unwrap().is_some());
+    assert!(
+        handler
+            .verify_key_detailed(&raw_key)
+            .await
+            .unwrap()
+            .is_valid
+    );
+    let row = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS count FROM teams",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<i64>("", "count").unwrap(),
+        0,
+        "authentication must not migrate a legacy snapshot into a new principal"
+    );
+
+    repository.delete(team.id()).await.unwrap();
+    assert_rejected(&handler, &raw_key, MISSING_TEAM_REASON).await;
+}
+
+#[tokio::test]
+async fn inactive_canonical_team_overrides_an_active_legacy_mirror() {
+    let (handler, repository) = fixture().await;
+    let mut team = repository
+        .create(Team::new("canonical-auth-status".into(), None))
+        .await
+        .unwrap();
+    let (_, raw_key) = handler
+        .create_key(
+            None,
+            Some(team.id()),
+            "canonical-team-key".into(),
+            vec!["api.chat".into()],
+        )
+        .await
+        .unwrap();
+    team.status = TeamStatus::Inactive;
+    repository.update(team.clone()).await.unwrap();
+
+    let mut legacy = handler
+        .storage
+        .database
+        .get_team(&team.id().to_string())
+        .await
+        .unwrap()
+        .unwrap();
+    legacy.is_active = true;
+    handler.storage.database.update_team(&legacy).await.unwrap();
+
+    assert_rejected(&handler, &raw_key, INACTIVE_TEAM_REASON).await;
+    let fresh = ApiKeyHandler::new(handler.storage.clone(), None)
+        .await
+        .unwrap();
+    assert_rejected(&fresh, &raw_key, INACTIVE_TEAM_REASON).await;
 }

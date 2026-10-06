@@ -5,7 +5,6 @@
 use super::types::{ApiKeyVerification, CreateApiKeyRequest};
 use crate::core::models::user::types::User;
 use crate::core::models::{ApiKey, Metadata, UsageStats};
-use crate::core::teams::TeamRepository;
 use crate::storage::StorageLayer;
 use crate::storage::database::SeaOrmTeamRepository;
 use crate::utils::auth::crypto::keys::{extract_api_key_prefix, generate_api_key, hash_api_key};
@@ -223,7 +222,7 @@ impl ApiKeyHandler {
             return Ok(None);
         };
         let repository = SeaOrmTeamRepository::new(self.storage.database.clone());
-        Ok(match repository.get(team_id).await? {
+        Ok(match repository.get_for_authentication(team_id).await? {
             None => Some(MISSING_TEAM_REASON),
             Some(team) if team.id() != team_id => Some(MISSING_TEAM_REASON),
             Some(team) if !team.is_active() => Some(INACTIVE_TEAM_REASON),
