@@ -274,11 +274,25 @@ async fn data_after_a_finished_choice_is_a_protocol_error() {
         5
     );
     let error = output.next().await.unwrap().unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("after its terminal finish_reason")
-    );
+    match error {
+        ProviderError::Streaming {
+            provider,
+            stream_type,
+            position,
+            last_chunk,
+            message,
+        } => {
+            assert_eq!(provider, "test");
+            assert_eq!(stream_type, "chat.completion");
+            assert_eq!(position, Some(0));
+            assert!(last_chunk.is_none());
+            assert_eq!(
+                message,
+                "received a choice after its terminal finish_reason"
+            );
+        }
+        error => panic!("unexpected protocol error: {error:?}"),
+    }
     assert!(output.next().await.is_none());
 }
 
