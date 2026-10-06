@@ -588,6 +588,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         bound,
         rates().max_output,
     )
+    .await
     .unwrap();
     assert!(
         Pending::reserve(
@@ -598,6 +599,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
             bound,
             rates().max_output
         )
+        .await
         .is_err()
     );
     pending
@@ -622,6 +624,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         bound,
         rates().max_output,
     )
+    .await
     .unwrap();
     drop(pending);
     assert!((state.budget_manager.get_current_spend(&scope) - expected - bound).abs() < 1e-9);

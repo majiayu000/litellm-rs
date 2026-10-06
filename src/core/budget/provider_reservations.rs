@@ -1,3 +1,7 @@
+#[cfg(feature = "gateway")]
+#[path = "async_reservations.rs"]
+pub(super) mod asynchronous;
+
 use super::config::BudgetPersistenceEvent;
 use super::distributed::{BudgetLeaseScope, budget_period_epoch};
 use super::tracker::BudgetReservationError;
@@ -417,14 +421,48 @@ impl UnifiedBudgetLimits {
         model: &str,
         max_amount: f64,
     ) -> Result<UnifiedBudgetReservation, BudgetReservationError> {
+        self.reserve_spend_with_permit(
+            provider,
+            model,
+            max_amount,
+            #[cfg(feature = "gateway")]
+            None,
+        )
+    }
+
+    fn reserve_spend_with_permit(
+        &self,
+        provider: &str,
+        model: &str,
+        max_amount: f64,
+        #[cfg(feature = "gateway")] permit: Option<std::sync::Arc<asynchronous::AsyncBudgetPermit>>,
+    ) -> Result<UnifiedBudgetReservation, BudgetReservationError> {
         let provider_reservation = self
             .providers
             .reserve_provider_spend(provider, max_amount)?;
+        #[cfg(feature = "gateway")]
+        let provider_reservation = {
+            let mut reservation = provider_reservation;
+            if reservation.lease_id.is_some() {
+                reservation.async_permit = permit.clone();
+            }
+            reservation
+        };
         match self.models.reserve_model_spend(model, max_amount) {
-            Ok(model_reservation) => Ok(UnifiedBudgetReservation::new(
-                provider_reservation,
-                model_reservation,
-            )),
+            Ok(model_reservation) => {
+                #[cfg(feature = "gateway")]
+                let model_reservation = {
+                    let mut reservation = model_reservation;
+                    if reservation.lease_id.is_some() {
+                        reservation.async_permit = permit;
+                    }
+                    reservation
+                };
+                Ok(UnifiedBudgetReservation::new(
+                    provider_reservation,
+                    model_reservation,
+                ))
+            }
             Err(error) => {
                 provider_reservation.cancel();
                 Err(error)
@@ -442,6 +480,8 @@ pub struct ProviderBudgetReservation {
     settled: bool,
     lease_id: Option<String>,
     period_epoch: i64,
+    #[cfg(feature = "gateway")]
+    async_permit: Option<std::sync::Arc<asynchronous::AsyncBudgetPermit>>,
 }
 
 impl ProviderBudgetReservation {
@@ -460,6 +500,8 @@ impl ProviderBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -477,6 +519,8 @@ impl ProviderBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -548,6 +592,8 @@ impl ProviderBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 ),
             }
             self.settled = true;
@@ -574,6 +620,8 @@ impl Drop for ProviderBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 );
             } else {
                 self.manager.release_provider_reservation(
@@ -595,6 +643,8 @@ pub struct ModelBudgetReservation {
     settled: bool,
     lease_id: Option<String>,
     period_epoch: i64,
+    #[cfg(feature = "gateway")]
+    async_permit: Option<std::sync::Arc<asynchronous::AsyncBudgetPermit>>,
 }
 
 impl ModelBudgetReservation {
@@ -613,6 +663,8 @@ impl ModelBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -630,6 +682,8 @@ impl ModelBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -701,6 +755,8 @@ impl ModelBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 ),
             }
             self.settled = true;
@@ -727,6 +783,8 @@ impl Drop for ModelBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 );
             } else {
                 self.manager.release_model_reservation(

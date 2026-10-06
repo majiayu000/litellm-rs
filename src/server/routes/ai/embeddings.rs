@@ -205,7 +205,7 @@ async fn handle_embedding_internal(
                         ApiKeyBudgetPolicy::RequirePricedReservation,
                     )
                     .reserve_call_settle(
-                        |budget| {
+                        async |budget| {
                             super::spend::reserve_embedding_budget_with_request_pricing(
                                 &reserve_request_pricing,
                                 &reserve_pricing_config,
@@ -213,7 +213,7 @@ async fn handle_embedding_internal(
                                 budget.provider(),
                                 budget.model(),
                                 &core_request.input,
-                            )
+                            ).await
                         },
                         || {
                             callback.begin_provider_execution_with_pricing(

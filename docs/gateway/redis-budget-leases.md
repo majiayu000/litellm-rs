@@ -63,6 +63,73 @@ reconnecting does not prove that a reservation or settlement was never applied.
 Subsequent operations reconnect while preserving the existing receipt and
 reservation-ID rules.
 
+## Async gateway execution
+
+The synchronous provider/model budget SDK remains available. Gateway request
+handlers use `reserve_spend_async`, `settle_async` and `cancel_async`; the pricing
+helpers await the reservation before invoking a provider. Admin provider/model
+resets use the same bounded worker bridge. Availability checks,
+API-key in-process bookkeeping and local spend snapshots remain synchronous
+memory operations.
+
+The async bridge runs the existing accounting operations on a separate budget
+SDK worker runtime, with at most 32 blocking workers. Redis I/O runs on its own
+runtime so a full SDK worker pool cannot starve connection setup or DNS work.
+A process-wide limit of 1,024 slots covers the async bridge's queued admissions,
+active reservations, and terminal cleanup across all managers and Redis
+endpoints. New admissions
+fail immediately with `BackendUnavailable` when those slots are occupied; there
+is no unbounded semaphore waiter queue. Each reservation can dispatch at most two
+Drop cancellations, one for its provider and one for its model, and both retain
+its original slot until their Redis calls finish. Synchronous SDK reservations
+retain their existing blocking calls and Drop cleanup behavior; they do not
+consume this new async capacity or lose cleanup when it is full. This process
+capacity is separate from each budget hash's unfinished-identity limit.
+
+Cancelling an HTTP future before its queued worker starts prevents that worker
+from reserving. If Redis is already processing an admission, the worker retains
+ownership through its reply. A successfully accepted reservation whose result
+cannot be delivered is explicitly cancelled, including provider rollback when
+the model refuses admission. Once delivered, its guards retain the slot for a
+later settlement, explicit cancellation or Drop cleanup. Dropping a settlement
+or cancellation waiter does not abort the already dispatched terminal operation.
+In-process API-key reservations are settled before waiting on Redis, and the
+existing usage write is polled alongside Redis settlement so its start is not
+postponed by the new wait. This preserves the usage writer's existing cancellation
+contract without adding an unbounded background accounting queue.
+Realtime transport Drop dispatches its existing conservative cost settlement;
+it does not turn potentially billable output into a cancelled reservation.
+Durable Responses retain their SQL receipt ownership and idempotent replay.
+
+This change bounds queued work and keeps the HTTP executor responsive. It does
+not add or change Redis deadlines. With the currently locked `redis` 1.2.0,
+standalone connections inherit `AsyncConnectionConfig`'s 500 ms response timeout;
+connection setup uses the configured connection timeout. The current Cluster
+builder sets a connection timeout but leaves response and overall response
+timeouts unset. In that mode a connected server which never replies can retain
+worker and reservation slots until I/O fails or resumes. The bridge adds no
+end-to-end recovery deadline or guarantee that terminal cleanup finishes within
+a fixed duration. A lost Redis reply still leaves the write result uncertain;
+the bridge does not replay admissions and preserves the existing client settings,
+remote capacity expiry and pending-identity rules.
+
+The new async SDK methods should be used as a pair: an async reservation carries
+its terminal capacity. If a synchronous SDK reservation is passed to async
+settlement while admission capacity is full, settlement reports unavailable and
+conservatively leaves its remote identity for reconciliation instead of refunding
+billable work.
+
+Regression tests use an isolated TCP proxy on a separate thread to hold real
+Redis replies after Lua has run. They check current-thread gateway progress,
+caller cancellation before and after dispatch, 32 occupied workers, 1,024 live
+reservation slots, retained Drop-cleanup capacity, terminal operations whose
+waiters disappear, legacy SDK Drop while async admission is full, detached
+billable settlement and durable replay. The proxy
+has a test-only watchdog so an executor-blocking regression fails rather than
+hanging the suite. The tests which saturate the process-wide reservation capacity
+or worker pool execute in isolated libtest subprocesses, so they cannot consume
+capacity needed by unrelated tests running in parallel.
+
 Redis eviction, administrative key deletion and reservations already reclaimed by an
 older binary cannot be recovered by this change. A rolling upgrade is complete
 only once all replicas use the new expiry/reset behavior and reservation-capacity

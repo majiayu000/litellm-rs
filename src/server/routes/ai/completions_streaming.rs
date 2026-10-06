@@ -123,7 +123,7 @@ pub(super) async fn handle_streaming_completion(
                         ApiKeyBudgetPolicy::FromProviderReservation,
                     )
                     .reserve_call(
-                        |budget| {
+                        async |budget| {
                             spend::reserve_chat_completion_budget_with_request_pricing(
                                 &reserve_request_pricing,
                                 &reserve_pricing_config,
@@ -132,6 +132,7 @@ pub(super) async fn handle_streaming_completion(
                                 budget.model(),
                                 request_for_budget,
                             )
+                            .await
                         },
                         || {
                             callback.begin_provider_execution_with_pricing(

@@ -100,7 +100,7 @@ pub(super) async fn execute_selected_native_image_edit(
             api_key_budget_id,
             ApiKeyBudgetPolicy::FromProviderReservation,
         ),
-        |budget| {
+        async |budget| {
             super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
                 &reserve_request_pricing,
                 &reserve_pricing_config,
@@ -109,6 +109,7 @@ pub(super) async fn execute_selected_native_image_edit(
                 budget.model(),
                 &reserve_usage,
             )
+            .await
         },
         || provider.edit_image(request, context),
         |reservations, budget| async move {

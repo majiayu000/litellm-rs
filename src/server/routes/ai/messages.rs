@@ -217,7 +217,7 @@ async fn create(
                             budgeted::ApiKeyBudgetPolicy::FromProviderReservation,
                         )
                         .reserve_call(
-                            |_| {
+                            async |_| {
                                 spend::reserve_pricing_usage_budget_with_request_pricing(
                                     &pricing,
                                     &state.config().gateway.pricing,
@@ -226,6 +226,7 @@ async fn create(
                                     &model,
                                     &estimated_usage,
                                 )
+                                .await
                             },
                             || {
                                 callback.begin_provider_execution_with_pricing(
@@ -625,12 +626,6 @@ async fn settle(
     if usage.is_none() {
         spend::capture_ledger_settlement(facts.as_ref(), provider, model, None, None);
         // Preserve the budget upper bound without presenting it as an actual bill.
-        if let Some(reservation) = reservation {
-            let reserved = reservation.reserved_amount();
-            if let Err(error) = reservation.settle(reserved) {
-                tracing::error!(%provider, %model, ?error, "failed to retain unknown Messages budget");
-            }
-        }
         if let Some(reservation) = key_reservation {
             let reserved = reservation.reserved_amount();
             spend::settle_api_key_budget_reservation(
@@ -639,16 +634,27 @@ async fn settle(
                 "Messages usage unknown",
             );
         }
-        if let Some(key_id) = context.api_key_id()
-            && let Err(error) = keys
-                .record_usage_record(
-                    key_id,
-                    crate::core::keys::UsageRecord::unpriced(0, 0.0, "messages_usage_unknown"),
-                )
-                .await
-        {
-            tracing::error!(%key_id, %error, "failed to record unknown Messages usage");
-        }
+        let budget_settlement = async {
+            if let Some(reservation) = reservation {
+                let reserved = reservation.reserved_amount();
+                if let Err(error) = reservation.settle_async(reserved).await {
+                    tracing::error!(%provider, %model, ?error, "failed to retain unknown Messages budget");
+                }
+            }
+        };
+        let usage_record = async {
+            if let Some(key_id) = context.api_key_id()
+                && let Err(error) = keys
+                    .record_usage_record(
+                        key_id,
+                        crate::core::keys::UsageRecord::unpriced(0, 0.0, "messages_usage_unknown"),
+                    )
+                    .await
+            {
+                tracing::error!(%key_id, %error, "failed to record unknown Messages usage");
+            }
+        };
+        tokio::join!(budget_settlement, usage_record);
         return;
     }
     let settlement = spend::usage_spend_settlement_with_request_pricing(

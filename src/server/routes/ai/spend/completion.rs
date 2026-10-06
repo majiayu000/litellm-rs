@@ -67,7 +67,7 @@ impl<'a> From<&'a ChatCompletionRequest> for ChatCompletionBudgetRequest<'a> {
 }
 
 #[cfg(test)]
-pub(in crate::server::routes::ai) fn reserve_completion_budget(
+pub(in crate::server::routes::ai) async fn reserve_completion_budget(
     budget_limits: &UnifiedBudgetLimits,
     provider: &str,
     model: &str,
@@ -82,10 +82,11 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget(
         estimated_prompt_tokens,
         max_output_tokens,
     )
+    .await
 }
 
 #[cfg(test)]
-pub(in crate::server::routes::ai) fn reserve_completion_budget_with_pricing(
+pub(in crate::server::routes::ai) async fn reserve_completion_budget_with_pricing(
     pricing_service: &PricingService,
     budget_limits: &UnifiedBudgetLimits,
     provider: &str,
@@ -102,10 +103,11 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_pricing(
         estimated_prompt_tokens,
         max_output_tokens,
     )
+    .await
 }
 
 #[cfg(test)]
-pub(in crate::server::routes::ai) fn reserve_completion_budget_with_policy(
+pub(in crate::server::routes::ai) async fn reserve_completion_budget_with_policy(
     pricing_service: &PricingService,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -125,11 +127,12 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_policy(
         estimated_prompt_tokens,
         max_output_tokens,
     )
+    .await
 }
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) fn reserve_completion_budget_with_split_pricing(
+pub(in crate::server::routes::ai) async fn reserve_completion_budget_with_split_pricing(
     pricing_service: &PricingService,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -161,7 +164,8 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_split_pricin
                 estimated_prompt_tokens,
                 max_output_tokens,
                 error,
-            );
+            )
+            .await;
         }
     };
 
@@ -171,7 +175,8 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_split_pricin
     }
 
     budget_limits
-        .reserve_spend(budget_provider, budget_model, estimate.max_cost)
+        .reserve_spend_async(budget_provider, budget_model, estimate.max_cost)
+        .await
         .map(Some)
         .map_err(|error| {
             super::reservation_error_to_provider_error(error, budget_provider, budget_model)
@@ -179,7 +184,7 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_split_pricin
 }
 
 #[cfg(test)]
-pub(in crate::server::routes::ai) fn reserve_chat_completion_budget(
+pub(in crate::server::routes::ai) async fn reserve_chat_completion_budget(
     budget_limits: &UnifiedBudgetLimits,
     provider: &str,
     model: &str,
@@ -192,10 +197,11 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget(
         model,
         request,
     )
+    .await
 }
 
 #[cfg(test)]
-pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_pricing(
+pub(in crate::server::routes::ai) async fn reserve_chat_completion_budget_with_pricing(
     pricing_service: &PricingService,
     budget_limits: &UnifiedBudgetLimits,
     provider: &str,
@@ -210,10 +216,11 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_pricing
         model,
         request,
     )
+    .await
 }
 
 #[cfg(test)]
-pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_policy(
+pub(in crate::server::routes::ai) async fn reserve_chat_completion_budget_with_policy(
     pricing_service: &PricingService,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -231,11 +238,12 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_policy(
         model,
         request,
     )
+    .await
 }
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_pricing<'a>(
+pub(in crate::server::routes::ai) async fn reserve_chat_completion_budget_with_split_pricing<'a>(
     pricing_service: &PricingService,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -277,9 +285,12 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_split_p
             request.n.unwrap_or(1),
         ),
     )
+    .await
 }
 
-pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request_pricing<'a>(
+pub(in crate::server::routes::ai) async fn reserve_chat_completion_budget_with_request_pricing<
+    'a,
+>(
     request_pricing: &super::pricing::RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -325,10 +336,11 @@ pub(in crate::server::routes::ai) fn reserve_chat_completion_budget_with_request
         prompt_tokens,
         max_output_tokens,
     )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) fn reserve_completion_budget_with_counted_input(
+pub(in crate::server::routes::ai) async fn reserve_completion_budget_with_counted_input(
     request_pricing: &super::pricing::RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -348,7 +360,8 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_counted_inpu
                 prompt_tokens,
                 max_output_tokens,
                 error,
-            );
+            )
+            .await;
         }
     };
     if estimate.max_cost <= 0.0 {
@@ -356,7 +369,8 @@ pub(in crate::server::routes::ai) fn reserve_completion_budget_with_counted_inpu
         return Ok(None);
     }
     budget_limits
-        .reserve_spend(budget_provider, budget_model, estimate.max_cost)
+        .reserve_spend_async(budget_provider, budget_model, estimate.max_cost)
+        .await
         .map(Some)
         .map_err(|error| {
             super::reservation_error_to_provider_error(error, budget_provider, budget_model)
@@ -666,8 +680,8 @@ fn observe_approximate_estimate(
 mod budget_request_tests {
     use super::*;
 
-    #[test]
-    fn selected_exact_openai_identity_fails_when_tokenizer_is_unavailable() {
+    #[tokio::test]
+    async fn selected_exact_openai_identity_fails_when_tokenizer_is_unavailable() {
         let pricing = PricingService::new(None);
         pricing.add_custom_model(
             "gpt-audio-1.5".to_string(),
@@ -724,7 +738,9 @@ mod budget_request_tests {
             "selected-openai",
             "wire-audio-deployment",
             request,
-        ) {
+        )
+        .await
+        {
             Err(error) => error,
             Ok(_) => {
                 panic!("missing exact tokenizer must fail before pricing or upstream execution")

@@ -637,7 +637,7 @@ async fn relay(
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.redacted().to_string()}}).to_string(), timeout).await?;
                                 continue;
                             }
-                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output) {
+                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output).await {
                                 Ok(reservation) => {
                                     let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                                     value["event_id"] = json!(event_id);

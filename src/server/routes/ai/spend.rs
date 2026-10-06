@@ -355,23 +355,27 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
         Some(cost),
     );
 
-    if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
-            tracing::error!(
-                "failed to settle reserved budget for '{provider}'/'{model}': {error:?}; \
-                 spend not recorded because reservation settlement failed"
-            );
-        }
-    } else {
-        budget_limits.record_spend(provider, model, cost);
-    }
     settle_api_key_budget_reservation(key_budget_reservation, cost, &format!("{provider}/{model}"));
-
-    if let Some(key_id) = api_key_id
-        && let Err(e) = key_manager.record_usage(key_id, total_tokens, cost).await
-    {
-        tracing::error!("failed to record usage for key {key_id}: {e}");
-    }
+    let budget_settlement = async {
+        if let Some(reservation) = budget_reservation {
+            if let Err(error) = reservation.settle_async(cost).await {
+                tracing::error!(
+                    "failed to settle reserved budget for '{provider}'/'{model}': {error:?}; \
+                 spend not recorded because reservation settlement failed"
+                );
+            }
+        } else {
+            budget_limits.record_spend(provider, model, cost);
+        }
+    };
+    let usage_record = async {
+        if let Some(key_id) = api_key_id
+            && let Err(e) = key_manager.record_usage(key_id, total_tokens, cost).await
+        {
+            tracing::error!("failed to record usage for key {key_id}: {e}");
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
 pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
@@ -405,28 +409,33 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
             "trusted provider usage unavailable; settling reserved spend fallback"
         );
     }
-    if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
-        && let Err(error) = reservation.settle(reserved)
-    {
-        tracing::error!(
-            "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"
-        );
-    }
     if let Some(reservation) = key_budget_reservation {
         settle_api_key_budget_reservation(Some(reservation), recorded_cost.unwrap_or(0.0), context);
     }
-    let Some(recorded_cost) = recorded_cost else {
-        tracing::error!(
-            "{context} for provider '{provider}' model '{model}'; \
-             no positive reserved spend was available, so key usage was not recorded"
-        );
-        return;
+    let budget_settlement = async {
+        if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
+            && let Err(error) = reservation.settle_async(reserved).await
+        {
+            tracing::error!(
+                "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"
+            );
+        }
     };
-    if let Some(key_id) = api_key_id
-        && let Err(error) = key_manager.record_usage(key_id, 0, recorded_cost).await
-    {
-        tracing::error!("failed to record reserved usage for key {key_id}: {error}");
-    }
+    let usage_record = async {
+        let Some(recorded_cost) = recorded_cost else {
+            tracing::error!(
+                "{context} for provider '{provider}' model '{model}'; \
+             no positive reserved spend was available, so key usage was not recorded"
+            );
+            return;
+        };
+        if let Some(key_id) = api_key_id
+            && let Err(error) = key_manager.record_usage(key_id, 0, recorded_cost).await
+        {
+            tracing::error!("failed to record reserved usage for key {key_id}: {error}");
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
 #[cfg(test)]
