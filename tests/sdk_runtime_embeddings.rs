@@ -181,9 +181,15 @@ async fn sdk_embedding_requires_embedding_capability_before_dispatch() {
         "unadvertised-model".into(),
         "unsupported".into(),
     ));
-    assert!(matches!(
-        client.embedding("one", Some("unsupported")).await,
-        Err(SDKError::NotSupported(_))
-    ));
+    let error = client
+        .embedding("one", Some("unsupported"))
+        .await
+        .expect_err("a model without the embedding capability must be rejected");
+    // The shared router classifies a known model lacking a requested
+    // capability as InvalidRequest, consistently with runtime-backed chat.
+    assert!(
+        matches!(&error, SDKError::InvalidRequest(message) if message.contains("Embeddings")),
+        "unexpected capability error: {error:?}"
+    );
     assert!(calls.lock().unwrap().is_empty());
 }
