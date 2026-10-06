@@ -9,7 +9,7 @@
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Bound live plus pending reservation identities for each budget. Durable
 /// Responses receipts have a separate replay contract and do not use this cap.
@@ -244,24 +244,83 @@ pub(crate) struct BudgetReserveArgs<'a> {
     pub ttl_ms: i64,
 }
 
-fn budget_runtime_connections() -> &'static tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>
-{
-    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>> =
+#[derive(Default)]
+struct BudgetRuntimeConnection {
+    live: tokio::sync::Mutex<Option<Arc<RedisLiveConnection>>>,
+}
+
+fn budget_runtime_connections()
+-> &'static tokio::sync::Mutex<HashMap<String, Arc<BudgetRuntimeConnection>>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<BudgetRuntimeConnection>>>> =
         OnceLock::new();
     CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
+async fn connection_on_current_runtime(pool: &RedisPool) -> Arc<BudgetRuntimeConnection> {
     let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
-    {
-        let cache = budget_runtime_connections().lock().await;
-        if let Some(conn) = cache.get(&cache_key) {
-            return Ok(conn.clone());
+    let mut cache = budget_runtime_connections().lock().await;
+    Arc::clone(cache.entry(cache_key).or_default())
+}
+
+impl BudgetRuntimeConnection {
+    async fn connect(&self, pool: &RedisPool) -> Result<Arc<RedisLiveConnection>> {
+        // Serialize connection creation only for this endpoint. Healthy script
+        // invocations clone the connection and release the lock before I/O.
+        let mut live = self.live.lock().await;
+        if let Some(connection) = live.as_ref() {
+            return Ok(Arc::clone(connection));
+        }
+        let connection = Arc::new(pool.open_live_connection().await?);
+        *live = Some(Arc::clone(&connection));
+        Ok(connection)
+    }
+
+    async fn invalidate(&self, failed: &Arc<RedisLiveConnection>) {
+        let mut live = self.live.lock().await;
+        // A late error from an old generation must not discard a replacement
+        // that another request has already opened.
+        if live
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, failed))
+        {
+            *live = None;
         }
     }
-    let conn = pool.open_live_connection().await?;
-    let mut cache = budget_runtime_connections().lock().await;
-    Ok(cache.entry(cache_key).or_insert(conn).clone())
+
+    async fn invoke(
+        &self,
+        pool: &RedisPool,
+        key: &str,
+        args: BudgetLeaseArgs<'_>,
+    ) -> Result<BudgetLeaseState> {
+        let live = self.connect(pool).await?;
+        let mut conn = live.as_ref().clone();
+        let values: redis::RedisResult<Vec<i64>> = redis::Script::new(BUDGET_LEASE_SCRIPT)
+            .key(key)
+            .arg(args.op)
+            .arg(args.now_ms)
+            .arg(args.period_epoch)
+            .arg(args.amount)
+            .arg(args.max_or_actual_or_force)
+            .arg(args.seed_committed)
+            .arg(args.lease_id)
+            .arg(args.ttl_ms)
+            .arg(MAX_UNSETTLED_BUDGET_LEASES)
+            .invoke_async(&mut conn)
+            .await;
+        match values {
+            Ok(values) => parse_budget_lease_state(values),
+            Err(error) => {
+                if error.is_unrecoverable_error() {
+                    self.invalidate(&live).await;
+                }
+                // The server may have applied a write before its reply was
+                // lost. Fail this operation closed; reconnect on the next one
+                // without automatically replaying an ambiguous reservation.
+                Err(GatewayError::from(error))
+            }
+        }
+    }
 }
 
 fn parse_budget_lease_state(values: Vec<i64>) -> Result<BudgetLeaseState> {
@@ -310,23 +369,10 @@ impl RedisPool {
             .acquire_owned()
             .await
             .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
-        let mut conn = connection_on_current_runtime(self).await?;
-
-        let values: Vec<i64> = redis::Script::new(BUDGET_LEASE_SCRIPT)
-            .key(key)
-            .arg(args.op)
-            .arg(args.now_ms)
-            .arg(args.period_epoch)
-            .arg(args.amount)
-            .arg(args.max_or_actual_or_force)
-            .arg(args.seed_committed)
-            .arg(args.lease_id)
-            .arg(args.ttl_ms)
-            .arg(MAX_UNSETTLED_BUDGET_LEASES)
-            .invoke_async(&mut conn)
+        connection_on_current_runtime(self)
             .await
-            .map_err(GatewayError::from)?;
-        parse_budget_lease_state(values)
+            .invoke(self, key, args)
+            .await
     }
 
     pub(crate) async fn budget_reserve(
@@ -446,6 +492,10 @@ impl RedisPool {
         .await
     }
 }
+
+#[cfg(test)]
+#[path = "budget_connection_tests.rs"]
+mod connection_tests;
 
 #[cfg(test)]
 mod tests {

@@ -54,6 +54,15 @@ are excluded and retain their existing SQL recovery and replay semantics, even
 when the unfinished reservation capacity is full. This change does not bound the
 entire budget hash or its scan cost when durable receipts accumulate.
 
+The dedicated budget connection is replaced after an unrecoverable Redis
+connection error. Concurrent reconnects share one new connection, and a delayed
+error from an older connection cannot evict its replacement. Script errors keep
+the healthy connection. The failed operation is returned to its caller without
+automatic replay: a lost response can follow a successfully applied write, so
+reconnecting does not prove that a reservation or settlement was never applied.
+Subsequent operations reconnect while preserving the existing receipt and
+reservation-ID rules.
+
 Redis eviction, administrative key deletion and reservations already reclaimed by an
 older binary cannot be recovered by this change. A rolling upgrade is complete
 only once all replicas use the new expiry/reset behavior and reservation-capacity
