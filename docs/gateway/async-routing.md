@@ -13,6 +13,9 @@ use `select_deployment_lease_async` or
 also exposes `select_deployment_lease_async`. Router-owned async execution uses
 the same selector implementation, without the synchronous compatibility wrapper.
 Synchronous query/record APIs also remain available for compatibility.
+Their private waiter does not enter a futures executor, so they also work when
+called from `futures::executor::block_on` or `LocalPool`. They still block the
+calling thread; async callers should use the async entry points above.
 
 Each admission/circuit bridge admits at most 64 I/O tasks. Additional callers wait
 for an async semaphore permit rather than occupying an HTTP worker or creating
@@ -40,8 +43,11 @@ ID-returning selectors retain their prior ownership contract; new code should
 keep the lease rather than detach it into an ID.
 
 Regression tests exercise caller progress on a single-thread Tokio runtime for
-both bridges, and a real-Redis reservation whose caller is cancelled before its
-result is delivered. Existing router, streaming and Realtime regression suites
-cover normal finish, retries, counters and generation admission. They are run by
+both bridges, nested futures executors through the synchronous APIs, and a
+real-Redis reservation whose caller is cancelled before its result is delivered.
+They also cancel a known-usage settlement while all admission permits are busy
+and check that drop cleanup records the actual tokens. Existing router,
+streaming and Realtime regression suites cover normal finish, retries, counters
+and generation admission. They are run by
 the repository's existing CI. Provider/model budget operations use a separate
 backend and are outside this async-routing change.

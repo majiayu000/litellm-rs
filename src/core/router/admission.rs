@@ -174,11 +174,11 @@ impl AdmissionBackend {
 
     #[cfg(test)]
     pub(crate) fn settle(&self, hold: &AdmissionHold, actual_tokens: u64) {
-        futures::executor::block_on(self.settle_async(hold, actual_tokens));
+        super::sync_compat::wait(self.settle_async(hold, actual_tokens));
     }
 
     pub(crate) fn cancel(&self, hold: &AdmissionHold) {
-        futures::executor::block_on(self.cancel_async(hold));
+        super::sync_compat::wait(self.cancel_async(hold));
     }
 
     pub(crate) async fn settle_async(&self, hold: &AdmissionHold, actual_tokens: u64) {
@@ -260,41 +260,53 @@ fn admission_io_handle() -> tokio::runtime::Handle {
 }
 
 #[cfg(feature = "gateway")]
-async fn run_redis<T>(
-    deployment_id: &str,
+fn admission_io_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+    &SLOTS
+}
+
+#[cfg(feature = "gateway")]
+fn run_redis<'a, T>(
+    deployment_id: &'a str,
     operation: &'static str,
     fut: impl std::future::Future<Output = crate::utils::error::gateway_error::Result<T>>
     + Send
     + 'static,
-) -> Result<T, ()>
+) -> impl std::future::Future<Output = Result<T, ()>> + Send + 'a
 where
     T: Send + 'static,
 {
-    // Waiters stay as futures on their caller's runtime. Only a bounded number
-    // of operations are spawned onto the connection-owning I/O runtime.
-    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
-    let permit = SLOTS.acquire().await.map_err(|_| ())?;
-    let task = admission_io_handle().spawn(async move {
-        let _permit = permit;
-        fut.await
-    });
-    match task.await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            warn!(
-                deployment_id,
-                operation,
-                error = %err,
-                "admission redis operation failed; failing closed"
-            );
-            Err(())
-        }
-        Err(_) => {
-            warn!(
-                deployment_id,
-                operation, "admission redis worker dropped; failing closed"
-            );
-            Err(())
+    // Erase the Redis connection/Lua future before constructing the caller's
+    // async frame, including its initial unpolled state. This keeps deep SDK
+    // and gateway call chains within downstream crates' default type limits.
+    let fut: futures::future::BoxFuture<'static, crate::utils::error::gateway_error::Result<T>> =
+        Box::pin(fut);
+    async move {
+        // Waiters stay on the caller's runtime. Only a bounded number of
+        // operations are spawned onto the connection-owning I/O runtime.
+        let permit = admission_io_slots().acquire().await.map_err(|_| ())?;
+        let task = admission_io_handle().spawn(async move {
+            let _permit = permit;
+            fut.await
+        });
+        match task.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(err)) => {
+                warn!(
+                    deployment_id,
+                    operation,
+                    error = %err,
+                    "admission redis operation failed; failing closed"
+                );
+                Err(())
+            }
+            Err(_) => {
+                warn!(
+                    deployment_id,
+                    operation, "admission redis worker dropped; failing closed"
+                );
+                Err(())
+            }
         }
     }
 }
@@ -452,6 +464,83 @@ mod tests {
         .await;
         assert_eq!(result.unwrap(), 7);
         peer.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_settlement_waiter_keeps_known_usage() {
+        use crate::config::models::storage::RedisConfig;
+        use crate::storage::redis::{RedisPool, admission::AdmissionReserveArgs};
+
+        let Ok(url) = std::env::var("REDIS_URL") else {
+            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+            return;
+        };
+        let pool = std::sync::Arc::new(
+            RedisPool::new(&RedisConfig {
+                url,
+                enabled: true,
+                allow_degraded: false,
+                ..RedisConfig::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let deployment = uuid::Uuid::new_v4().to_string();
+        let key = RedisPool::admission_key(&deployment);
+        let state = pool
+            .admission_reserve(AdmissionReserveArgs {
+                key: &key,
+                max_parallel: 1,
+                max_rpm: -1,
+                max_tpm: 10,
+                rpm_inc: 0,
+                tpm_inc: 10,
+                lease_id: "settling",
+                ttl_ms: DEFAULT_LEASE_TTL_MS,
+            })
+            .await
+            .unwrap();
+        assert!(state.allowed);
+        let backend = AdmissionBackend::redis(pool.clone());
+        let hold = AdmissionHold::new(pool.clone(), "settling".into(), deployment);
+
+        // Saturate the bridge so settlement can be cancelled specifically
+        // while awaiting an I/O permit, before a command has been spawned.
+        let slots = admission_io_slots().acquire_many(64).await.unwrap();
+        let mut settlement = Box::pin(backend.settle_async(&hold, 4));
+        assert!(futures::poll!(settlement.as_mut()).is_pending());
+        assert!(matches!(
+            *hold.inner.completion.lock(),
+            Some(AdmissionCompletion::Settle(4))
+        ));
+        drop(settlement);
+        drop(hold);
+
+        // Drop cleanup must settle actual usage even while the request's
+        // permit remains unavailable; replacing it with cancel would store 0.
+        let mut conn = pool.open_live_connection().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let (parallel, tokens): (i64, i64) = redis::cmd("HMGET")
+                    .arg(&key)
+                    .arg(&["p", "t"])
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                if parallel == 0 {
+                    assert_eq!(
+                        tokens, 4,
+                        "known usage must not be refunded on cancellation"
+                    );
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled settlement did not finish through drop cleanup");
+        drop(slots);
+        pool.delete(&key).await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

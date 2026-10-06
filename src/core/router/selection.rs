@@ -146,7 +146,7 @@ impl Router {
         &self,
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
-        futures::executor::block_on(self.select_deployment_lease_async(model_name))
+        super::sync_compat::wait(self.select_deployment_lease_async(model_name))
             .map(DeploymentLease::synchronous_cleanup)
     }
 
@@ -212,7 +212,7 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
-        futures::executor::block_on(self.select_deployment_lease_for_capability_matching_async(
+        super::sync_compat::wait(self.select_deployment_lease_for_capability_matching_async(
             model_name,
             capability,
             is_candidate,
@@ -596,7 +596,7 @@ impl Router {
         estimated_tokens: u64,
     ) -> Result<DeploymentLease, RouterError> {
         let snapshot = self.load_routing_snapshot();
-        futures::executor::block_on(self.select_deployment_matching(
+        super::sync_compat::wait(self.select_deployment_matching(
             snapshot.as_ref(),
             model_name,
             |_| true,
@@ -612,7 +612,7 @@ impl Router {
         deployment: &Deployment,
         estimated_tokens: u64,
     ) -> Result<DeploymentLease, RouterError> {
-        futures::executor::block_on(
+        super::sync_compat::wait(
             self.select_pinned_response_lease_async(deployment, estimated_tokens),
         )
         .map(DeploymentLease::synchronous_cleanup)
@@ -692,7 +692,7 @@ impl RuntimeHandle {
         model_name: &str,
         capability: &ProviderCapability,
     ) -> Result<DeploymentLease, crate::core::providers::ProviderError> {
-        futures::executor::block_on(
+        super::sync_compat::wait(
             self.binding
                 .router
                 .select_deployment_lease_for_capability_matching_in_snapshot(
@@ -712,7 +712,7 @@ impl RuntimeHandle {
         &self,
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
-        futures::executor::block_on(self.select_deployment_lease_async(model_name))
+        super::sync_compat::wait(self.select_deployment_lease_async(model_name))
             .map(DeploymentLease::synchronous_cleanup)
     }
 

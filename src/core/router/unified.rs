@@ -650,7 +650,7 @@ impl Router {
         tokens: u64,
         latency_us: u64,
     ) {
-        futures::executor::block_on(
+        super::sync_compat::wait(
             self.record_success_for_deployment_async(deployment, tokens, latency_us),
         );
     }
@@ -717,7 +717,7 @@ impl Router {
         deployment: &Deployment,
         reason: CooldownReason,
     ) {
-        futures::executor::block_on(
+        super::sync_compat::wait(
             self.record_failure_with_reason_for_deployment_async(deployment, reason),
         );
     }
@@ -784,7 +784,7 @@ impl Router {
     }
 
     pub(crate) fn deployment_is_selectable(&self, deployment: &Deployment) -> bool {
-        futures::executor::block_on(self.deployment_is_selectable_async(deployment))
+        super::sync_compat::wait(self.deployment_is_selectable_async(deployment))
     }
 
     pub(crate) async fn deployment_is_selectable_async(&self, deployment: &Deployment) -> bool {

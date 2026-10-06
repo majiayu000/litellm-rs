@@ -147,6 +147,36 @@ mod redis {
         cleanup(&pool, &id).await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn synchronous_admission_works_inside_a_futures_executor() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let id = unique("nested-executor");
+        let a = router_with(pool.clone());
+        let b = router_with(pool.clone());
+        seed(&a, &id, Some(1), None, Some(10)).await;
+        seed(&b, &id, Some(1), None, Some(10)).await;
+
+        futures::executor::block_on(async {
+            let mut lease = a
+                .select_deployment_lease_with_tokens("gpt-4", 10)
+                .expect("nested executor can reserve shared admission");
+            assert!(b.select_deployment_lease_with_tokens("gpt-4", 1).is_err());
+            lease.commit_admission(4);
+            drop(lease);
+            drop(
+                b.select_deployment_lease_with_tokens("gpt-4", 6)
+                    .expect("sync settlement records actual tokens"),
+            );
+            drop(
+                a.select_deployment_lease_with_tokens("gpt-4", 6)
+                    .expect("sync drop refunds the unused reservation"),
+            );
+        });
+        cleanup(&pool, &id).await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn stream_disconnect_releases_parallel_slot() {
         let Some(pool) = live_redis_pool().await else {

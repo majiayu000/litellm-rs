@@ -328,36 +328,42 @@ fn circuit_io_handle() -> tokio::runtime::Handle {
 }
 
 #[cfg(feature = "gateway")]
-async fn run_redis<T>(
-    deployment_id: &str,
+fn run_redis<'a, T>(
+    deployment_id: &'a str,
     operation: &'static str,
     fut: impl std::future::Future<Output = crate::utils::error::gateway_error::Result<T>>
     + Send
     + 'static,
-) -> Result<T, ()>
+) -> impl std::future::Future<Output = Result<T, ()>> + Send + 'a
 where
     T: Send + 'static,
 {
-    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
-    let permit = SLOTS.acquire().await.map_err(|_| ())?;
-    let task = circuit_io_handle().spawn(async move {
-        let _permit = permit;
-        fut.await
-    });
-    match task.await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            warn!(
-                deployment_id,
-                operation,
-                error = %err,
-                "circuit redis operation failed"
-            );
-            Err(())
-        }
-        Err(_) => {
-            warn!(deployment_id, operation, "circuit redis worker dropped");
-            Err(())
+    // Keep the connection/Lua implementation out of the unpolled async frame
+    // exposed to selection and request completion callers.
+    let fut: futures::future::BoxFuture<'static, crate::utils::error::gateway_error::Result<T>> =
+        Box::pin(fut);
+    async move {
+        static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+        let permit = SLOTS.acquire().await.map_err(|_| ())?;
+        let task = circuit_io_handle().spawn(async move {
+            let _permit = permit;
+            fut.await
+        });
+        match task.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(err)) => {
+                warn!(
+                    deployment_id,
+                    operation,
+                    error = %err,
+                    "circuit redis operation failed"
+                );
+                Err(())
+            }
+            Err(_) => {
+                warn!(deployment_id, operation, "circuit redis worker dropped");
+                Err(())
+            }
         }
     }
 }

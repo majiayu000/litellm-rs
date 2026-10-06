@@ -184,6 +184,27 @@ mod redis {
         cleanup(&pool, &id).await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn synchronous_circuit_works_inside_a_futures_executor() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let id = unique("nested-executor");
+        let a = router_with(pool.clone());
+        let b = router_with(pool.clone());
+        seed(&a, &id).await;
+        seed(&b, &id).await;
+
+        futures::executor::block_on(async {
+            assert_eq!(b.get_healthy_deployments("gpt-4"), vec![id.clone()]);
+            a.record_success(&id, 4, 1_000);
+            a.record_failure_with_reason(&id, CooldownReason::RateLimit);
+            assert!(b.get_healthy_deployments("gpt-4").is_empty());
+            assert!(b.select_deployment_lease("gpt-4").is_err());
+        });
+        cleanup(&pool, &id).await;
+    }
+
     fn router_with(pool: Arc<RedisPool>) -> Router {
         Router::new(RouterConfig::default()).with_circuit_redis(pool)
     }
