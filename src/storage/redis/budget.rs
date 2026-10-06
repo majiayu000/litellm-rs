@@ -469,25 +469,50 @@ mod tests {
         assert!(parse_budget_lease_state(vec![1, 0]).is_err());
     }
 
+    async fn capacity_script_step(
+        conn: &mut RedisLiveConnection,
+        key: &str,
+        (op, now_ms, period_epoch, amount, max_or_actual_or_force, lease_id): (
+            &str,
+            i64,
+            i64,
+            i64,
+            i64,
+            &str,
+        ),
+    ) -> Result<BudgetLeaseState> {
+        // Keep this test's driver on its own connection. The production budget
+        // connection cache belongs to the long-lived budget I/O runtime.
+        let values = redis::Script::new(BUDGET_LEASE_SCRIPT)
+            .key(key)
+            .arg(op)
+            .arg(now_ms)
+            .arg(period_epoch)
+            .arg(amount)
+            .arg(max_or_actual_or_force)
+            .arg(0)
+            .arg(lease_id)
+            .arg(1_000)
+            .arg(MAX_UNSETTLED_BUDGET_LEASES)
+            .invoke_async(conn)
+            .await
+            .map_err(GatewayError::from)?;
+        parse_budget_lease_state(values)
+    }
+
     async fn expect_reservation_capacity_error(
-        pool: &RedisPool,
+        conn: &mut RedisLiveConnection,
         key: &str,
         now_ms: i64,
         period_epoch: i64,
     ) {
-        let error = pool
-            .budget_reserve(BudgetReserveArgs {
-                key,
-                amount: 1,
-                max: 100,
-                seed_committed: 0,
-                period_epoch,
-                lease_id: "denied",
-                now_ms,
-                ttl_ms: 1_000,
-            })
-            .await
-            .expect_err("unfinished reservation metadata must have a hard capacity");
+        let error = capacity_script_step(
+            conn,
+            key,
+            ("reserve", now_ms, period_epoch, 1, 100, "denied"),
+        )
+        .await
+        .expect_err("unfinished reservation metadata must have a hard capacity");
         assert!(matches!(error, GatewayError::Unavailable(_)));
     }
 
@@ -527,21 +552,26 @@ mod tests {
         .await
         .unwrap();
 
-        expect_reservation_capacity_error(&pool, &key, 1_000, 10).await;
-        let state = pool
-            .budget_cancel(&key, 1, 10, "excess", 1_001)
+        expect_reservation_capacity_error(&mut conn, &key, 1_000, 10).await;
+        let state = capacity_script_step(&mut conn, &key, ("cancel", 1_001, 10, 1, 0, "excess"))
             .await
             .unwrap();
         assert_eq!((state.committed, state.outstanding), (0, 2));
-        expect_reservation_capacity_error(&pool, &key, 1_002, 10).await;
+        expect_reservation_capacity_error(&mut conn, &key, 1_002, 10).await;
         // Expiry releases monetary capacity, but must still count its pending identity.
-        expect_reservation_capacity_error(&pool, &key, 1_100, 10).await;
+        expect_reservation_capacity_error(&mut conn, &key, 1_100, 10).await;
 
         let late_now = 2 * 24 * 60 * 60 * 1_000;
         for force in [false, true] {
-            let state = pool.budget_reset(&key, 11, late_now, force).await.unwrap();
+            let state = capacity_script_step(
+                &mut conn,
+                &key,
+                ("reset", late_now, 11, 0, i64::from(force), ""),
+            )
+            .await
+            .unwrap();
             assert_eq!((state.committed, state.outstanding), (0, 0));
-            expect_reservation_capacity_error(&pool, &key, late_now, 11).await;
+            expect_reservation_capacity_error(&mut conn, &key, late_now, 11).await;
         }
         let fields: usize = redis::cmd("HLEN")
             .arg(&key)
@@ -553,62 +583,57 @@ mod tests {
         // A reservation older than 24 hours remains settleable. A repeated
         // finish neither charges twice nor releases an additional identity slot.
         for _ in 0..2 {
-            let state = pool
-                .budget_settle(&key, 10, 4, 10, "late", late_now + 1)
-                .await
-                .unwrap();
+            let state =
+                capacity_script_step(&mut conn, &key, ("settle", late_now + 1, 10, 10, 4, "late"))
+                    .await
+                    .unwrap();
             assert_eq!((state.committed, state.outstanding), (4, 0));
         }
         for lease_id in ["new-cancelled", "new-live"] {
-            let state = pool
-                .budget_reserve(BudgetReserveArgs {
-                    key: &key,
-                    amount: 3,
-                    max: 100,
-                    seed_committed: 0,
-                    period_epoch: 11,
-                    lease_id,
-                    now_ms: late_now + 2,
-                    ttl_ms: 1_000,
-                })
-                .await
-                .expect("a terminal operation must free one reservation slot");
+            let state = capacity_script_step(
+                &mut conn,
+                &key,
+                ("reserve", late_now + 2, 11, 3, 100, lease_id),
+            )
+            .await
+            .expect("a terminal operation must free one reservation slot");
             assert_eq!((state.committed, state.outstanding), (4, 3));
-            expect_reservation_capacity_error(&pool, &key, late_now + 2, 11).await;
+            expect_reservation_capacity_error(&mut conn, &key, late_now + 2, 11).await;
             if lease_id == "new-cancelled" {
-                pool.budget_cancel(&key, 3, 11, lease_id, late_now + 2)
-                    .await
-                    .unwrap();
+                capacity_script_step(
+                    &mut conn,
+                    &key,
+                    ("cancel", late_now + 2, 11, 3, 0, lease_id),
+                )
+                .await
+                .unwrap();
             }
         }
 
         for expected_applied in [true, false] {
-            let state = pool
-                .budget_settle_response(&key, 1, 2, 10, "orphan-1", late_now + 3)
-                .await
-                .unwrap();
+            let state = capacity_script_step(
+                &mut conn,
+                &key,
+                ("settle_response", late_now + 3, 10, 1, 2, "orphan-1"),
+            )
+            .await
+            .unwrap();
             assert_eq!(state.allowed, expected_applied);
             assert_eq!((state.committed, state.outstanding), (6, 3));
         }
-        let state = pool
-            .budget_reserve(BudgetReserveArgs {
-                key: &key,
-                amount: 2,
-                max: 100,
-                seed_committed: 0,
-                period_epoch: 11,
-                lease_id: "after-response",
-                now_ms: late_now + 4,
-                ttl_ms: 1_000,
-            })
-            .await
-            .expect("durable receipts do not consume unfinished reservation capacity");
+        let state = capacity_script_step(
+            &mut conn,
+            &key,
+            ("reserve", late_now + 4, 11, 2, 100, "after-response"),
+        )
+        .await
+        .expect("durable receipts do not consume unfinished reservation capacity");
         assert_eq!((state.committed, state.outstanding), (6, 5));
-        expect_reservation_capacity_error(&pool, &key, late_now + 4, 11).await;
-        let duplicate = pool
-            .budget_settle(&key, 10, 4, 10, "late", late_now + 5)
-            .await
-            .unwrap();
+        expect_reservation_capacity_error(&mut conn, &key, late_now + 4, 11).await;
+        let duplicate =
+            capacity_script_step(&mut conn, &key, ("settle", late_now + 5, 10, 10, 4, "late"))
+                .await
+                .unwrap();
         assert_eq!((duplicate.committed, duplicate.outstanding), (6, 5));
         let receipts: (i64, i64, Option<i64>) = redis::cmd("HMGET")
             .arg(&key)
@@ -617,7 +642,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(receipts, (7, 2, None));
-        pool.delete(&key).await.unwrap();
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
