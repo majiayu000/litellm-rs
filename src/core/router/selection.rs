@@ -54,6 +54,12 @@ impl DeploymentLease {
         }
     }
 
+    pub(crate) fn preserve_admission_usage(&self, actual_tokens: u64) {
+        if let Some(hold) = &self.hold {
+            hold.prepare_settlement(actual_tokens);
+        }
+    }
+
     pub(crate) async fn commit_admission_async(&mut self, actual_tokens: u64) {
         if let Some(hold) = self.hold.take() {
             self.admission.settle_async(&hold, actual_tokens).await;

@@ -2,7 +2,9 @@
 
 use super::LLMClient;
 use crate::core::router::RuntimeHandle;
-use crate::core::types::chat::{ChatMessage as CoreMessage, ChatRequest as CoreChatRequest};
+use crate::core::types::chat::{
+    ChatMessage as CoreMessage, ChatRequest as CoreChatRequest, StreamOptions,
+};
 use crate::core::types::context::RequestContext;
 use crate::core::types::model::ProviderCapability;
 use crate::core::types::responses::{
@@ -86,9 +88,13 @@ impl LLMClient {
                 ..Default::default()
             },
         };
-        let core_request = sdk_request_to_core(&model, request)?;
+        let mut core_request = sdk_request_to_core(&model, request)?;
+        core_request.stream_options = Some(StreamOptions {
+            include_usage: Some(true),
+        });
         let context = RequestContext::new();
         let handle = self.runtime_handle()?;
+        let started_at = std::time::Instant::now();
         let (stream, lease) = handle
             .execute_stream_with_selected_deployment_capability_typed(
                 &model,
@@ -108,10 +114,38 @@ impl LLMClient {
             .await
             .map_err(SDKError::from)?;
 
-        Ok(Box::pin(stream.map(move |chunk| {
-            let _lease = &lease;
-            chunk.map_err(SDKError::from).and_then(core_chunk_to_sdk)
-        })))
+        let mut completion = handle.stream_completion(lease, started_at);
+        Ok(Box::pin(async_stream::stream! {
+            let mut stream = stream;
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(chunk) => {
+                        if let Some(usage) = &chunk.usage {
+                            completion.observe_usage(u64::from(usage.total_tokens));
+                        }
+                        match core_chunk_to_sdk(chunk) {
+                            Ok(chunk) => yield Ok(chunk),
+                            Err(error) => {
+                                // Conversion belongs to the SDK, not provider
+                                // health. Release the guard before exposing it.
+                                drop(stream);
+                                drop(completion);
+                                yield Err(error);
+                                return;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        drop(stream);
+                        completion.finish_failure(&error).await;
+                        yield Err(SDKError::from(error));
+                        return;
+                    }
+                }
+            }
+            drop(stream);
+            completion.finish_success().await;
+        }))
     }
 }
 

@@ -17,6 +17,20 @@ pub(crate) struct AdmissionHold {
     inner: std::sync::Arc<AdmissionHoldInner>,
 }
 
+impl AdmissionHold {
+    /// Preserve known usage before yielding it to a caller that may drop the
+    /// stream. The lease's existing RAII cleanup owns the eventual Redis write.
+    pub(crate) fn prepare_settlement(&self, actual_tokens: u64) {
+        #[cfg(feature = "gateway")]
+        {
+            *self.inner.completion.lock() =
+                Some(AdmissionCompletion::Settle(to_i64(actual_tokens)));
+        }
+        #[cfg(not(feature = "gateway"))]
+        let _ = actual_tokens;
+    }
+}
+
 #[cfg(feature = "gateway")]
 #[derive(Debug)]
 struct AdmissionHoldInner {

@@ -45,6 +45,7 @@ mod provider_identity;
 pub mod retry_policy;
 pub mod selection;
 pub mod strategy_impl;
+mod stream_completion;
 mod sync_compat;
 pub mod unified;
 

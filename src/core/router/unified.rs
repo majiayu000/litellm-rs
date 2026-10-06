@@ -756,7 +756,7 @@ impl Router {
         }
     }
 
-    fn record_local_failure(&self, deployment: &Deployment, reason: CooldownReason) {
+    pub(crate) fn record_local_failure(&self, deployment: &Deployment, reason: CooldownReason) {
         let minute = deployment.record_failure_with_minute_counters();
 
         let should_cooldown = match reason {
