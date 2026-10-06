@@ -3,6 +3,7 @@ use crate::sdk::types::{ChatOptions, Function, Role, Tool};
 
 fn sdk_user_message_fixture() -> Message {
     Message {
+        tool_call_id: None,
         role: Role::User,
         content: Some(crate::sdk::types::Content::Text("hello".to_string())),
         name: None,
