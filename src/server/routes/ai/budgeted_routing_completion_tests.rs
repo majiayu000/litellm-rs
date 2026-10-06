@@ -89,25 +89,36 @@ async fn route_budget_completion(case: CompletionCase) {
                             let keys = KeyManager::new(InMemoryKeyRepository::new());
                             let (provider, key) = reservations.into_parts();
                             if case == CompletionCase::CancelUnpriced {
-                                let pricing = crate::config::models::gateway::GatewayPricingConfig {
-                                    unpriced_model_policy: crate::config::models::gateway::UnpricedModelPolicy::AllowUnpriced,
-                                    unpriced_fallback_cost_per_1k_tokens: Some(1.0),
-                                    ..Default::default()
-                                };
-                                spend::settle_unpriced_usage(&pricing, budget.budget_limits(), &keys, None,
-                                    budget.provider(), budget.model(), &crate::core::pricing_service::PricingUsage::from(&usage), provider, key,
-                                    "allowed unpriced completion").await;
-                            } else {
-                            spend::record_completion_spend_with_reservation(
-                                spend::usage_spend_settlement_with_pricing(
-                                    (budget.budget_limits(), &keys, None),
-                                    (budget.provider(), budget.model(), Some(&usage)),
-                                    ("openai", "gpt-4o-mini"),
+                                let pricing: crate::config::models::gateway::GatewayPricingConfig =
+                                    serde_json::from_value(serde_json::json!({
+                                        "unpriced_model_policy": "allow_unpriced",
+                                        "unpriced_fallback_cost_per_1k_tokens": 1.0
+                                    }))
+                                    .expect("valid allow-unpriced fixture configuration");
+                                spend::settle_unpriced_usage(
+                                    &pricing,
+                                    budget.budget_limits(),
+                                    &keys,
+                                    None,
+                                    budget.provider(),
+                                    budget.model(),
+                                    &crate::core::pricing_service::PricingUsage::from(&usage),
                                     provider,
                                     key,
-                                ),
-                            )
-                            .await;
+                                    "allowed unpriced completion",
+                                )
+                                .await;
+                            } else {
+                                spend::record_completion_spend_with_reservation(
+                                    spend::usage_spend_settlement_with_pricing(
+                                        (budget.budget_limits(), &keys, None),
+                                        (budget.provider(), budget.model(), Some(&usage)),
+                                        ("openai", "gpt-4o-mini"),
+                                        provider,
+                                        key,
+                                    ),
+                                )
+                                .await;
                             }
                             let tokens = u64::from(usage.total_tokens);
                             (usage, tokens)
