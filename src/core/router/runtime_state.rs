@@ -49,15 +49,17 @@ use super::{DeploymentState, RoutingSnapshot, deployment::current_timestamp};
 #[cfg(feature = "gateway")]
 use std::collections::HashMap;
 #[cfg(feature = "gateway")]
+use std::sync::Arc;
+#[cfg(feature = "gateway")]
 use std::sync::atomic::Ordering;
 
-/// Keep removed resource states only while they still hold requests, current
-/// minute usage or cooldown. Disabling/re-enabling a provider, or rotating A ->
-/// B -> A while A has work in flight, cannot grant it a fresh quota bucket.
+/// Keep removed resource states while a routing/state handle can still use
+/// them, or they retain current minute usage or cooldown. One shared entry per
+/// resource prevents registry copies from counting as live request handles.
 #[cfg(feature = "gateway")]
 #[derive(Debug, Clone, Default)]
 pub(super) struct RuntimeStateRegistry {
-    states: HashMap<(String, GatewayRuntimeIdentity), DeploymentState>,
+    states: HashMap<(String, GatewayRuntimeIdentity), Arc<DeploymentState>>,
 }
 
 #[cfg(feature = "gateway")]
@@ -65,6 +67,12 @@ impl RuntimeStateRegistry {
     pub(super) fn prune_retired(&mut self) {
         let now = current_timestamp();
         self.states.retain(|_, state| {
+            // Check ownership first: an idle old snapshot can start a request
+            // after this check, or a finishing request can change usage before
+            // dropping its final handle. Only unowned states are quiescent.
+            if state.has_other_runtime_handles() {
+                return true;
+            }
             let minute = state.minute_counters(now);
             state.active_requests.load(Ordering::Acquire) > 0
                 || minute.rpm > 0
@@ -78,7 +86,11 @@ impl RuntimeStateRegistry {
         for (id, deployment) in &snapshot.deployments {
             if let Some(identity) = &deployment.state.runtime_identity {
                 self.states
-                    .insert((id.clone(), identity.clone()), deployment.state.clone());
+                    .entry((id.clone(), identity.clone()))
+                    // Matching snapshots inherit this entry's shared state.
+                    // Replacing it would make old registry copies look like
+                    // additional live state handles and prevent retirement.
+                    .or_insert_with(|| Arc::new(deployment.state.clone()));
             }
         }
     }
@@ -86,5 +98,76 @@ impl RuntimeStateRegistry {
     pub(super) fn find(&self, id: &str, state: &DeploymentState) -> Option<&DeploymentState> {
         self.states
             .get(&(id.to_owned(), state.runtime_identity.clone()?))
+            .map(Arc::as_ref)
+    }
+}
+
+#[cfg(all(test, feature = "gateway"))]
+mod tests {
+    use super::*;
+    use crate::core::providers::{Provider, openai::OpenAIProvider};
+    use crate::core::router::{Deployment, UnifiedRouter};
+
+    async fn registry_fixture() -> (RuntimeStateRegistry, UnifiedRouter) {
+        let provider = OpenAIProvider::with_api_key("sk-runtime-registry-test")
+            .await
+            .unwrap();
+        let mut deployment = Deployment::new(
+            "deployment".into(),
+            Provider::OpenAI(provider),
+            "gpt-4o-mini".into(),
+            "chat".into(),
+        );
+        deployment.state.runtime_identity = Some(GatewayRuntimeIdentity([0; 32]));
+        let router = UnifiedRouter::default();
+        router.add_deployment(deployment);
+        let mut registry = RuntimeStateRegistry::default();
+        registry.remember(&router.load_routing_snapshot());
+        (registry, router)
+    }
+
+    #[tokio::test]
+    async fn registry_copies_do_not_prevent_retirement_after_the_last_pin() {
+        let (mut previous, router) = registry_fixture().await;
+        let pin = router.load_routing_snapshot();
+        let mut current = previous.clone();
+        current.remember(&pin);
+        drop(router);
+
+        current.prune_retired();
+        assert_eq!(current.states.len(), 1, "an idle pin can still admit work");
+
+        drop(pin);
+        current.prune_retired();
+        assert!(current.states.is_empty(), "registry copies are not pins");
+        previous.prune_retired();
+        assert!(previous.states.is_empty());
+    }
+
+    #[tokio::test]
+    async fn usage_and_cooldown_outlive_pins_but_expired_resources_are_retired() {
+        let (mut registry, router) = registry_fixture().await;
+        let deployment = router.get_deployment("deployment").unwrap();
+        deployment.record_success(17, 1);
+        deployment.enter_cooldown(300);
+        drop(deployment);
+        drop(router);
+
+        registry.prune_retired();
+        assert_eq!(registry.states.len(), 1);
+        let retained = registry.states.values().next().unwrap();
+        assert_eq!(retained.minute_counters(current_timestamp()).tpm, 17);
+        retained
+            .minute_reset_at
+            .store(current_timestamp() - 60, Ordering::Release);
+
+        registry.prune_retired();
+        assert_eq!(registry.states.len(), 1, "cooldown outlives the minute");
+        let retained = registry.states.values().next().unwrap();
+        assert_eq!(retained.minute_counters(current_timestamp()).tpm, 0);
+        retained.cooldown_until.store(0, Ordering::Release);
+
+        registry.prune_retired();
+        assert!(registry.states.is_empty());
     }
 }

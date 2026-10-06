@@ -135,6 +135,61 @@ async fn removing_and_readding_a_busy_resource_does_not_create_an_extra_slot() {
 }
 
 #[tokio::test]
+async fn delayed_request_pin_survives_removal_pruning_and_readdition() {
+    let state = app_state().await;
+    // HTTP requests pin a revision before asynchronous authentication and
+    // guardrails. Selection need not start until several reloads later.
+    let old = state.pin_runtime();
+    apply(&state, |config| config.gateway.providers[0].enabled = false).await;
+    apply(&state, |config| config.gateway.providers[0].priority = 2).await;
+    apply(&state, |config| {
+        config.gateway.providers[0].enabled = true;
+        config.gateway.providers[0].rpm = 1;
+        config.gateway.providers[0].tpm = 17;
+    })
+    .await;
+
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let task = {
+        let entered = Arc::clone(&entered);
+        let release = Arc::clone(&release);
+        tokio::spawn(async move {
+            old.unified_router
+                .execute_with_selected_deployment_retry(MODEL, move |_| {
+                    let entered = Arc::clone(&entered);
+                    let release = Arc::clone(&release);
+                    async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        Ok(((), 17))
+                    }
+                })
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+
+    let live = state.unified_router();
+    let deployment = live.get_deployment(DEPLOYMENT).unwrap();
+    assert_eq!(deployment.state.active_requests.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        live.select_deployment_lease(MODEL),
+        Err(RouterError::NoAvailableDeployment(_))
+    ));
+
+    release.notify_one();
+    task.await.unwrap();
+    assert_eq!(deployment.state.active_requests.load(Ordering::Acquire), 0);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Acquire), 1);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Acquire), 17);
+    assert!(live.select_deployment_lease(MODEL).is_err());
+}
+
+#[tokio::test]
 async fn credential_rotation_isolates_resources_but_rotation_back_retains_old_occupancy() {
     let state = app_state().await;
     let key_a = state.unified_router();

@@ -407,6 +407,14 @@ impl DeploymentState {
         self.provider_instance_identity.clone()
     }
 
+    /// A registry entry owns one state handle, shared across registry copies.
+    /// Any other handle can admit or finish requests, including an idle pin of
+    /// a retired routing snapshot, so its resource state must remain reachable.
+    #[cfg(feature = "gateway")]
+    pub(super) fn has_other_runtime_handles(&self) -> bool {
+        Arc::strong_count(&self.inner) > 1
+    }
+
     /// Explicitly disabling probes removes probe-owned failure evidence while
     /// preserving request failures, cooldown and resource occupancy.
     #[cfg(feature = "gateway")]
