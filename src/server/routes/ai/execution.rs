@@ -12,6 +12,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
+#[path = "execution_completion.rs"]
+pub(super) mod completion;
 #[path = "execution_observability.rs"]
 pub(super) mod observability;
 pub(super) struct StreamingDeploymentLease {
@@ -21,6 +23,30 @@ pub(super) struct StreamingDeploymentLease {
     finalized: bool,
     admission: AdmissionBackend,
     hold: Option<AdmissionHold>,
+}
+
+/// Cancellation ends the selected response even when the caller retains its
+/// lease and later retries a terminal method through the same &mut reference.
+struct TerminalSettlementGuard<'a> {
+    lease: &'a mut StreamingDeploymentLease,
+    completion: Arc<completion::UnaryCompletion>,
+    finished: bool,
+}
+
+impl TerminalSettlementGuard<'_> {
+    fn finish(mut self) {
+        self.completion.disarm();
+        self.finished = true;
+    }
+}
+
+impl Drop for TerminalSettlementGuard<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.completion.record_cancelled();
+            self.lease.release();
+        }
+    }
 }
 
 impl StreamingDeploymentLease {
@@ -41,6 +67,77 @@ impl StreamingDeploymentLease {
         }
     }
 
+    /// Preserve a known terminal outcome only while accounting is pending.
+    /// Normal completion stays owned by finish_success/finish_failure; dropping
+    /// this wait retains the original lease's outcome and admission usage.
+    pub(super) async fn settle_terminal<F: std::future::Future>(
+        &mut self,
+        tokens: u64,
+        error: Option<&ProviderError>,
+        settlement: F,
+    ) -> F::Output {
+        let outcome = match error {
+            Some(error) => self.failure_outcome(error, false),
+            None => completion::TerminalOutcome::Success,
+        };
+        self.settle_with_outcome(tokens, outcome, settlement).await
+    }
+
+    pub(super) async fn settle_interrupted<F: std::future::Future>(
+        &mut self,
+        tokens: u64,
+        error: Option<&ProviderError>,
+        settlement: F,
+    ) -> F::Output {
+        let outcome = match error {
+            Some(error) => self.failure_outcome(error, true),
+            None => completion::TerminalOutcome::Interrupted,
+        };
+        self.settle_with_outcome(tokens, outcome, settlement).await
+    }
+
+    fn failure_outcome(
+        &self,
+        error: &ProviderError,
+        interrupted: bool,
+    ) -> completion::TerminalOutcome {
+        let reason = match infer_cooldown_reason(error) {
+            reason @ (CooldownReason::RateLimit
+            | CooldownReason::AuthError
+            | CooldownReason::NotFound) => reason,
+            _ => CooldownReason::ConsecutiveFailures,
+        };
+        completion::TerminalOutcome::Failure(self.router.clone(), reason, interrupted)
+    }
+
+    async fn settle_with_outcome<F: std::future::Future>(
+        &mut self,
+        tokens: u64,
+        outcome: completion::TerminalOutcome,
+        settlement: F,
+    ) -> F::Output {
+        if self.finalized {
+            return settlement.await;
+        }
+        let completion = completion::UnaryCompletion::terminal(
+            self.deployment.clone(),
+            self.hold.clone(),
+            self.started_at,
+            tokens,
+            outcome,
+        );
+        let guard = TerminalSettlementGuard {
+            lease: self,
+            completion,
+            finished: false,
+        };
+        let result = completion::CURRENT
+            .scope(guard.completion.clone(), settlement)
+            .await;
+        guard.finish();
+        result
+    }
+
     pub(super) async fn finish_success(mut self, tokens_used: u64) {
         self.complete_response(tokens_used, None).await;
     }
@@ -54,7 +151,7 @@ impl StreamingDeploymentLease {
             return;
         }
         if let Some(error) = error {
-            self.complete_failure(error, tokens_used).await;
+            self.complete_failure(error, tokens_used, false).await;
             return;
         }
         let latency_us = self.started_at.elapsed().as_micros() as u64;
@@ -80,19 +177,21 @@ impl StreamingDeploymentLease {
         error: &ProviderError,
         tokens_used: u64,
     ) {
-        self.complete_failure(error, tokens_used).await;
+        self.complete_failure(error, tokens_used, false).await;
     }
 
-    async fn complete_failure(&mut self, error: &ProviderError, tokens_used: u64) {
+    async fn complete_failure(
+        &mut self,
+        error: &ProviderError,
+        tokens_used: u64,
+        interrupted: bool,
+    ) {
+        if self.finalized {
+            return;
+        }
         if tokens_used > 0 {
             self.deployment.record_partial_tokens(tokens_used);
-            if let Some(hold) = self.hold.take() {
-                self.admission.settle_async(&hold, tokens_used).await;
-            }
         }
-        // Mid-stream failures cannot be retried. Preserve fail-fast cooldowns
-        // for rate limits and deterministic misconfiguration, while routing
-        // ordinary transient failures through the counted breaker path.
         let inferred = infer_cooldown_reason(error);
         let cooldown_reason = match inferred {
             CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
@@ -101,10 +200,27 @@ impl StreamingDeploymentLease {
             _ => CooldownReason::ConsecutiveFailures,
         };
         self.router
-            .record_failure_with_reason_for_deployment_async(&self.deployment, cooldown_reason)
-            .await;
-        self.cancel_admission().await;
+            .record_local_failure(&self.deployment, cooldown_reason);
+        let retain_admission = completion::retain_failure_admission(tokens_used, interrupted);
+        let hold = self.hold.take();
+        if let Some(hold) = &hold {
+            if retain_admission {
+                hold.prepare_settlement(tokens_used);
+            } else {
+                hold.prepare_cancellation();
+            }
+        }
         self.release();
+        if let Some(hold) = hold {
+            if retain_admission {
+                self.admission.settle_async(&hold, tokens_used).await;
+            } else {
+                self.admission.cancel_async(&hold).await;
+            }
+        }
+        self.router
+            .record_failure_circuit_for_deployment_async(&self.deployment, cooldown_reason)
+            .await;
     }
 
     #[cfg(feature = "websockets")]
@@ -209,14 +325,20 @@ impl StreamingDeploymentLease {
         if self.finalized {
             return;
         }
-        self.deployment.record_interrupted_usage(tokens_used);
-        if let Some(hold) = self.hold.take() {
-            self.admission.settle_async(&hold, tokens_used).await;
-        }
         if let Some(error) = error {
-            self.complete_failure(error, 0).await;
+            // complete_failure owns tokens and the known failure before I/O.
+            self.deployment.record_interrupted_usage(0);
+            self.complete_failure(error, tokens_used, true).await;
         } else {
+            self.deployment.record_interrupted_usage(tokens_used);
+            let hold = self.hold.take();
+            if let Some(hold) = &hold {
+                hold.prepare_settlement(tokens_used);
+            }
             self.release();
+            if let Some(hold) = hold {
+                self.admission.settle_async(&hold, tokens_used).await;
+            }
         }
     }
 
@@ -244,6 +366,18 @@ impl StreamingDeploymentLease {
 impl Drop for StreamingDeploymentLease {
     fn drop(&mut self) {
         self.release();
+    }
+}
+
+pub(super) async fn settle_stream_terminal<F: std::future::Future>(
+    lease: Option<&mut StreamingDeploymentLease>,
+    tokens: u64,
+    error: Option<&ProviderError>,
+    settlement: F,
+) -> F::Output {
+    match lease {
+        Some(lease) => lease.settle_terminal(tokens, error, settlement).await,
+        None => settlement.await,
     }
 }
 
@@ -388,12 +522,16 @@ where
         let provider = deployment_lease.deployment().provider.clone();
         let selected_model = deployment_lease.deployment().model.clone();
 
-        match operation.clone()(provider, selected_model, selected_deployment_id).await {
+        let completion = completion::UnaryCompletion::new(&deployment_lease, started_at);
+        let result = completion::CURRENT
+            .scope(
+                completion.clone(),
+                operation.clone()(provider, selected_model, selected_deployment_id),
+            )
+            .await;
+        match result {
             Ok((value, tokens_used)) => {
-                let latency_us = started_at.elapsed().as_micros() as u64;
-                deployment_lease
-                    .deployment()
-                    .record_success(tokens_used, latency_us);
+                completion.complete_success(tokens_used);
                 deployment_lease.commit_admission_async(tokens_used).await;
                 router
                     .record_success_circuit_for_deployment_async(deployment_lease.deployment())
@@ -408,7 +546,7 @@ where
                     false,
                 ) {
                     excluded_budget_deployments.insert(deployment_lease.clone_deployment_id());
-                    deployment_lease.cancel_admission_async().await;
+                    completion.finish_admission(&mut deployment_lease).await;
                     drop(deployment_lease);
                     last_operation_error = Some(err);
                     continue;
@@ -421,8 +559,12 @@ where
                     RetryContext::unary(attempt, max_attempts),
                 );
                 if retry_decision.should_retry {
+                    router.record_local_failure(
+                        deployment_lease.deployment(),
+                        CooldownReason::ConsecutiveFailures,
+                    );
                     router
-                        .record_failure_with_reason_for_deployment_async(
+                        .record_failure_circuit_for_deployment_async(
                             deployment_lease.deployment(),
                             crate::core::router::CooldownReason::ConsecutiveFailures,
                         )
@@ -430,7 +572,7 @@ where
                     // Do not pick this deployment again in this request while
                     // another candidate is available.
                     tried_deployments.insert(deployment_lease.clone_deployment_id());
-                    deployment_lease.cancel_admission_async().await;
+                    completion.finish_admission(&mut deployment_lease).await;
                     drop(deployment_lease);
                     last_operation_error = Some(err);
                     attempt += 1;
@@ -441,13 +583,14 @@ where
                 }
 
                 let cooldown_reason = infer_cooldown_reason(&err);
+                router.record_local_failure(deployment_lease.deployment(), cooldown_reason);
                 router
-                    .record_failure_with_reason_for_deployment_async(
+                    .record_failure_circuit_for_deployment_async(
                         deployment_lease.deployment(),
                         cooldown_reason,
                     )
                     .await;
-                deployment_lease.cancel_admission_async().await;
+                completion.finish_admission(&mut deployment_lease).await;
                 drop(deployment_lease);
                 return Err(GatewayError::Provider(err));
             }

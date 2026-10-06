@@ -99,6 +99,49 @@ mod redis {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn model_reservation_capacity_is_infrastructure_failure_and_rolls_back_provider() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("provider-capacity-rollback");
+        let model = unique("model-capacity");
+        let limits = seeded(pool.clone(), &provider, &model, 100.0);
+        let key = RedisPool::budget_lease_key("model", &model);
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let _: i64 = ::redis::Script::new(
+            r#"
+            for i = 1, tonumber(ARGV[1]) do
+              redis.call('HSET', KEYS[1], 'p:orphan-' .. i, '1:100:0')
+            end
+            return 1
+            "#,
+        )
+        .key(&key)
+        .arg(crate::storage::redis::budget::MAX_UNSETTLED_BUDGET_LEASES)
+        .invoke_async(&mut conn)
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            limits.reserve_spend(&provider, &model, 10.0),
+            Err(BudgetReservationError::BackendUnavailable)
+        ));
+        let state: (i64, i64) = ::redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["c", "o"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(state, (0, 0), "capacity refusal must not change spend");
+        limits
+            .providers
+            .reserve_provider_spend(&provider, 100.0)
+            .expect("a model infrastructure failure must roll back its provider reservation")
+            .cancel();
+        cleanup(&pool, &provider, &model).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn settle_and_cancel_keep_committed_and_outstanding_distinct() {
         let Some(pool) = live_redis_pool().await else {
             return;
@@ -178,6 +221,41 @@ mod redis {
         other
             .reserve_spend(&provider, &model, 10.0)
             .expect("expired lease must be reclaimed for a later reserve");
+        cleanup(&pool, &provider, &model).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ordinary_settlement_after_expiry_preserves_new_reservations() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("provider-late-settlement");
+        let model = unique("model-late-settlement");
+        let creator = UnifiedBudgetLimits::new().with_redis_lease_ttl(pool.clone(), 1);
+        creator.providers.set_provider_limit(
+            &provider,
+            ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        creator
+            .models
+            .set_model_limit(&model, ModelLimitConfig::new(10.0, ResetPeriod::Monthly));
+
+        let old = creator.reserve_spend(&provider, &model, 8.0).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let other = seeded(pool.clone(), &provider, &model, 10.0);
+        let current = other.reserve_spend(&provider, &model, 6.0).unwrap();
+
+        old.settle(3.0).unwrap();
+        assert!(
+            other.reserve_spend(&provider, &model, 1.1).is_err(),
+            "late spend 3 plus the new outstanding 6 must leave only 1"
+        );
+        current.cancel();
+        other
+            .reserve_spend(&provider, &model, 7.0)
+            .expect("only actual spend must remain after cancelling the new hold")
+            .cancel();
+        assert!(other.reserve_spend(&provider, &model, 7.1).is_err());
         cleanup(&pool, &provider, &model).await;
     }
 

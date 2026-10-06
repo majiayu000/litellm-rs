@@ -637,7 +637,7 @@ async fn relay(
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.redacted().to_string()}}).to_string(), timeout).await?;
                                 continue;
                             }
-                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output) {
+                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output).await {
                                 Ok(reservation) => {
                                     let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                                     value["event_id"] = json!(event_id);
@@ -706,11 +706,18 @@ async fn relay(
                             match usage {
                                 Ok(usage) => {
                                     tokens = usage.map_or(tokens, |(_, tokens)| tokens);
-                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), usage).await {
-                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
-                                    }
                                     let provider_failed = status == "failed"
                                         && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
+                                    let terminal_error = provider_failed.then(|| upstream_event_error(&value["response"]["status_details"]["error"]));
+                                    let settlement = reservation.settle(&state, context.api_key_id(), usage);
+                                    let settled = if status == "completed" {
+                                        lease.settle_terminal(tokens, None, settlement).await
+                                    } else {
+                                        lease.settle_interrupted(tokens, terminal_error.as_ref(), settlement).await
+                                    };
+                                    if let Err(error) = settled {
+                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
+                                    }
                                     if provider_failed {
                                         lease.finish_interrupted(tokens, Some(&upstream_event_error(&value["response"]["status_details"]["error"]))).await;
                                     } else if matches!(status, "cancelled" | "incomplete" | "failed") {

@@ -50,6 +50,7 @@ async fn stream_disconnect_without_usage_records_reserved_key_cost() {
         .await
         .expect("test key should be created");
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .expect("reservation should succeed")
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();
@@ -91,6 +92,7 @@ async fn finished_stream_without_usage_records_reserved_key_cost_after_output() 
         .await
         .expect("test key should be created");
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .expect("reservation should succeed")
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();

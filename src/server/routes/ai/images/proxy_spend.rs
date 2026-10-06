@@ -21,6 +21,7 @@ pub(super) async fn record_image_proxy_spend(
     api_key_id: Option<uuid::Uuid>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
+    super::super::execution::completion::observe_usage(super::image_proxy_tokens_used(usage));
     if unpriced {
         super::super::spend::settle_unpriced_usage(
             pricing_config,
@@ -38,34 +39,42 @@ pub(super) async fn record_image_proxy_spend(
         return;
     }
 
-    if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
-            error!(
-                "failed to settle image proxy budget for provider '{}' model '{}': {error:?}",
-                provider.provider_name, model
-            );
-        }
-    } else {
-        budget_limits.record_spend(&provider.provider_name, model, cost);
-    }
-    if let Some(api_key_id) = api_key_id {
-        let total_tokens = u64::from(
-            usage
-                .total_tokens
-                .saturating_add(usage.image_tokens.unwrap_or(0)),
-        );
-        if let Err(error) = key_manager
-            .record_usage(api_key_id, total_tokens, cost)
-            .await
-        {
-            error!("failed to record image proxy usage for key {api_key_id}: {error}");
-        }
-    }
     super::super::spend::settle_api_key_budget_reservation(
         key_budget_reservation,
         cost,
         "image proxy",
     );
+    let budget_settlement = async {
+        if let Some(reservation) = budget_reservation {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
+                error!(
+                    "failed to settle image proxy budget for provider '{}' model '{}': {error:?}",
+                    provider.provider_name, model
+                );
+            }
+        } else {
+            budget_limits.record_spend(&provider.provider_name, model, cost);
+        }
+    };
+    let usage_record = async {
+        if let Some(api_key_id) = api_key_id {
+            let total_tokens = u64::from(
+                usage
+                    .total_tokens
+                    .saturating_add(usage.image_tokens.unwrap_or(0)),
+            );
+            if let Err(error) = key_manager
+                .record_usage(api_key_id, total_tokens, cost)
+                .await
+            {
+                error!("failed to record image proxy usage for key {api_key_id}: {error}");
+            }
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
 pub(super) fn image_proxy_cost(

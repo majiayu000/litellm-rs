@@ -123,7 +123,7 @@ pub(super) async fn handle_streaming_completion(
                         ApiKeyBudgetPolicy::FromProviderReservation,
                     )
                     .reserve_call(
-                        |budget| {
+                        async |budget| {
                             spend::reserve_chat_completion_budget_with_request_pricing(
                                 &reserve_request_pricing,
                                 &reserve_pricing_config,
@@ -132,6 +132,7 @@ pub(super) async fn handle_streaming_completion(
                                 budget.model(),
                                 request_for_budget,
                             )
+                            .await
                         },
                         || {
                             callback.begin_provider_execution_with_pricing(
@@ -490,9 +491,13 @@ pub(super) async fn handle_streaming_completion(
                         settle_if_chargeable!();
                         return;
                     }
-                    settlement
-                        .record_completion(final_usage.as_ref(), saw_upstream_output)
-                        .await;
+                    crate::server::routes::ai::execution::settle_stream_terminal(
+                        lease.as_mut(),
+                        tokens_used,
+                        None,
+                        settlement.record_completion(final_usage.as_ref(), saw_upstream_output),
+                    )
+                    .await;
                     callback.complete_usage(final_usage.as_ref(), "success");
                     if let Some(lease) = lease.take() {
                         lease.finish_success(tokens_used).await;

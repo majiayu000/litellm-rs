@@ -19,6 +19,10 @@ use super::execution;
 pub(super) use super::execution::StreamingDeploymentLease;
 use super::spend;
 
+#[cfg(test)]
+#[path = "budgeted_async_tests.rs"]
+mod async_tests;
+
 #[derive(Clone, Copy)]
 pub(super) enum SettlementMode {
     Metered,
@@ -157,12 +161,13 @@ impl BudgetContext {
         &self.model
     }
 
-    pub(super) fn reserve_spend(
+    pub(super) async fn reserve_spend(
         &self,
         amount: f64,
     ) -> Result<UnifiedBudgetReservation, ProviderError> {
         self.budget_limits
-            .reserve_spend(&self.provider, &self.model, amount)
+            .reserve_spend_async(&self.provider, &self.model, amount)
+            .await
             .map_err(|error| {
                 spend::reservation_error_to_provider_error(error, &self.provider, &self.model)
             })
@@ -233,29 +238,34 @@ impl BudgetedCall {
         call: Call,
     ) -> Result<(T, BudgetReservations), ProviderError>
     where
-        Reserve: FnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
+        Reserve:
+            AsyncFnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
         Call: FnOnce() -> CallFuture,
         CallFuture: Future<Output = Result<T, ProviderError>>,
     {
-        let mut reservations = self.reserve(reserve)?;
+        let mut reservations = self.reserve(reserve).await?;
         match call().await {
-            Ok(value) => Ok((value, reservations)),
+            Ok(value) => {
+                execution::completion::provider_succeeded();
+                Ok((value, reservations))
+            }
             Err(error) => {
-                reservations.cancel();
+                reservations.cancel().await;
                 Err(error)
             }
         }
     }
 
-    pub(super) fn reserve_for_call<Reserve>(
+    pub(super) async fn reserve_for_call<Reserve>(
         self,
         reserve: Reserve,
     ) -> Result<(BudgetReservations, BudgetContext), ProviderError>
     where
-        Reserve: FnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
+        Reserve:
+            AsyncFnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
     {
         let context = self.context();
-        let reservations = self.reserve(reserve)?;
+        let reservations = self.reserve(reserve).await?;
         Ok((reservations, context))
     }
 
@@ -266,7 +276,8 @@ impl BudgetedCall {
         settle: Settle,
     ) -> Result<(T, u64), ProviderError>
     where
-        Reserve: FnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
+        Reserve:
+            AsyncFnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
         Call: FnOnce() -> CallFuture,
         CallFuture: Future<Output = Result<T, ProviderError>>,
         Settle: FnOnce(T, BudgetReservations, BudgetContext) -> SettleFuture,
@@ -277,9 +288,10 @@ impl BudgetedCall {
         Ok(settle(value, reservations, context).await)
     }
 
-    fn reserve<Reserve>(&self, reserve: Reserve) -> Result<BudgetReservations, ProviderError>
+    async fn reserve<Reserve>(&self, reserve: Reserve) -> Result<BudgetReservations, ProviderError>
     where
-        Reserve: FnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
+        Reserve:
+            AsyncFnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
     {
         let context = self.context();
         spend::ensure_budget_available(
@@ -287,7 +299,7 @@ impl BudgetedCall {
             context.provider(),
             context.model(),
         )?;
-        let budget = reserve(&context)?;
+        let budget = reserve(&context).await?;
         let key = match self.settlement_mode {
             SettlementMode::AvailabilityOnly => None,
             SettlementMode::Metered => {
@@ -347,9 +359,11 @@ impl BudgetReservations {
         (self.budget, self.key)
     }
 
-    pub(super) fn cancel(&mut self) {
-        if let Some(reservation) = self.budget.take() {
-            reservation.cancel();
+    pub(super) async fn cancel(&mut self) {
+        if let Some(reservation) = self.budget.take()
+            && let Err(error) = reservation.cancel_async().await
+        {
+            tracing::error!(?error, "provider/model budget cancellation failed");
         }
         if let Some(reservation) = self.key.take() {
             reservation.cancel();
@@ -460,7 +474,7 @@ mod tests {
 
         let result = BudgetedCall::new(limits.clone(), "openai", "gpt-4")
             .reserve_call_settle(
-                |context| {
+                async |context| {
                     limits
                         .reserve_spend(context.provider(), context.model(), 2.0)
                         .map(Some)
@@ -513,7 +527,7 @@ mod tests {
                 ApiKeyBudgetPolicy::FromProviderReservation,
             )
             .reserve_call_settle(
-                |context| {
+                async |context| {
                     limits
                         .reserve_spend(context.provider(), context.model(), 0.25)
                         .map(Some)
@@ -576,7 +590,7 @@ mod tests {
                 ApiKeyBudgetPolicy::RequirePricedReservation,
             )
             .with_precomputed_api_key_budget_cost(Some(0.25))
-            .reserve_call(|_context| Ok(None), {
+            .reserve_call(async |_context| Ok(None), {
                 let limits = limits.clone();
                 let budget_manager = budget_manager.clone();
                 let scope = scope.clone();
@@ -615,16 +629,19 @@ mod tests {
         let limits = limited_budget();
 
         let first = BudgetedCall::new(limits.clone(), "openai", "gpt-4")
-            .reserve_call(|context| context.reserve_spend(0.75).map(Some), {
-                let limits = limits.clone();
-                move || async move {
-                    assert!(
-                        limits.reserve_spend("openai", "gpt-4", 0.50).is_err(),
-                        "in-flight reservation must count against remaining budget"
-                    );
-                    Ok::<_, crate::core::providers::ProviderError>(())
-                }
-            })
+            .reserve_call(
+                async |context| context.reserve_spend(0.75).await.map(Some),
+                {
+                    let limits = limits.clone();
+                    move || async move {
+                        assert!(
+                            limits.reserve_spend("openai", "gpt-4", 0.50).is_err(),
+                            "in-flight reservation must count against remaining budget"
+                        );
+                        Ok::<_, crate::core::providers::ProviderError>(())
+                    }
+                },
+            )
             .await;
         assert!(first.is_ok(), "first reservation should fit the budget");
         let (_, reservations) = match first {
@@ -693,7 +710,7 @@ mod tests {
 
         let (value, tokens) = BudgetedCall::new(limits.clone(), "openai", "gpt-4")
             .reserve_call_settle(
-                |context| {
+                async |context| {
                     limits
                         .reserve_spend(context.provider(), context.model(), 0.25)
                         .map(Some)

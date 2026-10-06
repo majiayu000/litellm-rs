@@ -187,7 +187,7 @@ pub(super) async fn record_gemini_spend(
     .await;
 }
 
-pub(super) fn reserve_gemini_budget(
+pub(super) async fn reserve_gemini_budget(
     pricing: &PricingService,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -211,6 +211,7 @@ pub(super) fn reserve_gemini_budget(
                 &usage,
                 error,
             )
+            .await
             .map_err(GatewayError::Provider);
         }
     };
@@ -223,7 +224,8 @@ pub(super) fn reserve_gemini_budget(
         return Ok(None);
     }
     budget_limits
-        .reserve_spend(&provider.provider_name, &provider.model, estimate.max_cost)
+        .reserve_spend_async(&provider.provider_name, &provider.model, estimate.max_cost)
+        .await
         .map(Some)
         .map_err(|error| reservation_error_to_gateway_error(error, provider))
 }
@@ -235,6 +237,7 @@ async fn record_gemini_usage(
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
+    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
     let cost = match spend_state
         .pricing
         .calculate_loaded_usage_cost_for_provider(
@@ -261,32 +264,39 @@ async fn record_gemini_usage(
         }
     };
 
-    if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
-            error!(
-                "failed to settle Gemini SDK budget for provider '{}' model '{}': {error:?}",
-                provider.provider_name, provider.model
-            );
-        }
-    } else {
-        spend_state
-            .budget_limits
-            .record_spend(&provider.provider_name, &provider.model, cost);
-    }
     super::super::spend::settle_api_key_budget_reservation(
         key_budget_reservation,
         cost,
         "Gemini SDK spend",
     );
-
-    if let Some(key_id) = spend_state.api_key_id
-        && let Err(error) = spend_state
-            .key_manager
-            .record_usage(key_id, u64::from(usage.total_tokens), cost)
-            .await
-    {
-        error!("failed to record Gemini SDK usage for key {key_id}: {error}");
-    }
+    let budget_settlement = async {
+        if let Some(reservation) = budget_reservation {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
+                error!(
+                    "failed to settle Gemini SDK budget for provider '{}' model '{}': {error:?}",
+                    provider.provider_name, provider.model
+                );
+            }
+        } else {
+            spend_state
+                .budget_limits
+                .record_spend(&provider.provider_name, &provider.model, cost);
+        }
+    };
+    let usage_record = async {
+        if let Some(key_id) = spend_state.api_key_id
+            && let Err(error) = spend_state
+                .key_manager
+                .record_usage(key_id, u64::from(usage.total_tokens), cost)
+                .await
+        {
+            error!("failed to record Gemini SDK usage for key {key_id}: {error}");
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
 async fn settle_gemini_reserved_spend_without_usage(

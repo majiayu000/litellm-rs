@@ -5,7 +5,7 @@ use crate::core::models::openai::requests::ChatCompletionRequest;
 use crate::core::models::openai::{ChatMessage, ContentPart, MessageContent, MessageRole};
 use crate::utils::ai::counter::token_counter::TokenizerIdentity;
 
-fn reserve_with_provider_limit(
+async fn reserve_with_provider_limit(
     provider: &str,
     model: &str,
     max_output_tokens: u32,
@@ -44,33 +44,36 @@ fn reserve_with_provider_limit(
     }
 
     let reservation = reserve_chat_completion_budget(&budget, provider, model, &request)
+        .await
         .unwrap()
         .unwrap();
     assert!((reservation.reserved_amount() - estimate.max_cost).abs() < f64::EPSILON);
     reservation
 }
 
-#[test]
-fn bedrock_chat_reservation_uses_bedrock_cost_pricing() {
-    let reservation = reserve_with_provider_limit("bedrock", "amazon.titan-text-express-v1", 100);
-    reservation.cancel();
-}
-
-#[test]
-fn amazon_nova_chat_reservation_uses_provider_pricing() {
-    let reservation = reserve_with_provider_limit("amazon_nova", "amazon.nova-2-lite-v1:0", 10);
-    reservation.cancel();
-}
-
-#[test]
-fn openai_like_prefixed_chat_reservation_uses_provider_pricing() {
+#[tokio::test]
+async fn bedrock_chat_reservation_uses_bedrock_cost_pricing() {
     let reservation =
-        reserve_with_provider_limit("openai_like", "groq/llama-3.3-70b-versatile", 100);
+        reserve_with_provider_limit("bedrock", "amazon.titan-text-express-v1", 100).await;
     reservation.cancel();
 }
 
-#[test]
-fn openai_chat_reservation_uses_exact_tiktoken_prompt_count() {
+#[tokio::test]
+async fn amazon_nova_chat_reservation_uses_provider_pricing() {
+    let reservation =
+        reserve_with_provider_limit("amazon_nova", "amazon.nova-2-lite-v1:0", 10).await;
+    reservation.cancel();
+}
+
+#[tokio::test]
+async fn openai_like_prefixed_chat_reservation_uses_provider_pricing() {
+    let reservation =
+        reserve_with_provider_limit("openai_like", "groq/llama-3.3-70b-versatile", 100).await;
+    reservation.cancel();
+}
+
+#[tokio::test]
+async fn openai_chat_reservation_uses_exact_tiktoken_prompt_count() {
     let budget = UnifiedBudgetLimits::new();
     let messages = vec![ChatMessage {
         role: MessageRole::User,
@@ -106,6 +109,7 @@ fn openai_chat_reservation_uses_exact_tiktoken_prompt_count() {
     request.max_tokens = Some(10);
 
     let reservation = reserve_chat_completion_budget(&budget, "openai", "gpt-3.5-turbo", &request)
+        .await
         .unwrap()
         .unwrap();
 

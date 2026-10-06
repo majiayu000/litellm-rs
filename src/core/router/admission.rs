@@ -18,6 +18,12 @@ pub(crate) struct AdmissionHold {
 }
 
 impl AdmissionHold {
+    /// Preserve a known cancellation before another accounting await.
+    #[cfg(feature = "gateway")]
+    pub(crate) fn prepare_cancellation(&self) {
+        *self.inner.completion.lock() = Some(AdmissionCompletion::Cancel);
+    }
+
     /// Preserve known usage before yielding it to a caller that may drop the
     /// stream. The lease's existing RAII cleanup owns the eventual Redis write.
     pub(crate) fn prepare_settlement(&self, actual_tokens: u64) {

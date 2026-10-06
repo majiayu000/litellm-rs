@@ -16,7 +16,7 @@ pub(super) fn response(
     state: AppState,
     context: RequestContext,
     call: MessageCall,
-    lease: StreamingDeploymentLease,
+    mut lease: StreamingDeploymentLease,
 ) -> HttpResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(8);
     let facts = crate::core::request_ledger::current_facts();
@@ -245,18 +245,49 @@ pub(super) fn response(
         let usage = (terminal && final_usage && !upstream_failed)
             .then(|| native_usage(&usage, require_inference_geo))
             .flatten();
-        settle(
-            &state,
-            &context,
-            &provider,
-            &model,
-            pricing,
-            usage.as_ref(),
-            reservation,
-            key_reservation,
-            facts,
-        )
-        .await;
+        let tokens_used = usage
+            .as_ref()
+            .map_or(0, |u| u64::from(u.normalized.total_tokens));
+        let terminal_error = failure.clone().or_else(|| {
+            upstream_failed.then(|| {
+                ProviderError::api_error("anthropic", 502, "Upstream Messages stream failed")
+            })
+        });
+        let settlement = async {
+            settle(
+                &state,
+                &context,
+                &provider,
+                &model,
+                pricing,
+                usage.as_ref(),
+                reservation,
+                key_reservation,
+                facts,
+            )
+            .await;
+        };
+        if matches!(
+            terminal_error.as_ref(),
+            Some(ProviderError::ApiError {
+                provider: "guardrail",
+                ..
+            })
+        ) {
+            lease
+                .settle_interrupted(tokens_used, None, settlement)
+                .await;
+        } else if let Some(error) = terminal_error.as_ref() {
+            lease
+                .settle_terminal(tokens_used, Some(error), settlement)
+                .await;
+        } else if terminal {
+            lease.settle_terminal(tokens_used, None, settlement).await;
+        } else {
+            lease
+                .settle_interrupted(tokens_used, None, settlement)
+                .await;
+        }
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
             let blocked = matches!(
@@ -269,7 +300,7 @@ pub(super) fn response(
             if blocked {
                 drop(lease);
             } else {
-                lease.finish_failure(&error).await;
+                lease.finish_failure_with_tokens(&error, tokens_used).await;
             }
             let kind = if blocked {
                 "permission_error"
@@ -283,11 +314,10 @@ pub(super) fn response(
         } else if upstream_failed {
             callback.fail("Upstream Messages stream failed", "provider_error");
             lease
-                .finish_failure(&ProviderError::api_error(
-                    "anthropic",
-                    502,
-                    "Upstream Messages stream failed",
-                ))
+                .finish_failure_with_tokens(
+                    &ProviderError::api_error("anthropic", 502, "Upstream Messages stream failed"),
+                    tokens_used,
+                )
                 .await;
         } else if terminal {
             callback.complete_pricing_usage(

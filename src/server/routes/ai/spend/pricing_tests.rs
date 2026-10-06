@@ -325,8 +325,8 @@ mod mapped_identity_tests {
         );
     }
 
-    #[test]
-    fn embedding_budget_fails_for_selected_exact_identity_without_tokenizer() {
+    #[tokio::test]
+    async fn embedding_budget_fails_for_selected_exact_identity_without_tokenizer() {
         let pricing = PricingService::new(None);
         pricing.add_custom_model(
             "gpt-audio-1.5".to_string(),
@@ -342,7 +342,9 @@ mod mapped_identity_tests {
             "selected-openai",
             "wire-audio-deployment",
             &input,
-        ) {
+        )
+        .await
+        {
             Err(error) => error,
             Ok(_) => panic!("missing exact embedding tokenizer must fail closed"),
         };

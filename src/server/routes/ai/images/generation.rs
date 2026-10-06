@@ -121,7 +121,7 @@ pub async fn handle_image_generation_with_state(
                         api_key_budget_id,
                         ApiKeyBudgetPolicy::FromProviderReservation,
                     ),
-                    |budget| {
+                    async |budget| {
                         super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
                             &reserve_request_pricing,
                             &reserve_pricing_config,
@@ -130,6 +130,7 @@ pub async fn handle_image_generation_with_state(
                             budget.model(),
                             &reserve_usage,
                         )
+                        .await
                     },
                     || provider.create_images(request_for_provider, context),
                     |reservations, budget| async move {
