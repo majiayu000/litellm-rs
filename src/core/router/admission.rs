@@ -172,7 +172,7 @@ impl AdmissionBackend {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gateway"))]
     pub(crate) fn settle(&self, hold: &AdmissionHold, actual_tokens: u64) {
         super::sync_compat::wait(self.settle_async(hold, actual_tokens));
     }

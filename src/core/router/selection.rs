@@ -47,7 +47,7 @@ impl DeploymentLease {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gateway"))]
     pub(crate) fn commit_admission(&mut self, actual_tokens: u64) {
         if let Some(hold) = self.hold.take() {
             self.admission.settle(&hold, actual_tokens);
