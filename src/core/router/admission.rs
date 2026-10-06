@@ -265,6 +265,11 @@ fn admission_io_slots() -> &'static tokio::sync::Semaphore {
     &SLOTS
 }
 
+#[cfg(all(test, feature = "gateway"))]
+pub(crate) async fn pause_admission_io() -> tokio::sync::SemaphorePermit<'static> {
+    admission_io_slots().acquire_many(64).await.unwrap()
+}
+
 #[cfg(feature = "gateway")]
 fn run_redis<'a, T>(
     deployment_id: &'a str,

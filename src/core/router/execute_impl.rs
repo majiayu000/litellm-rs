@@ -140,13 +140,14 @@ impl Router {
             match result {
                 Ok((value, tokens_used)) => {
                     let model_used = selected_deployment.model.clone();
+                    // The upstream outcome is known before the first settlement await.
+                    // Cancellation may stop I/O, but must not erase local accounting.
+                    deployment_lease
+                        .deployment()
+                        .record_success(tokens_used, latency_us);
                     deployment_lease.commit_admission_async(tokens_used).await;
-                    self.record_success_for_deployment_async(
-                        deployment_lease.deployment(),
-                        tokens_used,
-                        latency_us,
-                    )
-                    .await;
+                    self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
+                        .await;
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
@@ -578,13 +579,14 @@ impl Router {
         match result {
             Ok((value, tokens_used)) => {
                 let model_used = selected_deployment.model.clone();
+                // The upstream outcome is known before the first settlement await.
+                // Cancellation may stop I/O, but must not erase local accounting.
+                deployment_lease
+                    .deployment()
+                    .record_success(tokens_used, latency_us);
                 deployment_lease.commit_admission_async(tokens_used).await;
-                self.record_success_for_deployment_async(
-                    deployment_lease.deployment(),
-                    tokens_used,
-                    latency_us,
-                )
-                .await;
+                self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
+                    .await;
                 drop(deployment_lease);
 
                 Ok(build_execution_result(

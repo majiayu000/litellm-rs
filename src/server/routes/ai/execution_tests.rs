@@ -774,3 +774,133 @@ async fn cancelled_realtime_admission_restores_shared_rpm() {
     }
     pool.delete(&RedisPool::admission_key(&id)).await.unwrap();
 }
+
+async fn cancellation_test_router() -> Option<(
+    Arc<UnifiedRouter>,
+    Arc<crate::storage::redis::RedisPool>,
+    String,
+)> {
+    use crate::config::models::storage::RedisConfig;
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+        return None;
+    };
+    let pool = Arc::new(
+        crate::storage::redis::RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let router = UnifiedRouter::default().with_admission_redis(pool.clone());
+    let id = uuid::Uuid::new_v4().to_string();
+    router.add_deployment(
+        Deployment::new(
+            id.clone(),
+            Provider::OpenAI(OpenAIProvider::with_api_key("sk-test-key").await.unwrap()),
+            "gpt-4o-mini".into(),
+            "gpt-4".into(),
+        )
+        .with_config(DeploymentConfig {
+            max_parallel_requests: Some(1),
+            ..Default::default()
+        }),
+    );
+    Some((Arc::new(router), pool, id))
+}
+
+fn assert_one_completed_request(deployment: &Deployment) {
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 42);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_stream_completion_records_local_success_exactly_once() {
+    let Some((router, pool, id)) = cancellation_test_router().await else {
+        return;
+    };
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        router.clone(),
+        "gpt-4",
+        ProviderCapability::ChatCompletionStream,
+        |_, _, _| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let deployment = router.get_deployment(&id).unwrap();
+    let slots = crate::core::router::admission::pause_admission_io().await;
+    let mut completion = Box::pin(lease.complete_response(42, None));
+    assert!(futures::poll!(completion.as_mut()).is_pending());
+    assert_one_completed_request(&deployment);
+    drop(completion);
+    // Retry after cancellation, then drop the lease: neither may count twice
+    // nor replace the queued actual-token settlement with cancellation.
+    lease.complete_response(42, None).await;
+    assert_one_completed_request(&deployment);
+    drop(lease);
+    drop(slots);
+    assert_one_completed_request(&deployment);
+    wait_for_actual_settlement(&pool, &id).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_gateway_unary_settlement_retains_local_success() {
+    let Some((router, pool, id)) = cancellation_test_router().await else {
+        return;
+    };
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let started = Arc::new(Mutex::new(Some(started)));
+    let worker = router.clone();
+    let task = tokio::spawn(async move {
+        execute_with_selected_deployment(
+            &worker,
+            "gpt-4",
+            ProviderCapability::ChatCompletion,
+            move |_, _, _| {
+                let started = started.clone();
+                async move {
+                    let slots = crate::core::router::admission::pause_admission_io().await;
+                    let _ = started.lock().unwrap().take().unwrap().send(());
+                    Ok((slots, 42))
+                }
+            },
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+        .await
+        .unwrap()
+        .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_one_completed_request(&router.get_deployment(&id).unwrap());
+    wait_for_actual_settlement(&pool, &id).await;
+}
+
+async fn wait_for_actual_settlement(pool: &crate::storage::redis::RedisPool, id: &str) {
+    let key = crate::storage::redis::RedisPool::admission_key(id);
+    let mut conn = pool.open_live_connection().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let state: (i64, i64) = redis::cmd("HMGET")
+                .arg(&key)
+                .arg(&["p", "t"])
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            if state == (0, 42) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    pool.delete(&key).await.unwrap();
+}

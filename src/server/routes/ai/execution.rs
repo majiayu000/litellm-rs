@@ -50,21 +50,25 @@ impl StreamingDeploymentLease {
         tokens_used: u64,
         error: Option<&ProviderError>,
     ) {
+        if self.finalized {
+            return;
+        }
         if let Some(error) = error {
             self.complete_failure(error, tokens_used).await;
             return;
         }
-        if self.finalized {
-            return;
-        }
         let latency_us = self.started_at.elapsed().as_micros() as u64;
-        if let Some(hold) = self.hold.take() {
+        let hold = self.hold.take();
+        self.deployment.record_success(tokens_used, latency_us);
+        // Mark the local outcome before yielding. A cancelled completion may
+        // be retried by a caller holding &mut self; it must never count twice.
+        self.release();
+        if let Some(hold) = hold {
             self.admission.settle_async(&hold, tokens_used).await;
         }
         self.router
-            .record_success_for_deployment_async(&self.deployment, tokens_used, latency_us)
+            .record_success_circuit_for_deployment_async(&self.deployment)
             .await;
-        self.release();
     }
 
     pub(super) async fn finish_failure(self, error: &ProviderError) {
@@ -387,13 +391,12 @@ where
         match operation.clone()(provider, selected_model, selected_deployment_id).await {
             Ok((value, tokens_used)) => {
                 let latency_us = started_at.elapsed().as_micros() as u64;
+                deployment_lease
+                    .deployment()
+                    .record_success(tokens_used, latency_us);
                 deployment_lease.commit_admission_async(tokens_used).await;
                 router
-                    .record_success_for_deployment_async(
-                        deployment_lease.deployment(),
-                        tokens_used,
-                        latency_us,
-                    )
+                    .record_success_circuit_for_deployment_async(deployment_lease.deployment())
                     .await;
                 drop(deployment_lease);
                 return Ok(value);

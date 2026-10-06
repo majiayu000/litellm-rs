@@ -662,6 +662,16 @@ impl Router {
         latency_us: u64,
     ) {
         deployment.record_success(tokens, latency_us);
+        self.record_success_circuit_for_deployment_async(deployment)
+            .await;
+    }
+
+    /// Update shared breaker state after the caller has synchronously recorded
+    /// the known successful outcome. Never records local request/token counts.
+    pub(crate) async fn record_success_circuit_for_deployment_async(
+        &self,
+        deployment: &Deployment,
+    ) {
         match self
             .circuit
             .record_success_async(deployment, &self.config)

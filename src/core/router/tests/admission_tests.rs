@@ -196,6 +196,78 @@ mod redis {
         cleanup(&pool, &id).await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_success_settlement_retains_local_counts_for_all_execution_paths() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        for retry in [false, true] {
+            let id = unique("cancel-success");
+            let router = Arc::new(router_with(pool.clone()));
+            seed(&router, &id, Some(1), Some(10), Some(100)).await;
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let started = Arc::new(std::sync::Mutex::new(Some(started)));
+            let worker = router.clone();
+            let task = tokio::spawn(async move {
+                let operation = move |_| {
+                    let started = started.clone();
+                    async move {
+                        // Reserve has finished. Hold every I/O permit in the
+                        // result so the real settlement suspends until abort.
+                        let slots = crate::core::router::admission::pause_admission_io().await;
+                        let _ = started.lock().unwrap().take().unwrap().send(());
+                        Ok((slots, 42))
+                    }
+                };
+                if retry {
+                    worker
+                        .execute_with_selected_deployment_retry("gpt-4", operation)
+                        .await
+                        .map(|_| ())
+                } else {
+                    worker
+                        .execute_once_with_selected_deployment("gpt-4", operation)
+                        .await
+                        .map(|_| ())
+                        .map_err(crate::core::router::execution::router_error_to_provider_error)
+                        .map_err(|e| (e, 1))
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            let deployment = router.get_deployment(&id).unwrap();
+            assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 42);
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+            // RAII must also retain actual shared usage after the waiter dies.
+            let mut conn = pool.open_live_connection().await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    let state: (i64, i64) = ::redis::cmd("HMGET")
+                        .arg(RedisPool::admission_key(&id))
+                        .arg(&["p", "t"])
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap();
+                    if state == (0, 42) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            cleanup(&pool, &id).await;
+        }
+    }
+
     fn router_with(pool: Arc<RedisPool>) -> Router {
         Router::new(RouterConfig::default()).with_admission_redis(pool)
     }
