@@ -6,6 +6,12 @@ use crate::core::embedding::{
     EmbeddingOptions as CoreEmbeddingOptions, embedding as core_embedding,
 };
 use crate::core::providers::registry::LegacyAdapterSurface;
+use crate::core::types::{
+    context::RequestContext,
+    embedding::{EmbeddingInput, EmbeddingRequest},
+    model::ProviderCapability,
+    responses::EmbeddingResponse,
+};
 use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
 use crate::utils::net::ClientUtils;
@@ -13,10 +19,15 @@ use crate::utils::net::ClientUtils;
 impl LLMClient {
     /// Generate embeddings for a single text via the core embedding path.
     pub async fn embedding(&self, text: &str, model: Option<&str>) -> Result<Vec<f32>> {
-        let (resolved_model, options) = self.prepare_embedding_request(model)?;
-        let response = core_embedding(&resolved_model, text, Some(options))
-            .await
-            .map_err(SDKError::from)?;
+        let response = if self.runtime_binding.is_some() {
+            self.embedding_with_runtime(EmbeddingInput::Text(text.to_string()), model)
+                .await?
+        } else {
+            let (resolved_model, options) = self.prepare_embedding_request(model)?;
+            core_embedding(&resolved_model, text, Some(options))
+                .await
+                .map_err(SDKError::from)?
+        };
 
         response
             .data
@@ -32,10 +43,15 @@ impl LLMClient {
         texts: &[String],
         model: Option<&str>,
     ) -> Result<Vec<Vec<f32>>> {
-        let (resolved_model, options) = self.prepare_embedding_request(model)?;
-        let response = core_embedding(&resolved_model, texts.to_vec(), Some(options))
-            .await
-            .map_err(SDKError::from)?;
+        let response = if self.runtime_binding.is_some() {
+            self.embedding_with_runtime(EmbeddingInput::Array(texts.to_vec()), model)
+                .await?
+        } else {
+            let (resolved_model, options) = self.prepare_embedding_request(model)?;
+            core_embedding(&resolved_model, texts.to_vec(), Some(options))
+                .await
+                .map_err(SDKError::from)?
+        };
 
         let mut embeddings: Vec<(u32, Vec<f32>)> = response
             .data
@@ -48,6 +64,49 @@ impl LLMClient {
             .into_iter()
             .map(|(_, embedding)| embedding)
             .collect())
+    }
+
+    async fn embedding_with_runtime(
+        &self,
+        input: EmbeddingInput,
+        model: Option<&str>,
+    ) -> Result<EmbeddingResponse> {
+        let model = self.runtime_model(model.unwrap_or_default())?;
+        let context = RequestContext::new();
+        let execution = self
+            .runtime_handle()?
+            .execute_with_selected_deployment_capability_typed(
+                model,
+                &ProviderCapability::Embeddings,
+                move |deployment| {
+                    let input = input.clone();
+                    let context = context.clone();
+                    async move {
+                        let request = EmbeddingRequest {
+                            model: deployment.model.clone(),
+                            input,
+                            user: None,
+                            encoding_format: None,
+                            dimensions: None,
+                            task_type: None,
+                            truncation: None,
+                        };
+                        let response = deployment
+                            .provider
+                            .create_embeddings(request, context)
+                            .await?;
+                        let tokens = response
+                            .usage
+                            .as_ref()
+                            .map(|usage| u64::from(usage.total_tokens))
+                            .unwrap_or_default();
+                        Ok((response, tokens))
+                    }
+                },
+            )
+            .await
+            .map_err(SDKError::from)?;
+        Ok(execution.result)
     }
 
     pub(crate) fn prepare_embedding_request(

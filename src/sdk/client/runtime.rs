@@ -21,14 +21,14 @@ use futures::StreamExt;
 use std::pin::Pin;
 
 impl LLMClient {
-    fn runtime_handle(&self) -> Result<RuntimeHandle> {
+    pub(super) fn runtime_handle(&self) -> Result<RuntimeHandle> {
         self.runtime_binding
             .as_ref()
             .map(|binding| binding.bind())
             .ok_or_else(|| SDKError::ConfigError("canonical runtime is not configured".to_string()))
     }
 
-    fn runtime_model<'a>(&'a self, requested: &'a str) -> Result<&'a str> {
+    pub(super) fn runtime_model<'a>(&'a self, requested: &'a str) -> Result<&'a str> {
         if requested.is_empty() {
             self.runtime_default_model.as_deref().ok_or_else(|| {
                 SDKError::ConfigError(
