@@ -89,11 +89,34 @@ impl LLMClient {
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
         if self.runtime_binding.is_some() {
-            return self.chat_stream_with_runtime(messages).await;
+            return self
+                .chat_stream_with_options(SdkChatRequest {
+                    model: String::new(),
+                    messages,
+                    options: ChatOptions::default(),
+                })
+                .await;
         }
 
         let provider = self.select_provider_for_stream(&messages).await?;
         self.execute_stream_request(&provider.id, messages).await
+    }
+
+    /// Stream a request with model, tool definitions, and sampling options.
+    ///
+    /// Requires a client created with [`Self::from_runtime`]. The runtime owns
+    /// capability selection and execution; legacy clients can use [`Self::chat_stream`].
+    /// This method enables streaming regardless of `request.options.stream`.
+    pub async fn chat_stream_with_options(
+        &self,
+        request: SdkChatRequest,
+    ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
+        if self.runtime_binding.is_none() {
+            return Err(SDKError::NotSupported(
+                "chat_stream_with_options requires LLMClient::from_runtime".to_string(),
+            ));
+        }
+        self.chat_stream_with_runtime(request).await
     }
 
     /// Execute chat request with a specific provider
@@ -599,6 +622,7 @@ pub(crate) fn parse_anthropic_sse_record(
                 .and_then(|r| r.as_str())
                 .map(|s| normalize_anthropic_stop_reason(s).to_string());
             Some(Ok(ChatChunk {
+                usage: None,
                 id: String::new(),
                 model: String::new(),
                 choices: vec![ChunkChoice {
@@ -635,6 +659,7 @@ pub(crate) fn parse_anthropic_sse_record(
                         .and_then(|t| t.as_str())
                         .unwrap_or("");
                     Some(Ok(ChatChunk {
+                        usage: None,
                         id: String::new(),
                         model: String::new(),
                         choices: vec![ChunkChoice {
@@ -656,6 +681,7 @@ pub(crate) fn parse_anthropic_sse_record(
                         .unwrap_or("");
                     let (tool_id, tool_name) = current_tool.unwrap_or(("", ""));
                     Some(Ok(ChatChunk {
+                        usage: None,
                         id: String::new(),
                         model: String::new(),
                         choices: vec![ChunkChoice {
@@ -663,15 +689,19 @@ pub(crate) fn parse_anthropic_sse_record(
                             delta: MessageDelta {
                                 role: None,
                                 content: None,
-                                tool_calls: Some(vec![crate::sdk::types::ToolCall {
-                                    id: tool_id.to_string(),
-                                    tool_type: "function".to_string(),
-                                    function: crate::sdk::types::Function {
-                                        name: tool_name.to_string(),
-                                        description: None,
-                                        parameters: serde_json::Value::Null,
+                                tool_calls: Some(vec![ToolCallDelta {
+                                    index: v
+                                        .get("index")
+                                        .and_then(|value| value.as_u64())
+                                        .and_then(|index| u32::try_from(index).ok())
+                                        .unwrap_or_default(),
+                                    id: (!tool_id.is_empty()).then(|| tool_id.to_string()),
+                                    tool_type: Some("function".to_string()),
+                                    function: Some(FunctionCallDelta {
+                                        name: (!tool_name.is_empty())
+                                            .then(|| tool_name.to_string()),
                                         arguments: Some(partial_json.to_string()),
-                                    },
+                                    }),
                                 }]),
                             },
                             finish_reason: None,
@@ -711,6 +741,7 @@ mod tests {
         SdkChatRequest {
             model: model.to_string(),
             messages: vec![Message {
+                tool_call_id: None,
                 role: Role::User,
                 content: Some(Content::Text("hello".to_string())),
                 name: None,

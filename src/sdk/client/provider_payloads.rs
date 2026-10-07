@@ -207,6 +207,7 @@ pub(super) fn convert_anthropic_response(
         choices: vec![ChatChoice {
             index: 0,
             message: Message {
+                tool_call_id: None,
                 role: Role::Assistant,
                 content: Some(Content::Text(content)),
                 name: None,
@@ -548,6 +549,7 @@ mod tests {
             let mut request = SdkChatRequest {
                 model: model.into(),
                 messages: vec![Message {
+                    tool_call_id: None,
                     role: Role::User,
                     content: Some(Content::Text("hello".into())),
                     name: None,
@@ -570,6 +572,7 @@ mod tests {
             request.options.top_p = Some(0.99);
             assert!(build_anthropic_request_body(&request, model).is_ok());
             request.messages.push(Message {
+                tool_call_id: None,
                 role: Role::Assistant,
                 content: Some(Content::Text("prefill".into())),
                 name: None,
@@ -588,12 +591,14 @@ mod tests {
             model: "ignored".to_string(),
             messages: vec![
                 Message {
+                    tool_call_id: None,
                     role: Role::System,
                     content: Some(Content::Text("system prompt".to_string())),
                     name: None,
                     tool_calls: None,
                 },
                 Message {
+                    tool_call_id: None,
                     role: Role::User,
                     content: Some(Content::Text("hello".to_string())),
                     name: None,
@@ -624,6 +629,7 @@ mod tests {
         let request = SdkChatRequest {
             model: "ignored".to_string(),
             messages: vec![Message {
+                tool_call_id: None,
                 role: Role::User,
                 content: Some(Content::Text("hello".to_string())),
                 name: Some("alice".to_string()),

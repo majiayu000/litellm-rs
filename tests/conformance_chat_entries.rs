@@ -537,6 +537,7 @@ fn regroup(router: &UnifiedRouter) {
 
 fn sdk_messages() -> Vec<SdkMessage> {
     vec![SdkMessage {
+        tool_call_id: None,
         role: Role::User,
         content: Some(Content::Text("hello".into())),
         name: None,

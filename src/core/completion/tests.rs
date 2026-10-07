@@ -248,6 +248,7 @@ async fn runtime_handle_capability_filters_non_streaming_for_completion_and_sdk(
 
     let mut sdk_stream = sdk_facade
         .chat_stream(vec![SdkMessage {
+            tool_call_id: None,
             role: SdkRole::User,
             content: Some(SdkContent::Text("hello".to_string())),
             name: None,
@@ -356,6 +357,7 @@ async fn runtime_handle_capability_filters_non_chat_for_completion_and_sdk() {
         .expect("completion facade should succeed");
     let sdk_response = sdk_facade
         .chat(vec![SdkMessage {
+            tool_call_id: None,
             role: SdkRole::User,
             content: Some(SdkContent::Text("hello".to_string())),
             name: None,
@@ -380,6 +382,7 @@ async fn runtime_handle_capability_filters_non_chat_for_completion_and_sdk() {
     let sdk_error = LLMClient::from_runtime(empty_binding, "missing-model")
         .expect("SDK runtime facade should build")
         .chat(vec![SdkMessage {
+            tool_call_id: None,
             role: SdkRole::User,
             content: Some(SdkContent::Text("hello".to_string())),
             name: None,

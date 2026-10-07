@@ -459,6 +459,7 @@ async fn test_execute_chat_request_anthropic_plain_url_image_returns_invalid_req
     let request = SdkChatRequest {
         model: String::new(),
         messages: vec![Message {
+            tool_call_id: None,
             role: Role::User,
             content: Some(Content::Multimodal(vec![ContentPart::Image {
                 image_url: ImageUrl {
@@ -496,6 +497,7 @@ async fn test_execute_chat_request_anthropic_malformed_data_uri_returns_invalid_
     let request = SdkChatRequest {
         model: String::new(),
         messages: vec![Message {
+            tool_call_id: None,
             role: Role::User,
             content: Some(Content::Multimodal(vec![ContentPart::Image {
                 image_url: ImageUrl {
@@ -719,6 +721,71 @@ fn test_parse_anthropic_sse_record_message_delta_tool_use_maps_to_tool_calls() {
         chunk.choices[0].finish_reason,
         Some("tool_calls".to_string())
     );
+}
+
+#[test]
+fn legacy_openai_sse_preserves_partial_tool_arguments_and_usage() {
+    let line = r#"data: {"id":"tools","model":"gpt-4","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"Paris"}}]}}]}"#;
+    let chunk = super::completions::parse_openai_sse_line(line)
+        .unwrap()
+        .unwrap();
+    let delta = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(delta.index, 1);
+    assert!(delta.id.is_none());
+    let function = delta.function.as_ref().unwrap();
+    assert!(function.name.is_none());
+    assert_eq!(function.arguments.as_deref(), Some("Paris"));
+
+    let line = r#"data: {"id":"tools","model":"gpt-4","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":8,"total_tokens":12}}"#;
+    let chunk = super::completions::parse_openai_sse_line(line)
+        .unwrap()
+        .unwrap();
+    assert!(chunk.choices.is_empty());
+    assert_eq!(chunk.usage.unwrap().total_tokens, 12);
+}
+
+#[test]
+fn legacy_anthropic_tool_delta_keeps_its_block_index_and_identity() {
+    let chunk = super::completions::parse_anthropic_sse_record(
+        "content_block_delta",
+        r#"{"index":2,"delta":{"type":"input_json_delta","partial_json":"Paris"}}"#,
+        Some(("call-weather", "weather")),
+    )
+    .unwrap()
+    .unwrap();
+    let delta = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(delta.index, 2);
+    assert_eq!(delta.id.as_deref(), Some("call-weather"));
+    assert_eq!(
+        delta.function.as_ref().unwrap().name.as_deref(),
+        Some("weather")
+    );
+    assert_eq!(
+        delta.function.as_ref().unwrap().arguments.as_deref(),
+        Some("Paris")
+    );
+}
+
+#[tokio::test]
+async fn legacy_stream_with_options_fails_explicitly_before_transport() {
+    let client = LLMClient::new(
+        ConfigBuilder::new()
+            .add_provider(test_provider_config(
+                "openai",
+                ProviderType::OpenAI,
+                "gpt-4",
+            ))
+            .build(),
+    )
+    .unwrap();
+    let result = client
+        .chat_stream_with_options(SdkChatRequest {
+            model: "gpt-4".into(),
+            messages: Vec::new(),
+            options: ChatOptions::default(),
+        })
+        .await;
+    assert!(matches!(result, Err(SDKError::NotSupported(_))));
 }
 
 #[test]
