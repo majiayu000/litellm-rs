@@ -629,15 +629,13 @@ impl Deployment {
     }
 
     /// Retain billable tokens completed before a streaming request failed.
-    #[cfg(feature = "gateway")]
     pub(crate) fn record_partial_tokens(&self, tokens: u64) {
         self.state.with_current_minute(current_timestamp(), || {
             self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
         });
     }
 
-    /// Retain conservative admission usage when Realtime ends without terminal usage.
-    #[cfg(feature = "websockets")]
+    /// Retain known admission usage when a consumer interrupts a stream.
     pub(crate) fn record_interrupted_usage(&self, tokens: u64) {
         self.state.with_current_minute(current_timestamp(), || {
             self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);

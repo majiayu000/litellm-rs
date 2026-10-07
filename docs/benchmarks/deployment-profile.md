@@ -62,7 +62,7 @@ Default measured workloads:
 | Cancellation | Four concurrent slow consumers close their actual socket after two seconds; observe upstream disconnect and terminal ledger row for at most 30 seconds |
 
 The streaming `max_tokens=8192` is an admission input, not a claim about generated
-model tokens. The synthetic upstream emits fixed token usage at completion.
+model tokens. The synthetic upstream declares usage at completion from its emitted frame count.
 The route uses `gpt-4` with the embedded price catalog and a visibly synthetic
 local upstream API key, avoiding fallback-pricing logs in the measured path.
 Completed SSE must contain `[DONE]`; EOF alone is a recorded error. Intentional
@@ -97,8 +97,11 @@ The cancellation fixture intentionally closes before the synthetic upstream's fi
 usage frame. Outside the performance window, the runner decodes SQL billing JSON
 and queries the existing admin ledger endpoint for each cancelled request. It
 records checks that cost remains null, reason/waiting duration are visible,
-provider and model each acknowledge their own reserved estimate as budget
-responsibility, and SQL/admin billing agree. These scopes are never summed.
+provider and model each expose their own reservation and current settlement state,
+and SQL/admin billing agree. ACKs and charge amounts are preserved as observed;
+pending/unconfirmed snapshots remain valid conservative states and are marked
+`requires_review`, never rewritten to settled. These scopes are never summed.
+Unknown cost also requires supplier review even when the estimate was acknowledged.
 No supplier verification is fabricated or submitted. These checks cover this chat
 SSE fixture; the added Realtime session subtotal/count fields are retained when
 present but this workload does not exercise Realtime.

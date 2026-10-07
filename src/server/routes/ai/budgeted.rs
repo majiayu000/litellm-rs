@@ -245,7 +245,10 @@ impl BudgetedCall {
     {
         let mut reservations = self.reserve(reserve).await?;
         match call().await {
-            Ok(value) => Ok((value, reservations)),
+            Ok(value) => {
+                execution::completion::provider_succeeded();
+                Ok((value, reservations))
+            }
             Err(error) => {
                 reservations.cancel().await;
                 Err(error)

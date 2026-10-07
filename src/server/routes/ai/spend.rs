@@ -329,6 +329,7 @@ async fn record_completion_spend_inner(
     };
 
     let total_tokens = u64::from(usage.total_tokens);
+    super::execution::completion::observe_usage(total_tokens);
     let usage_tokens = pricing_usage.unwrap_or_else(|| PricingUsage::from(usage));
 
     let priced = match request_pricing.as_ref() {
@@ -376,7 +377,10 @@ async fn record_completion_spend_inner(
     settle_api_key_budget_reservation(key_budget_reservation, cost, &format!("{provider}/{model}"));
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
-            if let Err(error) = reservation.settle_async(cost).await {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
                 tracing::error!(
                     "failed to settle reserved budget for '{provider}'/'{model}': {error:?}; \
                  spend not recorded because reservation settlement failed"
@@ -417,6 +421,7 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
         );
         billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
     });
+    super::execution::completion::observe_usage(0);
     let provider_reserved = budget_reservation
         .as_ref()
         .map(UnifiedBudgetReservation::reserved_amount);
@@ -444,7 +449,11 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
     }
     let budget_settlement = async {
         if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
-            && let Err(error) = reservation.settle_async(reserved).await
+            && let Err(error) = crate::server::routes::ai::execution::completion::settle_budget(
+                reservation,
+                reserved,
+            )
+            .await
         {
             tracing::error!(
                 "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"

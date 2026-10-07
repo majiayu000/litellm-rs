@@ -28,6 +28,7 @@ where
     let (mut reservations, budget) = budgeted.reserve_for_call(reserve).await?;
     match call().await {
         Ok(value) => {
+            super::super::execution::completion::provider_succeeded();
             let tokens_used = settle(reservations, budget).await;
             Ok((value, tokens_used))
         }

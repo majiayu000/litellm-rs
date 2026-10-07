@@ -1,5 +1,71 @@
 use super::*;
 
+#[tokio::test(flavor = "current_thread")]
+async fn cleanup_task_does_not_retain_discarded_cache() {
+    let mut signals = Vec::new();
+    for _ in 0..100 {
+        let cache = Arc::new(InMemoryCache::<String>::new(DualCacheConfig {
+            cleanup_interval: Duration::from_secs(3600),
+            ..DualCacheConfig::memory_only()
+        }));
+        let weak = Arc::downgrade(&cache);
+        signals.push(cache.shutdown.clone());
+        cache.start_cleanup_task();
+        drop(cache);
+        assert!(
+            weak.upgrade().is_none(),
+            "cleanup retained a discarded cache"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while signals.iter().any(|signal| signal.receiver_count() != 0) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("discarded cleanup tasks must exit before the next hourly interval");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cleanup_shutdown_before_first_poll_is_persistent() {
+    for start_first in [false, true] {
+        let cache = Arc::new(InMemoryCache::<String>::with_defaults());
+        if start_first {
+            cache.start_cleanup_task();
+        }
+        cache.shutdown();
+        cache.start_cleanup_task();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while cache.shutdown.receiver_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown must remain visible to a task that has not polled");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn repeated_cleanup_start_has_one_task_and_shutdown_preserves_cached_values() {
+    let cache = Arc::new(InMemoryCache::<String>::with_defaults());
+    for _ in 0..100 {
+        cache.start_cleanup_task();
+    }
+    assert_eq!(cache.shutdown.receiver_count(), 1);
+    let key = CacheKey::new("pinned-cache-value");
+    cache.set(key.clone(), "kept".into()).await;
+    tokio::task::yield_now().await;
+    cache.shutdown();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while cache.shutdown.receiver_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(cache.get(&key).await.as_deref(), Some("kept"));
+}
+
 #[test]
 fn test_cache_new() {
     let cache: InMemoryCache<String> = InMemoryCache::with_defaults();
@@ -271,7 +337,7 @@ async fn test_delete_if_preserves_replacement_access_meta() {
         "replacement should reset access metadata"
     );
 
-    cache.remove_access_meta_if_unchanged(&key, meta_before.0, meta_before.1);
+    cache.remove_access_meta(&key);
 
     assert!(
         cache.access_shard(&key).contains_key(&key),
@@ -445,4 +511,235 @@ async fn test_cache_update_existing() {
     let result = cache.get(&key).await;
     assert_eq!(result, Some("updated".to_string()));
     assert_eq!(cache.len(), 1);
+}
+
+fn assert_eviction_metadata_matches_live_keys<T: Clone + Send + Sync + 'static>(
+    cache: &InMemoryCache<T>,
+) {
+    use std::collections::HashSet;
+
+    let live: HashSet<_> = cache.keys().into_iter().collect();
+    let mut metadata = HashSet::new();
+    let mut candidates = HashSet::new();
+    for shard in cache.access_meta.iter() {
+        for entry in shard.iter() {
+            assert!(metadata.insert(entry.key().clone()));
+        }
+    }
+    for queue in cache.access_queue.iter() {
+        for (key, _) in lock_queue(queue).iter() {
+            assert!(candidates.insert(key.clone()), "duplicate candidate key");
+        }
+    }
+    assert_eq!(metadata, live);
+    assert_eq!(candidates, live);
+}
+
+#[tokio::test]
+async fn test_cache_replacement_and_delete_churn_release_eviction_metadata() {
+    let cache = InMemoryCache::new(DualCacheConfig::default().with_max_size(16));
+    let retained = CacheKey::new("retained");
+    cache.set(retained.clone(), 0).await;
+    for round in 0..1_000 {
+        cache.set(retained.clone(), round).await;
+        assert_eq!(cache.get_entry(&retained).await.unwrap().access_count, 1);
+        let transient = CacheKey::new(format!("transient-{round}"));
+        cache.set(transient.clone(), round).await;
+        cache.get(&transient).await;
+        if round % 2 == 0 {
+            assert!(cache.delete(&transient).await);
+        } else {
+            assert_eq!(cache.delete_if(&transient, |_| true).await, Some(round));
+        }
+        assert_eviction_metadata_matches_live_keys(&cache);
+    }
+    assert_eq!(cache.len(), 1);
+    cache.clear().await;
+    assert_eviction_metadata_matches_live_keys(&cache);
+    cache.set(retained, 1).await;
+    assert_eviction_metadata_matches_live_keys(&cache);
+}
+
+#[tokio::test]
+async fn test_cache_expiration_releases_eviction_metadata() {
+    let cache = InMemoryCache::new(DualCacheConfig::default().with_max_size(16));
+    for round in 0..100 {
+        for operation in 0..6 {
+            let key = CacheKey::new(format!("expired-{round}-{operation}"));
+            cache.set_with_ttl(key.clone(), 1, Duration::ZERO).await;
+            match operation {
+                0 => assert!(cache.get(&key).await.is_none()),
+                1 => assert!(cache.peek(&key).await.is_none()),
+                2 => assert!(cache.get_entry(&key).await.is_none()),
+                3 => assert!(cache.peek_entry(&key).await.is_none()),
+                4 => assert!(!cache.exists(&key).await),
+                _ => cache.cleanup_expired().await,
+            }
+            assert!(cache.is_empty());
+            assert_eviction_metadata_matches_live_keys(&cache);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_cache_delayed_read_and_insert_bookkeeping_do_not_recreate_deleted_key() {
+    let cache = InMemoryCache::with_defaults();
+    let key = CacheKey::new("deleted-before-bookkeeping");
+    cache.set(key.clone(), 1).await;
+    let _sampled = cache.sample_eviction_keys(cache.access_shard_index(&key), 1);
+    assert!(cache.delete(&key).await);
+
+    // Model a read that cloned its value before deletion, and a writer whose
+    // bookkeeping was delayed until after its value was removed.
+    assert_eq!(cache.record_access(&key), 0);
+    cache.reset_access_meta_for_insert(&key);
+    assert_eviction_metadata_matches_live_keys(&cache);
+    assert!(cache.eviction_candidates().is_empty());
+}
+
+#[tokio::test]
+async fn test_cache_sampling_rotates_unique_keys_without_metadata_growth() {
+    use std::collections::HashSet;
+
+    let cache = InMemoryCache::new(DualCacheConfig::default().with_max_size(512));
+    let mut keys = Vec::new();
+    let shard_index = 0;
+    for number in 0.. {
+        let key = CacheKey::new(format!("same-shard-{number}"));
+        if cache.access_shard_index(&key) == shard_index {
+            cache.set(key.clone(), number).await;
+            keys.push(key);
+            if keys.len() == EVICTION_SAMPLE_SIZE * 2 {
+                break;
+            }
+        }
+    }
+    let mut visited = HashSet::new();
+    for _ in 0..2 {
+        let sampled = cache.sample_eviction_keys(shard_index, EVICTION_SAMPLE_SIZE);
+        assert_eq!(sampled.len(), EVICTION_SAMPLE_SIZE);
+        assert_eq!(sampled.iter().collect::<HashSet<_>>().len(), sampled.len());
+        visited.extend(sampled);
+    }
+    assert_eq!(visited, keys.into_iter().collect());
+    for _ in 0..100 {
+        cache.eviction_candidates();
+        cache.expired_eviction_candidate();
+        assert_eviction_metadata_matches_live_keys(&cache);
+    }
+}
+
+#[tokio::test]
+async fn test_cache_fifo_ignores_hits_and_ttl_keeps_shortest_expiry_policy() {
+    for policy in [EvictionPolicy::FIFO, EvictionPolicy::TTL] {
+        let cache = InMemoryCache::new(
+            DualCacheConfig::default()
+                .with_max_size(2)
+                .with_eviction_policy(policy),
+        );
+        let first = CacheKey::new("first");
+        let second = CacheKey::new("second");
+        cache
+            .set_with_ttl(first.clone(), 1, Duration::from_secs(300))
+            .await;
+        cache
+            .set_with_ttl(second.clone(), 2, Duration::from_secs(60))
+            .await;
+        for _ in 0..100 {
+            cache.peek(&first).await;
+            cache.peek_entry(&second).await;
+        }
+        cache.set(CacheKey::new("third"), 3).await;
+        match policy {
+            EvictionPolicy::FIFO => {
+                assert!(!cache.exists(&first).await);
+                assert!(cache.exists(&second).await);
+            }
+            EvictionPolicy::TTL => {
+                assert!(cache.exists(&first).await);
+                assert!(!cache.exists(&second).await);
+            }
+            _ => unreachable!(),
+        }
+        assert_eviction_metadata_matches_live_keys(&cache);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_cache_concurrent_hot_reads_and_churn_keep_metadata_bounded() {
+    let cache = Arc::new(InMemoryCache::new(
+        DualCacheConfig::default().with_max_size(32),
+    ));
+    let hot = CacheKey::new("concurrent-hot");
+    cache.set(hot.clone(), 1).await;
+    let mut workers = Vec::new();
+    for worker in 0..8 {
+        let cache = Arc::clone(&cache);
+        let hot = hot.clone();
+        workers.push(tokio::spawn(async move {
+            for round in 0..500 {
+                assert_eq!(cache.get(&hot).await, Some(1));
+                assert_eq!(cache.peek(&hot).await, Some(1));
+                let key = CacheKey::new(format!("worker-{worker}-{round}"));
+                cache.set(key.clone(), round).await;
+                cache.get_entry(&key).await;
+                cache.set(key.clone(), round + 1).await;
+                cache.peek_entry(&key).await;
+                assert!(cache.delete(&key).await);
+                // Same-key replacement/delete races, including a delayed read.
+                let shared = CacheKey::new("shared-churn");
+                cache.set(shared.clone(), round).await;
+                cache.get(&shared).await;
+                cache.delete_if(&shared, |_| true).await;
+                if round % 10 == 0 {
+                    cache.eviction_candidates();
+                    tokio::task::yield_now().await;
+                }
+            }
+        }));
+    }
+    for worker in workers {
+        worker.await.expect("cache worker should complete");
+    }
+    cache.delete(&CacheKey::new("shared-churn")).await;
+    assert_eq!(cache.len(), 1);
+    assert_eviction_metadata_matches_live_keys(&cache);
+    assert_eq!(cache.get_entry(&hot).await.unwrap().access_count, 8_001);
+}
+
+#[tokio::test]
+async fn test_cache_hot_reads_keep_eviction_metadata_bounded() {
+    const KEY_COUNT: usize = 8;
+    const ROUNDS: usize = 2_000;
+    let cache = InMemoryCache::new(DualCacheConfig::default().with_max_size(64));
+    let keys: Vec<_> = (0..KEY_COUNT)
+        .map(|index| CacheKey::new(format!("hot-{index}")))
+        .collect();
+
+    for (index, key) in keys.iter().enumerate() {
+        cache.set(key.clone(), index).await;
+    }
+    for round in 0..ROUNDS {
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(cache.get(key).await, Some(index));
+            assert_eq!(cache.peek(key).await, Some(index));
+            assert_eq!(cache.get_entry(key).await.unwrap().value, index);
+            let entry = cache.peek_entry(key).await.unwrap();
+            assert_eq!(entry.value, index);
+            assert_eq!(entry.access_count, ((round + 1) * 4) as u64);
+        }
+    }
+
+    assert_eq!(cache.len(), KEY_COUNT);
+    let metadata_count: usize = cache.access_meta.iter().map(DashMap::len).sum();
+    let queued_count: usize = cache
+        .access_queue
+        .iter()
+        .map(|queue| lock_queue(queue).len())
+        .sum();
+    assert_eq!(metadata_count, KEY_COUNT);
+    assert_eq!(
+        queued_count, KEY_COUNT,
+        "hits must not accumulate key copies"
+    );
 }

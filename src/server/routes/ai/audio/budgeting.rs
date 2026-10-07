@@ -106,6 +106,7 @@ pub(super) async fn record_audio_spend(
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
+    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
     if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
         match cost {
             Ok(cost) => {
@@ -203,7 +204,9 @@ async fn settle_audio_budget_or_record(
     context: &str,
 ) {
     if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle_async(cost).await {
+        if let Err(error) =
+            crate::server::routes::ai::execution::completion::settle_budget(reservation, cost).await
+        {
             tracing::error!("failed to settle {context}: {error:?}");
         }
     } else {

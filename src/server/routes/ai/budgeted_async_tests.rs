@@ -18,6 +18,11 @@ use crate::core::budget::{
 };
 use crate::storage::redis::RedisPool;
 
+#[path = "budgeted_routing_completion_tests.rs"]
+mod routing_completion_tests;
+#[path = "budgeted_stream_completion_tests.rs"]
+mod stream_completion_tests;
+
 // Serialize this module's ordinary fixtures. Capacity and worker saturation
 // run in separate processes so unrelated Redis tests never share those limits.
 static TESTS: Mutex<()> = Mutex::const_new(());
@@ -57,6 +62,7 @@ struct ReplyGate {
 }
 
 struct Fixture {
+    pool: Arc<RedisPool>,
     limits: Arc<UnifiedBudgetLimits>,
     provider: String,
     model: String,
@@ -131,7 +137,7 @@ impl Fixture {
             .unwrap();
         let provider = format!("async-provider-{}", uuid::Uuid::new_v4());
         let model = format!("async-model-{}", uuid::Uuid::new_v4());
-        let limits = Arc::new(UnifiedBudgetLimits::new().with_redis(pool));
+        let limits = Arc::new(UnifiedBudgetLimits::new().with_redis(pool.clone()));
         limits.providers.set_provider_limit(
             &provider,
             ProviderLimitConfig::new(1_000_000.0, ResetPeriod::Never),
@@ -141,6 +147,7 @@ impl Fixture {
             ModelLimitConfig::new(1_000_000.0, ResetPeriod::Never),
         );
         let fixture = Self {
+            pool,
             limits,
             provider,
             model,

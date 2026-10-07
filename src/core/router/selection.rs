@@ -54,6 +54,17 @@ impl DeploymentLease {
         }
     }
 
+    pub(crate) fn preserve_admission_usage(&self, actual_tokens: u64) {
+        if let Some(hold) = &self.hold {
+            hold.prepare_settlement(actual_tokens);
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn clone_admission_hold(&self) -> Option<AdmissionHold> {
+        self.hold.clone()
+    }
+
     pub(crate) async fn commit_admission_async(&mut self, actual_tokens: u64) {
         if let Some(hold) = self.hold.take() {
             self.admission.settle_async(&hold, actual_tokens).await;

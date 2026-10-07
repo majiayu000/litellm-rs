@@ -17,7 +17,7 @@ pub(super) async fn response(
     state: AppState,
     context: RequestContext,
     mut call: NativeCall,
-    lease: StreamingDeploymentLease,
+    mut lease: StreamingDeploymentLease,
     value: Result<Value, GatewayError>,
     already_stored: bool,
     facts: Option<crate::core::request_ledger::SharedRequestLedgerFacts>,
@@ -54,19 +54,24 @@ pub(super) async fn response(
         Ok(value) => value,
         Err(error) => {
             if durable_id.is_none() {
-                settle(
-                    &state,
-                    &context,
-                    &call.provider,
-                    &call.model,
-                    call.pricing,
-                    None,
-                    None,
-                    call.reservation,
-                    call.key_reservation,
-                    facts,
-                )
-                .await;
+                lease
+                    .settle_interrupted(
+                        0,
+                        None,
+                        settle(
+                            &state,
+                            &context,
+                            &call.provider,
+                            &call.model,
+                            call.pricing,
+                            None,
+                            None,
+                            call.reservation,
+                            call.key_reservation,
+                            facts,
+                        ),
+                    )
+                    .await;
             }
             call.callback.fail(error.to_string(), "background_error");
             // A local storage/guardrail failure is not an upstream health failure.
@@ -102,28 +107,45 @@ pub(super) async fn response(
             ))
         });
         let usage = result.as_ref().ok().and_then(response_usage);
-        if let Some(id) = durable_id {
-            if let Err(error) =
-                super::super::responses_settlement::submit_usage(&state, &id, usage.as_ref()).await
-            {
-                tracing::error!(%error, "Response settlement remains pending for recovery");
+        let tokens_used = usage
+            .as_ref()
+            .map_or(0, |usage| u64::from(usage.total_tokens));
+        let settlement = async {
+            if let Some(id) = durable_id {
+                if let Err(error) =
+                    super::super::responses_settlement::submit_usage(&state, &id, usage.as_ref())
+                        .await
+                {
+                    tracing::error!(%error, "Response settlement remains pending for recovery");
+                }
+            } else {
+                settle(
+                    &state,
+                    &context,
+                    &provider,
+                    &model,
+                    pricing,
+                    usage.as_ref(),
+                    usage
+                        .as_ref()
+                        .map(crate::core::pricing_service::PricingUsage::from),
+                    reservation,
+                    key_reservation,
+                    facts,
+                )
+                .await;
             }
+        };
+        // Polling/guardrail/storage failures stay neutral for upstream health.
+        if result
+            .as_ref()
+            .is_ok_and(|value| value.get("status").and_then(Value::as_str) == Some("completed"))
+        {
+            lease.settle_terminal(tokens_used, None, settlement).await;
         } else {
-            settle(
-                &state,
-                &context,
-                &provider,
-                &model,
-                pricing,
-                usage.as_ref(),
-                usage
-                    .as_ref()
-                    .map(crate::core::pricing_service::PricingUsage::from),
-                reservation,
-                key_reservation,
-                facts,
-            )
-            .await;
+            lease
+                .settle_interrupted(tokens_used, None, settlement)
+                .await;
         }
         // GET/cancel/delete on another replica cannot cancel this settlement owner.
         lease

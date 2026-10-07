@@ -577,6 +577,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reque
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
+    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
     let cost = match request_pricing.calculate_settlement(usage) {
         Ok(breakdown) => breakdown.total_cost,
         Err(_) => {
@@ -604,7 +605,10 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reque
     );
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
-            if let Err(error) = reservation.settle_async(cost).await {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
                 tracing::error!("failed to settle reserved budget: {error:?}");
             }
         } else {
