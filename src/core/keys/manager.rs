@@ -358,7 +358,9 @@ impl KeyManager {
     }
 
     /// Record usage for a key from an explicit usage record.
-    /// Once accepted on the first poll, the write survives cancellation of its waiter.
+    /// On Tokio, a write accepted on the first poll survives cancellation of its waiter.
+    /// Other executors directly await the repository under the same capacity bound,
+    /// preserving their existing execution and cancellation behavior.
     /// Capacity exhaustion and repository failures remain best-effort write errors;
     /// runtime shutdown does not provide durable retry.
     pub async fn record_usage_record(&self, key_id: Uuid, record: UsageRecord) -> Result<()> {
@@ -367,8 +369,10 @@ impl KeyManager {
             .clone()
             .try_acquire_owned()
             .map_err(|_| GatewayError::unavailable("Key usage write capacity exhausted"))?;
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|_| GatewayError::internal("Key usage writes require a Tokio runtime"))?;
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            let _permit = permit;
+            return self.repository.update_usage(key_id, record).await;
+        };
         let repository = self.repository.clone();
         let (sender, receiver) = oneshot::channel();
         runtime.spawn(async move {
@@ -751,5 +755,76 @@ mod manager_tests {
         assert_eq!(stats.total_requests, 2);
         assert_eq!(stats.total_tokens, 300);
         assert_eq!(stats.total_cost, 0.75);
+    }
+
+    #[test]
+    fn usage_recording_preserves_non_tokio_executor_compatibility() {
+        assert!(tokio::runtime::Handle::try_current().is_err());
+        for local_pool in [false, true] {
+            let exercise = async {
+                let mut manager = create_manager();
+                manager.usage_write_slots = Arc::new(Semaphore::new(1));
+                let (key_id, _) = manager
+                    .generate_key(CreateKeyConfig {
+                        name: "Executor-independent usage".to_string(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+
+                drop(manager.record_usage(key_id, 999, 9.0));
+                assert_eq!(
+                    manager
+                        .get_usage_stats(key_id)
+                        .await
+                        .unwrap()
+                        .total_requests,
+                    0
+                );
+                manager.record_usage(key_id, 100, 0.25).await.unwrap();
+                manager
+                    .record_usage_record(key_id, UsageRecord::unpriced(50, 0.125, "allow_unpriced"))
+                    .await
+                    .unwrap();
+                let stats = manager.get_usage_stats(key_id).await.unwrap();
+                assert_eq!(stats.total_requests, 2);
+                assert_eq!(stats.total_tokens, 150);
+                assert!((stats.total_cost - 0.375).abs() < f64::EPSILON);
+                assert_eq!(stats.unpriced_requests, 1);
+                assert_eq!(stats.unpriced_tokens, 50);
+                assert!((stats.unpriced_cost - 0.125).abs() < f64::EPSILON);
+                assert_eq!(manager.usage_write_slots.available_permits(), 1);
+
+                let permit = manager
+                    .usage_write_slots
+                    .clone()
+                    .try_acquire_owned()
+                    .unwrap();
+                assert!(matches!(
+                    manager.record_usage(key_id, 200, 0.5).await,
+                    Err(GatewayError::Unavailable(message))
+                        if message == "Key usage write capacity exhausted"
+                ));
+                drop(permit);
+                assert_eq!(
+                    manager
+                        .get_usage_stats(key_id)
+                        .await
+                        .unwrap()
+                        .total_requests,
+                    2
+                );
+                // Preserve the in-memory repository's missing-key no-op contract.
+                let missing_id = Uuid::new_v4();
+                manager.record_usage(missing_id, 1, 0.01).await.unwrap();
+                assert!(manager.get_key(missing_id).await.unwrap().is_none());
+                assert_eq!(manager.usage_write_slots.available_permits(), 1);
+            };
+            if local_pool {
+                futures::executor::LocalPool::new().run_until(exercise);
+            } else {
+                futures::executor::block_on(exercise);
+            }
+        }
     }
 }

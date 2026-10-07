@@ -18,15 +18,12 @@ use crate::core::traits::provider::ProviderConfig as _;
 use super::builder::build_github_copilot_config_from_factory;
 use super::builder::{
     apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
-    build_bedrock_config_from_factory, build_cloudflare_config_from_factory,
-    build_mistral_config_from_factory, build_openai_config_from_factory,
-    build_openai_like_config_from_factory, config_endpoint_access, config_str,
+    build_cloudflare_config_from_factory, build_mistral_config_from_factory,
+    build_openai_config_from_factory, build_openai_like_config_from_factory,
+    config_endpoint_access, config_str,
 };
 #[cfg(feature = "providers-extra")]
-use super::builder::{
-    build_azure_ai_config_from_factory, build_azure_config_from_factory,
-    build_vertex_ai_config_from_factory,
-};
+use super::builder::{build_azure_ai_config_from_factory, build_azure_config_from_factory};
 #[cfg(not(feature = "providers-extra"))]
 use super::builder::{
     build_azure_ai_openai_like_config_from_factory, build_azure_openai_like_config_from_factory,
@@ -89,6 +86,24 @@ impl Provider {
     pub(super) async fn from_gateway_config_async(
         provider_type: ProviderType,
         config: serde_json::Value,
+    ) -> Result<Self, ProviderError> {
+        Self::from_gateway_config_with_resources_async(
+            provider_type,
+            config,
+            None,
+            #[cfg(feature = "providers-extra")]
+            None,
+        )
+        .await
+    }
+
+    pub(super) async fn from_gateway_config_with_resources_async(
+        provider_type: ProviderType,
+        config: serde_json::Value,
+        bedrock_resource: Option<bedrock::BedrockConfig>,
+        #[cfg(feature = "providers-extra")] vertex_resource: Option<
+            Result<vertex_ai::VertexAIProviderConfig, ProviderError>,
+        >,
     ) -> Result<Self, ProviderError> {
         match provider_type {
             ProviderType::OpenAI => {
@@ -213,7 +228,15 @@ impl Provider {
                 }
             }
             ProviderType::Bedrock => {
-                let bedrock_config = build_bedrock_config_from_factory(&config)?;
+                let bedrock_config = match bedrock_resource {
+                    Some(resource) => {
+                        super::builder::build_bedrock_config_from_factory_with_resource(
+                            &config,
+                            Some(resource),
+                        )?
+                    }
+                    None => super::builder::build_bedrock_config_from_factory(&config)?,
+                };
                 let provider = bedrock::BedrockProvider::new(bedrock_config)
                     .await
                     .map_err(|e| ProviderError::initialization("bedrock", e.to_string()))?;
@@ -222,7 +245,15 @@ impl Provider {
             ProviderType::VertexAI => {
                 #[cfg(feature = "providers-extra")]
                 {
-                    let vertex_config = build_vertex_ai_config_from_factory(&config)?;
+                    let vertex_config = match vertex_resource {
+                        Some(resource) => {
+                            super::builder::build_vertex_ai_config_from_factory_with_resource(
+                                &config,
+                                Some(resource),
+                            )?
+                        }
+                        None => super::builder::build_vertex_ai_config_from_factory(&config)?,
+                    };
                     let provider = vertex_ai::VertexAIProvider::new(vertex_config)
                         .await
                         .map_err(|e| ProviderError::initialization("vertex_ai", e.to_string()))?;
