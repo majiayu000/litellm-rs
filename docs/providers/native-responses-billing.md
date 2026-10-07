@@ -94,13 +94,18 @@ headers arrive. The gateway does not retry or fail over their provider-operation
 errors; ordinary chat retry behavior and safe pre-call budget/unpriced fallback
 are unchanged. There is no assumed upstream idempotency-key contract.
 
-A foreground network failure or response-header timeout retains its provider,
-model and API-key budget upper bounds through unknown-usage settlement. API-key
-actual cost/tokens remain unknown rather than treating the reservation as a bill.
+A foreground network failure or response-header timeout after generation dispatch
+retains its provider, model and API-key budget upper bounds through unknown-usage
+settlement. Copilot authentication and account `/models` discovery happen before
+that dispatch: their failures preserve the provider error and release reservations
+without recording billable usage. API-key actual cost/tokens remain unknown after
+an ambiguous generation attempt rather than treating the reservation as a bill.
 Known foreground rejection, such as HTTP 401, releases its reservation. Background
 creation retains its one durable dispatch obligation for existing reconciliation;
 missing response headers do not cause another POST or another obligation.
 
 Mock HTTP regression tests receive the complete POST before closing the connection
 or withholding headers. They cover unary/streaming creation, compaction, known
-rejection, and background reconciliation without paid provider calls.
+rejection, and background reconciliation without paid provider calls. Copilot route
+regressions also inject GET-only disconnects/timeouts and generation POST failures,
+checking provider/model/key holds, unknown usage and ledger facts.

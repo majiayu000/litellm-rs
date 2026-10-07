@@ -343,10 +343,12 @@ async fn create_native(
                         &model,
                         pricing.clone(),
                     );
+                    let mut generation_attempted = false;
                     let response = if compact {
+                        generation_attempted = true;
                         provider.compact_response(body).await
                     } else {
-                        provider.native_response(body).await
+                        provider.native_response(body, &mut generation_attempted).await
                     };
                     let response = match response {
                         Ok(response) => response,
@@ -355,7 +357,7 @@ async fn create_native(
                             // calls have no durable owner yet, so settle unknown usage
                             // before dropping their reservations. Background obligations
                             // already belong to the durable recovery path above.
-                            if !background && matches!(
+                            if !background && generation_attempted && matches!(
                                 error,
                                 ProviderError::Network { .. } | ProviderError::Timeout { .. }
                             ) {
