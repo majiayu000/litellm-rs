@@ -350,6 +350,9 @@ impl Router {
                     #[cfg(feature = "providers-extra")]
                     Provider::VertexAI(vertex) => runtime_identity
                         .with_credential_digest(vertex.credential_resource_identity()),
+                    #[cfg(feature = "providers-extended")]
+                    Provider::GitHubCopilot(copilot) => runtime_identity
+                        .with_credential_digest(copilot.credential_resource_identity()),
                     _ => runtime_identity,
                 };
             let provider_instance_identity = ProviderInstanceIdentity::new();

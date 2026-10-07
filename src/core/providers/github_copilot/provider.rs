@@ -71,6 +71,10 @@ impl Clone for GitHubCopilotProvider {
 }
 
 impl GitHubCopilotProvider {
+    pub(crate) fn credential_resource_identity(&self) -> [u8; 32] {
+        self.authenticator.credential_resource_identity()
+    }
+
     /// Create a new GitHub Copilot provider instance
     pub async fn new(config: GitHubCopilotConfig) -> Result<Self, ProviderError> {
         let authenticator = CopilotAuthenticator::new(&config);

@@ -15,6 +15,7 @@ const ENVS: &[&str] = &[
     "AWS_REGION", "AWS_DEFAULT_REGION",
     "GOOGLE_CLOUD_PROJECT", "GOOGLE_PROJECT_ID", "GCP_PROJECT", "GCLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS",
+    "GITHUB_COPILOT_TOKEN_DIR", "GITHUB_COPILOT_ACCESS_TOKEN_FILE", "GITHUB_COPILOT_API_KEY_FILE",
 ];
 struct EnvScope {
     previous: Vec<(&'static str, Option<String>)>,
@@ -50,6 +51,173 @@ impl Drop for EnvScope {
             }
         }
     }
+}
+
+#[cfg(all(feature = "providers-extended", feature = "gateway"))]
+#[tokio::test]
+async fn copilot_captured_credentials_isolate_reloaded_runtime_state() {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let write = |directory: &std::path::Path, access: &str, key: &str| {
+        std::fs::write(directory.join("access-token"), access).unwrap();
+        std::fs::write(
+            directory.join("api-key.json"),
+            serde_json::json!({
+                "token": key, "expires_at": u64::MAX,
+                "endpoints": {"api": "https://copilot.fixture.invalid"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    write(first.path(), "fixture-access-a", "fixture-key-a");
+    write(second.path(), "fixture-access-a", "fixture-key-a");
+    let config = ProviderConfig {
+        name: "copilot-fixture".into(),
+        provider_type: "github_copilot".into(),
+        models: vec!["gpt-4o".into()],
+        ..Default::default()
+    };
+    let _env = EnvScope::new(&[
+        ("GITHUB_COPILOT_TOKEN_DIR", first.path().to_str().unwrap()),
+        ("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+        ("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
+    ]);
+    let original = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .unwrap();
+    let id = "copilot-fixture-gpt-4o";
+    let original_deployment = original.get_deployment(id).unwrap();
+    original_deployment.record_success(3, 1);
+    let replica = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .unwrap();
+    replica.inherit_runtime_state(&original);
+    assert_eq!(
+        replica
+            .get_deployment(id)
+            .unwrap()
+            .state
+            .total_requests
+            .load(Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        replica.get_deployment(id).unwrap().state.runtime_identity,
+        original_deployment.state.runtime_identity
+    );
+
+    // A changed effective path isolates even equal captured tokens; same-path
+    // access/API token changes also isolate the reconstructed resource.
+    for variant in [
+        "directory",
+        "access-file",
+        "key-file",
+        "access-content",
+        "key-content",
+    ] {
+        unsafe {
+            std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", first.path());
+        }
+        unsafe {
+            std::env::set_var("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token");
+        }
+        unsafe {
+            std::env::set_var("GITHUB_COPILOT_API_KEY_FILE", "api-key.json");
+        }
+        write(first.path(), "fixture-access-a", "fixture-key-a");
+        match variant {
+            "directory" => unsafe {
+                std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", second.path());
+            },
+            "access-file" => {
+                std::fs::copy(
+                    first.path().join("access-token"),
+                    first.path().join("alternate-access"),
+                )
+                .unwrap();
+                unsafe {
+                    std::env::set_var("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "alternate-access");
+                }
+            }
+            "key-file" => {
+                std::fs::copy(
+                    first.path().join("api-key.json"),
+                    first.path().join("alternate-key.json"),
+                )
+                .unwrap();
+                unsafe {
+                    std::env::set_var("GITHUB_COPILOT_API_KEY_FILE", "alternate-key.json");
+                }
+            }
+            "access-content" => write(first.path(), "fixture-access-b", "fixture-key-a"),
+            "key-content" => write(first.path(), "fixture-access-a", "fixture-key-b"),
+            _ => unreachable!(),
+        }
+        let replacement = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        replacement.inherit_runtime_state(&original);
+        let replaced = replacement.get_deployment(id).unwrap();
+        assert_ne!(
+            replaced.state.runtime_identity, original_deployment.state.runtime_identity,
+            "{variant}"
+        );
+        assert_eq!(
+            replaced.state.total_requests.load(Ordering::Relaxed),
+            0,
+            "{variant}"
+        );
+        assert_eq!(
+            original_deployment
+                .state
+                .total_requests
+                .load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    // Existing explicit settings override environment fallbacks, including
+    // file names. Changing unused environment credentials must preserve state.
+    write(first.path(), "fixture-access-a", "fixture-key-a");
+    let mut explicit = config.clone();
+    explicit.settings = serde_json::from_value(serde_json::json!({
+        "token_dir": first.path().to_str().unwrap(),
+        "access_token_file": "access-token", "api_key_file": "api-key.json"
+    }))
+    .unwrap();
+    let before = Router::from_gateway_config(std::slice::from_ref(&explicit), None)
+        .await
+        .unwrap();
+    before.get_deployment(id).unwrap().record_success(3, 1);
+    unsafe {
+        std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", second.path());
+    }
+    unsafe {
+        std::env::set_var("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "unused-access");
+    }
+    unsafe {
+        std::env::set_var("GITHUB_COPILOT_API_KEY_FILE", "unused-api-key");
+    }
+    let after = Router::from_gateway_config(std::slice::from_ref(&explicit), None)
+        .await
+        .unwrap();
+    after.inherit_runtime_state(&before);
+    assert_eq!(
+        after.get_deployment(id).unwrap().state.runtime_identity,
+        before.get_deployment(id).unwrap().state.runtime_identity
+    );
+    assert_eq!(
+        after
+            .get_deployment(id)
+            .unwrap()
+            .state
+            .total_requests
+            .load(Ordering::Relaxed),
+        1
+    );
 }
 
 #[tokio::test]
