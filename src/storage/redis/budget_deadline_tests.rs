@@ -23,6 +23,11 @@ impl Drop for FaultCluster {
 
 impl FaultCluster {
     async fn bind(mode: usize) -> Self {
+        Self::bind_with_reply(mode, b"*3\r\n:1\r\n:0\r\n:3\r\n".to_vec()).await
+    }
+
+    async fn bind_with_reply(mode: usize, healthy_reply: Vec<u8>) -> Self {
+        let healthy_reply = Arc::new(healthy_reply);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mode = Arc::new(AtomicUsize::new(mode));
@@ -37,6 +42,7 @@ impl FaultCluster {
                         let Ok((mut socket, _)) = accepted else { return; };
                         let mode = Arc::clone(&server_mode);
                         let writes = Arc::clone(&server_writes);
+                        let healthy_reply = Arc::clone(&healthy_reply);
                         clients.spawn(async move {
                             let mut buffer = Vec::new();
                             loop {
@@ -58,7 +64,7 @@ impl FaultCluster {
                                                 0 => continue, // Connected, but no command response.
                                                 2 => return,   // Write received, connection lost.
                                                 3 => format!("-MOVED 1 {address}\r\n").into_bytes(),
-                                                _ => b"*3\r\n:1\r\n:0\r\n:3\r\n".to_vec(),
+                                                _ => healthy_reply.as_ref().clone(),
                                             }
                                         }
                                         _ => b"+OK\r\n".to_vec(),
@@ -183,4 +189,90 @@ async fn contended_connection_creation_has_a_deadline_without_starting_io() {
     let error = cached.invoke(&pool, "deadline", args()).await.unwrap_err();
     assert!(error.to_string().contains("connection lock deadline"));
     assert_eq!(start.elapsed(), BUDGET_PHASE_TIMEOUT);
+}
+
+async fn routing_operation(pool: &RedisPool, circuit: bool) -> Result<()> {
+    if circuit {
+        pool.circuit_invoke(
+            "{deadline}:circuit",
+            super::circuit::CircuitArgs {
+                op: "failure",
+                now_secs: 1_000,
+                window_epoch: 1,
+                token: "",
+                allowed_fails: 3,
+                min_requests: 10,
+                cooldown_secs: 5,
+                success_threshold: 1,
+                reason: 0,
+            },
+        )
+        .await
+        .map(|_| ())
+    } else {
+        // Drop cleanup invokes the same storage boundary as normal completion.
+        pool.admission_cancel("{deadline}:admission", "uncertain-cleanup")
+            .await
+            .map(|_| ())
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn routing_live_silent_replies_release_capacity_and_recover_without_replay() {
+    for cluster in [false, true] {
+        for circuit in [false, true] {
+            let reply = if circuit {
+                b"*6\r\n:1\r\n:0\r\n:1\r\n:0\r\n:1\r\n:0\r\n".to_vec()
+            } else {
+                b"*4\r\n:1\r\n:0\r\n:0\r\n:0\r\n".to_vec()
+            };
+            let server = FaultCluster::bind_with_reply(1, reply).await;
+            let pool = Arc::new(
+                RedisPool::new(&RedisConfig {
+                    url: server.url.clone(),
+                    enabled: true,
+                    cluster,
+                    allow_degraded: false,
+                    max_connections: 64,
+                    ..RedisConfig::default()
+                })
+                .await
+                .unwrap(),
+            );
+            routing_operation(&pool, circuit).await.unwrap();
+            assert_eq!(server.writes.load(Ordering::SeqCst), 1);
+            server.mode.store(0, Ordering::SeqCst);
+            let start = tokio::time::Instant::now();
+            let mut operations = tokio::task::JoinSet::new();
+            for _ in 0..64 {
+                let pool = Arc::clone(&pool);
+                operations.spawn(async move { routing_operation(&pool, circuit).await });
+            }
+            tokio::time::timeout(BUDGET_PHASE_TIMEOUT * 2, async {
+                while let Some(result) = operations.join_next().await {
+                    assert!(
+                        result.unwrap().is_err(),
+                        "silence must not claim a Redis receipt"
+                    );
+                }
+            })
+            .await
+            .expect("64 silent routing operations must all release capacity");
+            assert!(start.elapsed() >= BUDGET_PHASE_TIMEOUT / 2);
+            assert_eq!(pool.semaphore.available_permits(), 64);
+            assert_eq!(
+                server.writes.load(Ordering::SeqCst),
+                65,
+                "an uncertain routing command must not be replayed"
+            );
+            server.mode.store(1, Ordering::SeqCst);
+            routing_operation(&pool, circuit).await.unwrap();
+            assert_eq!(
+                server.writes.load(Ordering::SeqCst),
+                66,
+                "a new call must recover with one new command"
+            );
+            assert_eq!(pool.semaphore.available_permits(), 64);
+        }
+    }
 }

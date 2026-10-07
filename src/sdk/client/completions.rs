@@ -6,6 +6,7 @@ use super::provider_payloads::{
     convert_messages_to_anthropic,
 };
 use super::routing::{sdk_provider_has_legacy_adapter, unsupported_legacy_sdk_adapter_error};
+use crate::core::providers::base::sse::AnthropicUsageState;
 use crate::core::providers::registry::LegacyAdapterSurface;
 use crate::sdk::{errors::*, types::*};
 use futures::StreamExt;
@@ -373,7 +374,7 @@ impl LLMClient {
                 VecDeque::<Result<ChatChunk>>::new(),
                 false,
                 Option::<(String, String)>::None,
-                Option::<u32>::None,
+                AnthropicUsageState::default(),
             ),
             |(
                 mut byte_stream,
@@ -381,7 +382,7 @@ impl LLMClient {
                 mut pending,
                 mut done,
                 mut current_tool,
-                mut input_tokens,
+                mut usage_state,
             )| async move {
                 loop {
                     if let Some(item) = pending.pop_front() {
@@ -393,7 +394,7 @@ impl LLMClient {
                                 pending,
                                 done,
                                 current_tool,
-                                input_tokens,
+                                usage_state,
                             ),
                         ));
                     }
@@ -451,7 +452,7 @@ impl LLMClient {
                                             &event,
                                             &data,
                                             tool_ref,
-                                            &mut input_tokens,
+                                            &mut usage_state,
                                         ) {
                                             Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
                                             Some(Err(e)) => {
@@ -486,7 +487,7 @@ impl LLMClient {
                                     pending,
                                     true,
                                     current_tool,
-                                    input_tokens,
+                                    usage_state,
                                 ),
                             ));
                         }
@@ -621,25 +622,22 @@ pub(crate) fn parse_openai_sse_line(line: &str) -> Option<Result<ChatChunk>> {
 ///
 /// `current_tool` carries `(tool_id, tool_name)` captured from the preceding
 /// `content_block_start` event so `input_json_delta` chunks include the tool identity.
-/// `input_tokens` retains trusted `message_start` usage until the terminal delta.
+/// `usage_state` retains trusted cumulative input and cache counts until the terminal delta.
 pub(crate) fn parse_anthropic_sse_record(
     event: &str,
     data: &str,
     current_tool: Option<(&str, &str)>,
-    input_tokens: &mut Option<u32>,
+    usage_state: &mut AnthropicUsageState,
 ) -> Option<Result<ChatChunk>> {
     match event {
         "message_start" => {
             // This lifecycle event remains invisible; absent or invalid usage stays unknown.
-            *input_tokens = serde_json::from_str::<serde_json::Value>(data)
-                .ok()
-                .and_then(|v| {
-                    v.get("message")?
-                        .get("usage")?
-                        .get("input_tokens")?
-                        .as_u64()
-                })
-                .and_then(|tokens| u32::try_from(tokens).ok());
+            *usage_state = AnthropicUsageState::default();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+                && let Some(usage) = v.pointer("/message/usage")
+            {
+                usage_state.merge(usage);
+            }
             None
         }
         "error" => {
@@ -672,25 +670,12 @@ pub(crate) fn parse_anthropic_sse_record(
                 .and_then(|d| d.get("stop_reason"))
                 .and_then(|r| r.as_str())
                 .map(|s| normalize_anthropic_stop_reason(s).to_string());
-            let usage = if stop_reason.is_some() {
-                (*input_tokens)
-                    .zip(
-                        v.get("usage")
-                            .and_then(|u| u.get("output_tokens"))
-                            .and_then(|tokens| tokens.as_u64())
-                            .and_then(|tokens| u32::try_from(tokens).ok()),
-                    )
-                    .and_then(|(prompt_tokens, completion_tokens)| {
-                        Some(crate::core::types::responses::Usage {
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens: prompt_tokens.checked_add(completion_tokens)?,
-                            ..Default::default()
-                        })
-                    })
-            } else {
-                None
-            };
+            let usage = v.get("usage").and_then(|usage| {
+                usage_state.merge(usage);
+                stop_reason
+                    .as_ref()
+                    .and_then(|_| usage_state.terminal_usage(usage))
+            });
             Some(Ok(ChatChunk {
                 usage,
                 id: String::new(),

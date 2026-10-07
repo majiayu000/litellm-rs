@@ -64,12 +64,15 @@ mod redis {
         let Some(pool) = live_redis_pool().await else {
             return;
         };
-        for (mode, retries) in [
-            ("unary", 0),
-            ("unary", 1),
-            ("stream", 0),
-            ("stream", 1),
-            ("once", 0),
+        for (mode, retries, completed_usage) in [
+            ("unary", 0, None),
+            ("unary", 1, None),
+            ("stream", 0, None),
+            ("stream", 1, None),
+            ("once", 0, None),
+            ("unary", 0, Some(None)),
+            ("unary", 0, Some(Some(0_u64))),
+            ("unary", 0, Some(Some(3_u64))),
         ] {
             for cancel in [false, true] {
                 let id = unique("failure-before-circuit");
@@ -110,7 +113,12 @@ mod redis {
                                     20,
                                     move |deployment| {
                                         let result = fail(deployment);
-                                        async move { result.await.map(|()| ((), None::<u64>)) }
+                                        async move {
+                                            result
+                                                .await
+                                                .map(|()| ((), None::<u64>))
+                                                .map_err(|error| (error, completed_usage))
+                                        }
                                     },
                                 )
                                 .await
@@ -151,6 +159,14 @@ mod redis {
                 }
                 assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
                 assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+                assert_eq!(
+                    deployment.state.rpm_current.load(Ordering::Relaxed),
+                    u64::from(completed_usage.is_some())
+                );
+                assert_eq!(
+                    deployment.state.tpm_current.load(Ordering::Relaxed),
+                    completed_usage.flatten().unwrap_or(0)
+                );
                 assert!(deployment.is_in_cooldown());
                 if cancel {
                     drop(request);
@@ -160,7 +176,17 @@ mod redis {
                     request.await;
                 }
                 assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+                assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
                 assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+                assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
+                assert_eq!(
+                    deployment.state.rpm_current.load(Ordering::Relaxed),
+                    u64::from(completed_usage.is_some())
+                );
+                assert_eq!(
+                    deployment.state.tpm_current.load(Ordering::Relaxed),
+                    completed_usage.flatten().unwrap_or(0)
+                );
                 let mut conn = pool.open_live_connection().await.unwrap();
                 tokio::time::timeout(Duration::from_secs(5), async {
                     loop {
@@ -170,14 +196,34 @@ mod redis {
                             .query_async(&mut conn)
                             .await
                             .unwrap();
-                        if counts.iter().all(|value| value.unwrap_or(0) == 0) {
+                        let expected_tokens = match completed_usage {
+                            Some(Some(tokens)) => tokens as i64,
+                            Some(None) => 20,
+                            None => 0,
+                        };
+                        let expected =
+                            vec![0, i64::from(completed_usage.is_some()), expected_tokens];
+                        let fields: Vec<String> = ::redis::cmd("HKEYS")
+                            .arg(RedisPool::admission_key(&id))
+                            .query_async(&mut conn)
+                            .await
+                            .unwrap();
+                        if counts
+                            .iter()
+                            .map(|value| value.unwrap_or(0))
+                            .collect::<Vec<_>>()
+                            == expected
+                            && !fields.iter().any(|field| field.starts_with("l:"))
+                        {
                             break;
                         }
                         tokio::task::yield_now().await;
                     }
                 })
                 .await
-                .expect("failed request must refund admission");
+                .expect(
+                    "ordinary failure refunds; completed response keeps known or estimated usage",
+                );
                 let shared: Vec<Option<i64>> = ::redis::cmd("HMGET")
                     .arg(RedisPool::circuit_key(&id))
                     .arg(&["tot", "fail"])

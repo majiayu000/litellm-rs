@@ -3,6 +3,7 @@
 #[cfg(test)]
 use super::llm_client::LLMClient;
 use super::types::{LoadBalancer, LoadBalancingStrategy, ProviderStats};
+use crate::core::providers::base::sse::AnthropicUsageState;
 use crate::sdk::config::{ConfigBuilder, ProviderType, SdkProviderConfig};
 use crate::sdk::errors::SDKError;
 use crate::sdk::types::{
@@ -756,7 +757,12 @@ fn test_parse_anthropic_sse_record_delta() {
 
     let data =
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
-    let result = parse_anthropic_sse_record("content_block_delta", data, None, &mut None);
+    let result = parse_anthropic_sse_record(
+        "content_block_delta",
+        data,
+        None,
+        &mut AnthropicUsageState::default(),
+    );
     assert!(result.is_some());
     let chunk = result.unwrap().unwrap();
     assert_eq!(chunk.choices[0].delta.content, Some("Hello".to_string()));
@@ -770,7 +776,7 @@ fn test_parse_anthropic_sse_record_stop() {
         "message_stop",
         r#"{"type":"message_stop"}"#,
         None,
-        &mut None,
+        &mut AnthropicUsageState::default(),
     );
     assert!(result.is_none());
 }
@@ -779,13 +785,13 @@ fn test_parse_anthropic_sse_record_stop() {
 fn test_parse_anthropic_sse_record_message_delta_end_turn_maps_to_stop() {
     use super::completions::parse_anthropic_sse_record;
 
-    let mut input_tokens = None;
+    let mut usage_state = AnthropicUsageState::default();
     assert!(
         parse_anthropic_sse_record(
             "message_start",
-            r#"{"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":1}}}"#,
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":4,"cache_read_input_tokens":6,"output_tokens":0}}}"#,
             None,
-            &mut input_tokens,
+            &mut usage_state,
         )
         .is_none()
     );
@@ -793,7 +799,7 @@ fn test_parse_anthropic_sse_record_message_delta_end_turn_maps_to_stop() {
         "content_block_delta",
         r#"{"delta":{"type":"text_delta","text":"Hello"}}"#,
         None,
-        &mut input_tokens,
+        &mut usage_state,
     )
     .unwrap()
     .unwrap();
@@ -801,22 +807,26 @@ fn test_parse_anthropic_sse_record_message_delta_end_turn_maps_to_stop() {
     assert!(text.usage.is_none());
     let intermediate = parse_anthropic_sse_record(
         "message_delta",
-        r#"{"delta":{"stop_reason":null},"usage":{"output_tokens":5}}"#,
+        r#"{"delta":{"stop_reason":null},"usage":{"output_tokens":1,"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}"#,
         None,
-        &mut input_tokens,
+        &mut usage_state,
     )
     .unwrap()
     .unwrap();
     assert!(intermediate.usage.is_none());
-    let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}"#;
-    let chunk = parse_anthropic_sse_record("message_delta", data, None, &mut input_tokens)
+    let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}"#;
+    let chunk = parse_anthropic_sse_record("message_delta", data, None, &mut usage_state)
         .unwrap()
         .unwrap();
     assert_eq!(chunk.choices[0].finish_reason, Some("stop".to_string()));
     let usage = chunk.usage.unwrap();
-    assert_eq!(usage.prompt_tokens, 4);
-    assert_eq!(usage.completion_tokens, 10);
-    assert_eq!(usage.total_tokens, 14);
+    assert_eq!(usage.prompt_tokens, 20);
+    assert_eq!(usage.completion_tokens, 3);
+    assert_eq!(usage.total_tokens, 23);
+    let details = usage.prompt_tokens_details.unwrap();
+    assert_eq!(details.cache_creation_tokens, Some(4));
+    assert_eq!(details.cache_read_tokens, Some(6));
+    assert_eq!(details.cached_tokens, Some(6));
 }
 
 #[test]
@@ -824,9 +834,14 @@ fn test_parse_anthropic_sse_record_message_delta_max_tokens_maps_to_length() {
     use super::completions::parse_anthropic_sse_record;
 
     let data = r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":100}}"#;
-    let chunk = parse_anthropic_sse_record("message_delta", data, None, &mut None)
-        .unwrap()
-        .unwrap();
+    let chunk = parse_anthropic_sse_record(
+        "message_delta",
+        data,
+        None,
+        &mut AnthropicUsageState::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(chunk.choices[0].finish_reason, Some("length".to_string()));
     assert!(chunk.usage.is_none());
 }
@@ -836,9 +851,14 @@ fn test_parse_anthropic_sse_record_message_delta_tool_use_maps_to_tool_calls() {
     use super::completions::parse_anthropic_sse_record;
 
     let data = r#"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}"#;
-    let chunk = parse_anthropic_sse_record("message_delta", data, None, &mut None)
-        .unwrap()
-        .unwrap();
+    let chunk = parse_anthropic_sse_record(
+        "message_delta",
+        data,
+        None,
+        &mut AnthropicUsageState::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         chunk.choices[0].finish_reason,
         Some("tool_calls".to_string())
@@ -872,7 +892,7 @@ fn legacy_anthropic_tool_delta_keeps_its_block_index_and_identity() {
         "content_block_delta",
         r#"{"index":2,"delta":{"type":"input_json_delta","partial_json":"Paris"}}"#,
         Some(("call-weather", "weather")),
-        &mut None,
+        &mut AnthropicUsageState::default(),
     )
     .unwrap()
     .unwrap();
@@ -919,13 +939,19 @@ fn test_parse_anthropic_sse_record_ignored_events() {
         "message_start",
         r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-3"}}"#,
         None,
-        &mut None,
+        &mut AnthropicUsageState::default(),
     );
     assert!(result.is_none());
 
-    let result = parse_anthropic_sse_record("ping", r#"{}"#, None, &mut None);
+    let result =
+        parse_anthropic_sse_record("ping", r#"{}"#, None, &mut AnthropicUsageState::default());
     assert!(result.is_none());
-    let result = parse_anthropic_sse_record("message_start", "{malformed", None, &mut None);
+    let result = parse_anthropic_sse_record(
+        "message_start",
+        "{malformed",
+        None,
+        &mut AnthropicUsageState::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -950,39 +976,134 @@ fn legacy_anthropic_usage_stays_unknown_without_complete_trusted_counts() {
             r#"{"message":{"usage":{"input_tokens":4294967295}}}"#,
             r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
         ),
+        (
+            r#"{"message":{"usage":{"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":10,"output_tokens":2}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"cache_read_input_tokens":6}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":null}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":4294967294,"cache_creation_input_tokens":2}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}"#,
+        ),
     ] {
-        let mut input_tokens = None;
+        let mut usage_state = AnthropicUsageState::default();
         assert!(
-            parse_anthropic_sse_record("message_start", start, None, &mut input_tokens).is_none()
+            parse_anthropic_sse_record("message_start", start, None, &mut usage_state).is_none()
         );
-        let chunk = parse_anthropic_sse_record("message_delta", terminal, None, &mut input_tokens)
+        let chunk = parse_anthropic_sse_record("message_delta", terminal, None, &mut usage_state)
             .unwrap()
             .unwrap();
         assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("stop"));
         assert!(chunk.usage.is_none(), "start={start}, terminal={terminal}");
     }
 
-    let mut input_tokens = None;
-    assert!(
-        parse_anthropic_sse_record(
-            "message_start",
+    for (start, terminal, cache_reported) in [
+        (
             r#"{"message":{"usage":{"input_tokens":0}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}"#,
+            false,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#,
+            true,
+        ),
+    ] {
+        let mut usage_state = AnthropicUsageState::default();
+        assert!(
+            parse_anthropic_sse_record("message_start", start, None, &mut usage_state).is_none()
+        );
+        let usage = parse_anthropic_sse_record("message_delta", terminal, None, &mut usage_state)
+            .unwrap()
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        if cache_reported {
+            let details = usage.prompt_tokens_details.unwrap();
+            assert_eq!(details.cache_creation_tokens, Some(0));
+            assert_eq!(details.cache_read_tokens, Some(0));
+            assert_eq!(details.cached_tokens, Some(0));
+        } else {
+            assert!(usage.prompt_tokens_details.is_none());
+        }
+    }
+}
+
+#[test]
+fn legacy_anthropic_usage_resets_cache_and_invalid_state_for_next_message() {
+    use super::completions::parse_anthropic_sse_record;
+
+    for invalid_intermediate in [false, true] {
+        let mut usage_state = AnthropicUsageState::default();
+        assert!(
+            parse_anthropic_sse_record(
+                "message_start",
+                r#"{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}}"#,
+                None,
+                &mut usage_state,
+            )
+            .is_none()
+        );
+        let intermediate_usage = if invalid_intermediate {
+            r#"{"usage":{"cache_read_input_tokens":-1}}"#
+        } else {
+            r#"{"usage":{"cache_read_input_tokens":6,"output_tokens":1}}"#
+        };
+        let intermediate =
+            parse_anthropic_sse_record("message_delta", intermediate_usage, None, &mut usage_state)
+                .unwrap()
+                .unwrap();
+        assert!(intermediate.usage.is_none());
+        let terminal = parse_anthropic_sse_record(
+            "message_delta",
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"cache_read_input_tokens":6,"output_tokens":3}}"#,
             None,
-            &mut input_tokens,
+            &mut usage_state,
         )
-        .is_none()
-    );
-    let usage = parse_anthropic_sse_record(
-        "message_delta",
-        r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}"#,
-        None,
-        &mut input_tokens,
-    )
-    .unwrap()
-    .unwrap()
-    .usage
-    .unwrap();
-    assert_eq!(usage.prompt_tokens, 0);
-    assert_eq!(usage.completion_tokens, 0);
-    assert_eq!(usage.total_tokens, 0);
+        .unwrap()
+        .unwrap();
+        assert_eq!(terminal.choices[0].finish_reason.as_deref(), Some("stop"));
+        if invalid_intermediate {
+            assert!(
+                terminal.usage.is_none(),
+                "invalid usage must remain unknown"
+            );
+        } else {
+            assert_eq!(terminal.usage.unwrap().total_tokens, 23);
+        }
+
+        assert!(
+            parse_anthropic_sse_record(
+                "message_start",
+                r#"{"message":{"usage":{"input_tokens":4}}}"#,
+                None,
+                &mut usage_state,
+            )
+            .is_none()
+        );
+        let next = parse_anthropic_sse_record(
+            "message_delta",
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+            None,
+            &mut usage_state,
+        )
+        .unwrap()
+        .unwrap()
+        .usage
+        .expect("new message resets previous invalid/cache state");
+        assert_eq!(next.prompt_tokens, 4);
+        assert_eq!(next.completion_tokens, 1);
+        assert_eq!(next.total_tokens, 5);
+        assert!(next.prompt_tokens_details.is_none());
+    }
 }
