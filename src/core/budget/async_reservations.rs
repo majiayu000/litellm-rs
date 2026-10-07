@@ -576,7 +576,7 @@ mod deadline_tests {
 
     #[tokio::test]
     async fn backend_failure_keeps_known_cost_and_unacknowledged_budget() {
-        use super::super::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
+        use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
         let limits = UnifiedBudgetLimits::new();
         limits.providers.set_provider_limit(
             "provider",
@@ -597,9 +597,9 @@ mod deadline_tests {
             reservation.provider.lease_id = Some("unavailable-provider-lease".into());
             reservation.model.lease_id = Some("unavailable-model-lease".into());
             reservation.provider.manager.backend =
-                super::super::distributed::BudgetLeaseBackend::Unavailable;
+                crate::core::budget::distributed::BudgetLeaseBackend::Unavailable;
             reservation.model.manager.backend =
-                super::super::distributed::BudgetLeaseBackend::Unavailable;
+                crate::core::budget::distributed::BudgetLeaseBackend::Unavailable;
             crate::core::request_ledger::record_current_settlement(
                 "provider",
                 "model",
