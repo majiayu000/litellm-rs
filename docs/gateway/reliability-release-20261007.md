@@ -7,8 +7,8 @@ The source candidate is an integration branch, not the published 0.8.2 artifact.
 ## Existing repair queue
 
 All eight PRs start from main `a0aada3521b72e4ea0ebbf9044b8f4dd359a5d6f`.
-The integration merge `aecaa8feb53973e9dd4f1558ce18fc9ce658dfb1` contains these
-exact heads and was produced without text conflicts:
+The initial integration merge `aecaa8feb53973e9dd4f1558ce18fc9ce658dfb1` contains
+these exact heads and was produced without text conflicts:
 
 | PR | Exact head | Repair |
 | --- | --- | --- |
@@ -20,6 +20,16 @@ exact heads and was produced without text conflicts:
 | [1463](https://github.com/majiayu000/litellm-rs/pull/1463) | `77cf4c2d179cd5d3cf961f78caa391a82a27afc2` | Missing/inactive team key rejection |
 | [1464](https://github.com/majiayu000/litellm-rs/pull/1464) | `719f6dd10a9226c3ede839eae7d726abd45b2de8` | Runtime reload quota continuity |
 | [1465](https://github.com/majiayu000/litellm-rs/pull/1465) | `b804d4cff3c30cc3ee30cfebde6c69d176babd4f` | Await routing Redis and preserve successful cancellation accounting |
+
+These original PRs were subsequently closed as superseded by the existing
+[audit combination #1470](https://github.com/majiayu000/litellm-rs/pull/1470),
+not marked merged. The accounting candidate #1471 builds on its validated head
+`d88fec44a166b2c566a5b62fb34ae29f0b9867d4`, retaining its lifecycle/SDK and cache
+follow-ups rather than opening a competing repair delivery. Three settlement
+conflicts combine lifecycle usage observation/completion with captured billing
+facts; the scoped settlement futures remain heap-pinned for the default thread
+stack. Original commit ancestry is preserved. Acceptance of either previous
+candidate alone is not acceptance of this new combination.
 
 The original review correctly identified synchronous budget Redis waits in main.
 The latest #1459 head now handles them through the existing SDK worker bridge.

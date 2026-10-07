@@ -16,7 +16,7 @@ pub(super) fn response(
     state: AppState,
     context: RequestContext,
     call: NativeCall,
-    lease: StreamingDeploymentLease,
+    mut lease: StreamingDeploymentLease,
 ) -> HttpResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(8);
     let facts = crate::core::request_ledger::current_facts();
@@ -93,34 +93,53 @@ pub(super) fn response(
                 .await;
             return;
         }
-        // A disconnect or malformed usage never releases a possibly consumed reservation.
-        if let Some(id) = storage
-            .as_ref()
-            .and_then(|storage| storage.settlement_id.as_ref())
-        {
-            if let Err(error) =
-                super::super::responses_settlement::submit_usage(&state, id, usage.as_ref()).await
+        let tokens_used = usage.as_ref().map_or(0, |u| u64::from(u.total_tokens));
+        let terminal_error = failure.clone().or_else(|| {
+            upstream_failed
+                .then(|| ProviderError::api_error("responses", 502, "Upstream response failed"))
+        });
+        let settlement = async {
+            // A disconnect or malformed usage never releases a possibly consumed reservation.
+            if let Some(id) = storage
+                .as_ref()
+                .and_then(|storage| storage.settlement_id.as_ref())
             {
-                tracing::error!(%error, "Response stream settlement remains pending for recovery");
+                if let Err(error) =
+                    super::super::responses_settlement::submit_usage(&state, id, usage.as_ref())
+                        .await
+                {
+                    tracing::error!(%error, "Response stream settlement remains pending for recovery");
+                }
+            } else {
+                settle(
+                    &state,
+                    &context,
+                    &provider,
+                    &model,
+                    pricing,
+                    usage.as_ref(),
+                    pricing_usage.clone(),
+                    reservation,
+                    key_reservation,
+                    facts,
+                )
+                .await;
             }
+        };
+        if let Some(error) = terminal_error.as_ref() {
+            lease
+                .settle_terminal(tokens_used, Some(error), settlement)
+                .await;
+        } else if terminal {
+            lease.settle_terminal(tokens_used, None, settlement).await;
         } else {
-            settle(
-                &state,
-                &context,
-                &provider,
-                &model,
-                pricing,
-                usage.as_ref(),
-                pricing_usage.clone(),
-                reservation,
-                key_reservation,
-                facts,
-            )
-            .await;
+            lease
+                .settle_interrupted(tokens_used, None, settlement)
+                .await;
         }
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
-            lease.finish_failure(&error).await;
+            lease.finish_failure_with_tokens(&error, tokens_used).await;
             let code = if provider_error_is_guardrail(&error) {
                 "guardrail_violation"
             } else {
@@ -134,11 +153,10 @@ pub(super) fn response(
         } else if upstream_failed {
             callback.fail("Upstream response failed", "provider_error");
             lease
-                .finish_failure(&ProviderError::api_error(
-                    "responses",
-                    502,
-                    "Upstream response failed",
-                ))
+                .finish_failure_with_tokens(
+                    &ProviderError::api_error("responses", 502, "Upstream response failed"),
+                    tokens_used,
+                )
                 .await;
         } else if terminal {
             callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");

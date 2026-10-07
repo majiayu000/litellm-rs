@@ -166,6 +166,7 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
+    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
     let cost = fallback_cost_for_usage(pricing_config, usage);
     super::capture_ledger_settlement(None, budget_provider, budget_model, None, None);
     crate::core::request_ledger::update_billing(None, |billing| {
@@ -197,7 +198,10 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
     );
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
-            if let Err(error) = reservation.settle_async(cost).await {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
                 tracing::error!(
                     "failed to settle unpriced budget for '{budget_provider}'/'{budget_model}': \
                  {error:?}; spend not recorded because reservation settlement failed"

@@ -491,9 +491,13 @@ pub(super) async fn handle_streaming_completion(
                         settle_if_chargeable!();
                         return;
                     }
-                    settlement
-                        .record_completion(final_usage.as_ref(), saw_upstream_output)
-                        .await;
+                    crate::server::routes::ai::execution::settle_stream_terminal(
+                        lease.as_mut(),
+                        tokens_used,
+                        None,
+                        settlement.record_completion(final_usage.as_ref(), saw_upstream_output),
+                    )
+                    .await;
                     callback.complete_usage(final_usage.as_ref(), "success");
                     if let Some(lease) = lease.take() {
                         lease.finish_success(tokens_used).await;

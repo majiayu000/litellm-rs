@@ -237,6 +237,7 @@ async fn record_gemini_usage(
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
+    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
     let cost = match spend_state
         .pricing
         .calculate_loaded_usage_cost_for_provider(
@@ -277,7 +278,10 @@ async fn record_gemini_usage(
     );
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
-            if let Err(error) = reservation.settle_async(cost).await {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
                 error!(
                     "failed to settle Gemini SDK budget for provider '{}' model '{}': {error:?}",
                     provider.provider_name, provider.model

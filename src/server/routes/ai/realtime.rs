@@ -710,11 +710,18 @@ async fn relay(
                             match usage {
                                 Ok(usage) => {
                                     tokens = usage.map_or(tokens, |(_, tokens)| tokens);
-                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), usage).await {
-                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
-                                    }
                                     let provider_failed = status == "failed"
                                         && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
+                                    let terminal_error = provider_failed.then(|| upstream_event_error(&value["response"]["status_details"]["error"]));
+                                    let settlement = reservation.settle(&state, context.api_key_id(), usage);
+                                    let settled = if status == "completed" {
+                                        lease.settle_terminal(tokens, None, settlement).await
+                                    } else {
+                                        lease.settle_interrupted(tokens, terminal_error.as_ref(), settlement).await
+                                    };
+                                    if let Err(error) = settled {
+                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
+                                    }
                                     if provider_failed {
                                         lease.finish_interrupted(tokens, Some(&upstream_event_error(&value["response"]["status_details"]["error"]))).await;
                                     } else if matches!(status, "cancelled" | "incomplete" | "failed") {
@@ -789,7 +796,11 @@ async fn relay(
             .finish_interrupted(tokens, failure.then_some(&error))
             .await;
     } else if failure {
-        lease.finish_failure_with_tokens(&error, 0).await;
+        // An idle socket has already finalized its generation lease. A new
+        // transport failure is a separate provider event, not a second attempt
+        // to complete that generation.
+        lease.record_provider_event_failure(&error).await;
+        lease.finish_neutral(0).await;
     } else {
         lease.finish_neutral(0).await;
     }

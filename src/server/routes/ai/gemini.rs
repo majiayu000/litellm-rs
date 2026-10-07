@@ -521,17 +521,22 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             .as_valid()
             .map(|usage| u64::from(usage.total_tokens))
             .unwrap_or(0);
-        settle_gemini_stream_spend(
-            &spend_state,
-            &provider,
-            if should_record_spend {
-                final_usage
-            } else {
-                GeminiStreamUsage::Missing
-            },
-            budget_reservation.take(),
-            key_budget_reservation.take(),
-            should_record_spend && saw_upstream_output,
+        crate::server::routes::ai::execution::settle_stream_terminal(
+            stream_lease.as_mut(),
+            tokens_used,
+            None,
+            settle_gemini_stream_spend(
+                &spend_state,
+                &provider,
+                if should_record_spend {
+                    final_usage
+                } else {
+                    GeminiStreamUsage::Missing
+                },
+                budget_reservation.take(),
+                key_budget_reservation.take(),
+                should_record_spend && saw_upstream_output,
+            ),
         )
         .await;
         if let Some(lease) = stream_lease.take() {

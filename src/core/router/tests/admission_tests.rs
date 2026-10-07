@@ -203,7 +203,7 @@ mod redis {
         };
         for retry in [false, true] {
             let id = unique("cancel-success");
-            let router = Arc::new(router_with(pool.clone()));
+            let router = Arc::new(router_with(pool.clone()).with_circuit_redis(pool.clone()));
             seed(&router, &id, Some(1), Some(10), Some(100)).await;
             let (started, ready) = tokio::sync::oneshot::channel();
             let started = Arc::new(std::sync::Mutex::new(Some(started)));
@@ -237,6 +237,25 @@ mod redis {
                 .await
                 .unwrap()
                 .unwrap();
+            // Admission settlement is still waiting for its permit. The
+            // shared circuit must already own the successful upstream outcome.
+            let mut conn = pool.open_live_connection().await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    let state: (Option<i64>, Option<i64>) = ::redis::cmd("HMGET")
+                        .arg(RedisPool::circuit_key(&id))
+                        .arg(&["tot", "r"])
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap();
+                    if state == (Some(1), Some(1)) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("successful upstream outcome must reach the circuit before admission waits");
             let deployment = router.get_deployment(&id).unwrap();
             assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
             assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
@@ -247,7 +266,6 @@ mod redis {
             assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
             assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
             // RAII must also retain actual shared usage after the waiter dies.
-            let mut conn = pool.open_live_connection().await.unwrap();
             tokio::time::timeout(std::time::Duration::from_secs(3), async {
                 loop {
                     let state: (i64, i64) = ::redis::cmd("HMGET")
@@ -264,7 +282,15 @@ mod redis {
             })
             .await
             .unwrap();
+            let circuit: (i64, i64) = ::redis::cmd("HMGET")
+                .arg(RedisPool::circuit_key(&id))
+                .arg(&["tot", "r"])
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(circuit, (1, 1), "cancellation must not duplicate success");
             cleanup(&pool, &id).await;
+            pool.delete(&RedisPool::circuit_key(&id)).await.unwrap();
         }
     }
 

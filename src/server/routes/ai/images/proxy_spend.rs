@@ -21,6 +21,7 @@ pub(super) async fn record_image_proxy_spend(
     api_key_id: Option<uuid::Uuid>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
+    super::super::execution::completion::observe_usage(super::image_proxy_tokens_used(usage));
     if unpriced {
         super::super::spend::settle_unpriced_usage(
             pricing_config,
@@ -52,7 +53,10 @@ pub(super) async fn record_image_proxy_spend(
     );
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
-            if let Err(error) = reservation.settle_async(cost).await {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
                 error!(
                     "failed to settle image proxy budget for provider '{}' model '{}': {error:?}",
                     provider.provider_name, model

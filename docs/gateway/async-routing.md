@@ -31,10 +31,12 @@ operation instead of substituting cancellation.
 
 Normal completion and retry cleanup are awaited before proceeding. A destructor
 cannot await, so async lease drop releases the local active-request count
-immediately and places Redis cleanup in one bounded queue (1,024 entries, one
-consumer on the admission runtime). The cleanup holds no HTTP-worker thread. If
-Redis fails or that queue is unavailable/full, the gateway logs the condition and
-retains the existing lease-expiry safety fallback. Explicitly awaited completion
+immediately and places Redis cleanup in an unbounded metadata queue with one
+consumer on the admission runtime and no task per event. A slow Redis can grow
+the process-local event backlog; it is not durable across process restarts.
+The cleanup holds no HTTP-worker thread. If Redis fails or the consumer becomes
+unavailable, the gateway logs the condition and retains the existing lease-expiry
+safety fallback. Explicitly awaited completion
 is preferred when the caller can still make progress. Queue fallback does not
 claim durable token accounting during an outage.
 

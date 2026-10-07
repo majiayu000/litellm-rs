@@ -101,6 +101,27 @@ Realtime transport Drop dispatches its existing conservative cost settlement;
 it does not turn potentially billable output into a cancelled reservation.
 Durable Responses retain their SQL receipt ownership and idempotent replay.
 
+Routing outcomes and dollar-budget ownership are separate. Once a unary provider
+has returned a successful response, cancellation during its owned dollar-budget
+settlement retains the selected deployment's local success, RPM/TPM and actual
+routing-admission usage. The dollar worker keeps its existing settlement identity.
+A later conversion error on a normally completed operation remains an error;
+observed usage alone does not imply provider success. Allowed unpriced settlement
+remains a successful accounting policy rather than being relabeled a provider error.
+
+Gateway stream completion scopes begin only after EOF or a known terminal result.
+Cancelling that accounting wait records the known success, typed provider failure,
+or neutral interruption once and finalizes the original lease, even when its
+caller retains it. Completing the wait normally leaves outcome recording to the
+existing terminal method. Failure counters and known tokens are recorded before
+shared admission or circuit I/O. These scopes retain the selected deployment
+object and hold; replacing a deployment under the same ID cannot transfer its
+outcome to the replacement. Intermediate usage does not terminate a stream.
+A terminal provider failure with zero observed tokens cancels ordinary stream
+admission and refunds its reserved RPM. Realtime interrupted failures retain their
+existing request-usage contract, including shared RPM when actual tokens are zero.
+Both normal completion and cancelled accounting waits use the same decision.
+
 Each HTTP-facing async reply has a 30-second deadline, including time queued
 behind the SDK workers. Expiration closes the reply receiver. An admission still
 queued then skips Redis; an admission already executing keeps its original

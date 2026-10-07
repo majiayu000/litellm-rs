@@ -799,7 +799,27 @@ impl Router {
         }
     }
 
-    fn record_local_failure(&self, deployment: &Deployment, reason: CooldownReason) {
+    /// Publish an already-recorded local failure to the shared breaker.
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn record_failure_circuit_for_deployment_async(
+        &self,
+        deployment: &Deployment,
+        reason: CooldownReason,
+    ) {
+        match self
+            .circuit
+            .record_failure_async(deployment, &self.config, reason)
+            .await
+        {
+            CircuitWrite::Local => {}
+            CircuitWrite::StrictUnavailable => {
+                deployment.enter_cooldown(self.config.cooldown_time_secs)
+            }
+            CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
+        }
+    }
+
+    pub(crate) fn record_local_failure(&self, deployment: &Deployment, reason: CooldownReason) {
         let minute = deployment.record_failure_with_minute_counters();
 
         let should_cooldown = match reason {

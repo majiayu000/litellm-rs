@@ -122,7 +122,7 @@ async fn create(
         &requested_model,
         &context,
     );
-    let (call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
+    let (call, mut lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::ChatCompletion,
@@ -277,7 +277,23 @@ async fn create(
         .as_ref()
         .ok()
         .and_then(|value| native_usage(value.get("usage")?, require_inference_geo));
-    settle(
+    let result = result.and_then(|value| {
+        if !valid_message_envelope(&value)
+            || usage.is_none()
+            || value
+                .get("stop_reason")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            Err(ProviderError::response_parsing("anthropic", "Invalid Messages response").into())
+        } else {
+            Ok(value)
+        }
+    });
+    let tokens_used = usage
+        .as_ref()
+        .map_or(0, |usage| u64::from(usage.normalized.total_tokens));
+    let settlement = settle(
         state,
         &context,
         &provider,
@@ -287,30 +303,32 @@ async fn create(
         reservation,
         key_reservation,
         crate::core::request_ledger::current_facts(),
-    )
-    .await;
+    );
+    match result.as_ref() {
+        Ok(_) => lease.settle_terminal(tokens_used, None, settlement).await,
+        Err(GatewayError::Provider(error)) => {
+            lease
+                .settle_terminal(tokens_used, Some(error), settlement)
+                .await
+        }
+        Err(_) => {
+            lease
+                .settle_interrupted(tokens_used, None, settlement)
+                .await
+        }
+    }
     let value = match result {
         Ok(value) => value,
         Err(error) => {
             callback.fail(error.to_string(), "provider_error");
             if let GatewayError::Provider(provider_error) = &error {
-                lease.finish_failure(provider_error).await;
+                lease
+                    .finish_failure_with_tokens(provider_error, tokens_used)
+                    .await;
             }
             return Err(error);
         }
     };
-    if !valid_message_envelope(&value)
-        || usage.is_none()
-        || value
-            .get("stop_reason")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        let error = ProviderError::response_parsing("anthropic", "Invalid Messages response");
-        callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error).await;
-        return Err(error.into());
-    }
     lease
         .finish_success(
             usage
@@ -638,10 +656,13 @@ async fn settle(
                     "Messages usage unknown",
                 );
             }
+            super::execution::completion::observe_usage(0);
             let budget_settlement = async {
                 if let Some(reservation) = reservation {
                     let reserved = reservation.reserved_amount();
-                    if let Err(error) = reservation.settle_async(reserved).await {
+                    if let Err(error) =
+                        super::execution::completion::settle_budget(reservation, reserved).await
+                    {
                         tracing::error!(%provider, %model, ?error, "failed to retain unknown Messages budget");
                     }
                 }

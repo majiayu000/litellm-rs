@@ -14,8 +14,9 @@ use crate::utils::error::gateway_error::Result;
 use dashmap::DashMap;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, watch};
 use tracing::{debug, trace, warn};
 
 /// Short-lived barrier that rejects recreating a just-invalidated logical value.
@@ -121,8 +122,10 @@ pub struct DualCache<T> {
     l1_fill_locks: Arc<DashMap<CacheKey, Arc<Mutex<()>>>>,
     /// Per-key barriers rejecting stale recreation of conditionally deleted values.
     stale_write_barriers: Arc<DashMap<CacheKey, Vec<StaleWriteBarrier>>>,
-    /// Signals the barrier-map cleanup task to exit.
-    barrier_cleanup_shutdown: Arc<Notify>,
+    /// Owns at most one barrier cleanup task.
+    barrier_cleanup_started: AtomicBool,
+    /// Persistent shutdown state for the barrier-map cleanup task.
+    barrier_cleanup_shutdown: watch::Sender<bool>,
     /// Logical write fingerprint used by Dual stale-write barriers.
     ///
     /// Defaults to JSON/SHA-256 of the full value (`serialize_write_identity`).
@@ -185,7 +188,8 @@ where
             stats,
             l1_fill_locks: Arc::new(DashMap::new()),
             stale_write_barriers: Arc::new(DashMap::new()),
-            barrier_cleanup_shutdown: Arc::new(Notify::new()),
+            barrier_cleanup_started: AtomicBool::new(false),
+            barrier_cleanup_shutdown: watch::channel(false).0,
             write_identity,
         }
     }
@@ -206,17 +210,25 @@ where
     /// stale-write barriers (independent of per-key access).
     pub fn start_cleanup_task(&self) {
         self.memory.start_cleanup_task();
-
-        let barriers = Arc::clone(&self.stale_write_barriers);
-        let shutdown = Arc::clone(&self.barrier_cleanup_shutdown);
+        if *self.barrier_cleanup_shutdown.borrow()
+            || self.barrier_cleanup_started.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let barriers = Arc::downgrade(&self.stale_write_barriers);
+        let mut shutdown = self.barrier_cleanup_shutdown.subscribe();
         let interval = self.config.cleanup_interval;
         tokio::spawn(async move {
             loop {
+                if *shutdown.borrow() {
+                    break;
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {
+                        let Some(barriers) = barriers.upgrade() else { break };
                         Self::prune_expired_barriers_map(&barriers);
                     }
-                    _ = shutdown.notified() => {
+                    _ = shutdown.changed() => {
                         debug!("Dual cache barrier cleanup task shutting down");
                         break;
                     }
@@ -800,7 +812,7 @@ where
 
     /// Shutdown the cache
     pub fn shutdown(&self) {
-        self.barrier_cleanup_shutdown.notify_waiters();
+        self.barrier_cleanup_shutdown.send_replace(true);
         self.memory.shutdown();
     }
 }
@@ -810,7 +822,7 @@ impl<T> Drop for DualCache<T> {
         // Stop the barrier cleanup task even when callers forget `shutdown`
         // (e.g. runtime revision replace dropping an obsolete LLMCache).
         // InMemoryCache shuts down via its own Drop when the last Arc is released.
-        self.barrier_cleanup_shutdown.notify_waiters();
+        self.barrier_cleanup_shutdown.send_replace(true);
     }
 }
 
@@ -933,6 +945,53 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn discarded_dual_caches_release_memory_barriers_and_cleanup_tasks() {
+        let mut signals = Vec::new();
+        for _ in 0..100 {
+            let cache = DualCache::<String>::memory_only(DualCacheConfig {
+                cleanup_interval: Duration::from_secs(3600),
+                ..DualCacheConfig::memory_only()
+            });
+            let memory = Arc::downgrade(&cache.memory);
+            let barriers = Arc::downgrade(&cache.stale_write_barriers);
+            signals.push(cache.barrier_cleanup_shutdown.clone());
+            cache.start_cleanup_task();
+            drop(cache);
+            assert!(memory.upgrade().is_none());
+            assert!(barriers.upgrade().is_none());
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while signals.iter().any(|signal| signal.receiver_count() != 0) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("discarded barrier tasks must stop without waiting for the interval");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dual_cleanup_shutdown_before_first_poll_is_persistent() {
+        for start_first in [false, true] {
+            let cache = DualCache::<String>::with_defaults();
+            if start_first {
+                for _ in 0..100 {
+                    cache.start_cleanup_task();
+                }
+                assert_eq!(cache.barrier_cleanup_shutdown.receiver_count(), 1);
+            }
+            cache.shutdown();
+            cache.start_cleanup_task();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while cache.barrier_cleanup_shutdown.receiver_count() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("an early shutdown must not leave a barrier task alive");
+        }
+    }
 
     // ==================== Configuration Tests ====================
 

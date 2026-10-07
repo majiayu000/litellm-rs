@@ -462,10 +462,35 @@ async fn budget_and_scope_rejections_never_reach_upstream() {
 }
 #[actix_web::test]
 async fn upstream_close_code_and_reason_are_preserved() {
+    upstream_policy_close(false).await;
+}
+
+#[actix_web::test]
+async fn upstream_policy_close_after_completed_response_records_one_transport_failure() {
+    upstream_policy_close(true).await;
+}
+
+async fn upstream_policy_close(complete_response: bool) {
     let (state, url, key, _, handles) = fixture().await;
     let mut client = client(&url, &key).await;
     next_json(&mut client).await;
     next_json(&mut client).await;
+    if complete_response {
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        for event in [
+            "response.created",
+            "response.output_audio.delta",
+            "response.function_call_arguments.done",
+            "response.done",
+        ] {
+            assert_eq!(next_json(&mut client).await["type"], event);
+        }
+    }
     client
         .send(Message::Text(
             json!({"type":"conversation.item.delete","item_id":"close"})
@@ -474,7 +499,11 @@ async fn upstream_close_code_and_reason_are_preserved() {
         ))
         .await
         .unwrap();
-    let event = client.next().await.unwrap().unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(3), client.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let Message::Close(Some(close)) = event else {
         panic!("expected close")
     };
@@ -495,12 +524,48 @@ async fn upstream_close_code_and_reason_are_preserved() {
     })
     .await
     .unwrap();
+    let successful_responses = u64::from(complete_response);
+    assert_eq!(
+        deployment
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        deployment
+            .state
+            .total_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses + 1
+    );
     assert_eq!(
         deployment
             .state
             .success_requests
             .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses
+    );
+    assert_eq!(
+        deployment
+            .state
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
         0
+    );
+    assert_eq!(
+        deployment
+            .state
+            .rpm_current
+            .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses
+    );
+    assert_eq!(
+        deployment
+            .state
+            .tpm_current
+            .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses * 60
     );
     drop(client);
     for handle in handles {

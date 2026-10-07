@@ -208,7 +208,7 @@ async fn create_native(
         &requested_model,
         &context,
     );
-    let (mut call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
+    let (mut call, mut lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::Responses,
@@ -428,58 +428,79 @@ async fn create_native(
         .ok()
         .zip(usage.as_ref())
         .and_then(|(value, usage)| request::pricing_usage(value, usage, file_search_calls));
-    settle(
-        state,
-        &context,
-        &provider,
-        &model,
-        pricing,
-        usage.as_ref(),
-        pricing_usage.clone(),
-        reservation,
-        key_reservation,
-        crate::core::request_ledger::current_facts(),
-    )
-    .await;
-    if let Some(error) = failure {
-        callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error).await;
-        return Err(error.into());
-    }
+    let value =
+        value.map_err(|_| ProviderError::response_parsing("responses", "Invalid Responses JSON"));
+    let value = match failure {
+        Some(error) => Err(error),
+        None => value,
+    };
+    let value = value.and_then(|value| {
+        if compact
+            && (value.get("error").is_some_and(|error| !error.is_null())
+                || value.get("object").and_then(Value::as_str) != Some("response.compaction")
+                || value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                || value.get("output").and_then(Value::as_array).is_none()
+                || usage.is_none())
+        {
+            Err(ProviderError::response_parsing(
+                "responses",
+                "Invalid compaction response",
+            ))
+        } else {
+            Ok(value)
+        }
+    });
+    let tokens_used = usage
+        .as_ref()
+        .map_or(0, |usage| u64::from(usage.total_tokens));
+    let terminal_error = value.as_ref().err().cloned().or_else(|| {
+        value
+            .as_ref()
+            .ok()
+            .filter(|value| {
+                value.get("error").is_some_and(|error| !error.is_null())
+                    || value.get("status").and_then(Value::as_str) == Some("failed")
+            })
+            .map(|_| ProviderError::api_error("responses", 502, "Upstream response failed"))
+    });
+    lease
+        .settle_terminal(
+            tokens_used,
+            terminal_error.as_ref(),
+            settle(
+                state,
+                &context,
+                &provider,
+                &model,
+                pricing,
+                usage.as_ref(),
+                pricing_usage.clone(),
+                reservation,
+                key_reservation,
+                crate::core::request_ledger::current_facts(),
+            ),
+        )
+        .await;
     let value = match value {
         Ok(value) => value,
-        Err(_) => {
-            let error = ProviderError::response_parsing("responses", "Invalid Responses JSON");
+        Err(error) => {
             callback.fail(error.to_string(), "provider_error");
-            lease.finish_failure(&error).await;
+            lease.finish_failure_with_tokens(&error, tokens_used).await;
             return Err(error.into());
         }
     };
-    if compact
-        && (value.get("error").is_some_and(|error| !error.is_null())
-            || value.get("object").and_then(Value::as_str) != Some("response.compaction")
-            || value
-                .get("id")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-            || value.get("output").and_then(Value::as_array).is_none()
-            || usage.is_none())
-    {
-        let error = ProviderError::response_parsing("responses", "Invalid compaction response");
-        callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error).await;
-        return Err(error.into());
-    }
     if value.get("error").is_some_and(|error| !error.is_null())
         || value.get("status").and_then(Value::as_str) == Some("failed")
     {
         callback.fail("Upstream response failed", "provider_error");
         lease
-            .finish_failure(&ProviderError::api_error(
-                "responses",
-                502,
-                "Upstream response failed",
-            ))
+            .finish_failure_with_tokens(
+                &ProviderError::api_error("responses", 502, "Upstream response failed"),
+                tokens_used,
+            )
             .await;
     } else {
         lease
@@ -692,10 +713,15 @@ async fn settle(
                     "Responses usage unknown",
                 );
             }
+            super::execution::completion::observe_usage(
+                usage.map_or(0, |usage| u64::from(usage.total_tokens)),
+            );
             let budget_settlement = async {
                 if let Some(reservation) = reservation {
                     let reserved = reservation.reserved_amount();
-                    if let Err(error) = reservation.settle_async(reserved).await {
+                    if let Err(error) =
+                        super::execution::completion::settle_budget(reservation, reserved).await
+                    {
                         tracing::error!(%provider, %model, ?error, "failed to retain unknown Responses budget");
                     }
                 }
