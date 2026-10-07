@@ -46,6 +46,7 @@ struct AdmissionHoldInner {
     // A cancelled waiter must retain the desired settlement, not turn known
     // usage into a cancellation while waiting for an I/O permit.
     completion: parking_lot::Mutex<Option<AdmissionCompletion>>,
+    cleanup_slot: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 #[cfg(feature = "gateway")]
@@ -57,14 +58,11 @@ enum AdmissionCompletion {
 
 #[cfg(feature = "gateway")]
 impl AdmissionHold {
-    pub(crate) fn detach(&self) {
-        *self.inner.completion.lock() = None;
-    }
-
     fn new(
         pool: std::sync::Arc<crate::storage::redis::RedisPool>,
         lease_id: String,
         deployment_id: String,
+        cleanup_slot: tokio::sync::OwnedSemaphorePermit,
     ) -> Self {
         Self {
             inner: std::sync::Arc::new(AdmissionHoldInner {
@@ -72,6 +70,7 @@ impl AdmissionHold {
                 lease_id,
                 deployment_id,
                 completion: parking_lot::Mutex::new(Some(AdmissionCompletion::Cancel)),
+                cleanup_slot: Some(cleanup_slot),
             }),
         }
     }
@@ -86,6 +85,10 @@ impl Drop for AdmissionHoldInner {
                 lease_id: self.lease_id.clone(),
                 deployment_id: self.deployment_id.clone(),
                 completion,
+                _slot: self
+                    .cleanup_slot
+                    .take()
+                    .expect("owned admission cleanup slot"),
             });
         }
     }
@@ -153,6 +156,13 @@ impl AdmissionBackend {
             }
             #[cfg(feature = "gateway")]
             Self::Redis { pool, lease_ttl_ms } => {
+                // Own cleanup capacity before creating a remote liability. The
+                // permit follows the hold into Drop cleanup, so the bounded
+                // queue cannot discard known usage when Redis is slow.
+                let Ok(cleanup_slot) = cleanup_slots().try_acquire_owned() else {
+                    warn!(deployment_id = %deployment.id, "admission cleanup capacity exhausted; failing closed");
+                    return AdmissionReserve::Unavailable;
+                };
                 let rpm_inc = i64::from(max_rpm >= 0);
                 let tpm_inc = if max_tpm >= 0 {
                     to_i64(estimated_tokens.max(1))
@@ -161,9 +171,9 @@ impl AdmissionBackend {
                 };
                 let lease_id = uuid::Uuid::new_v4().to_string();
                 let pool = std::sync::Arc::clone(pool);
-                let key = crate::storage::redis::RedisPool::admission_key(&deployment.id);
+                let deployment_id = deployment.shared_state_id();
+                let key = crate::storage::redis::RedisPool::admission_key(&deployment_id);
                 let ttl_ms = *lease_ttl_ms;
-                let deployment_id = deployment.id.clone();
                 let log_deployment_id = deployment_id.clone();
                 let result = run_redis(&log_deployment_id, "reserve", async move {
                     let state = pool
@@ -181,7 +191,12 @@ impl AdmissionBackend {
                     Ok(if state.allowed {
                         // Construct the RAII hold on the I/O task. Dropping an
                         // unreceived result therefore releases the Redis slot.
-                        AdmissionReserve::Granted(AdmissionHold::new(pool, lease_id, deployment_id))
+                        AdmissionReserve::Granted(AdmissionHold::new(
+                            pool,
+                            lease_id,
+                            deployment_id,
+                            cleanup_slot,
+                        ))
                     } else {
                         AdmissionReserve::Denied
                     })
@@ -342,59 +357,60 @@ struct AdmissionCleanup {
     lease_id: String,
     deployment_id: String,
     completion: AdmissionCompletion,
+    _slot: tokio::sync::OwnedSemaphorePermit,
+}
+
+#[cfg(feature = "gateway")]
+const CLEANUP_CAPACITY: usize = 1_024;
+
+#[cfg(feature = "gateway")]
+fn cleanup_slots() -> std::sync::Arc<tokio::sync::Semaphore> {
+    static SLOTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    SLOTS
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(CLEANUP_CAPACITY)))
+        .clone()
 }
 
 #[cfg(feature = "gateway")]
 fn enqueue_cleanup(cleanup: AdmissionCleanup) {
-    static SENDER: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<AdmissionCleanup>> =
+    static SENDER: std::sync::OnceLock<tokio::sync::mpsc::Sender<AdmissionCleanup>> =
         std::sync::OnceLock::new();
     let sender = SENDER.get_or_init(|| {
-        // Drop cannot await capacity, and a known settlement cannot be
-        // replaced by lease expiry. Retain metadata for one consumer; a slow
-        // Redis can grow this process-local backlog, but not worker tasks.
-        let (sender, consumer) = cleanup_queue();
-        admission_io_handle().spawn(consumer);
+        let (sender, mut receiver) =
+            tokio::sync::mpsc::channel::<AdmissionCleanup>(CLEANUP_CAPACITY);
+        admission_io_handle().spawn(async move {
+            while let Some(cleanup) = receiver.recv().await {
+                let key = crate::storage::redis::RedisPool::admission_key(&cleanup.deployment_id);
+                let result = match cleanup.completion {
+                    AdmissionCompletion::Cancel => {
+                        cleanup.pool.admission_cancel(&key, &cleanup.lease_id).await
+                    }
+                    AdmissionCompletion::Settle(tokens) => {
+                        cleanup
+                            .pool
+                            .admission_settle(&key, &cleanup.lease_id, tokens)
+                            .await
+                    }
+                };
+                if let Err(error) = result {
+                    warn!(
+                        deployment_id = %cleanup.deployment_id,
+                        %error,
+                        "admission cleanup failed; relying on lease expiry"
+                    );
+                }
+            }
+        });
         sender
     });
-    if let Err(error) = sender.send(cleanup) {
+    // Every queued or in-flight cleanup retains its original capacity permit;
+    // at most CLEANUP_CAPACITY events can exist, so a live queue cannot be full.
+    if let Err(error) = sender.try_send(cleanup) {
         warn!(
-            deployment_id = %error.0.deployment_id,
+            deployment_id = %error.into_inner().deployment_id,
             "admission cleanup queue unavailable; relying on lease expiry"
         );
-    }
-}
-
-#[cfg(feature = "gateway")]
-fn cleanup_queue() -> (
-    tokio::sync::mpsc::UnboundedSender<AdmissionCleanup>,
-    impl std::future::Future<Output = ()> + Send + 'static,
-) {
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-    (sender, consume_cleanup(receiver))
-}
-
-#[cfg(feature = "gateway")]
-async fn consume_cleanup(mut receiver: tokio::sync::mpsc::UnboundedReceiver<AdmissionCleanup>) {
-    while let Some(cleanup) = receiver.recv().await {
-        let key = crate::storage::redis::RedisPool::admission_key(&cleanup.deployment_id);
-        let result = match cleanup.completion {
-            AdmissionCompletion::Cancel => {
-                cleanup.pool.admission_cancel(&key, &cleanup.lease_id).await
-            }
-            AdmissionCompletion::Settle(tokens) => {
-                cleanup
-                    .pool
-                    .admission_settle(&key, &cleanup.lease_id, tokens)
-                    .await
-            }
-        };
-        if let Err(error) = result {
-            warn!(
-                deployment_id = %cleanup.deployment_id,
-                %error,
-                "admission cleanup failed; relying on lease expiry"
-            );
-        }
     }
 }
 
@@ -429,7 +445,12 @@ mod tests {
             let epoch = seconds / 60;
             let deployment_id = uuid::Uuid::new_v4().to_string();
             let key = RedisPool::admission_key(&deployment_id);
-            let hold = AdmissionHold::new(pool.clone(), "old".into(), deployment_id);
+            let hold = AdmissionHold::new(
+                pool.clone(),
+                "old".into(),
+                deployment_id,
+                cleanup_slots().try_acquire_owned().unwrap(),
+            );
             // Finish a lease from the previous window through the production backend.
             redis::cmd("HSET")
                 .arg(&key)
@@ -549,7 +570,12 @@ mod tests {
         .unwrap();
         assert!(state.allowed);
         let backend = AdmissionBackend::redis(pool.clone());
-        let hold = AdmissionHold::new(pool.clone(), "settling".into(), deployment);
+        let hold = AdmissionHold::new(
+            pool.clone(),
+            "settling".into(),
+            deployment,
+            cleanup_slots().try_acquire_owned().unwrap(),
+        );
 
         // Saturate the bridge so settlement can be cancelled specifically
         // while awaiting an I/O permit, before a command has been spawned.
@@ -591,114 +617,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn cleanup_backlog_retains_every_known_completion() {
-        use crate::config::models::storage::RedisConfig;
-        use crate::storage::redis::{RedisPool, admission::AdmissionReserveArgs};
-
-        let Ok(url) = std::env::var("REDIS_URL") else {
-            assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
-            return;
-        };
-        let pool = std::sync::Arc::new(
-            RedisPool::new(&RedisConfig {
-                url,
-                enabled: true,
-                allow_degraded: false,
-                ..RedisConfig::default()
-            })
-            .await
-            .unwrap(),
-        );
-        let deployments: Vec<_> = (0..1_100)
-            .map(|_| uuid::Uuid::new_v4().to_string())
-            .collect();
-        let keys: Vec<_> = deployments
-            .iter()
-            .map(|id| RedisPool::admission_key(id))
-            .collect();
-        let worker_pool = pool.clone();
-        let worker_keys = keys.clone();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            run_redis("cleanup-backlog", "reserve", async move {
-                for key in worker_keys {
-                    let state = worker_pool
-                        .admission_reserve(AdmissionReserveArgs {
-                            key: &key,
-                            max_parallel: 1,
-                            max_rpm: 10,
-                            max_tpm: 10,
-                            rpm_inc: 1,
-                            tpm_inc: 10,
-                            lease_id: "cleanup",
-                            ttl_ms: DEFAULT_LEASE_TTL_MS,
-                        })
-                        .await?;
-                    assert!(state.allowed);
-                }
-                Ok(())
-            }),
-        )
-        .await
-        .expect("backlog reservations must finish")
-        .unwrap();
-
-        // Use the production queue constructor and consumer, but delay this
-        // independent consumer so all events exceed the old 1,024 capacity.
-        // No global cleanup gate or test ordering is needed.
-        let (sender, consumer) = cleanup_queue();
-        for (index, deployment_id) in deployments.into_iter().enumerate() {
-            let completion = if index % 2 == 0 {
-                AdmissionCompletion::Settle(4)
-            } else {
-                AdmissionCompletion::Cancel
-            };
-            assert!(
-                sender
-                    .send(AdmissionCleanup {
-                        pool: pool.clone(),
-                        lease_id: "cleanup".into(),
-                        deployment_id,
-                        completion,
-                    })
-                    .is_ok(),
-                "an owned cleanup fact must not be dropped at capacity"
-            );
-        }
-        drop(sender);
-        let task = admission_io_handle().spawn(consumer);
-        tokio::time::timeout(std::time::Duration::from_secs(10), task)
-            .await
-            .expect("every backlog event must be consumed")
-            .unwrap();
-
-        let mut conn = pool.open_live_connection().await.unwrap();
-        let mut pipeline = redis::pipe();
-        for key in &keys {
-            pipeline.cmd("HMGET").arg(key).arg(&["p", "t", "l:cleanup"]);
-        }
-        let states: Vec<(i64, i64, Option<String>)> =
-            pipeline.query_async(&mut conn).await.unwrap();
-        assert_eq!(states.len(), keys.len());
-        for (index, state) in states.into_iter().enumerate() {
-            let expected = if index % 2 == 0 {
-                (0, 4, None)
-            } else {
-                (0, 0, None)
-            };
-            assert_eq!(
-                state, expected,
-                "cleanup event {index} must retain its outcome"
-            );
-        }
-        redis::cmd("DEL")
-            .arg(&keys)
-            .query_async::<i64>(&mut conn)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn abandoned_reserve_result_releases_the_shared_slot() {
         use crate::config::models::storage::RedisConfig;
         use crate::storage::redis::{RedisPool, admission::AdmissionReserveArgs};
@@ -737,7 +655,12 @@ mod tests {
                     })
                     .await?;
                 assert!(state.allowed);
-                let hold = AdmissionHold::new(worker_pool, "abandoned".into(), deployment);
+                let hold = AdmissionHold::new(
+                    worker_pool,
+                    "abandoned".into(),
+                    deployment,
+                    cleanup_slots().try_acquire_owned().unwrap(),
+                );
                 let _ = reserved_tx.send(());
                 let _ = deliver_rx.await;
                 Ok(hold)

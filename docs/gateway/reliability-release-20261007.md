@@ -47,12 +47,17 @@ block; they are not the HTTP execution path.
 - Routing lease success/failure completion is asynchronous. Embedded callers of
   those APIs must await completion; retain the lease rather than detaching its ID.
 - Deprecated deployment-ID selectors and `DeploymentLease::into_deployment_id`
-  detach Redis admission ownership. Use the owned lease APIs for asynchronous
-  shared-admission settlement and cancellation.
-- Shared Redis admission/circuit keys use the logical deployment ID. Reusing that
-  ID during credential or endpoint rotation retains prior shared leases and
-  circuit state; distinct deployment IDs separate those shared states. The local
-  resource-identity registry alone does not isolate their Redis namespaces.
+  cancel shared admission through the synchronous bridge before returning the ID.
+  They retain the local active count until release, but do not enforce shared
+  quotas throughout execution. Use owned leases for asynchronous shared admission.
+- Gateway Redis admission/circuit keys include the existing resource identity
+  digest alongside deployment ID. Credential/endpoint changes isolate replacement
+  state; old holds complete in their original namespace. Old ID-only replicas and
+  new resource-specific replicas do not share the full quota/circuit state: drain
+  old replicas rather than treating mixed-version operation as quota continuity.
+- Redis limited admission owns one of 1,024 process-wide cleanup responsibility
+  slots before reserving remotely. Exhaustion returns the existing unavailable
+  result; accepted holds retain bounded cleanup capacity through completion.
 - SSE EOF without a provider terminal indication is an error, not a completed
   answer. Consumers must handle that existing stream-error boundary.
 - Key management requires the credential's own management grant as well as the

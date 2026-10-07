@@ -53,6 +53,17 @@ use std::sync::Arc;
 #[cfg(feature = "gateway")]
 use std::sync::atomic::Ordering;
 
+#[cfg(feature = "gateway")]
+impl super::Deployment {
+    /// Shared state follows the same resource identity as the local registry.
+    pub(crate) fn shared_state_id(&self) -> String {
+        match &self.state.runtime_identity {
+            Some(identity) => format!("{}:{}", self.id, hex::encode(identity.0)),
+            None => self.id.clone(),
+        }
+    }
+}
+
 /// Keep removed resource states while a routing/state handle can still use
 /// them, or they retain current minute usage or cooldown. One shared entry per
 /// resource prevents registry copies from counting as live request handles.

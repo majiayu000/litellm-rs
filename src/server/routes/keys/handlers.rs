@@ -1,10 +1,10 @@
 //! HTTP request handlers for API key management
 
 use super::access::{
-    auth_result_from_request_extensions, authenticate_management_request,
-    check_auth_result_ownership, filter_and_paginate_keys, invalidate_api_key_auth_cache,
-    is_auth_enabled, management_key_grant_allowed, resolve_create_key_scope,
-    validate_create_key_rate_limits, validate_update_key_permissions,
+    auth_can_grant_management_access, auth_result_from_request_extensions,
+    authenticate_management_request, check_auth_result_ownership, filter_and_paginate_keys,
+    invalidate_api_key_auth_cache, is_auth_enabled, management_key_grant_allowed,
+    resolve_create_key_scope, validate_create_key_rate_limits, validate_update_key_permissions,
     validate_update_key_rate_limits, verify_key_access_allowed, verify_unknown_key_access_allowed,
 };
 use super::types::{
@@ -171,7 +171,7 @@ pub async fn list_keys(
             }
         } else {
             // Listing all keys (no filter) requires admin privileges.
-            let is_admin = check_auth_result_ownership(&auth, None, None);
+            let is_admin = auth_can_grant_management_access(&auth);
             if !is_admin {
                 warn!("Non-admin caller attempted to list all keys");
                 let error_response =

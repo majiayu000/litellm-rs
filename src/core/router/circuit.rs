@@ -102,14 +102,15 @@ impl CircuitBackend {
                 allow_degraded,
                 cache,
             } => {
-                if let Some(entry) = cache.get(deployment.id.as_str())
+                let shared_id = deployment.shared_state_id();
+                if let Some(entry) = cache.get(shared_id.as_str())
                     && entry.1.elapsed() < CACHE_TTL
                 {
                     return CircuitObserve::Shared(entry.0);
                 }
-                match invoke(pool, &deployment.id, probe_token, config, "observe", 0).await {
+                match invoke(pool, &shared_id, probe_token, config, "observe", 0).await {
                     Ok(state) => {
-                        cache.insert(deployment.id.clone(), (state, Instant::now()));
+                        cache.insert(shared_id.clone(), (state, Instant::now()));
                         CircuitObserve::Shared(state)
                     }
                     Err(_) => redis_loss_observe(&deployment.id, *allow_degraded),
@@ -171,28 +172,31 @@ impl CircuitBackend {
                 probe_token,
                 allow_degraded,
                 cache,
-            } => match invoke(pool, &deployment.id, probe_token, config, op, reason).await {
-                Ok(state) => {
-                    cache.insert(deployment.id.clone(), (state, Instant::now()));
-                    CircuitWrite::Applied(state)
+            } => {
+                let shared_id = deployment.shared_state_id();
+                match invoke(pool, &shared_id, probe_token, config, op, reason).await {
+                    Ok(state) => {
+                        cache.insert(shared_id, (state, Instant::now()));
+                        CircuitWrite::Applied(state)
+                    }
+                    Err(_) if *allow_degraded => {
+                        warn!(
+                            deployment_id = %deployment.id,
+                            operation = op,
+                            "circuit redis operation failed; using last local snapshot"
+                        );
+                        CircuitWrite::Local
+                    }
+                    Err(_) => {
+                        warn!(
+                            deployment_id = %deployment.id,
+                            operation = op,
+                            "circuit redis operation failed; failing closed"
+                        );
+                        CircuitWrite::StrictUnavailable
+                    }
                 }
-                Err(_) if *allow_degraded => {
-                    warn!(
-                        deployment_id = %deployment.id,
-                        operation = op,
-                        "circuit redis operation failed; using last local snapshot"
-                    );
-                    CircuitWrite::Local
-                }
-                Err(_) => {
-                    warn!(
-                        deployment_id = %deployment.id,
-                        operation = op,
-                        "circuit redis operation failed; failing closed"
-                    );
-                    CircuitWrite::StrictUnavailable
-                }
-            },
+            }
         }
     }
 }
