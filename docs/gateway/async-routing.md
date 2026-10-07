@@ -82,3 +82,30 @@ With shared Redis admission, runtime-backed SDK and DefaultRouter streams reserv
 Shared admission hashes expire after both the current quota minute and every live lease deadline. Ending one lease cannot remove another replica's live reservation or the current minute's settled/retained quota. Shared circuit calls refresh a ten-minute idle retention period, extended through any later open-circuit or probe-owner deadline; observing a circuit does not extend its open deadline. Active namespaces retain cumulative circuit counters. After the idle retention period, the shared circuit history starts fresh. This applies to newly created or subsequently accessed hashes; pre-upgrade idle keys without TTL are not backfilled.
 
 Streaming provider failure preserves local failure and admission completion intent before notifying the shared circuit, then awaits admission settlement/cancellation. Cancellation during the later admission wait retains the captured failure and settlement responsibility. Circuit calls still use the existing bounded I/O bridge; a call cancelled before bridge admission has not been accepted for detached I/O.
+
+When more stream output follows a usage snapshot, that snapshot no longer covers
+the whole response. Shared admission retains the initial estimate until newer
+usage covers the output, with any already observed larger count as a minimum.
+A newer usage report, including an explicit zero, restores settlement to the
+reported count. Local counters retain observed token counts. Anthropic adapters
+expose complete, valid terminal usage; intermediate or incomplete token fields
+remain unknown for settlement.
+
+Runtime-backed SDK and DefaultRouter unary chat use the same input and output
+estimate before provider dispatch. Runtime-backed SDK embeddings reserve the
+existing input estimate for the whole single or batch request. Successful unary
+responses without usage retain their shared token reservation; an explicit zero
+or positive usage count settles to that reported count. Local token statistics
+continue to include only observed usage.
+
+Bedrock also contributes a digest of the static credentials held by the
+constructed client. A fallback resolved during construction cannot share a
+namespace with different credentials merely because earlier normalized inputs
+matched. Vertex project normalization preserves the factory's existing
+precedence for an explicit top-level project and provider-specific settings.
+
+Accepted API-key usage writes outlive a cancelled request waiter. The key manager
+owns at most 1,024 concurrent writes and retains the complete usage record,
+including pricing and unpriced fields. Admission at that bound is best effort;
+an overloaded writer returns an error, and process shutdown is not a durable
+delivery guarantee. Normal callers continue to await the database result.

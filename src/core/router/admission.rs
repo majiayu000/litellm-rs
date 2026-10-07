@@ -18,13 +18,16 @@ pub(crate) struct AdmissionHold {
 }
 
 impl AdmissionHold {
-    /// Release concurrency while preserving the original RPM/TPM reservation
-    /// when generation happened but its actual usage remains unknown.
-    pub(crate) fn prepare_retention(&self) {
+    /// Release concurrency while preserving the RPM/TPM reservation, raised
+    /// to any observed token minimum when the final usage remains unknown.
+    pub(crate) fn prepare_retention(&self, minimum_tokens: u64) {
         #[cfg(feature = "gateway")]
         {
-            *self.inner.completion.lock() = Some(AdmissionCompletion::Retain);
+            *self.inner.completion.lock() =
+                Some(AdmissionCompletion::Retain(to_i64(minimum_tokens)));
         }
+        #[cfg(not(feature = "gateway"))]
+        let _ = minimum_tokens;
     }
 
     /// Preserve a known cancellation before another accounting await.
@@ -63,7 +66,7 @@ struct AdmissionHoldInner {
 enum AdmissionCompletion {
     Cancel,
     Settle(i64),
-    Retain,
+    Retain(i64),
 }
 
 #[cfg(feature = "gateway")]
@@ -234,8 +237,8 @@ impl AdmissionBackend {
         self.finish(hold, "cancel", 0).await;
     }
 
-    pub(crate) async fn retain_async(&self, hold: &AdmissionHold) {
-        self.finish(hold, "retain", 0).await;
+    pub(crate) async fn retain_async(&self, hold: &AdmissionHold, minimum_tokens: u64) {
+        self.finish(hold, "retain", to_i64(minimum_tokens)).await;
     }
 
     async fn finish(&self, hold: &AdmissionHold, op: &'static str, actual_tpm: i64) {
@@ -254,7 +257,7 @@ impl AdmissionBackend {
                 let deployment_id = hold.inner.deployment_id.clone();
                 *hold.inner.completion.lock() = Some(match op {
                     "settle" => AdmissionCompletion::Settle(actual_tpm),
-                    "retain" => AdmissionCompletion::Retain,
+                    "retain" => AdmissionCompletion::Retain(actual_tpm),
                     _ => AdmissionCompletion::Cancel,
                 });
                 let _ = run_redis(&deployment_id, op, async move {
@@ -262,7 +265,8 @@ impl AdmissionBackend {
                         pool.admission_settle(&key, &hold.inner.lease_id, actual_tpm)
                             .await
                     } else if op == "retain" {
-                        pool.admission_retain(&key, &hold.inner.lease_id).await
+                        pool.admission_retain(&key, &hold.inner.lease_id, actual_tpm)
+                            .await
                     } else {
                         pool.admission_cancel(&key, &hold.inner.lease_id).await
                     };
@@ -408,8 +412,11 @@ fn enqueue_cleanup(cleanup: AdmissionCleanup) {
                             .admission_settle(&key, &cleanup.lease_id, tokens)
                             .await
                     }
-                    AdmissionCompletion::Retain => {
-                        cleanup.pool.admission_retain(&key, &cleanup.lease_id).await
+                    AdmissionCompletion::Retain(minimum_tokens) => {
+                        cleanup
+                            .pool
+                            .admission_retain(&key, &cleanup.lease_id, minimum_tokens)
+                            .await
                     }
                 };
                 if let Err(error) = result {

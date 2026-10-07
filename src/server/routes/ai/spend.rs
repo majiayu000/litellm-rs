@@ -655,3 +655,7 @@ mod no_usage_tests;
 #[cfg(test)]
 #[path = "spend_runtime_pricing_tests.rs"]
 mod runtime_pricing_tests;
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "spend_cancellation_tests.rs"]
+mod cancellation_tests;

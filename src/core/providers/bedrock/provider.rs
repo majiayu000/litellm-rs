@@ -65,6 +65,11 @@ pub struct BedrockProvider {
 }
 
 impl BedrockProvider {
+    /// Only a digest of the constructed client's credentials leaves the provider.
+    pub(crate) fn credential_resource_identity(&self) -> [u8; 32] {
+        self.client.credential_resource_identity()
+    }
+
     /// Create a new Bedrock provider instance
     pub async fn new(config: BedrockConfig) -> Result<Self, ProviderError> {
         // Validate configuration

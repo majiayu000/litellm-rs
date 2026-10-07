@@ -532,7 +532,7 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
         .await
         .unwrap();
     for default_facade in [false, true] {
-        for terminal in [
+        let cases = [
             "drop",
             "eof",
             "error",
@@ -540,7 +540,22 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
             "unpolled",
             "heartbeat-error",
             "known",
-        ] {
+            "known-error",
+        ]
+        .into_iter()
+        .map(|terminal| (terminal, 0_u64))
+        .chain(
+            [
+                "snapshot-drop",
+                "snapshot-eof",
+                "snapshot-error",
+                "snapshot-final",
+                "snapshot-zero",
+            ]
+            .into_iter()
+            .flat_map(|terminal| [4, 40].map(|tokens| (terminal, tokens))),
+        );
+        for (terminal, snapshot_tokens) in cases {
             let mut events = vec![Ok(serde_json::from_value(serde_json::json!({
             "id":"unknown", "object":"chat.completion.chunk", "created":1,
             "model":"wire-model", "choices":[{"index":0,"delta":{
@@ -548,10 +563,35 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
             }}]
         }))
         .unwrap())];
-            if terminal == "known" {
+            if terminal == "known" || terminal == "known-error" {
                 events = vec![Ok(usage_chunk(1))];
             }
-            if terminal == "error" || terminal == "heartbeat-error" {
+            if terminal.starts_with("snapshot-") {
+                let mut snapshot = usage_chunk(1);
+                snapshot.usage.as_mut().unwrap().total_tokens = snapshot_tokens as u32;
+                events.insert(0, Ok(snapshot));
+                if terminal == "snapshot-final" || terminal == "snapshot-zero" {
+                    let mut final_chunk = usage_chunk(1);
+                    if terminal == "snapshot-zero" {
+                        final_chunk.usage.as_mut().unwrap().total_tokens = 0;
+                        // Same-chunk actual zero covers this newly observed payload.
+                        final_chunk.choices = serde_json::from_value(serde_json::json!([
+                            {"index":0,"delta":{"content":"final"}}
+                        ]))
+                        .unwrap();
+                    }
+                    events.push(Ok(final_chunk));
+                }
+            }
+            let completed = matches!(
+                terminal,
+                "eof" | "known" | "snapshot-eof" | "snapshot-final" | "snapshot-zero"
+            );
+            let failed = matches!(
+                terminal,
+                "error" | "heartbeat-error" | "snapshot-error" | "known-error"
+            );
+            if failed {
                 events.push(Err(ProviderError::authentication(
                     "sdk-completion-test",
                     "denied",
@@ -628,11 +668,23 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
                 reserved.2 > 1,
                 "admission must reserve the request estimate and output bound"
             );
+            if terminal.starts_with("snapshot-") {
+                assert!(
+                    (4..40).contains(&reserved.2),
+                    "snapshot matrix must straddle initial estimate: {reserved:?}"
+                );
+            }
             if terminal != "unpolled" {
                 assert!(output.next().await.unwrap().is_ok());
-                if terminal == "eof" || terminal == "known" {
+                if terminal.starts_with("snapshot-") {
+                    assert!(output.next().await.unwrap().is_ok());
+                    if terminal == "snapshot-final" || terminal == "snapshot-zero" {
+                        assert!(output.next().await.unwrap().is_ok());
+                    }
+                }
+                if completed {
                     assert!(output.next().await.is_none());
-                } else if terminal == "error" || terminal == "heartbeat-error" {
+                } else if failed {
                     assert!(output.next().await.unwrap().is_err());
                 }
             }
@@ -640,20 +692,31 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
             let deployment = router.get_deployment(&id).unwrap();
             assert_counts(
                 &deployment,
-                u64::from(terminal == "eof" || terminal == "known"),
-                u64::from(terminal == "error" || terminal == "heartbeat-error"),
-                if terminal == "known" { 12 } else { 0 },
+                u64::from(completed),
+                u64::from(failed),
+                if matches!(terminal, "known" | "known-error" | "snapshot-final") {
+                    12
+                } else if terminal == "snapshot-zero" {
+                    0
+                } else if terminal.starts_with("snapshot-") {
+                    snapshot_tokens
+                } else {
+                    0
+                },
             );
-            let retain = matches!(terminal, "drop" | "eof" | "error" | "known");
+            let retain = matches!(terminal, "drop" | "eof" | "error" | "known" | "known-error")
+                || terminal.starts_with("snapshot-");
             assert_eq!(
                 deployment.state.rpm_current.load(Ordering::Relaxed),
                 u64::from(retain)
             );
             assert!(dropped.load(Ordering::Relaxed));
-            let expected = if terminal == "known" {
+            let expected = if matches!(terminal, "known" | "known-error" | "snapshot-final") {
                 (0, 1, 12)
+            } else if terminal == "snapshot-zero" {
+                (0, 1, 0)
             } else if retain {
-                (0, 1, reserved.2)
+                (0, 1, reserved.2.max(snapshot_tokens as i64))
             } else {
                 (0, 0, 0)
             };
@@ -682,7 +745,7 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
                 !fields.iter().any(|field| field.starts_with("l:")),
                 "terminal cleanup must delete the lease"
             );
-            if terminal == "drop" || terminal == "eof" {
+            if matches!(terminal, "drop" | "eof" | "snapshot-drop" | "snapshot-eof") {
                 assert!(
                     matches!(
                         client.chat_stream_with_options(bounded_request()).await,

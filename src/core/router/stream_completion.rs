@@ -13,6 +13,7 @@ pub(crate) struct RuntimeStreamCompletion {
     lease: Option<DeploymentLease>,
     started_at: Instant,
     usage: Option<u64>,
+    usage_covers_output: bool,
     output_observed: bool,
     terminal_failure: Option<CooldownReason>,
     outcome_recorded: bool,
@@ -41,6 +42,7 @@ impl RuntimeHandle {
             lease: Some(lease),
             started_at,
             usage: None,
+            usage_covers_output: false,
             output_observed: false,
             terminal_failure: None,
             outcome_recorded: false,
@@ -60,15 +62,18 @@ impl RuntimeStreamCompletion {
 
     pub(crate) fn observe_output(&mut self) {
         self.output_observed = true;
-        if self.usage.is_none()
-            && let Some(lease) = &self.lease
-        {
-            lease.preserve_admission_reservation();
+        // A prior usage snapshot cannot settle output generated after it.
+        // Keep that observed count locally, but retain the shared reservation
+        // until another usage record covers the newly observed payload.
+        self.usage_covers_output = false;
+        if let Some(lease) = &self.lease {
+            lease.preserve_admission_reservation(self.usage.unwrap_or_default());
         }
     }
 
     pub(crate) fn observe_usage(&mut self, tokens: u64) {
         self.usage = Some(tokens);
+        self.usage_covers_output = true;
         if let Some(lease) = &self.lease {
             lease.preserve_admission_usage(tokens);
         }
@@ -81,18 +86,20 @@ impl RuntimeStreamCompletion {
             .deployment()
             .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
         self.outcome_recorded = true;
-        if self.usage.is_some() {
+        if self.usage_covers_output {
             lease.preserve_admission_usage(tokens);
         } else {
-            lease.preserve_admission_reservation();
+            lease.preserve_admission_reservation(self.usage.unwrap_or_default());
         }
         self.router
             .record_success_circuit_for_deployment_async(lease.deployment())
             .await;
-        if self.usage.is_some() {
+        if self.usage_covers_output {
             lease.commit_admission_async(tokens).await;
         } else {
-            lease.retain_admission_async().await;
+            lease
+                .retain_admission_async(self.usage.unwrap_or_default())
+                .await;
         }
         // EOF releases the exact snapshot lease even if the caller retains
         // the exhausted Stream object indefinitely.
@@ -109,7 +116,7 @@ impl RuntimeStreamCompletion {
         self.terminal_failure = Some(reason);
         let lease = self.lease.as_mut().expect("live stream completion");
         if let Some(tokens) = self.usage {
-            lease.deployment().record_partial_tokens(tokens);
+            lease.deployment().record_interrupted_usage(tokens);
         } else if self.output_observed {
             lease.deployment().record_interrupted_usage(0);
         }
@@ -117,10 +124,14 @@ impl RuntimeStreamCompletion {
             .record_failure_with_reason_for_deployment_async(lease.deployment(), reason)
             .await;
         self.outcome_recorded = true;
-        if let Some(tokens) = self.usage {
-            lease.commit_admission_async(tokens).await;
+        if self.usage_covers_output {
+            lease
+                .commit_admission_async(self.usage.unwrap_or_default())
+                .await;
         } else if self.output_observed {
-            lease.retain_admission_async().await;
+            lease
+                .retain_admission_async(self.usage.unwrap_or_default())
+                .await;
         } else {
             lease.cancel_admission_async().await;
         }
