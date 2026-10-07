@@ -39,6 +39,10 @@ regressions separately check actual accounting and cancellation ownership.
 Running both groups on this complete candidate is required before treating the
 integration as verified.
 
+The SDK stream-completion fixture from #1466 also supplies the optional
+`tool_call_id` field added by #1461. Its user-message role and all accounting,
+release, cancellation and terminal-outcome assertions remain unchanged.
+
 The other merged files use Git's combined content without a manual behavioral
 rewrite. Source review alone does not establish that their composition passes.
 

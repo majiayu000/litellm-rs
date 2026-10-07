@@ -124,6 +124,7 @@ fn request() -> Vec<Message> {
         content: Some(Content::Text("hello".into())),
         name: None,
         tool_calls: None,
+        tool_call_id: None,
     }]
 }
 
