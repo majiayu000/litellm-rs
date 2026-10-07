@@ -606,10 +606,9 @@ async fn relay(
                                     error_type = "authentication_error";
                                     return Err("Realtime API key is no longer authorized".into());
                                 }
-                                let owner = match key.user_id {
-                                    Some(user_id) => state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?,
-                                    None => None,
-                                };
+                                let owner = if let Some(user_id) = key.user_id {
+                                    state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?
+                                } else { None };
                                 if state.auth.api_key().principal_invalid_reason(&key, owner.as_ref()).await.map_err(|_| "Realtime key principal verification unavailable")?.is_some() {
                                     error_type = "authentication_error";
                                     return Err("Realtime API key principal is no longer authorized".into());

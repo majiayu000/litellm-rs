@@ -17,6 +17,14 @@ Their private waiter does not enter a futures executor, so they also work when
 called from `futures::executor::block_on` or `LocalPool`. They still block the
 calling thread; async callers should use the async entry points above.
 
+Deprecated ID-returning selectors and `DeploymentLease::into_deployment_id`
+cancel shared admission through the synchronous bridge before returning the ID.
+Failed writes retain the existing Drop cleanup and lease-expiry fallback. These
+APIs retain the local active count until `release_deployment`, but an ID cannot
+own a distributed reservation.
+Keep the owned lease to enforce shared parallel, RPM, and TPM limits throughout
+execution. Gateway execution retains owned leases.
+
 Each admission/circuit bridge admits at most 64 I/O tasks. Additional callers wait
 for an async semaphore permit rather than occupying an HTTP worker or creating
 additional detached tasks. A launched operation retains its permit even if its
@@ -31,18 +39,26 @@ operation instead of substituting cancellation.
 
 Normal completion and retry cleanup are awaited before proceeding. A destructor
 cannot await, so async lease drop releases the local active-request count
-immediately and places Redis cleanup in an unbounded metadata queue with one
-consumer on the admission runtime and no task per event. A slow Redis can grow
-the process-local event backlog; it is not durable across process restarts.
-The cleanup holds no HTTP-worker thread. If Redis fails or the consumer becomes
-unavailable, the gateway logs the condition and retains the existing lease-expiry
-safety fallback. Explicitly awaited completion
-is preferred when the caller can still make progress. Queue fallback does not
-claim durable token accounting during an outage.
+immediately and places Redis cleanup in one bounded queue (1,024 entries, one
+consumer on the admission runtime). Before reserving in Redis, each request owns
+one of 1,024 process-wide cleanup slots until its hold or queued terminal operation
+finishes. Saturation rejects new admission through the existing unavailable
+result, so accepted holds always have space to retain known settlement usage.
+The cleanup holds no HTTP-worker thread. Redis cleanup failures are still logged
+and retain the existing lease-expiry fallback; this queue does not provide durable
+token accounting during an outage.
 
-The synchronous selectors preserve their synchronous drop behavior. Deprecated
-ID-returning selectors retain their prior ownership contract; new code should
-keep the lease rather than detach it into an ID.
+Successful unary and runtime-stream completion preserves known admission usage
+and publishes shared circuit success before awaiting admission settlement.
+Cancellation during that settlement cannot omit the already published outcome.
+
+Gateway resources use the existing construction identity digest alongside the
+deployment ID for shared Redis admission, circuit state and the circuit cache.
+Replicas with the same resource share state; changing credentials or endpoints
+isolates the replacement from retired leases and cooldowns. Old holds retain the
+original namespace, so their completion cannot alter the replacement's quota.
+
+The synchronous owned-lease selectors preserve their synchronous drop behavior.
 
 Regression tests exercise caller progress on a single-thread Tokio runtime for
 both bridges, nested futures executors through the synchronous APIs, and a

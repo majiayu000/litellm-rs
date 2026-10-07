@@ -32,7 +32,7 @@ fn permissions_grant_management_access(permissions: &KeyPermissions) -> bool {
         })
 }
 
-fn auth_can_grant_management_access(auth: &AuthResult) -> bool {
+pub(super) fn auth_can_grant_management_access(auth: &AuthResult) -> bool {
     auth.user
         .as_ref()
         .map(|user| user.has_role(&UserRole::Admin))
@@ -60,14 +60,6 @@ pub(super) fn check_ownership(
     if requesting_user.has_role(&UserRole::Admin) {
         return true;
     }
-    check_owned_scope(requesting_user, key_user_id, key_team_id)
-}
-
-fn check_owned_scope(
-    requesting_user: &User,
-    key_user_id: Option<Uuid>,
-    key_team_id: Option<Uuid>,
-) -> bool {
     if key_user_id == Some(requesting_user.id()) {
         return true;
     }
@@ -84,14 +76,14 @@ pub(super) fn check_auth_result_ownership(
     key_user_id: Option<Uuid>,
     key_team_id: Option<Uuid>,
 ) -> bool {
+    if let Some(key) = auth.api_key.as_ref()
+        && !api_key_has_admin_permission_checked(key).unwrap_or(false)
+    {
+        return (key.user_id.is_some() && key.user_id == key_user_id)
+            || (key.team_id.is_some() && key.team_id == key_team_id);
+    }
     if let Some(ref user) = auth.user {
-        if auth.api_key.is_none() || auth_can_grant_management_access(auth) {
-            check_ownership(user, key_user_id, key_team_id)
-        } else {
-            // An operation grant permits management within the owner's scope;
-            // the owner's admin role cannot restore absent global authority.
-            check_owned_scope(user, key_user_id, key_team_id)
-        }
+        check_ownership(user, key_user_id, key_team_id)
     } else {
         let caller_team = auth.context.team_id();
         caller_team.is_some() && caller_team == key_team_id
@@ -254,12 +246,38 @@ pub(super) fn resolve_create_key_scope(
         .map(permissions_grant_management_access)
         .unwrap_or(false);
 
+    if let Some(key) = auth.api_key.as_ref()
+        && !api_key_has_admin_permission_checked(key).unwrap_or(false)
+    {
+        if requests_management_key {
+            return Err(if auth.user.is_none() {
+                "Team-scoped API keys cannot create API keys with management permissions"
+            } else {
+                "Only admin can create API keys with management permissions"
+            });
+        }
+        let scope = if requested_user_id.is_none() && requested_team_id.is_none() {
+            (key.user_id, key.team_id)
+        } else {
+            (requested_user_id, requested_team_id)
+        };
+        return match scope {
+            (Some(user_id), None) if Some(user_id) == key.user_id => Ok(scope),
+            (None, Some(team_id)) if Some(team_id) == key.team_id => Ok(scope),
+            (Some(user_id), Some(team_id))
+                if Some(user_id) == key.user_id && Some(team_id) == key.team_id =>
+            {
+                Ok(scope)
+            }
+            _ => Err("Not authorized to create API key for this scope"),
+        };
+    }
+
     if let Some(ref user) = auth.user {
-        let can_grant_management = auth_can_grant_management_access(auth);
-        if requests_management_key && !can_grant_management {
+        if requests_management_key && !auth_can_grant_management_access(auth) {
             return Err("Only admin can create API keys with management permissions");
         }
-        if can_grant_management {
+        if user.has_role(&UserRole::Admin) {
             return Ok((requested_user_id, requested_team_id));
         }
 
