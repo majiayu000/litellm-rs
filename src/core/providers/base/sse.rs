@@ -14,6 +14,7 @@ mod openai;
 mod termination;
 
 pub use anthropic::AnthropicTransformer;
+pub(crate) use anthropic::AnthropicUsageState;
 pub use cohere::CohereTransformer;
 pub use databricks::DatabricksTransformer;
 pub use gemini::GeminiTransformer;

@@ -105,18 +105,22 @@ impl LLMClient {
                         let response = deployment
                             .provider
                             .create_embeddings(request, context)
-                            .await?;
-                        if expects_data && response.data.is_empty() {
-                            return Err(ProviderError::api_error(
-                                "embedding",
-                                502,
-                                "No embedding data in response",
-                            ));
-                        }
+                            .await
+                            .map_err(|error| (error, None))?;
                         let tokens = response
                             .usage
                             .as_ref()
                             .map(|usage| u64::from(usage.total_tokens));
+                        if expects_data && response.data.is_empty() {
+                            return Err((
+                                ProviderError::api_error(
+                                    "embedding",
+                                    502,
+                                    "No embedding data in response",
+                                ),
+                                Some(tokens),
+                            ));
+                        }
                         Ok((response, tokens))
                     }
                 },

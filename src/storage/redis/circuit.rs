@@ -3,7 +3,10 @@
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+const CIRCUIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CIRCUIT_SCRIPT: &str = r#"
 local op = ARGV[1]
@@ -163,14 +166,14 @@ fn circuit_script() -> &'static redis::Script {
     SCRIPT.get_or_init(|| redis::Script::new(CIRCUIT_SCRIPT))
 }
 
-fn circuit_runtime_connections() -> &'static parking_lot::Mutex<HashMap<String, RedisLiveConnection>>
-{
-    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, RedisLiveConnection>>> =
+fn circuit_runtime_connections()
+-> &'static parking_lot::Mutex<HashMap<String, Arc<RedisLiveConnection>>> {
+    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, Arc<RedisLiveConnection>>>> =
         OnceLock::new();
     CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
-async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
+async fn connection_on_current_runtime(pool: &RedisPool) -> Result<Arc<RedisLiveConnection>> {
     let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
     {
         let cache = circuit_runtime_connections().lock();
@@ -178,7 +181,11 @@ async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConn
             return Ok(conn.clone());
         }
     }
-    let conn = pool.open_live_connection().await?;
+    // Reuse the bounded, non-replaying transport for uncertain routing writes.
+    let conn = Arc::new(
+        pool.open_budget_connection(CIRCUIT_OPERATION_TIMEOUT)
+            .await?,
+    );
     let mut cache = circuit_runtime_connections().lock();
     Ok(cache.entry(cache_key).or_insert(conn).clone())
 }
@@ -216,29 +223,53 @@ impl RedisPool {
             ));
         }
 
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
-        let mut conn = connection_on_current_runtime(self).await?;
+        let mut connection = None;
+        let result =
+            tokio::time::timeout(CIRCUIT_OPERATION_TIMEOUT, async {
+                let _permit =
+                    self.semaphore.clone().acquire_owned().await.map_err(|_| {
+                        GatewayError::Internal("Redis semaphore closed".to_string())
+                    })?;
+                let cached = connection_on_current_runtime(self).await?;
+                connection = Some(Arc::clone(&cached));
+                let mut conn = cached.as_ref().clone();
 
-        let values: Vec<i64> = circuit_script()
-            .key(key)
-            .arg(args.op)
-            .arg(args.now_secs)
-            .arg(args.window_epoch)
-            .arg(args.token)
-            .arg(args.allowed_fails)
-            .arg(args.min_requests)
-            .arg(args.cooldown_secs)
-            .arg(args.success_threshold)
-            .arg(args.reason)
-            .invoke_async(&mut conn)
+                let values: Vec<i64> = circuit_script()
+                    .key(key)
+                    .arg(args.op)
+                    .arg(args.now_secs)
+                    .arg(args.window_epoch)
+                    .arg(args.token)
+                    .arg(args.allowed_fails)
+                    .arg(args.min_requests)
+                    .arg(args.cooldown_secs)
+                    .arg(args.success_threshold)
+                    .arg(args.reason)
+                    .invoke_async(&mut conn)
+                    .await
+                    .map_err(GatewayError::from)?;
+                parse_circuit_state(values)
+            })
             .await
-            .map_err(GatewayError::from)?;
-        parse_circuit_state(values)
+            .unwrap_or_else(|_| {
+                Err(GatewayError::Unavailable(
+                    "Redis circuit operation deadline exceeded".into(),
+                ))
+            });
+        if result.is_err()
+            && let Some(connection) = connection
+        {
+            let key = format!("{}|{}", self.config.url, self.config.cluster);
+            let mut cache = circuit_runtime_connections().lock();
+            // A late failure from an old connection must preserve a replacement.
+            if cache
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                cache.remove(&key);
+            }
+        }
+        result
     }
 }
 

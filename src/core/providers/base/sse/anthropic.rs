@@ -19,7 +19,7 @@ mod state;
 mod usage;
 
 use state::{ActiveContentBlock, AnthropicThinkingStreamState, DeltaDisposition};
-use usage::AnthropicUsageState;
+pub(crate) use usage::AnthropicUsageState;
 
 /// Anthropic SSE Transformer
 ///
