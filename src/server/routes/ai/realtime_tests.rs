@@ -1430,7 +1430,14 @@ async fn response_boundaries_reauthorize_current_keys() {
 #[actix_web::test]
 async fn response_boundaries_reauthorize_api_key_teams() {
     for team_only in [false, true] {
-        for change in ["inactive", "deleted", "unavailable"] {
+        for change in [
+            "active",
+            "inactive",
+            "deleted",
+            "unavailable",
+            "inactive-after-response",
+            "deleted-after-response",
+        ] {
             let (state, url, raw, calls, handles) = fixture().await;
             let (mut key, _) = state
                 .auth
@@ -1460,9 +1467,33 @@ async fn response_boundaries_reauthorize_api_key_teams() {
             let deployment = router
                 .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
                 .unwrap();
+            let completed_before = u64::from(matches!(
+                change,
+                "active" | "inactive-after-response" | "deleted-after-response"
+            ));
+            if completed_before == 1 {
+                socket
+                    .send(Message::Text(
+                        json!({"type":"response.create"}).to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(next_json(&mut socket).await["type"], "response.created");
+                for _ in 0..3 {
+                    next_json(&mut socket).await;
+                }
+            }
+            let budget_before = state
+                .budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .unwrap();
+            assert_eq!(budget_before.request_count, completed_before);
+            assert_eq!(budget_before.current_spend > 0.0, completed_before == 1);
             match change {
-                "deleted" => repository.delete(team.id()).await.unwrap(),
-                "inactive" => {
+                "active" => {}
+                "deleted" | "deleted-after-response" => repository.delete(team.id()).await.unwrap(),
+                "inactive" | "inactive-after-response" => {
                     team.status = TeamStatus::Inactive;
                     repository.update(team).await.unwrap();
                 }
@@ -1484,35 +1515,60 @@ async fn response_boundaries_reauthorize_api_key_teams() {
                 .await
                 .unwrap();
             let event = next_json(&mut socket).await;
-            assert_eq!(event["type"], "error");
+            if change == "active" {
+                assert_eq!(event["type"], "response.created");
+                for _ in 0..3 {
+                    next_json(&mut socket).await;
+                }
+            } else {
+                assert_eq!(event["type"], "error");
+                assert_eq!(
+                    event["error"]["type"],
+                    if change == "unavailable" {
+                        "server_error"
+                    } else {
+                        "authentication_error"
+                    },
+                    "team_only={team_only}, change={change}"
+                );
+            }
+            let completed = completed_before + u64::from(change == "active");
             assert_eq!(
-                event["error"]["type"],
-                if change == "unavailable" {
-                    "server_error"
-                } else {
-                    "authentication_error"
-                },
-                "team_only={team_only}, change={change}"
-            );
-            assert!(
                 calls
                     .lock()
                     .unwrap()
                     .iter()
-                    .all(|event| event["type"] != "response.create")
+                    .filter(|event| event["type"] == "response.create")
+                    .count(),
+                completed as usize,
+                "team_only={team_only}, change={change}"
             );
             assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
-            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
-            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
             assert_eq!(
-                state
-                    .budget_limits
-                    .providers
-                    .get_provider_usage("openai")
-                    .unwrap()
-                    .current_spend,
-                0.0
+                deployment.state.success_requests.load(Ordering::Relaxed),
+                completed
             );
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                completed
+            );
+            assert_eq!(
+                deployment.state.tpm_current.load(Ordering::Relaxed),
+                completed * 60
+            );
+            let budget_after = state
+                .budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .unwrap();
+            assert_eq!(budget_after.request_count, completed);
+            if change == "active" {
+                assert!(
+                    (budget_after.current_spend - budget_before.current_spend * 2.0).abs() < 1e-12
+                );
+            } else {
+                assert_eq!(budget_after.current_spend, budget_before.current_spend);
+            }
             assert!(state.budget_limits.providers.reserved_spend.is_empty());
             drop(socket);
             for handle in handles {
