@@ -195,7 +195,7 @@ async fn routing_operation(pool: &RedisPool, circuit: bool) -> Result<()> {
     if circuit {
         pool.circuit_invoke(
             "{deadline}:circuit",
-            super::circuit::CircuitArgs {
+            crate::storage::redis::circuit::CircuitArgs {
                 op: "failure",
                 now_secs: 1_000,
                 window_epoch: 1,
