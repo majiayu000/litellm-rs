@@ -291,6 +291,7 @@ async fn unary_admission_request(
 #[tokio::test]
 async fn runtime_unary_facades_reserve_estimates_and_preserve_unknown_usage() {
     use litellm_rs::config::models::storage::RedisConfig;
+    use litellm_rs::storage::redis::RedisPool;
     use litellm_rs::core::router::{DeploymentConfig, RouterConfig};
     use litellm_rs::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 
