@@ -1,8 +1,11 @@
 //! Exercise completion through the public SDK stream, including its outer RAII owner.
 use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
+#[cfg(feature = "gateway")]
+use litellm_rs::core::completion::{CompletionOptions, DefaultRouter, Router as CompletionRouter};
+#[cfg(feature = "gateway")]
+use litellm_rs::sdk::types::{ChatOptions, SdkChatRequest};
 use litellm_rs::{
     core::{
-        completion::{CompletionOptions, DefaultRouter, Router as CompletionRouter},
         providers::{ExternalProvider, Provider, ProviderError},
         router::{Deployment, RuntimeBinding, UnifiedRouter},
         types::{
@@ -15,7 +18,7 @@ use litellm_rs::{
     sdk::{
         LLMClient,
         errors::SDKError,
-        types::{ChatOptions, Content, Message, Role, SdkChatRequest},
+        types::{Content, Message, Role},
     },
 };
 use std::{
@@ -129,6 +132,7 @@ fn request() -> Vec<Message> {
     }]
 }
 
+#[cfg(feature = "gateway")]
 fn bounded_request() -> SdkChatRequest {
     SdkChatRequest {
         model: "public-model".into(),
