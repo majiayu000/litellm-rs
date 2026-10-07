@@ -331,7 +331,6 @@ impl StreamingDeploymentLease {
         }
     }
 
-    #[cfg(feature = "websockets")]
     pub(super) async fn cancel_response(&mut self) {
         self.cancel_admission().await;
         self.release();
@@ -363,6 +362,50 @@ impl StreamingDeploymentLease {
         }
     }
 
+    /// Unknown generation keeps its admission estimate without inventing actual tokens.
+    pub(super) async fn finish_unknown(&mut self, terminal: bool, error: Option<&ProviderError>) {
+        if self.finalized {
+            return;
+        }
+        let hold = self.hold.take();
+        if let Some(hold) = &hold {
+            hold.prepare_retention(0);
+        }
+        let failure = error.map(|error| match infer_cooldown_reason(error) {
+            reason @ (CooldownReason::RateLimit
+            | CooldownReason::AuthError
+            | CooldownReason::NotFound) => reason,
+            _ => CooldownReason::ConsecutiveFailures,
+        });
+        if failure.is_some() || !terminal {
+            self.deployment
+                .record_interrupted_usage_with_admission(0, hold.as_ref());
+        } else {
+            self.deployment.record_success_with_admission(
+                0,
+                self.started_at.elapsed().as_micros() as u64,
+                hold.as_ref(),
+            );
+        }
+        if let Some(reason) = failure {
+            self.router.record_local_failure(&self.deployment, reason);
+        }
+        // Own the final admission/outcome before circuit or accounting can yield.
+        self.release();
+        if let Some(reason) = failure {
+            self.router
+                .record_failure_circuit_for_deployment_async(&self.deployment, reason)
+                .await;
+        } else if terminal {
+            self.router
+                .record_success_circuit_for_deployment_async(&self.deployment)
+                .await;
+        }
+        if let Some(hold) = hold {
+            self.admission.retain_async(&hold, 0).await;
+        }
+    }
+
     pub(super) fn deployment_id(&self) -> &str {
         self.deployment.id.as_str()
     }
@@ -377,7 +420,6 @@ impl StreamingDeploymentLease {
         }
     }
 
-    #[cfg(feature = "websockets")]
     async fn cancel_admission(&mut self) {
         if let Some(hold) = self.hold.take() {
             self.admission.cancel_async(&hold).await;
@@ -695,6 +737,7 @@ where
         capability,
         is_candidate,
         RequestIdempotency::Idempotent,
+        0,
         operation,
     )
     .await
@@ -713,6 +756,7 @@ pub(super) async fn execute_stream_with_selected_deployment_matching_with_idempo
     capability: ProviderCapability,
     is_candidate: P,
     idempotency: RequestIdempotency,
+    estimated_tokens: u64,
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
 where
@@ -732,12 +776,14 @@ where
 
     while attempt <= max_attempts {
         let started_at = Instant::now();
+        let snapshot = router.load_routing_snapshot();
 
         // Prefer deployments this request has not already tried; when every
         // candidate was tried once, fall back to the full pool so
         // single-deployment setups still get same-target retries.
         let mut deployment_lease = match router
-            .select_deployment_lease_for_capability_matching_async(
+            .select_deployment_lease_for_capability_matching_with_estimate(
+                &snapshot,
                 requested_model,
                 &capability,
                 |deployment| {
@@ -745,19 +791,22 @@ where
                         && !tried_deployments.contains(deployment.id.as_str())
                         && is_candidate(deployment)
                 },
+                estimated_tokens,
             )
             .await
         {
             Ok(lease) => lease,
             Err(RouterError::UnsupportedCapability { .. }) if !tried_deployments.is_empty() => {
                 match router
-                    .select_deployment_lease_for_capability_matching_async(
+                    .select_deployment_lease_for_capability_matching_with_estimate(
+                        &snapshot,
                         requested_model,
                         &capability,
                         |deployment| {
                             !excluded_budget_deployments.contains(deployment.id.as_str())
                                 && is_candidate(deployment)
                         },
+                        estimated_tokens,
                     )
                     .await
                 {

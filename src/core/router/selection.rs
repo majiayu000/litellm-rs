@@ -295,7 +295,7 @@ impl Router {
         .await
     }
 
-    pub(super) async fn select_deployment_lease_for_capability_matching_with_estimate<F>(
+    pub(crate) async fn select_deployment_lease_for_capability_matching_with_estimate<F>(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,

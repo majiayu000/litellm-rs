@@ -67,9 +67,23 @@ impl MockGeminiServer {
         self.captured_requests.lock().unwrap().clone()
     }
 
-    pub(crate) async fn shutdown(self) {
-        self.handle.stop(true).await;
-        let result = self.task.await.expect("mock server task should join");
+    pub(crate) async fn shutdown(mut self) {
+        // Wire assertions are complete; pooled mock connections need no drain.
+        // A stalled stop acknowledgement must fail this fixture, not hang the suite.
+        if tokio::time::timeout(Duration::from_secs(10), self.handle.stop(false))
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            panic!("mock server stop acknowledgement timed out");
+        }
+        let result = match tokio::time::timeout(Duration::from_secs(10), &mut self.task).await {
+            Ok(result) => result.expect("mock server task should join"),
+            Err(_) => {
+                self.task.abort();
+                panic!("mock server task join timed out");
+            }
+        };
         if let Err(error) = result {
             panic!("mock server should stop cleanly: {error}");
         }

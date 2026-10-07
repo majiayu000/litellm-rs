@@ -202,6 +202,21 @@ async fn create_native(
     )
     .await?;
     let model = state.unified_router().resolve_model_name(&requested_model);
+    let projected = budget_request(&body, &model);
+    let estimated_prompt_tokens = spend::try_estimate_chat_prompt_tokens(
+        &crate::utils::ai::counter::token_counter::TokenizerIdentity::approximate(
+            "responses",
+            &model,
+        ),
+        &projected.messages,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    let estimated_tokens = u64::from(estimated_prompt_tokens)
+        .saturating_add(u64::from(retained_prompt_tokens))
+        .saturating_add(u64::from(projected.max_tokens.unwrap_or(0)));
     let callback = super::callbacks::CallbackLifecycle::new(
         &state.callbacks,
         state.budgeted.pricing(),
@@ -220,6 +235,7 @@ async fn create_native(
             })
         },
         crate::core::router::retry_policy::RequestIdempotency::NonIdempotent,
+        estimated_tokens,
         {
             let context = context.clone();
             let callback = callback.clone();
@@ -489,6 +505,9 @@ async fn create_native(
             })
             .map(|_| ProviderError::api_error("responses", 502, "Upstream response failed"))
     });
+    if usage.is_none() {
+        lease.finish_unknown(true, terminal_error.as_ref()).await;
+    }
     lease
         .settle_terminal(
             tokens_used,
@@ -736,9 +755,9 @@ async fn settle(
                     "Responses usage unknown",
                 );
             }
-            super::execution::completion::observe_usage(
-                usage.map_or(0, |usage| u64::from(usage.total_tokens)),
-            );
+            if let Some(usage) = usage {
+                super::execution::completion::observe_usage(u64::from(usage.total_tokens));
+            }
             let budget_settlement = async {
                 if let Some(reservation) = reservation {
                     let reserved = reservation.reserved_amount();

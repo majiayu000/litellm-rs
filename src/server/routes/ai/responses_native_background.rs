@@ -53,6 +53,7 @@ pub(super) async fn response(
     let (initial, native_provider) = match prepared {
         Ok(value) => value,
         Err(error) => {
+            lease.finish_unknown(true, None).await;
             if durable_id.is_none() {
                 lease
                     .settle_interrupted(
@@ -110,6 +111,9 @@ pub(super) async fn response(
         let tokens_used = usage
             .as_ref()
             .map_or(0, |usage| u64::from(usage.total_tokens));
+        if usage.is_none() {
+            lease.finish_unknown(true, None).await;
+        }
         let settlement = async {
             if let Some(id) = durable_id {
                 if let Err(error) =

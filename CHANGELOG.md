@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0] - Candidate
+## [0.9.0] - 2026-10-08
 
 ### Added
 
@@ -36,10 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Vertex project precedence and trustworthy terminal Anthropic usage.
 - Capture the credential resources used by provider construction, including
   same-path Vertex file rotation. Preserve key usage calls on non-Tokio executors.
-- Reject malformed empty embedding responses before success accounting and retain
-  their known or unknown usage. Include Anthropic cache reads/writes in legacy
-  stream usage. Bound silent routing Redis operations and cleanup, invalidate the
+- Reject incomplete or invalidly indexed embedding responses before success
+  accounting and retain their known or unknown usage. Include Anthropic cache
+  reads/writes in legacy stream usage. Bound silent routing Redis operations and
+  cleanup, invalidate the
   failed connection generation, and avoid replaying uncertain Cluster writes.
+- Pass the existing native Responses request estimate through admission. Retain
+  unknown usage after output or completion, distinguish known zero and no-output
+  cancellation, and keep background work with its original reservation owner.
 
 ### Breaking changes
 
@@ -47,8 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed tool calls use canonical `ToolCallDelta` fragments. Routing completion
   callers must await asynchronous lease settlement. See
   [compatibility and rollout notes](docs/gateway/reliability-release-20261007.md).
-- This section describes an unreleased candidate. Tag, registry, release archives,
-  container and installation verification remain required for publication.
 
 ## [0.8.2] - 2026-10-04
 

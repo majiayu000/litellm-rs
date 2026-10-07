@@ -47,6 +47,25 @@ async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResp
         return HttpResponse::Ok().json(value);
     }
     if body["stream"] == true {
+        if data.output.lock().unwrap()["test_stall_stream"] == true {
+            use futures::StreamExt;
+            let created = json!({"type":"response.created", "response":{"id":"resp_native","object":"response","status":"in_progress","output":[]}});
+            let mut wire = format!("event: response.created\ndata: {created}\n\n");
+            if data.output.lock().unwrap()["test_output_before_stall"] == true {
+                let delta = json!({"type":"response.output_text.delta","output_index":0,"delta":"generated"});
+                wire.push_str(&format!(
+                    "event: response.output_text.delta\ndata: {delta}\n\n"
+                ));
+            }
+            return HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(
+                    futures::stream::once(async move {
+                        Ok::<_, std::io::Error>(bytes::Bytes::from(wire))
+                    })
+                    .chain(futures::stream::pending()),
+                );
+        }
         if data.output.lock().unwrap()["test_midstream_error"] == true {
             return HttpResponse::Ok().insert_header(("content-type", "text/event-stream"))
                 .body("event: error\ndata: {\"type\":\"error\",\"message\":\"provider interrupted\"}\n\n");
@@ -1264,6 +1283,12 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
             );
         })
         .await;
+        let router = state.unified_router();
+        let id = router
+            .get_deployments_for_model("gpt-4o-mini")
+            .pop()
+            .unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state.clone()))
@@ -1284,6 +1309,9 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
         let wire = String::from_utf8(test::read_body(response).await.to_vec()).unwrap();
         assert!(wire.contains("id: 0\nevent: response.created"), "{wire}");
         assert_eq!(u8::from(settlement_row(&state).await.complete), 0);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
         drop(app);
         let second = litellm_rs::server::HttpServer::new(state.config().as_ref())
             .await
@@ -1319,7 +1347,9 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if u8::from(settlement_row(&state).await.complete) == 1 {
+                if u8::from(settlement_row(&state).await.complete) == 1
+                    && deployment.state.active_requests.load(Ordering::Relaxed) == 0
+                {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1339,6 +1369,9 @@ async fn background_stream_reconnect_preserves_cursor_and_never_rebills() {
             3
         );
         assert_eq!(u8::from(settlement_row(&state).await.complete), 1);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 15);
         handle.stop(false).await;
     }
 }
@@ -1952,6 +1985,187 @@ async fn native_counted_input_settles_terminal_usage_and_retains_unknown_budget(
             "stream={streaming} status={status} missing={missing} spend={spend} expected={expected}"
         );
         handle.stop(false).await;
+    }
+}
+
+#[tokio::test]
+async fn native_unknown_usage_retains_admission_but_zero_and_no_output_do_not() {
+    use actix_web::body::MessageBody;
+    use litellm_rs::core::router::DeploymentConfig;
+    use std::time::Duration;
+
+    let mut backends = vec![None];
+    if let Ok(url) = std::env::var("REDIS_URL") {
+        backends.push(Some(url));
+    }
+    for redis_url in backends {
+        for (streaming, terminal, output, known_zero) in [
+            (true, false, true, false),
+            (true, false, false, false),
+            (true, true, true, false),
+            (true, true, true, true),
+            (false, true, true, false),
+            (false, true, true, true),
+        ] {
+            let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+                config.gateway.providers[0].name =
+                    format!("native-admission-{}", uuid::Uuid::new_v4());
+                if let Some(url) = &redis_url {
+                    config.gateway.storage.redis.enabled = true;
+                    config.gateway.storage.redis.url = url.clone();
+                }
+            })
+            .await;
+            let router = state.unified_router();
+            let id = router
+                .get_deployments_for_model("gpt-4o-mini")
+                .pop()
+                .unwrap();
+            let deployment = router.get_deployment(&id).unwrap();
+            router.add_deployment(deployment.as_ref().clone().with_config(DeploymentConfig {
+                tpm_limit: Some(1000),
+                ..deployment.config.clone()
+            }));
+            let deployment = router.get_deployment(&id).unwrap();
+            let initial_health = deployment.state.health.load(Ordering::Relaxed);
+            {
+                let mut response = upstream.output.lock().unwrap();
+                response["usage"] = if known_zero {
+                    json!({"input_tokens":0,"output_tokens":0,"total_tokens":0})
+                } else {
+                    Value::Null
+                };
+                response["test_stall_stream"] = json!(!terminal);
+                response["test_output_before_stall"] = json!(output);
+            }
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            // One positive input/output estimate fits 1000; two 700-output
+            // reservations cannot fit. This tests retained quota through the route.
+            let body = json!({"model":"gpt-4o-mini","stream":streaming,"store":false,"input":"x","max_output_tokens":700});
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/responses")
+                    .set_json(&body)
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            if terminal {
+                let _ = test::read_body(response).await;
+            } else {
+                let mut response_body = Box::pin(response.into_body());
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    let mut wire = String::new();
+                    loop {
+                        let chunk =
+                            futures::future::poll_fn(|cx| response_body.as_mut().poll_next(cx))
+                                .await
+                                .expect("stream must expose creation/output before cancellation")
+                                .unwrap();
+                        wire.push_str(&String::from_utf8_lossy(&chunk));
+                        if wire.contains(if output {
+                            "generated"
+                        } else {
+                            "response.created"
+                        }) {
+                            break;
+                        }
+                    }
+                })
+                .await
+                .expect("native stream must expose the expected prefix promptly");
+                drop(response_body);
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("native completion must release the original lease");
+            let retained = !known_zero && (terminal || output);
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                u64::from(terminal || output)
+            );
+            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                deployment.state.success_requests.load(Ordering::Relaxed),
+                u64::from(terminal)
+            );
+            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+            if !terminal {
+                assert_eq!(
+                    deployment.state.health.load(Ordering::Relaxed),
+                    initial_health
+                );
+            }
+            if redis_url.is_some() {
+                let mut conn = redis::Client::open(redis_url.as_ref().unwrap().as_str())
+                    .unwrap()
+                    .get_multiplexed_async_connection()
+                    .await
+                    .unwrap();
+                let key = format!("litellm-rs:admission:v1:{id}");
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let counts: Vec<Option<i64>> = redis::cmd("HMGET")
+                            .arg(&key).arg(&["p", "r", "t"])
+                            .query_async(&mut conn).await.unwrap();
+                        if counts[0] == Some(0) {
+                            assert_eq!(counts[1], Some(i64::from(terminal || output)));
+                            let tokens = counts[2].unwrap();
+                            assert!(if retained { tokens > 700 && tokens < 1000 } else { tokens == 0 });
+                            let fields: Vec<String> = redis::cmd("HKEYS").arg(&key).query_async(&mut conn).await.unwrap();
+                            assert!(!fields.iter().any(|field| field.starts_with("l:") || field.starts_with("p:")));
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.expect("shared admission must retain/refund the original hold");
+            }
+            // The existing selection retry policy waits 60s after a quota
+            // denial. Bound/cancel this waiter before the minute can roll over.
+            let next = tokio::time::timeout(
+                Duration::from_secs(if retained { 1 } else { 5 }),
+                test::call_service(
+                    &app,
+                    test::TestRequest::post()
+                        .uri("/v1/responses")
+                        .set_json(&body)
+                        .to_request(),
+                ),
+            )
+            .await;
+            if retained {
+                assert!(
+                    next.is_err(),
+                    "retained estimate must deny the next admission"
+                );
+            } else {
+                let next = next.expect("zero/no-output request must remain admissible");
+                assert_eq!(next.status(), StatusCode::OK);
+                drop(next);
+            }
+            assert_eq!(
+                upstream.seen.lock().unwrap().len(),
+                if retained { 1 } else { 2 }
+            );
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("follow-up must leave no active lease");
+            handle.stop(false).await;
+        }
     }
 }
 

@@ -16,6 +16,7 @@ use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
 use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 use crate::utils::net::ClientUtils;
+use std::collections::HashSet;
 
 impl LLMClient {
     /// Generate embeddings for a single text via the core embedding path.
@@ -73,7 +74,10 @@ impl LLMClient {
         model: Option<&str>,
     ) -> Result<EmbeddingResponse> {
         let model = self.runtime_model(model.unwrap_or_default())?;
-        let expects_data = !matches!(&input, EmbeddingInput::Array(texts) if texts.is_empty());
+        let expected_count = match &input {
+            EmbeddingInput::Text(_) => 1,
+            EmbeddingInput::Array(texts) => texts.len(),
+        };
         let estimated_tokens = u64::from(
             TokenCounter::new()
                 .count_embedding_tokens(
@@ -111,12 +115,23 @@ impl LLMClient {
                             .usage
                             .as_ref()
                             .map(|usage| u64::from(usage.total_tokens));
-                        if expects_data && response.data.is_empty() {
+                        let mut indices = HashSet::new();
+                        let complete = response.data.len() == expected_count
+                            && response.data.iter().all(|item| {
+                                usize::try_from(item.index).is_ok_and(|index| {
+                                    index < expected_count && indices.insert(index)
+                                })
+                            });
+                        if !complete {
                             return Err((
                                 ProviderError::api_error(
                                     "embedding",
                                     502,
-                                    "No embedding data in response",
+                                    if response.data.is_empty() {
+                                        "No embedding data in response"
+                                    } else {
+                                        "Embedding data does not match requested inputs"
+                                    },
                                 ),
                                 Some(tokens),
                             ));
