@@ -86,7 +86,7 @@ async fn native_audio_environment_rotations_change_runtime_resource_identity() {
                 normalized.config.base_url.as_deref(),
                 Some(endpoint.as_str())
             );
-            let router = Router::from_gateway_config(&[config.clone()], None)
+            let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
                 .await
                 .unwrap();
             let deployment = router
