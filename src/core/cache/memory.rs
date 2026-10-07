@@ -12,7 +12,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tracing::{debug, trace};
 
 const EVICTION_SAMPLE_SIZE: usize = 64;
@@ -78,10 +78,10 @@ pub struct InMemoryCache<T> {
     config: DualCacheConfig,
     /// Statistics
     stats: Arc<AtomicCacheStats>,
-    /// Shutdown signal
-    shutdown: Arc<AtomicBool>,
-    /// Notify for shutdown
-    shutdown_notify: Arc<Notify>,
+    /// Cleanup has one owner, even if startup is requested more than once.
+    cleanup_started: AtomicBool,
+    /// Persistent shutdown state, including shutdown before the task first polls.
+    shutdown: watch::Sender<bool>,
 }
 
 impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
@@ -93,8 +93,7 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
     /// Create a new in-memory cache with shared statistics
     pub fn with_stats(config: DualCacheConfig, stats: Arc<AtomicCacheStats>) -> Self {
         let cache = Arc::new(DashMap::with_capacity(config.max_size));
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_notify = Arc::new(Notify::new());
+        let (shutdown, _) = watch::channel(false);
         let access_shards = default_access_shard_count();
         let access_meta: Arc<Vec<DashMap<CacheKey, CacheAccessMeta>>> =
             Arc::new((0..access_shards).map(|_| DashMap::new()).collect());
@@ -112,8 +111,8 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             eviction_cursor: AtomicUsize::new(0),
             config,
             stats,
+            cleanup_started: AtomicBool::new(false),
             shutdown,
-            shutdown_notify,
         }
     }
 
@@ -124,16 +123,26 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
 
     /// Start the background cleanup task
     pub fn start_cleanup_task(self: &Arc<Self>) {
-        let cache = Arc::clone(self);
+        if *self.shutdown.borrow() || self.cleanup_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // Background maintenance must not keep a discarded runtime candidate
+        // alive. Upgrade only while actually cleaning an externally owned cache.
+        let cache = Arc::downgrade(self);
+        let mut shutdown = self.shutdown.subscribe();
         let interval = self.config.cleanup_interval;
 
         tokio::spawn(async move {
             loop {
+                if *shutdown.borrow() {
+                    break;
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {
+                        let Some(cache) = cache.upgrade() else { break };
                         cache.cleanup_expired().await;
                     }
-                    _ = cache.shutdown_notify.notified() => {
+                    _ = shutdown.changed() => {
                         debug!("In-memory cache cleanup task shutting down");
                         break;
                     }
@@ -387,8 +396,7 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
 
     /// Shutdown the cache and cleanup task
     pub fn shutdown(&self) {
-        self.shutdown.store(true, Ordering::SeqCst);
-        self.shutdown_notify.notify_waiters();
+        self.shutdown.send_replace(true);
     }
 
     // ==================== Private Methods ====================
@@ -732,8 +740,7 @@ fn lock_queue(queue: &Mutex<VecDeque<CacheKey>>) -> MutexGuard<'_, VecDeque<Cach
 
 impl<T> Drop for InMemoryCache<T> {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
-        self.shutdown_notify.notify_waiters();
+        self.shutdown.send_replace(true);
     }
 }
 

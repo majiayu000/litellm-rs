@@ -8,6 +8,61 @@ fn sync(key: u8) -> Arc<ConfigSync> {
     })
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn repeated_candidate_commit_failures_release_cache_tasks_and_keep_live_revision() {
+    let state = state().await;
+    let mut config = (*state.config()).clone();
+    config.gateway.cache.enabled = true;
+    state.apply_runtime_at(config.clone(), 0).await.unwrap();
+    let active = state.pin_runtime();
+    let cache = Arc::clone(active.response_cache.as_ref().unwrap());
+    // A different node advances the authoritative row after this node pins
+    // its generation. Every local build succeeds, then its real SQL CAS fails.
+    let encrypted = state
+        .config_sync
+        .as_ref()
+        .unwrap()
+        .encrypt(&config, 2)
+        .unwrap();
+    state
+        .storage
+        .database
+        .commit_runtime_config(1, encrypted)
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    let runtime = tokio::runtime::Handle::current();
+    let baseline = runtime.metrics().num_alive_tasks();
+    for _ in 0..100 {
+        assert!(matches!(
+            state.apply_runtime_at(config.clone(), 1).await,
+            Err(GatewayError::Conflict(_))
+        ));
+        let live = state.pin_runtime();
+        assert_eq!(live.generation, 1);
+        assert!(Arc::ptr_eq(&active, &live));
+        assert!(Arc::ptr_eq(&cache, live.response_cache.as_ref().unwrap()));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while runtime.metrics().num_alive_tasks() > baseline {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed candidates must not retain cache cleanup tasks");
+    assert_eq!(
+        state
+            .storage
+            .database
+            .runtime_config()
+            .await
+            .unwrap()
+            .revision,
+        2
+    );
+    assert!(state.config_sync_status().last_sync_error.is_some());
+}
+
 async fn state() -> AppState {
     let mut config = crate::server::valid_test_config();
     config.gateway.storage.database.enabled = false;

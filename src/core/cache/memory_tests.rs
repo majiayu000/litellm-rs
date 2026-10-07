@@ -1,5 +1,71 @@
 use super::*;
 
+#[tokio::test(flavor = "current_thread")]
+async fn cleanup_task_does_not_retain_discarded_cache() {
+    let mut signals = Vec::new();
+    for _ in 0..100 {
+        let cache = Arc::new(InMemoryCache::<String>::new(DualCacheConfig {
+            cleanup_interval: Duration::from_secs(3600),
+            ..DualCacheConfig::memory_only()
+        }));
+        let weak = Arc::downgrade(&cache);
+        signals.push(cache.shutdown.clone());
+        cache.start_cleanup_task();
+        drop(cache);
+        assert!(
+            weak.upgrade().is_none(),
+            "cleanup retained a discarded cache"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while signals.iter().any(|signal| signal.receiver_count() != 0) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("discarded cleanup tasks must exit before the next hourly interval");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cleanup_shutdown_before_first_poll_is_persistent() {
+    for start_first in [false, true] {
+        let cache = Arc::new(InMemoryCache::<String>::with_defaults());
+        if start_first {
+            cache.start_cleanup_task();
+        }
+        cache.shutdown();
+        cache.start_cleanup_task();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while cache.shutdown.receiver_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown must remain visible to a task that has not polled");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn repeated_cleanup_start_has_one_task_and_shutdown_preserves_cached_values() {
+    let cache = Arc::new(InMemoryCache::<String>::with_defaults());
+    for _ in 0..100 {
+        cache.start_cleanup_task();
+    }
+    assert_eq!(cache.shutdown.receiver_count(), 1);
+    let key = CacheKey::new("pinned-cache-value");
+    cache.set(key.clone(), "kept".into()).await;
+    tokio::task::yield_now().await;
+    cache.shutdown();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while cache.shutdown.receiver_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(cache.get(&key).await.as_deref(), Some("kept"));
+}
+
 #[test]
 fn test_cache_new() {
     let cache: InMemoryCache<String> = InMemoryCache::with_defaults();
