@@ -115,3 +115,5 @@ version must be verified by tag commit, registry checksum and archive/container
 identities before this scope can be called delivered.
 
 SDK stream compatibility: terminal provider usage is available in the chunk DTO for OpenAI and legacy Anthropic streams. Anthropic input/output counts are combined only when both are known. A runtime-backed stream that produced content but ended before trustworthy usage conservatively retains its admission estimate; it does not report that estimate as actual usage.
+
+Redis state retention: admission state lasts through current-minute quota and all live lease deadlines. Circuit history is retained while calls continue, then expires after ten minutes idle or any later cooldown/probe-owner deadline. A deployment reused after that idle period starts fresh shared circuit history. Existing idle hashes from prior deployments that never received a TTL are not backfilled by this release.

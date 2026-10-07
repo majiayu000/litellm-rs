@@ -220,6 +220,9 @@ impl StreamingDeploymentLease {
             }
         }
         self.release();
+        self.router
+            .record_failure_circuit_for_deployment_async(&self.deployment, cooldown_reason)
+            .await;
         if let Some(hold) = hold {
             if retain_admission {
                 self.admission.settle_async(&hold, tokens_used).await;
@@ -227,9 +230,6 @@ impl StreamingDeploymentLease {
                 self.admission.cancel_async(&hold).await;
             }
         }
-        self.router
-            .record_failure_circuit_for_deployment_async(&self.deployment, cooldown_reason)
-            .await;
     }
 
     #[cfg(feature = "websockets")]

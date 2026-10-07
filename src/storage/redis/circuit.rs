@@ -122,6 +122,8 @@ end
 if op ~= 'observe' or opened > 0 then
   save(f, r, tot, fail, opened, consec, e, h, owner, own_until)
 end
+-- Refresh active history without changing cooldown or probe-owner deadlines.
+redis.call('EXPIRE', KEYS[1], math.max(600, opened - now + 1, own_until - now + 1))
 return {status, opened, f, consec, h, owned}
 "#;
 
@@ -266,6 +268,7 @@ mod tests {
             op: &str,
             now: i64,
             token: &str,
+            cooldown: i64,
         ) -> CircuitState {
             // This test owns a short-lived runtime; do not populate the
             // production bridge's process-lifetime connection cache.
@@ -278,7 +281,7 @@ mod tests {
                 .arg(token)
                 .arg(1)
                 .arg(1)
-                .arg(10)
+                .arg(cooldown)
                 .arg(2)
                 .arg(1)
                 .invoke_async(&mut conn)
@@ -287,39 +290,128 @@ mod tests {
             parse_circuit_state(values).unwrap()
         }
         assert!(
-            invoke(&pool, &key, "fail", 100, "a")
+            invoke(&pool, &key, "fail", 100, "a", 10)
                 .await
                 .blocks_selection()
         );
         assert!(
-            !invoke(&pool, &key, "observe", 110, "a")
+            !invoke(&pool, &key, "observe", 110, "a", 10)
                 .await
                 .blocks_selection()
         );
         assert!(
-            invoke(&pool, &key, "observe", 119, "b")
+            invoke(&pool, &key, "observe", 119, "b", 10)
                 .await
                 .blocks_selection()
         );
         assert!(
-            !invoke(&pool, &key, "observe", 120, "b")
+            !invoke(&pool, &key, "observe", 120, "b", 10)
                 .await
                 .blocks_selection()
         );
-        invoke(&pool, &key, "ok", 121, "a").await;
-        let first = invoke(&pool, &key, "ok", 122, "b").await;
+        invoke(&pool, &key, "ok", 121, "a", 10).await;
+        let first = invoke(&pool, &key, "ok", 122, "b", 10).await;
         assert_eq!(
             first.status, STATUS_HALF,
             "expired owner's late success must not close the circuit"
         );
         assert_eq!(first.consecutive_successes, 1);
         assert!(
-            invoke(&pool, &key, "observe", 122, "a")
+            invoke(&pool, &key, "observe", 122, "a", 10)
                 .await
                 .blocks_selection()
         );
-        assert_eq!(invoke(&pool, &key, "ok", 123, "b").await.status, 0);
+        assert_eq!(invoke(&pool, &key, "ok", 123, "b", 10).await.status, 0);
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let history: (i64, i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["tot", "fail", "opened"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(history, (4, 1, 0));
+        redis::cmd("PEXPIRE")
+            .arg(&key)
+            .arg(60_000)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+        invoke(&pool, &key, "observe", 123, "a", 10).await;
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            (570..=600).contains(&ttl),
+            "closed observe must refresh idle lifetime: {ttl}"
+        );
+        let retained: (i64, i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["tot", "fail", "opened"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            retained, history,
+            "active observations must retain cumulative history"
+        );
         pool.delete(&key).await.unwrap();
+
+        let key = RedisPool::circuit_key(&uuid::Uuid::new_v4().to_string());
+        let opened = invoke(&pool, &key, "fail", 100, "a", 900).await;
+        assert_eq!(opened.opened_until, 1_000);
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            (871..=901).contains(&ttl),
+            "long cooldown must outlive idle TTL: {ttl}"
+        );
+        let observed = invoke(&pool, &key, "observe", 200, "b", 900).await;
+        assert_eq!(
+            observed.opened_until, 1_000,
+            "observing must not extend the open deadline"
+        );
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!((771..=801).contains(&ttl));
+        let probe = invoke(&pool, &key, "observe", 1_000, "a", 900).await;
+        assert_eq!(probe.status, STATUS_HALF);
+        assert!(probe.owned);
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            (871..=901).contains(&ttl),
+            "live probe owner must outlive idle TTL: {ttl}"
+        );
+        let foreign = invoke(&pool, &key, "observe", 1_001, "b", 900).await;
+        assert!(foreign.blocks_selection());
+        let deadlines: (i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["opened", "own_until"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(deadlines, (1_000, 1_900));
+        pool.delete(&key).await.unwrap();
+
+        // A closed observation of an unused namespace must not create a hash.
+        invoke(&pool, &key, "observe", 2_000, "a", 900).await;
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(!exists);
     }
 
     #[test]
