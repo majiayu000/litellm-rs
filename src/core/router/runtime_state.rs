@@ -36,6 +36,14 @@ impl GatewayRuntimeIdentity {
         Self(Sha256::digest(value.to_string().as_bytes()).into())
     }
 
+    #[cfg(feature = "providers-extra")]
+    pub(super) fn with_credential_digest(&self, credentials: [u8; 32]) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(self.0);
+        digest.update(credentials);
+        Self(digest.finalize().into())
+    }
+
     pub(super) fn for_model(&self, model: &str) -> Self {
         let mut digest = Sha256::new();
         digest.update(self.0);

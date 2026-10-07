@@ -2,6 +2,7 @@
 use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
 use litellm_rs::{
     core::{
+        completion::{CompletionOptions, DefaultRouter, Router as CompletionRouter},
         providers::{ExternalProvider, Provider, ProviderError},
         router::{Deployment, RuntimeBinding, UnifiedRouter},
         types::{
@@ -14,7 +15,7 @@ use litellm_rs::{
     sdk::{
         LLMClient,
         errors::SDKError,
-        types::{Content, Message, Role},
+        types::{ChatOptions, Content, Message, Role, SdkChatRequest},
     },
 };
 use std::{
@@ -126,6 +127,17 @@ fn request() -> Vec<Message> {
         tool_calls: None,
         tool_call_id: None,
     }]
+}
+
+fn bounded_request() -> SdkChatRequest {
+    SdkChatRequest {
+        model: "public-model".into(),
+        messages: request(),
+        options: ChatOptions {
+            max_tokens: Some(20),
+            ..Default::default()
+        },
+    }
 }
 
 fn assert_counts(deployment: &Deployment, success: u64, failures: u64, tokens: u64) {
@@ -287,7 +299,10 @@ async fn sdk_outer_drop_settles_observed_usage_in_redis() {
     let router = Arc::new(router);
     let client =
         LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model").unwrap();
-    let mut output = client.chat_stream(request()).await.unwrap();
+    let mut output = client
+        .chat_stream_with_options(bounded_request())
+        .await
+        .unwrap();
     assert!(output.next().await.unwrap().is_ok());
     drop(output);
     assert_counts(&router.get_deployment(&id).unwrap(), 0, 0, 12);
@@ -437,7 +452,10 @@ async fn cancelling_sdk_eof_during_redis_io_keeps_exactly_one_success_and_actual
     let router = Arc::new(router);
     let client =
         LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model").unwrap();
-    let mut output = client.chat_stream(request()).await.unwrap();
+    let mut output = client
+        .chat_stream_with_options(bounded_request())
+        .await
+        .unwrap();
     assert!(output.next().await.unwrap().is_ok());
     proxy.paused.store(true, Ordering::SeqCst);
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -484,4 +502,196 @@ async fn cancelling_sdk_eof_during_redis_io_keeps_exactly_one_success_and_actual
         .query_async::<i64>(&mut connection)
         .await
         .unwrap();
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test(flavor = "current_thread")]
+async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses() {
+    use litellm_rs::{config::models::storage::RedisConfig, storage::redis::RedisPool};
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+        return;
+    };
+    let pool = Arc::new(
+        RedisPool::new(&RedisConfig {
+            url: url.clone(),
+            enabled: true,
+            allow_degraded: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let mut connection = redis::Client::open(url)
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    for default_facade in [false, true] {
+        for terminal in [
+            "drop",
+            "eof",
+            "error",
+            "heartbeat",
+            "unpolled",
+            "heartbeat-error",
+            "known",
+        ] {
+            let mut events = vec![Ok(serde_json::from_value(serde_json::json!({
+            "id":"unknown", "object":"chat.completion.chunk", "created":1,
+            "model":"wire-model", "choices":[{"index":0,"delta":{
+                "role":"assistant", "content":if terminal.starts_with("heartbeat") { "" } else { "partial" }
+            }}]
+        }))
+        .unwrap())];
+            if terminal == "known" {
+                events = vec![Ok(usage_chunk(1))];
+            }
+            if terminal == "error" || terminal == "heartbeat-error" {
+                events.push(Err(ProviderError::authentication(
+                    "sdk-completion-test",
+                    "denied",
+                )));
+            }
+            let (old_client, router, dropped) = fixture(events);
+            drop(old_client);
+            let router = Arc::try_unwrap(router)
+                .ok()
+                .unwrap()
+                .with_admission_redis(pool.clone());
+            let mut deployment = router
+                .get_deployment("completion")
+                .unwrap()
+                .as_ref()
+                .clone();
+            deployment.id = uuid::Uuid::new_v4().to_string();
+            deployment.config.max_parallel_requests = Some(1);
+            deployment.config.rpm_limit = Some(1);
+            deployment.config.tpm_limit = Some(100);
+            let _ = router.remove_deployment("completion");
+            let id = deployment.id.clone();
+            router.add_deployment(deployment);
+            let router = Arc::new(router);
+            let client =
+                LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
+                    .unwrap();
+            let mut output: BoxStream<'static, Result<(), ()>> = if default_facade {
+                DefaultRouter::from_runtime(RuntimeBinding::new(router.clone()))
+                    .complete_stream(
+                        "public-model",
+                        ChatRequest::new("public-model")
+                            .add_user_message("hello")
+                            .messages,
+                        CompletionOptions {
+                            max_tokens: Some(20),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .map(|result| {
+                        result.map(|_| ()).map_err(|error| {
+                            assert!(matches!(
+                                error,
+                                litellm_rs::utils::error::gateway_error::GatewayError::Provider(
+                                    ProviderError::Authentication { .. }
+                                )
+                            ));
+                        })
+                    })
+                    .boxed()
+            } else {
+                client
+                    .chat_stream_with_options(bounded_request())
+                    .await
+                    .unwrap()
+                    .map(|result| {
+                        result.map(|_| ()).map_err(|error| {
+                            assert!(matches!(error, SDKError::AuthError(_)));
+                        })
+                    })
+                    .boxed()
+            };
+            let key = format!("litellm-rs:admission:v1:{id}");
+            let reserved: (i64, i64, i64) = redis::cmd("HMGET")
+                .arg(&key)
+                .arg(&["p", "r", "t"])
+                .query_async(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!((reserved.0, reserved.1), (1, 1));
+            assert!(
+                reserved.2 > 1,
+                "admission must reserve the request estimate and output bound"
+            );
+            if terminal != "unpolled" {
+                assert!(output.next().await.unwrap().is_ok());
+                if terminal == "eof" || terminal == "known" {
+                    assert!(output.next().await.is_none());
+                } else if terminal == "error" || terminal == "heartbeat-error" {
+                    assert!(output.next().await.unwrap().is_err());
+                }
+            }
+            drop(output);
+            let deployment = router.get_deployment(&id).unwrap();
+            assert_counts(
+                &deployment,
+                u64::from(terminal == "eof" || terminal == "known"),
+                u64::from(terminal == "error" || terminal == "heartbeat-error"),
+                if terminal == "known" { 12 } else { 0 },
+            );
+            let retain = matches!(terminal, "drop" | "eof" | "error" | "known");
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                u64::from(retain)
+            );
+            assert!(dropped.load(Ordering::Relaxed));
+            let expected = if terminal == "known" {
+                (0, 1, 12)
+            } else if retain {
+                (0, 1, reserved.2)
+            } else {
+                (0, 0, 0)
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let state: (i64, i64, i64) = redis::cmd("HMGET")
+                        .arg(&key)
+                        .arg(&["p", "r", "t"])
+                        .query_async(&mut connection)
+                        .await
+                        .unwrap();
+                    if state == expected {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let fields: Vec<String> = redis::cmd("HKEYS")
+                .arg(&key)
+                .query_async(&mut connection)
+                .await
+                .unwrap();
+            assert!(
+                !fields.iter().any(|field| field.starts_with("l:")),
+                "terminal cleanup must delete the lease"
+            );
+            if terminal == "drop" || terminal == "eof" {
+                assert!(
+                    matches!(
+                        client.chat_stream_with_options(bounded_request()).await,
+                        Err(SDKError::Unavailable(_))
+                    ),
+                    "retained RPM must block another admission"
+                );
+            }
+            redis::cmd("DEL")
+                .arg(key)
+                .query_async::<i64>(&mut connection)
+                .await
+                .unwrap();
+        }
+    }
 }

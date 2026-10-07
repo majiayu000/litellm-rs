@@ -74,3 +74,7 @@ streaming and Realtime regression suites cover normal finish, retries, counters
 and generation admission. They are run by
 the repository's existing CI. Provider/model budget operations use a separate
 backend and are outside this async-routing change.
+
+Vertex AI construction also captures the existing project/location environment fallbacks and the selected credential-file path before resource identity hashing. Explicit token or inline credentials retain precedence over an unused environment file. The identity also includes a digest of the parsed credentials held by the constructed provider, so same-path file content rotation changes identity without a second file read. This binds the configuration inputs used by the current factory; it does not claim identity discovery for a dynamically refreshed Application Default Credentials principal.
+
+With shared Redis admission, runtime-backed SDK and DefaultRouter streams reserve the existing request token estimate plus the configured output bound. Once billable output has been observed, cancellation or EOF without trustworthy usage retains the RPM and estimated TPM reservation while releasing parallel admission. These counters remain conservative reservations, not reported actual token usage. Cancellation before output still refunds admission; observed provider usage settles the actual count. In-process admission records known RPM and observed tokens; it has no separate estimated-TPM reservation ledger.

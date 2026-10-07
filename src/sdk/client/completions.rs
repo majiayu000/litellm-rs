@@ -367,11 +367,29 @@ impl LLMClient {
                 VecDeque::<Result<ChatChunk>>::new(),
                 false,
                 Option::<(String, String)>::None,
+                Option::<u32>::None,
             ),
-            |(mut byte_stream, mut buffer, mut pending, mut done, mut current_tool)| async move {
+            |(
+                mut byte_stream,
+                mut buffer,
+                mut pending,
+                mut done,
+                mut current_tool,
+                mut input_tokens,
+            )| async move {
                 loop {
                     if let Some(item) = pending.pop_front() {
-                        return Some((item, (byte_stream, buffer, pending, done, current_tool)));
+                        return Some((
+                            item,
+                            (
+                                byte_stream,
+                                buffer,
+                                pending,
+                                done,
+                                current_tool,
+                                input_tokens,
+                            ),
+                        ));
                     }
 
                     if done {
@@ -423,7 +441,12 @@ impl LLMClient {
                                         let tool_ref = current_tool
                                             .as_ref()
                                             .map(|(id, name)| (id.as_str(), name.as_str()));
-                                        match parse_anthropic_sse_record(&event, &data, tool_ref) {
+                                        match parse_anthropic_sse_record(
+                                            &event,
+                                            &data,
+                                            tool_ref,
+                                            &mut input_tokens,
+                                        ) {
                                             Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
                                             Some(Err(e)) => {
                                                 done = true;
@@ -451,7 +474,14 @@ impl LLMClient {
                         Some(Err(e)) => {
                             return Some((
                                 Err(SDKError::NetworkError(e.to_string())),
-                                (byte_stream, buffer, pending, true, current_tool),
+                                (
+                                    byte_stream,
+                                    buffer,
+                                    pending,
+                                    true,
+                                    current_tool,
+                                    input_tokens,
+                                ),
                             ));
                         }
                         None => {
@@ -585,12 +615,27 @@ pub(crate) fn parse_openai_sse_line(line: &str) -> Option<Result<ChatChunk>> {
 ///
 /// `current_tool` carries `(tool_id, tool_name)` captured from the preceding
 /// `content_block_start` event so `input_json_delta` chunks include the tool identity.
+/// `input_tokens` retains trusted `message_start` usage until the terminal delta.
 pub(crate) fn parse_anthropic_sse_record(
     event: &str,
     data: &str,
     current_tool: Option<(&str, &str)>,
+    input_tokens: &mut Option<u32>,
 ) -> Option<Result<ChatChunk>> {
     match event {
+        "message_start" => {
+            // This lifecycle event remains invisible; absent or invalid usage stays unknown.
+            *input_tokens = serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|v| {
+                    v.get("message")?
+                        .get("usage")?
+                        .get("input_tokens")?
+                        .as_u64()
+                })
+                .and_then(|tokens| u32::try_from(tokens).ok());
+            None
+        }
         "error" => {
             let msg = serde_json::from_str::<serde_json::Value>(data)
                 .ok()
@@ -621,8 +666,27 @@ pub(crate) fn parse_anthropic_sse_record(
                 .and_then(|d| d.get("stop_reason"))
                 .and_then(|r| r.as_str())
                 .map(|s| normalize_anthropic_stop_reason(s).to_string());
+            let usage = if stop_reason.is_some() {
+                (*input_tokens)
+                    .zip(
+                        v.get("usage")
+                            .and_then(|u| u.get("output_tokens"))
+                            .and_then(|tokens| tokens.as_u64())
+                            .and_then(|tokens| u32::try_from(tokens).ok()),
+                    )
+                    .and_then(|(prompt_tokens, completion_tokens)| {
+                        Some(crate::core::types::responses::Usage {
+                            prompt_tokens,
+                            completion_tokens,
+                            total_tokens: prompt_tokens.checked_add(completion_tokens)?,
+                            ..Default::default()
+                        })
+                    })
+            } else {
+                None
+            };
             Some(Ok(ChatChunk {
-                usage: None,
+                usage,
                 id: String::new(),
                 model: String::new(),
                 choices: vec![ChunkChoice {

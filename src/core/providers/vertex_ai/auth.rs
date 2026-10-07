@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 /// Vertex AI Authentication credentials
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum VertexCredentials {
     /// Service Account JSON key
     ServiceAccount(ServiceAccountKey),

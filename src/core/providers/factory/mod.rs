@@ -30,6 +30,8 @@ mod voyage_builder;
 
 pub(crate) use super::openai::config::validate_private_official_openai_endpoint;
 pub(crate) use builder::bedrock_resource_config_from_factory;
+#[cfg(feature = "providers-extra")]
+pub(crate) use builder::vertex_resource_config_from_factory;
 #[cfg(test)]
 pub(crate) static CONSTRUCTION_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub(crate) use endpoint_policy::{
