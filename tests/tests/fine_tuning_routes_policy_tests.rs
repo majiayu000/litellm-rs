@@ -16,20 +16,29 @@ async fn public_only_fine_tuning_route_rejects_loopback_before_connect() {
     )
     .await;
 
-    let response = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/fine_tuning/jobs")
-            .set_json(json!({
-                "model": "gpt-4o-mini",
-                "training_file": "file-train"
-            }))
-            .to_request(),
+    let response = within(
+        "request dispatch",
+        &address.to_string(),
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/fine_tuning/jobs")
+                .set_json(json!({
+                    "model": "gpt-4o-mini",
+                    "training_file": "file-train"
+                }))
+                .to_request(),
+        ),
     )
     .await;
 
     assert!(!response.status().is_success());
-    let body: Value = test::read_body_json(response).await;
+    let body: Value = within(
+        "read response body",
+        &address.to_string(),
+        test::read_body_json(response),
+    )
+    .await;
     assert!(
         body["error"]["message"]
             .as_str()
