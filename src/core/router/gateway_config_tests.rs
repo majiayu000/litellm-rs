@@ -1,3 +1,4 @@
+use crate::core::providers::create_provider;
 use crate::core::providers::factory::CONSTRUCTION_ENV_LOCK as ENV_LOCK;
 use std::sync::MutexGuard;
 #[rustfmt::skip]
@@ -225,24 +226,24 @@ async fn vertex_environment_rotations_change_runtime_resource_identity() {
         // with entry.or_insert. Compare its effective input with normalization.
         let direct = crate::core::providers::factory::vertex_resource_config_from_factory(
             &serde_json::json!({"project": "top-level-project", "access_token": "fixture-direct-token"}),
-        );
+        ).unwrap();
         assert_eq!(
             normalize_provider_construction(&explicit).config.settings["project_id"],
-            direct["project_id"]
+            direct.project_id
         );
-        assert_eq!(direct["project_id"], "top-level-project");
+        assert_eq!(direct.project_id, "top-level-project");
         // The explicit canonical key precedes project in the factory resolver.
         explicit
             .settings
             .insert("project_id".into(), "canonical-project".into());
         let direct = crate::core::providers::factory::vertex_resource_config_from_factory(
-            &serde_json::json!({"project_id": "canonical-project", "project": "top-level-project"}),
-        );
+            &serde_json::json!({"project_id": "canonical-project", "project": "top-level-project", "access_token": "fixture-direct-token"}),
+        ).unwrap();
         assert_eq!(
             normalize_provider_construction(&explicit).config.settings["project_id"],
-            direct["project_id"]
+            direct.project_id
         );
-        assert_eq!(direct["project_id"], "canonical-project");
+        assert_eq!(direct.project_id, "canonical-project");
     }
     // The selected path remains the same; credentials held by the new provider change.
     let _env = EnvScope::new(&[
@@ -705,7 +706,10 @@ fn credential_resolver_and_construction_source_guards() {
         gateway,
         "pub(super) async fn from_gateway_config_with_identity(",
     );
-    assert_eq!(canonical.matches("create_provider(").count(), 1);
+    assert_eq!(
+        canonical.matches("create_provider_with_resources(").count(),
+        1
+    );
 
     let construction_entry_points = [
         function(gateway, "pub async fn from_gateway_config("),
@@ -720,7 +724,9 @@ fn credential_resolver_and_construction_source_guards() {
     assert_eq!(
         construction_entry_points
             .iter()
-            .map(|entry_point| entry_point.matches("create_provider(").count())
+            .map(|entry_point| entry_point
+                .matches("create_provider_with_resources(")
+                .count())
             .sum::<usize>(),
         1
     );
@@ -1451,4 +1457,90 @@ async fn model_less_azure_ai_compatible_route_keeps_dynamic_chat() {
             );
         }
     }
+}
+
+#[test]
+fn bedrock_absent_session_token_is_frozen_before_factory_handoff() {
+    use super::*;
+    let _env = EnvScope::new(&[
+        ("AWS_ACCESS_KEY_ID", "fixture-access"),
+        ("AWS_SECRET_ACCESS_KEY", "fixture-secret"),
+    ]);
+    let config = ProviderConfig {
+        name: "bedrock".into(),
+        provider_type: "bedrock".into(),
+        ..Default::default()
+    };
+    let normalized = normalize_provider_construction(&config);
+    let identity = GatewayRuntimeIdentity::for_provider(&normalized.config);
+    unsafe { std::env::set_var("AWS_SESSION_TOKEN", "later-fixture-token") };
+    assert!(
+        normalized
+            .bedrock_resource
+            .unwrap()
+            .aws_session_token
+            .is_none()
+    );
+    assert_eq!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalized.config)
+    );
+    assert_ne!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalize_provider_construction(&config).config)
+    );
+}
+
+#[cfg(feature = "providers-extra")]
+#[test]
+fn vertex_effective_environment_and_file_contents_are_frozen_for_identity() {
+    use super::*;
+    use crate::core::providers::vertex_ai::VertexCredentials;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("credentials.json");
+    let credentials = |secret: &str| {
+        serde_json::json!({"type":"authorized_user", "client_id":"fixture-client", "client_secret":secret, "refresh_token":"fixture-refresh"}).to_string()
+    };
+    std::fs::write(&path, credentials("fixture-secret-a")).unwrap();
+    let _env = EnvScope::new(&[
+        ("GOOGLE_CLOUD_PROJECT", "fixture-project-a"),
+        ("GOOGLE_CLOUD_LOCATION", "us-east1"),
+        ("GOOGLE_APPLICATION_CREDENTIALS", path.to_str().unwrap()),
+    ]);
+    let config = ProviderConfig {
+        name: "vertex_ai".into(),
+        provider_type: "vertex_ai".into(),
+        ..Default::default()
+    };
+    let normalized = normalize_provider_construction(&config);
+    let identity = GatewayRuntimeIdentity::for_provider(&normalized.config);
+    std::fs::write(&path, credentials("fixture-secret-b")).unwrap();
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_PROJECT", "fixture-project-b");
+        std::env::set_var("GOOGLE_CLOUD_LOCATION", "us-west1");
+    }
+    let resource = normalized.vertex_resource.unwrap().unwrap();
+    assert_eq!(resource.project_id, "fixture-project-a");
+    assert_eq!(resource.location, "us-east1");
+    let VertexCredentials::AuthorizedUser(value) = resource.credentials else {
+        panic!("expected file credential")
+    };
+    assert_eq!(value.client_secret, "fixture-secret-a");
+    assert_eq!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalized.config)
+    );
+    assert_ne!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalize_provider_construction(&config).config)
+    );
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_PROJECT", "fixture-project-a");
+        std::env::set_var("GOOGLE_CLOUD_LOCATION", "us-east1");
+    }
+    assert_ne!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalize_provider_construction(&config).config),
+        "same credential path with changed contents must rotate identity"
+    );
 }

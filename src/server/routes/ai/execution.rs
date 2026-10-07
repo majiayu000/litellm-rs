@@ -377,6 +377,7 @@ impl StreamingDeploymentLease {
         }
     }
 
+    #[cfg(feature = "websockets")]
     async fn cancel_admission(&mut self) {
         if let Some(hold) = self.hold.take() {
             self.admission.cancel_async(&hold).await;
