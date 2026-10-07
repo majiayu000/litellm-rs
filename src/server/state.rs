@@ -25,6 +25,10 @@ use tokio::sync::Mutex;
 #[path = "runtime_reload_tests.rs"]
 mod runtime_reload_tests;
 
+#[cfg(test)]
+#[path = "runtime_reload_profile.rs"]
+mod runtime_reload_profile;
+
 pub use super::runtime::RuntimeRevision;
 use super::runtime::{build_response_cache, build_runtime_revision};
 
