@@ -211,6 +211,47 @@ impl RedisPool {
         }
     }
 
+    /// Open the accounting connection with transport and overall reply bounds.
+    /// A budget write with an uncertain outcome must not be replayed by the
+    /// Cluster driver's retry loop. Topology errors fail this operation closed;
+    /// the next operation can discover a fresh mapping.
+    pub(crate) async fn open_budget_connection(
+        &self,
+        response_timeout: Duration,
+    ) -> Result<RedisLiveConnection> {
+        if self.noop_mode {
+            return Err(GatewayError::Storage(
+                "budget redis backend is unavailable".to_string(),
+            ));
+        }
+        let connection_timeout =
+            Duration::from_secs(self.config.connection_timeout).min(response_timeout);
+        if self.config.cluster {
+            let client = ClusterClient::builder(cluster_seed_urls(&self.config.url))
+                .connection_timeout(connection_timeout)
+                .response_timeout(response_timeout)
+                .overall_response_timeout(Some(response_timeout))
+                .retries(0)
+                .build()
+                .map_err(GatewayError::from)?;
+            client
+                .get_async_connection()
+                .await
+                .map(RedisLiveConnection::Cluster)
+                .map_err(GatewayError::from)
+        } else {
+            let client = Client::open(self.config.url.as_str()).map_err(GatewayError::from)?;
+            let config = AsyncConnectionConfig::new()
+                .set_connection_timeout(Some(connection_timeout))
+                .set_response_timeout(Some(response_timeout));
+            client
+                .get_multiplexed_async_connection_with_config(&config)
+                .await
+                .map(RedisLiveConnection::Standalone)
+                .map_err(GatewayError::from)
+        }
+    }
+
     /// Get a connection from the pool.
     ///
     /// The returned [`RedisConnection`] holds a semaphore permit that limits

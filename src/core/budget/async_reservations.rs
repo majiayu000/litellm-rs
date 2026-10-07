@@ -5,6 +5,7 @@
 //! Redis result: the worker still owns it and cancels an undelivered reservation.
 
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 
@@ -17,6 +18,31 @@ use crate::core::budget::{BudgetReservationError, BudgetStatus};
 /// Bounds queued work, active reservations, and their terminal cleanup together.
 /// A reservation can own at most two drop-cancel tasks (provider and model).
 const MAX_ASYNC_BUDGET_RESERVATIONS: usize = 1024;
+const ASYNC_BUDGET_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn receive_with_timeout<T>(
+    reply: oneshot::Receiver<T>,
+    operation: &'static str,
+    timeout: Duration,
+) -> Result<T, BudgetReservationError> {
+    match tokio::time::timeout(timeout, reply).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => Err(BudgetReservationError::BackendUnavailable),
+        Err(_) => {
+            // Closing this receiver does not cancel dispatched accounting.
+            // The worker retains its original reservation and capacity slot.
+            tracing::warn!(operation, "async budget reply deadline exceeded");
+            Err(BudgetReservationError::BackendUnavailable)
+        }
+    }
+}
+
+async fn receive<T>(
+    reply: oneshot::Receiver<T>,
+    operation: &'static str,
+) -> Result<T, BudgetReservationError> {
+    receive_with_timeout(reply, operation, ASYNC_BUDGET_REPLY_TIMEOUT).await
+}
 
 pub(crate) struct AsyncBudgetPermit {
     _permit: OwnedSemaphorePermit,
@@ -81,9 +107,11 @@ impl ProviderBudgetManager {
         let permit = try_budget_permit()?;
         let manager = self.clone();
         let provider = provider.to_owned();
-        dispatch(permit, move || manager.reset_provider_budget(&provider))
-            .await
-            .map_err(|_| BudgetReservationError::BackendUnavailable)
+        receive(
+            dispatch(permit, move || manager.reset_provider_budget(&provider)),
+            "reset_provider",
+        )
+        .await
     }
 }
 
@@ -99,9 +127,11 @@ impl ModelBudgetManager {
         let permit = try_budget_permit()?;
         let manager = self.clone();
         let model = model.to_owned();
-        dispatch(permit, move || manager.reset_model_budget(&model))
-            .await
-            .map_err(|_| BudgetReservationError::BackendUnavailable)
+        receive(
+            dispatch(permit, move || manager.reset_model_budget(&model)),
+            "reset_model",
+        )
+        .await
     }
 }
 
@@ -143,8 +173,7 @@ impl UnifiedBudgetLimits {
                 reservation.cancel();
             }
         });
-        rx.await
-            .map_err(|_| BudgetReservationError::BackendUnavailable)?
+        receive(rx, "reserve").await?
     }
 
     pub(crate) async fn settle_response_leases_async(
@@ -162,11 +191,13 @@ impl UnifiedBudgetLimits {
         // SQL retains the receipt until acknowledgement. If the caller aborts
         // after dispatch, this worker finishes; the existing durable retry is
         // safe because settle_response is receipt-idempotent.
-        dispatch(permit, move || {
-            limits.settle_response_leases(&provider, &model, &leases, cost)
-        })
-        .await
-        .map_err(|_| BudgetReservationError::BackendUnavailable)?
+        receive(
+            dispatch(permit, move || {
+                limits.settle_response_leases(&provider, &model, &leases, cost)
+            }),
+            "settle_response",
+        )
+        .await?
     }
 }
 
@@ -214,9 +245,11 @@ impl UnifiedBudgetReservation {
                 return Err(error);
             }
         };
-        dispatch(permit, move || self.settle(actual_amount))
-            .await
-            .map_err(|_| BudgetReservationError::BackendUnavailable)?
+        receive(
+            dispatch(permit, move || self.settle(actual_amount)),
+            "settle",
+        )
+        .await?
     }
 
     /// Cancel without blocking the async executor, even if this future is dropped.
@@ -226,9 +259,7 @@ impl UnifiedBudgetReservation {
             return Ok(());
         }
         let permit = self.async_permit()?;
-        dispatch(permit, move || self.cancel())
-            .await
-            .map_err(|_| BudgetReservationError::BackendUnavailable)
+        receive(dispatch(permit, move || self.cancel()), "cancel").await
     }
 
     /// Used by Realtime transport Drop: output may already have been consumed,
@@ -255,5 +286,59 @@ impl UnifiedBudgetReservation {
                 tracing::error!(?error, "detached budget settlement failed");
             }
         }));
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminal_reply_timeout_retains_worker_capacity_until_accounting_finishes() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = Arc::new(AsyncBudgetPermit {
+            _permit: Arc::clone(&slots).try_acquire_owned().unwrap(),
+        });
+        let completed = Arc::new(AtomicUsize::new(0));
+        let worker_completed = Arc::clone(&completed);
+        let (entered, started) = oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let reply = dispatch(permit, move || {
+            let _ = entered.send(());
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            worker_completed.fetch_add(1, Ordering::SeqCst);
+        });
+        started.await.unwrap();
+        assert!(
+            receive_with_timeout(reply, "settle", Duration::from_millis(25))
+                .await
+                .is_err()
+        );
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+        assert_eq!(slots.available_permits(), 0);
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while slots.available_permits() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn expired_admission_receiver_prevents_a_queued_reserve() {
+        let (queued, reply) = oneshot::channel::<()>();
+        assert!(
+            receive_with_timeout(reply, "reserve", Duration::from_millis(25))
+                .await
+                .is_err()
+        );
+        assert!(
+            queued.is_closed(),
+            "queued admission must observe expiration"
+        );
     }
 }

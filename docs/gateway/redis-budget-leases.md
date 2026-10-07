@@ -101,17 +101,36 @@ Realtime transport Drop dispatches its existing conservative cost settlement;
 it does not turn potentially billable output into a cancelled reservation.
 Durable Responses retain their SQL receipt ownership and idempotent replay.
 
-This change bounds queued work and keeps the HTTP executor responsive. It does
-not add or change Redis deadlines. With the currently locked `redis` 1.2.0,
-standalone connections inherit `AsyncConnectionConfig`'s 500 ms response timeout;
-connection setup uses the configured connection timeout. The current Cluster
-builder sets a connection timeout but leaves response and overall response
-timeouts unset. In that mode a connected server which never replies can retain
-worker and reservation slots until I/O fails or resumes. The bridge adds no
-end-to-end recovery deadline or guarantee that terminal cleanup finishes within
-a fixed duration. A lost Redis reply still leaves the write result uncertain;
-the bridge does not replay admissions and preserves the existing client settings,
-remote capacity expiry and pending-identity rules.
+Each HTTP-facing async reply has a 30-second deadline, including time queued
+behind the SDK workers. Expiration closes the reply receiver. An admission still
+queued then skips Redis; an admission already executing keeps its original
+identity and cancels a successfully returned but undeliverable reservation.
+Terminal work retains its slot and accounting ownership after the caller times
+out. The HTTP deadline does not abort settlement or turn billable work into a
+refund.
+
+The dedicated budget connection has separate five-second bounds for acquiring
+a Redis concurrency permit, waiting for connection creation, command execution,
+and failed-generation invalidation. Whole connection setup uses the smaller of
+the configured connection timeout and five seconds. The underlying standalone
+and Cluster clients also receive an explicit five-second response timeout;
+Cluster requests have a five-second overall timeout and zero automatic retries.
+Consequently an uncertain write is not replayed by the driver. A Cluster topology
+redirect fails the current operation closed and evicts that connection; a later
+operation discovers a fresh mapping. Other Redis consumers retain their existing
+client settings.
+
+These are phase and caller-wait bounds, not a promise that every combined
+provider/model operation succeeds within five seconds. A lost reply remains
+uncertain even after timeout: remote capacity can expire while its pending
+identity remains for reconciliation. Backend diagnostics retain the operation
+and original lease ID. A failed actual settlement preserves that identity for
+reconciliation and cannot fall through Drop to cancellation. Provider and model
+settlement are both attempted, even if the first scope fails; the combined call
+then reports the failure. Settlement-failure diagnostics include the original
+lease ID, scope, name and actual amount, including failures before command I/O. The bridge does not invent an acknowledgement, retry a
+reserve, or delete an uncertain remote identity. Durable Responses continue to
+use the SQL-owned, idempotent receipt recovery path.
 
 The new async SDK methods should be used as a pair: an async reservation carries
 its terminal capacity. If a synchronous SDK reservation is passed to async
@@ -145,3 +164,33 @@ classification and rollback of the provider reservation when the model is full.
 A manager-level test keeps a request alive past its short test lease, creates a
 new reservation through another manager, and
 verifies that late settlement records actual spend without releasing the new hold.
+
+## API-key budget capability boundary
+
+| Scope | Definition and spend state | Restart / multiple gateways |
+| --- | --- | --- |
+| Provider/model with the distributed Redis backend | Configured limits plus Redis reservation/counter state | Shared reservation accounting under the documented lease and upgrade contract |
+| API-key `BudgetManager` | Process-local definitions, counters and reservations | Not restored from SQL and not distributed through the provider/model Redis backend |
+| Persisted API-key record | SQL record including its `budget_id` binding | The binding alone does not recreate a budget or its previous balance |
+
+`POST /keys` and key updates reject `max_budget`. An embedded caller may create
+a process-local budget and bind an API key to that existing `budget_id`; this
+is a single-process capability. Missing budget bindings fail closed. Creating a
+fresh budget after restart does not recover its previous spend. Applications
+must not advertise a shared or restart-persistent API-key balance on this basis.
+
+Extending this capability requires persisted budget definitions and scopes,
+restoration and distribution, and a shared reservation ledger. Its acceptance
+must use production authentication with real SQL and Redis: gateway A spends,
+gateway B observes the same remaining balance, restarting A preserves accounting,
+and concurrent/stream-interrupted/late-settled requests respect one total. That
+capability is not introduced by the provider/model budget fixes.
+
+## History growth measurement
+
+The reproducible driver and recorded samples are described in
+[the history growth benchmark](../benchmarks/redis-budget-history.md). It varies
+unfinished identities independently from durable receipts and checks late
+settlement, duplicate completion, durable replay and capacity rejection before
+recording latency. A new timeout does not remove the Lua hash scan or bound
+receipt retention.
