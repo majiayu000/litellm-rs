@@ -2106,8 +2106,8 @@ async fn native_unknown_usage_retains_admission_but_zero_and_no_output_do_not() 
                     initial_health
                 );
             }
-            if redis_url.is_some() {
-                let mut conn = redis::Client::open(redis_url.as_ref().unwrap().as_str())
+            if let Some(redis_url) = &redis_url {
+                let mut conn = redis::Client::open(redis_url.as_str())
                     .unwrap()
                     .get_multiplexed_async_connection()
                     .await
