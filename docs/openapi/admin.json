@@ -1982,6 +1982,7 @@
       },
       "CreateKeyRequest": {
         "type": "object",
+        "description": "API-key budget definitions and counters are process-local. The persisted key binding does not provide restart recovery or cross-gateway accounting. max_budget is unsupported and rejected.",
         "required": ["name"],
         "properties": {
           "name": { "type": "string" },
@@ -1998,6 +1999,7 @@
       },
       "UpdateKeyRequest": {
         "type": "object",
+        "description": "budget_id references a budget already configured in this process; null removes the binding. Budget definitions and counters are not restored from SQL or shared through Redis. max_budget is unsupported and rejected.",
         "properties": {
           "name": { "type": "string" },
           "description": { "type": ["string", "null"] },

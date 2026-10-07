@@ -548,17 +548,32 @@ impl ProviderBudgetReservation {
     ) -> Result<Option<BudgetStatus>, BudgetReservationError> {
         let actual = BudgetAmount::from_f64(actual_amount)?;
         if let Some(lease_id) = self.lease_id.clone() {
-            let snapshot = self.manager.backend.settle(
-                BudgetLeaseScope::Provider,
-                &self.provider,
-                &lease_id,
-                self.reserved,
-                actual,
-                self.period_epoch,
-            )?;
+            // A failed/expired reply does not prove that the actual charge was
+            // unapplied. Drop must not cancel potentially billable work.
+            self.settled = true;
+            let snapshot = self
+                .manager
+                .backend
+                .settle(
+                    BudgetLeaseScope::Provider,
+                    &self.provider,
+                    &lease_id,
+                    self.reserved,
+                    actual,
+                    self.period_epoch,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        scope = "provider",
+                        name = self.provider,
+                        lease_id,
+                        actual_amount,
+                        ?error,
+                        "budget settlement unacknowledged; retaining identity for reconciliation"
+                    );
+                })?;
             self.manager.sync_lease_snapshot(&self.provider, snapshot);
             let status = self.manager.finish_distributed_settle(&self.provider);
-            self.settled = true;
             return Ok(status);
         }
         let status = if self.tracked {
@@ -711,17 +726,32 @@ impl ModelBudgetReservation {
     ) -> Result<Option<BudgetStatus>, BudgetReservationError> {
         let actual = BudgetAmount::from_f64(actual_amount)?;
         if let Some(lease_id) = self.lease_id.clone() {
-            let snapshot = self.manager.backend.settle(
-                BudgetLeaseScope::Model,
-                &self.model,
-                &lease_id,
-                self.reserved,
-                actual,
-                self.period_epoch,
-            )?;
+            // Keep an uncertain actual charge available for reconciliation;
+            // unwinding this call must not turn it into a cancellation.
+            self.settled = true;
+            let snapshot = self
+                .manager
+                .backend
+                .settle(
+                    BudgetLeaseScope::Model,
+                    &self.model,
+                    &lease_id,
+                    self.reserved,
+                    actual,
+                    self.period_epoch,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        scope = "model",
+                        name = self.model,
+                        lease_id,
+                        actual_amount,
+                        ?error,
+                        "budget settlement unacknowledged; retaining identity for reconciliation"
+                    );
+                })?;
             self.manager.sync_lease_snapshot(&self.model, snapshot);
             let status = self.manager.finish_distributed_settle(&self.model);
-            self.settled = true;
             return Ok(status);
         }
         let status = if self.tracked {
@@ -843,9 +873,11 @@ impl UnifiedBudgetReservation {
                 model.reservation_reset_at,
             )?;
         }
-        let provider_status = provider.settle(actual_amount)?;
-        let model_status = model.settle(actual_amount)?;
-        Ok((provider_status, model_status))
+        // Both scopes own the same billable result. An unavailable provider
+        // backend must not skip model accounting or drop it as a cancellation.
+        let provider_status = provider.settle(actual_amount);
+        let model_status = model.settle(actual_amount);
+        Ok((provider_status?, model_status?))
     }
 
     pub fn cancel(self) {

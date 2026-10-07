@@ -271,6 +271,89 @@ mod redis {
         limits
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settlement_deadline_keeps_uncertain_identity_and_finishes_the_other_scope() {
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        let provider = unique("provider-settle-deadline");
+        let model = unique("model-settle-deadline");
+        let mut isolated = (*pool).clone();
+        isolated.semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let provider_pool = Arc::new(isolated);
+        let mut limits = seeded(pool.clone(), &provider, &model, 100.0);
+        limits.providers = limits.providers.with_redis(provider_pool.clone());
+        let reservation = limits
+            .reserve_spend_async(&provider, &model, 10.0)
+            .await
+            .unwrap();
+        let descriptor = reservation.response_leases().unwrap();
+        let (lease_id, epoch) = descriptor.provider.unwrap();
+
+        // Only provider accounting is unavailable. Model accounting must still
+        // publish this request's actual cost through the real Redis backend.
+        let held = provider_pool.semaphore.acquire().await.unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            reservation.settle_async(4.0),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            result,
+            Err(BudgetReservationError::BackendUnavailable)
+        ));
+        let provider_key = RedisPool::budget_lease_key("provider", &provider);
+        let model_key = RedisPool::budget_lease_key("model", &model);
+        let mut control = pool.open_live_connection().await.unwrap();
+        let model_state: (i64, i64) = ::redis::cmd("HMGET")
+            .arg(&model_key)
+            .arg(&["c", "o"])
+            .query_async(&mut control)
+            .await
+            .unwrap();
+        let actual = i64::try_from(
+            crate::core::budget::BudgetAmount::from_f64(4.0)
+                .unwrap()
+                .as_scaled(),
+        )
+        .unwrap();
+        let reserved = i64::try_from(
+            crate::core::budget::BudgetAmount::from_f64(10.0)
+                .unwrap()
+                .as_scaled(),
+        )
+        .unwrap();
+        assert_eq!(
+            model_state,
+            (actual, 0),
+            "provider failure must not cancel the model charge"
+        );
+        let retained: bool = ::redis::cmd("HEXISTS")
+            .arg(&provider_key)
+            .arg(format!("l:{lease_id}"))
+            .query_async(&mut control)
+            .await
+            .unwrap();
+        assert!(
+            retained,
+            "uncertain settlement must preserve the original reservation"
+        );
+        drop(held);
+        let now = chrono::Utc::now().timestamp_millis();
+        let late = provider_pool
+            .budget_settle(&provider_key, reserved, actual, epoch, &lease_id, now)
+            .await
+            .unwrap();
+        assert_eq!((late.committed, late.outstanding), (actual, 0));
+        let duplicate = provider_pool
+            .budget_settle(&provider_key, reserved, actual, epoch, &lease_id, now)
+            .await
+            .unwrap();
+        assert_eq!((duplicate.committed, duplicate.outstanding), (actual, 0));
+        cleanup(&pool, &provider, &model).await;
+    }
+
     fn unique(prefix: &str) -> String {
         format!("{prefix}-{}", uuid::Uuid::new_v4())
     }

@@ -10,10 +10,16 @@ use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// Bound live plus pending reservation identities for each budget. Durable
 /// Responses receipts have a separate replay contract and do not use this cap.
 pub(crate) const MAX_UNSETTLED_BUDGET_LEASES: usize = 65_536;
+const BUDGET_PHASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn deadline_error(phase: &str) -> GatewayError {
+    GatewayError::Unavailable(format!("Redis budget {phase} deadline exceeded"))
+}
 
 const BUDGET_LEASE_SCRIPT: &str = r#"
 local op = ARGV[1]
@@ -266,17 +272,32 @@ impl BudgetRuntimeConnection {
     async fn connect(&self, pool: &RedisPool) -> Result<Arc<RedisLiveConnection>> {
         // Serialize connection creation only for this endpoint. Healthy script
         // invocations clone the connection and release the lock before I/O.
-        let mut live = self.live.lock().await;
+        let mut live = tokio::time::timeout(BUDGET_PHASE_TIMEOUT, self.live.lock())
+            .await
+            .map_err(|_| deadline_error("connection lock"))?;
         if let Some(connection) = live.as_ref() {
             return Ok(Arc::clone(connection));
         }
-        let connection = Arc::new(pool.open_live_connection().await?);
+        // The Cluster client may perform multiple discovery/retry steps. Bound
+        // the whole setup, in addition to its per-connection transport timeout.
+        let connection = Arc::new(
+            tokio::time::timeout(
+                Duration::from_secs(pool.config.connection_timeout).min(BUDGET_PHASE_TIMEOUT),
+                pool.open_budget_connection(BUDGET_PHASE_TIMEOUT),
+            )
+            .await
+            .map_err(|_| deadline_error("connection setup"))??,
+        );
         *live = Some(Arc::clone(&connection));
         Ok(connection)
     }
 
     async fn invalidate(&self, failed: &Arc<RedisLiveConnection>) {
-        let mut live = self.live.lock().await;
+        let Ok(mut live) = tokio::time::timeout(BUDGET_PHASE_TIMEOUT, self.live.lock()).await
+        else {
+            tracing::warn!("Redis budget connection invalidation deadline exceeded");
+            return;
+        };
         // A late error from an old generation must not discard a replacement
         // that another request has already opened.
         if live
@@ -295,7 +316,9 @@ impl BudgetRuntimeConnection {
     ) -> Result<BudgetLeaseState> {
         let live = self.connect(pool).await?;
         let mut conn = live.as_ref().clone();
-        let values: redis::RedisResult<Vec<i64>> = redis::Script::new(BUDGET_LEASE_SCRIPT)
+        let script = redis::Script::new(BUDGET_LEASE_SCRIPT);
+        let mut invocation = script.prepare_invoke();
+        invocation
             .key(key)
             .arg(args.op)
             .arg(args.now_ms)
@@ -305,15 +328,39 @@ impl BudgetRuntimeConnection {
             .arg(args.seed_committed)
             .arg(args.lease_id)
             .arg(args.ttl_ms)
-            .arg(MAX_UNSETTLED_BUDGET_LEASES)
-            .invoke_async(&mut conn)
-            .await;
+            .arg(MAX_UNSETTLED_BUDGET_LEASES);
+        let values: redis::RedisResult<Vec<i64>> =
+            match tokio::time::timeout(BUDGET_PHASE_TIMEOUT, invocation.invoke_async(&mut conn))
+                .await
+            {
+                Ok(values) => values,
+                Err(_) => {
+                    self.invalidate(&live).await;
+                    // Timeout does not prove the write was unapplied. Keep the
+                    // original identity visible for reconciliation; never replay.
+                    tracing::warn!(
+                        operation = args.op,
+                        lease_id = args.lease_id,
+                        "Redis budget command timed out; write outcome is uncertain"
+                    );
+                    return Err(deadline_error("command"));
+                }
+            };
         match values {
             Ok(values) => parse_budget_lease_state(values),
             Err(error) => {
-                if error.is_unrecoverable_error() {
+                if error.is_unrecoverable_error()
+                    || error.is_timeout()
+                    || error.redirect_node().is_some()
+                {
                     self.invalidate(&live).await;
                 }
+                tracing::warn!(
+                    operation = args.op,
+                    lease_id = args.lease_id,
+                    error = %error,
+                    "Redis budget command failed; write outcome may be uncertain"
+                );
                 // The server may have applied a write before its reply was
                 // lost. Fail this operation closed; reconnect on the next one
                 // without automatically replaying an ambiguous reservation.
@@ -363,12 +410,11 @@ impl RedisPool {
             ));
         }
 
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
+        let _permit =
+            tokio::time::timeout(BUDGET_PHASE_TIMEOUT, self.semaphore.clone().acquire_owned())
+                .await
+                .map_err(|_| deadline_error("connection permit"))?
+                .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
         connection_on_current_runtime(self)
             .await
             .invoke(self, key, args)
@@ -496,6 +542,10 @@ impl RedisPool {
 #[cfg(test)]
 #[path = "budget_connection_tests.rs"]
 mod connection_tests;
+
+#[cfg(test)]
+#[path = "budget_deadline_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 mod tests {
