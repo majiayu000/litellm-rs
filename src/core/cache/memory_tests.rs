@@ -1,5 +1,39 @@
 use super::*;
 
+#[tokio::test]
+async fn test_cache_hot_reads_keep_eviction_metadata_bounded() {
+    const KEY_COUNT: usize = 8;
+    const ROUNDS: usize = 2_000;
+    let cache = InMemoryCache::new(DualCacheConfig::default().with_max_size(64));
+    let keys: Vec<_> = (0..KEY_COUNT)
+        .map(|index| CacheKey::new(format!("hot-{index}")))
+        .collect();
+
+    for (index, key) in keys.iter().enumerate() {
+        cache.set(key.clone(), index).await;
+    }
+    for round in 0..ROUNDS {
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(cache.get(key).await, Some(index));
+            assert_eq!(cache.peek(key).await, Some(index));
+            assert_eq!(cache.get_entry(key).await.unwrap().value, index);
+            let entry = cache.peek_entry(key).await.unwrap();
+            assert_eq!(entry.value, index);
+            assert_eq!(entry.access_count, ((round + 1) * 4) as u64);
+        }
+    }
+
+    assert_eq!(cache.len(), KEY_COUNT);
+    let metadata_count: usize = cache.access_meta.iter().map(DashMap::len).sum();
+    let queued_count: usize = cache
+        .access_queue
+        .iter()
+        .map(|queue| lock_queue(queue).len())
+        .sum();
+    assert_eq!(metadata_count, KEY_COUNT);
+    assert_eq!(queued_count, KEY_COUNT, "hits must not accumulate key copies");
+}
+
 #[test]
 fn test_cache_new() {
     let cache: InMemoryCache<String> = InMemoryCache::with_defaults();
