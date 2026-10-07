@@ -60,15 +60,15 @@ impl DeploymentLease {
         }
     }
 
-    pub(crate) fn preserve_admission_reservation(&self) {
+    pub(crate) fn preserve_admission_reservation(&self, minimum_tokens: u64) {
         if let Some(hold) = &self.hold {
-            hold.prepare_retention();
+            hold.prepare_retention(minimum_tokens);
         }
     }
 
-    pub(crate) async fn retain_admission_async(&mut self) {
+    pub(crate) async fn retain_admission_async(&mut self, minimum_tokens: u64) {
         if let Some(hold) = self.hold.take() {
-            self.admission.retain_async(&hold).await;
+            self.admission.retain_async(&hold, minimum_tokens).await;
         }
     }
 

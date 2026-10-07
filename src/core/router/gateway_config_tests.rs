@@ -221,10 +221,28 @@ async fn vertex_environment_rotations_change_runtime_resource_identity() {
         explicit
             .settings
             .insert("project".into(), "settings-project".into());
+        // The direct factory inserts top-level project before merging settings
+        // with entry.or_insert. Compare its effective input with normalization.
+        let direct = crate::core::providers::factory::vertex_resource_config_from_factory(
+            &serde_json::json!({"project": "top-level-project", "access_token": "fixture-direct-token"}),
+        );
         assert_eq!(
             normalize_provider_construction(&explicit).config.settings["project_id"],
-            "settings-project"
+            direct["project_id"]
         );
+        assert_eq!(direct["project_id"], "top-level-project");
+        // The explicit canonical key precedes project in the factory resolver.
+        explicit
+            .settings
+            .insert("project_id".into(), "canonical-project".into());
+        let direct = crate::core::providers::factory::vertex_resource_config_from_factory(
+            &serde_json::json!({"project_id": "canonical-project", "project": "top-level-project"}),
+        );
+        assert_eq!(
+            normalize_provider_construction(&explicit).config.settings["project_id"],
+            direct["project_id"]
+        );
+        assert_eq!(direct["project_id"], "canonical-project");
     }
     // The selected path remains the same; credentials held by the new provider change.
     let _env = EnvScope::new(&[
@@ -401,6 +419,49 @@ async fn bedrock_environment_rotations_change_runtime_resource_identity() {
     }
 }
 
+#[tokio::test]
+async fn bedrock_identity_binds_credentials_read_after_normalization() {
+    use super::*;
+    let _env = EnvScope::new(&[
+        ("AWS_ACCESS_KEY_ID", "AKIA-fixture-key"),
+        ("AWS_SECRET_ACCESS_KEY", "fixture-secret"),
+    ]);
+    let config = ProviderConfig {
+        name: "bedrock-fixture".into(),
+        provider_type: "bedrock".into(),
+        ..ProviderConfig::default()
+    };
+    let normalized = normalize_provider_construction(&config).config;
+    assert!(normalized.settings["aws_session_token"].is_null());
+    let base_identity = GatewayRuntimeIdentity::for_provider(&normalized);
+    let Provider::Bedrock(first) = create_provider(normalized.clone()).await.unwrap() else {
+        panic!("expected Bedrock provider");
+    };
+    let first_digest = first.credential_resource_identity();
+
+    // The public factory's existing fallback can observe a token appearing
+    // after normalization. Identity must bind what this provider actually uses.
+    unsafe { std::env::set_var("AWS_SESSION_TOKEN", "late-fixture-session") };
+    let Provider::Bedrock(second) = create_provider(normalized.clone()).await.unwrap() else {
+        panic!("expected Bedrock provider");
+    };
+    let second_digest = second.credential_resource_identity();
+    assert_eq!(first_digest, first.credential_resource_identity());
+    assert_ne!(
+        base_identity.with_credential_digest(first_digest),
+        base_identity.with_credential_digest(second_digest),
+        "same normalized config must not mask different constructed credentials"
+    );
+
+    // The digest is stable once constructed, even if the environment changes again.
+    unsafe { std::env::remove_var("AWS_SESSION_TOKEN") };
+    assert_eq!(second_digest, second.credential_resource_identity());
+    let Provider::Bedrock(third) = create_provider(normalized).await.unwrap() else {
+        panic!("expected Bedrock provider");
+    };
+    assert_eq!(first_digest, third.credential_resource_identity());
+}
+
 #[cfg(feature = "providers-extended")]
 mod matrix {
     use super::super::*;
@@ -437,10 +498,12 @@ mod matrix {
     }
 
     async fn run(case: &Case) {
-        let before = ENVS
-            .iter()
-            .map(|key| (*key, std::env::var(key).ok()))
-            .collect::<Vec<_>>();
+        let before = {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+            ENVS.iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect::<Vec<_>>()
+        };
         {
             let _env = EnvScope::new(case.env);
             let mut config = provider(case.name, case.top);
@@ -493,12 +556,13 @@ mod matrix {
                 }
             }
         }
-        assert_eq!(
-            before,
+        let after = {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
             ENVS.iter()
                 .map(|key| (*key, std::env::var(key).ok()))
                 .collect::<Vec<_>>()
-        );
+        };
+        assert_eq!(before, after);
     }
 
     #[tokio::test]

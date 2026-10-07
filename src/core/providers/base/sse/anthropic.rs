@@ -427,9 +427,14 @@ impl SSETransformer for AnthropicTransformer {
                     })?;
                 }
 
-                let usage = json
-                    .get("usage")
-                    .map(|usage| self.with_usage_state(|state| state.merge(usage)));
+                let usage = json.get("usage").and_then(|usage| {
+                    self.with_usage_state(|state| {
+                        state.merge(usage);
+                        finish_reason
+                            .as_ref()
+                            .and_then(|_| state.terminal_usage(usage))
+                    })
+                });
 
                 Ok(Some(self.chunk_with_choice(
                     created,
@@ -584,10 +589,11 @@ mod tests {
             serde_json::json!({
                 "type": "message_delta", "usage": {"output_tokens": 1}
             }),
-        )
-        .usage
-        .expect("intermediate usage");
-        assert_eq!(intermediate.total_tokens, 21);
+        );
+        assert!(
+            intermediate.usage.is_none(),
+            "intermediate usage is not a completed total"
+        );
         let terminal = chunk_from_event(
             &transformer,
             serde_json::json!({
@@ -601,6 +607,121 @@ mod tests {
         assert_eq!(terminal.prompt_tokens, 20);
         assert_eq!(terminal.completion_tokens, 3);
         assert_eq!(terminal.total_tokens, 23);
+    }
+
+    #[test]
+    fn test_terminal_usage_requires_complete_valid_counters() {
+        let cases = [
+            (
+                serde_json::json!({}),
+                serde_json::json!({"output_tokens": 1}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10, "output_tokens": 0}),
+                serde_json::json!({}),
+            ),
+            (serde_json::json!({"input_tokens": 10}), Value::Null),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!([]),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!({"output_tokens": null}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!({"output_tokens": -1}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!({"output_tokens": 1.5}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!({"output_tokens": "1"}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!({"output_tokens": 4294967296_u64}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 4294967295_u64}),
+                serde_json::json!({"output_tokens": 1}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10, "cache_read_input_tokens": -1}),
+                serde_json::json!({"output_tokens": 1}),
+            ),
+            (
+                serde_json::json!({"input_tokens": 10}),
+                serde_json::json!({"output_tokens": 1, "cache_creation_input_tokens": null}),
+            ),
+        ];
+        for (start, terminal) in cases {
+            let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+            chunk_from_event(
+                &transformer,
+                serde_json::json!({
+                    "type": "message_start", "message": {"usage": start}
+                }),
+            );
+            let chunk = chunk_from_event(
+                &transformer,
+                serde_json::json!({
+                    "type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": terminal
+                }),
+            );
+            assert!(
+                chunk.usage.is_none(),
+                "unknown usage must not settle as zero: start={start}, terminal={terminal}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_intermediate_usage_stays_unknown_until_next_message() {
+        let transformer = AnthropicTransformer::new("claude-3-5-sonnet");
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start", "message": {"usage": {"input_tokens": 10}}
+            }),
+        );
+        let intermediate = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "usage": {"output_tokens": -1}
+            }),
+        );
+        assert!(intermediate.usage.is_none());
+        let terminal = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"input_tokens": 10, "output_tokens": 1}
+            }),
+        );
+        assert!(terminal.usage.is_none());
+        chunk_from_event(&transformer, serde_json::json!({"type": "message_stop"}));
+        chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_start", "message": {"usage": {"input_tokens": 0}}
+            }),
+        );
+        let next = chunk_from_event(
+            &transformer,
+            serde_json::json!({
+                "type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 0}
+            }),
+        );
+        assert_eq!(
+            next.usage
+                .expect("trusted explicit zero after state reset")
+                .total_tokens,
+            0
+        );
     }
 
     #[test]

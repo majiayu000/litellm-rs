@@ -153,14 +153,14 @@ impl Router {
                     if let Some(tokens) = tokens_used {
                         deployment_lease.preserve_admission_usage(tokens);
                     } else {
-                        deployment_lease.preserve_admission_reservation();
+                        deployment_lease.preserve_admission_reservation(0);
                     }
                     self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
                         .await;
                     if let Some(tokens) = tokens_used {
                         deployment_lease.commit_admission_async(tokens).await;
                     } else {
-                        deployment_lease.retain_admission_async().await;
+                        deployment_lease.retain_admission_async(0).await;
                     }
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
