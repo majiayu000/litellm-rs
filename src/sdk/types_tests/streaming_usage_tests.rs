@@ -5,6 +5,7 @@ use crate::sdk::types::*;
 #[test]
 fn test_chat_chunk_creation() {
     let chunk = ChatChunk {
+        usage: None,
         id: "chunk_123".to_string(),
         model: "gpt-4".to_string(),
         choices: vec![],
@@ -16,6 +17,7 @@ fn test_chat_chunk_creation() {
 #[test]
 fn test_chat_chunk_with_choices() {
     let chunk = ChatChunk {
+        usage: None,
         id: "chunk_456".to_string(),
         model: "gpt-4".to_string(),
         choices: vec![ChunkChoice {

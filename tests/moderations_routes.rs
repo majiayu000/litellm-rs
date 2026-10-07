@@ -19,6 +19,28 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+    async fn within<T>(
+        phase: &str,
+        endpoints: &str,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        within_timeout(phase, endpoints, REQUEST_TIMEOUT, future).await
+    }
+
+    async fn within_timeout<T>(
+        phase: &str,
+        endpoints: &str,
+        limit: Duration,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        tokio::time::timeout(limit, future).await.unwrap_or_else(|_| {
+            panic!("moderation test timed out after {limit:?} during {phase}; endpoints: {endpoints}")
+        })
+    }
+
     #[derive(Clone, Debug)]
     struct CapturedModerationRequest {
         method: String,
@@ -66,26 +88,58 @@ mod tests {
             .run();
             let handle = server.handle();
             let task = tokio::spawn(server);
-            wait_for_server(address).await;
-
-            Self {
+            let mock = Self {
                 base_url: format!("http://{address}/v1"),
                 captured_requests,
                 handle,
                 task,
-            }
+            };
+            within(
+                "start mock server",
+                &mock.base_url,
+                wait_for_server(address),
+            )
+            .await;
+            mock
         }
 
         fn requests(&self) -> Vec<CapturedModerationRequest> {
             self.captured_requests.lock().unwrap().clone()
         }
 
-        async fn stop_moderation_mock(self) {
-            self.handle.stop(true).await;
-            let result = self.task.await.expect("mock server task should join");
+        async fn stop_moderation_mock(mut self) {
+            // Routing assertions have completed. Idle pooled client connections
+            // should not make this fixture wait for graceful server draining.
+            within_timeout(
+                "stop mock server",
+                &self.base_url,
+                SHUTDOWN_TIMEOUT,
+                self.handle.stop(false),
+            )
+            .await;
+            let result = within_timeout(
+                "join mock server task",
+                &self.base_url,
+                SHUTDOWN_TIMEOUT,
+                &mut self.task,
+            )
+            .await
+            .expect("mock server task should join");
             if let Err(error) = result {
-                panic!("mock server should stop cleanly: {error}");
+                panic!(
+                    "mock server at {} should stop cleanly: {error}",
+                    self.base_url
+                );
             }
+        }
+    }
+
+    impl Drop for MockModerationServer {
+        fn drop(&mut self) {
+            // Stop is sent synchronously; panic cleanup must not wait for a
+            // runtime or worker thread. Only this mock's task is aborted.
+            drop(self.handle.stop(false));
+            self.task.abort();
         }
     }
 
@@ -165,6 +219,15 @@ mod tests {
         enable_api_key: bool,
         allow_anonymous: bool,
     ) -> litellm_rs::server::state::AppState {
+        let endpoints = if providers.is_empty() {
+            "<no moderation provider>".to_string()
+        } else {
+            providers
+                .iter()
+                .map(|provider| provider.base_url.as_deref().unwrap_or("<default>"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
         config.gateway.auth.enable_api_key = enable_api_key;
@@ -173,11 +236,15 @@ mod tests {
         config.gateway.storage.redis.enabled = false;
         config.gateway.providers = route_policy_bootstrap_providers(&providers);
 
-        let state = GatewayHttpServer::new(&config)
-            .await
-            .expect("gateway server should initialize")
-            .state()
-            .clone();
+        let state = within(
+            "initialize gateway state",
+            &endpoints,
+            GatewayHttpServer::new(&config),
+        )
+        .await
+        .expect("gateway server should initialize")
+        .state()
+        .clone();
         let mut runtime_config = state.config().as_ref().clone();
         runtime_config.gateway.providers = providers;
         state.config.store(runtime_config);
@@ -252,34 +319,51 @@ mod tests {
 
     #[tokio::test]
     async fn public_only_moderation_route_rejects_loopback_before_connect() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("listener should bind");
+        let listener = within(
+            "bind policy listener",
+            "127.0.0.1:0",
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("listener should bind");
         let address = listener.local_addr().expect("listener should have address");
         let mut provider = moderation_provider(&format!("http://{address}/v1"));
         provider.endpoint_access = ProviderEndpointAccess::PublicOnly;
         let state = build_test_app_state(vec![provider]).await;
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(state))
-                .configure(litellm_rs::server::routes::ai::configure_routes),
+        let app = within(
+            "initialize test app",
+            &address.to_string(),
+            test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            ),
         )
         .await;
 
-        let response = test::call_service(
-            &app,
-            test::TestRequest::post()
-                .uri("/v1/moderations")
-                .set_json(json!({
-                    "model": "omni-moderation-latest",
-                    "input": "listener must remain untouched"
-                }))
-                .to_request(),
+        let response = within(
+            "request dispatch",
+            &address.to_string(),
+            test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/moderations")
+                    .set_json(json!({
+                        "model": "omni-moderation-latest",
+                        "input": "listener must remain untouched"
+                    }))
+                    .to_request(),
+            ),
         )
         .await;
 
         assert!(!response.status().is_success());
-        let body: Value = test::read_body_json(response).await;
+        let body: Value = within(
+            "read response body",
+            &address.to_string(),
+            test::read_body_json(response),
+        )
+        .await;
         assert!(
             body["error"]["message"]
                 .as_str()

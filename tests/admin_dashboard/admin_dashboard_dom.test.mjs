@@ -2306,3 +2306,59 @@ test("B27 a late routing policy PUT after logout cannot restore the draft", { co
   assert.equal(window.document.getElementById("routing-policy-panel").hidden, true);
 });
 
+
+test("B28 request billing preserves estimates when recording supplier evidence", { concurrency: false }, async (t) => {
+  let reconciliation = null;
+  const item = ledgerItem({
+    cost: null,
+    billing: {
+      charge_basis: "reserved_estimate",
+      unknown_reason: "stream_cancelled_before_usage",
+      provider_reserved_amount: 1,
+      model_reserved_amount: 1,
+      key_reserved_amount: 0.8,
+      provider_charge_amount: 1,
+      model_charge_amount: 1,
+      key_charge_amount: 0.8,
+      provider_settlement: "settled",
+      model_settlement: "settled",
+      key_settlement: "settled",
+    },
+    awaiting_duration_ms: 30000,
+  });
+  const context = dashboard({
+    handler(call) {
+      if (call.url.pathname === "/admin/request-ledger/req-1/reconciliation" && call.method === "POST") {
+        const input = JSON.parse(call.init.body);
+        assert.deepEqual(input, { verified_actual_cost: 0.2, evidence_reference: "invoice-line-42" });
+        reconciliation = { ...input, verified_at: "2026-10-07T10:00:00Z", budget_review_required: true };
+        return apiResponse({ success: true, reconciliation });
+      }
+      if (call.url.pathname === "/admin/request-ledger" && call.method === "GET") {
+        return apiResponse({ items: [{ ...item, reconciliation }], next_cursor: null, has_more: false });
+      }
+      return undefined;
+    },
+  });
+  t.after(() => context.window.close());
+  await signIn(context);
+  await openRequestLogs(context);
+  const { window } = context;
+  window.document.querySelector("#request-logs-body button").click();
+  let detail = window.document.getElementById("request-logs-detail");
+  assert.match(detail.textContent, /reserved_estimate/);
+  assert.match(detail.textContent, /stream_cancelled_before_usage/);
+  assert.match(detail.textContent, /30 s/);
+  assert.doesNotMatch(detail.textContent, /\$2\.8000/);
+  const form = detail.querySelector("form");
+  form.querySelector('input[type="number"]').value = "0.2";
+  form.querySelector('input:not([type="number"])').value = "invoice-line-42";
+  submit(window, form);
+  await waitFor(() => /budget reconciliation \/ manual review required/.test(detail.textContent), "supplier verification did not reload the ledger");
+  detail = window.document.getElementById("request-logs-detail");
+  assert.equal(detail.querySelector("form"), null);
+  assert.match(detail.textContent, /invoice-line-42/);
+  assert.match(detail.textContent, /\$1\.0000/);
+  assert.match(detail.textContent, /\$0\.2000/);
+  assert.match(detail.textContent, /does not adjust budget counters/);
+});

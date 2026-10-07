@@ -264,6 +264,9 @@ impl BudgetLeaseBackend {
         lease_id: String,
         reserved: BudgetAmount,
         period_epoch: i64,
+        #[cfg(feature = "gateway")] permit: Option<
+            Arc<super::provider_reservations::asynchronous::AsyncBudgetPermit>,
+        >,
     ) {
         #[cfg(feature = "gateway")]
         if let Self::Redis { pool, .. } = self {
@@ -273,6 +276,10 @@ impl BudgetLeaseBackend {
             let pool = Arc::clone(pool);
             let key = crate::storage::redis::RedisPool::budget_lease_key(scope.as_str(), name);
             budget_io_handle().spawn(async move {
+                // Gateway guards retain their original admission slot through
+                // cleanup. Legacy synchronous SDK guards keep their existing
+                // Drop dispatch contract, independently of async admission.
+                let _permit = permit;
                 if let Err(err) = pool
                     .budget_cancel(&key, reserved, period_epoch, &lease_id, now_ms())
                     .await

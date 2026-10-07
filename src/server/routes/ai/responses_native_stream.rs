@@ -120,7 +120,7 @@ pub(super) fn response(
         }
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
-            lease.finish_failure(&error);
+            lease.finish_failure(&error).await;
             let code = if provider_error_is_guardrail(&error) {
                 "guardrail_violation"
             } else {
@@ -133,18 +133,22 @@ pub(super) fn response(
                 .await;
         } else if upstream_failed {
             callback.fail("Upstream response failed", "provider_error");
-            lease.finish_failure(&ProviderError::api_error(
-                "responses",
-                502,
-                "Upstream response failed",
-            ));
+            lease
+                .finish_failure(&ProviderError::api_error(
+                    "responses",
+                    502,
+                    "Upstream response failed",
+                ))
+                .await;
         } else if terminal {
             callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");
-            lease.finish_success(
-                usage
-                    .as_ref()
-                    .map_or(0, |usage| u64::from(usage.total_tokens)),
-            );
+            lease
+                .finish_success(
+                    usage
+                        .as_ref()
+                        .map_or(0, |usage| u64::from(usage.total_tokens)),
+                )
+                .await;
         } else {
             callback.fail("Client disconnected", "client_disconnect");
         }

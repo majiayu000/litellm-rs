@@ -442,10 +442,12 @@ pub async fn reset_provider_budget(
 
     let provider_name = path.into_inner();
 
-    if budget_limits
+    let reset = budget_limits
         .providers
-        .reset_provider_budget(&provider_name)
-    {
+        .reset_provider_budget_async(&provider_name)
+        .await
+        .map_err(|_| actix_web::error::ErrorServiceUnavailable("budget backend unavailable"))?;
+    if reset {
         info!("Reset provider budget for '{}'", provider_name);
 
         match budget_limits.providers.get_provider_usage(&provider_name) {
@@ -692,7 +694,12 @@ pub async fn reset_model_budget(
 
     let model_name = path.into_inner();
 
-    if budget_limits.models.reset_model_budget(&model_name) {
+    let reset = budget_limits
+        .models
+        .reset_model_budget_async(&model_name)
+        .await
+        .map_err(|_| actix_web::error::ErrorServiceUnavailable("budget backend unavailable"))?;
+    if reset {
         info!("Reset model budget for '{}'", model_name);
 
         match budget_limits.models.get_model_usage(&model_name) {

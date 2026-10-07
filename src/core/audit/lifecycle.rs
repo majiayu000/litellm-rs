@@ -25,10 +25,10 @@ pub(crate) struct AuditEventPermit {
 
 #[cfg(feature = "gateway")]
 impl AuditEventPermit {
-    pub(super) fn disabled() -> Self {
+    pub(super) fn disabled(cancellation: impl FnOnce() -> AuditEvent + 'static) -> Self {
         Self {
             terminal: None,
-            cancellation: None,
+            cancellation: Some(Box::new(cancellation)),
             logger: None,
         }
     }
@@ -57,14 +57,15 @@ impl AuditEventPermit {
 #[cfg(feature = "gateway")]
 impl Drop for AuditEventPermit {
     fn drop(&mut self) {
-        let (Some(terminal), Some(cancellation), Some(logger)) = (
-            self.terminal.take(),
-            self.cancellation.take(),
-            self.logger.take(),
-        ) else {
+        let Some(cancellation) = self.cancellation.take() else {
             return;
         };
-        let event = logger.prepare_event(cancellation());
+        // Ledger cancellation still runs when audit output is disabled.
+        let event = cancellation();
+        let (Some(terminal), Some(logger)) = (self.terminal.take(), self.logger.take()) else {
+            return;
+        };
+        let event = logger.prepare_event(event);
         if terminal.send(event).is_err() {
             tracing::error!("Audit worker rejected a cancelled-request terminal event");
         }

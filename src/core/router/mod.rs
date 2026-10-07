@@ -43,8 +43,10 @@ mod gateway_identity;
 mod health_probe;
 mod provider_identity;
 pub mod retry_policy;
+mod runtime_state;
 pub mod selection;
 pub mod strategy_impl;
+mod sync_compat;
 pub mod unified;
 
 #[cfg(test)]

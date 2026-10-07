@@ -500,7 +500,7 @@ fn unpriced_openai_mapping_identity(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_request_pricing(
+pub(in crate::server::routes::ai) async fn reserve_embedding_budget_with_request_pricing(
     request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -526,9 +526,10 @@ pub(in crate::server::routes::ai) fn reserve_embedding_budget_with_request_prici
         prompt_tokens,
         Some(0),
     )
+    .await
 }
 
-pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_request_pricing(
+pub(in crate::server::routes::ai) async fn reserve_pricing_usage_budget_with_request_pricing(
     request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -546,7 +547,8 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_request_p
                 budget_model,
                 usage,
                 error,
-            );
+            )
+            .await;
         }
     };
     if cost <= 0.0 {
@@ -554,7 +556,8 @@ pub(in crate::server::routes::ai) fn reserve_pricing_usage_budget_with_request_p
         return Ok(None);
     }
     budget_limits
-        .reserve_spend(budget_provider, budget_model, cost)
+        .reserve_spend_async(budget_provider, budget_model, cost)
+        .await
         .map(Some)
         .map_err(|error| {
             super::reservation_error_to_provider_error(error, budget_provider, budget_model)
@@ -593,30 +596,36 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reque
             return;
         }
     };
-    if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
-            tracing::error!("failed to settle reserved budget: {error:?}");
-        }
-    } else {
-        budget_limits.record_spend(budget_provider, budget_model, cost);
-    }
+    super::capture_ledger_settlement(None, budget_provider, budget_model, None, Some(cost));
     super::settle_api_key_budget_reservation(
         key_budget_reservation,
         cost,
         &format!("{budget_provider}/{budget_model}"),
     );
-    if let Some(key_id) = api_key_id {
-        let total_tokens = super::unpriced::usage_units(usage);
-        if let Err(error) = key_manager
-            .record_usage(key_id, u64::from(total_tokens), cost)
-            .await
-        {
-            tracing::error!("failed to record usage for key {key_id}: {error}");
+    let budget_settlement = async {
+        if let Some(reservation) = budget_reservation {
+            if let Err(error) = reservation.settle_async(cost).await {
+                tracing::error!("failed to settle reserved budget: {error:?}");
+            }
+        } else {
+            budget_limits.record_spend(budget_provider, budget_model, cost);
         }
-    }
+    };
+    let usage_record = async {
+        if let Some(key_id) = api_key_id {
+            let total_tokens = super::unpriced::usage_units(usage);
+            if let Err(error) = key_manager
+                .record_usage(key_id, u64::from(total_tokens), cost)
+                .await
+            {
+                tracing::error!("failed to record usage for key {key_id}: {error}");
+            }
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
-fn reserve_completion_budget_with_request_pricing(
+async fn reserve_completion_budget_with_request_pricing(
     request_pricing: &RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -637,7 +646,8 @@ fn reserve_completion_budget_with_request_pricing(
                     estimated_prompt_tokens,
                     max_output_tokens,
                     error,
-                );
+                )
+                .await;
             }
         };
     if estimate.max_cost <= 0.0 {
@@ -645,7 +655,8 @@ fn reserve_completion_budget_with_request_pricing(
         return Ok(None);
     }
     budget_limits
-        .reserve_spend(budget_provider, budget_model, estimate.max_cost)
+        .reserve_spend_async(budget_provider, budget_model, estimate.max_cost)
+        .await
         .map(Some)
         .map_err(|error| {
             super::reservation_error_to_provider_error(error, budget_provider, budget_model)

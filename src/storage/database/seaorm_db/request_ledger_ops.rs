@@ -125,6 +125,13 @@ impl SeaOrmDatabase {
             completion_tokens: Set(record.completion_tokens),
             total_tokens: Set(record.total_tokens),
             cost: Set(record.cost),
+            billing: Set(record
+                .billing
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| GatewayError::Storage(error.to_string()))?),
+            reconciliation: Set(None),
             user_id: Set(record.user_id.clone()),
             api_key_id: Set(record.api_key_id.clone()),
             team_id: Set(record.team_id.clone()),
@@ -148,6 +155,7 @@ impl SeaOrmDatabase {
                         request_ledger::Column::CompletionTokens,
                         request_ledger::Column::TotalTokens,
                         request_ledger::Column::Cost,
+                        request_ledger::Column::Billing,
                         request_ledger::Column::UserId,
                         request_ledger::Column::ApiKeyId,
                         request_ledger::Column::TeamId,
@@ -158,6 +166,70 @@ impl SeaOrmDatabase {
             .await
             .map_err(GatewayError::from)?;
         Ok(())
+    }
+
+    /// Record supplier verification only; terminal upserts never overwrite it.
+    pub async fn reconcile_request_ledger(
+        &self,
+        request_id: &str,
+        actual_cost: f64,
+        evidence_reference: String,
+    ) -> Result<Option<crate::core::request_ledger::RequestReconciliation>> {
+        use crate::core::request_ledger::{RequestBilling, RequestReconciliation};
+        let Some(row) = entities::RequestLedger::find_by_id(request_id)
+            .one(&self.db)
+            .await
+            .map_err(GatewayError::from)?
+        else {
+            return Ok(None);
+        };
+        let billing = row
+            .billing
+            .map(serde_json::from_value::<RequestBilling>)
+            .transpose()
+            .map_err(|error| GatewayError::Storage(format!("invalid request billing: {error}")))?;
+        if let Some(stored) = row.reconciliation {
+            let existing: RequestReconciliation =
+                serde_json::from_value(stored).map_err(|error| {
+                    GatewayError::Storage(format!("invalid request reconciliation: {error}"))
+                })?;
+            if existing.verified_actual_cost == actual_cost
+                && existing.evidence_reference == evidence_reference
+            {
+                return Ok(Some(existing));
+            }
+            return Err(GatewayError::Conflict(
+                "request already has different supplier verification".into(),
+            ));
+        }
+        let budget_review_required = billing
+            .as_ref()
+            .is_none_or(|billing| billing.requires_budget_review(actual_cost));
+        let reconciliation = RequestReconciliation {
+            verified_actual_cost: actual_cost,
+            evidence_reference,
+            verified_at: Utc::now(),
+            budget_review_required,
+        };
+        let result = entities::RequestLedger::update_many()
+            .col_expr(
+                request_ledger::Column::Reconciliation,
+                sea_orm::sea_query::Expr::value(
+                    serde_json::to_value(&reconciliation)
+                        .map_err(|error| GatewayError::Storage(error.to_string()))?,
+                ),
+            )
+            .filter(request_ledger::Column::RequestId.eq(request_id))
+            .filter(request_ledger::Column::Reconciliation.is_null())
+            .exec(&self.db)
+            .await
+            .map_err(GatewayError::from)?;
+        if result.rows_affected == 0 {
+            return Err(GatewayError::Conflict(
+                "supplier verification changed concurrently; reload the ledger".into(),
+            ));
+        }
+        Ok(Some(reconciliation))
     }
 
     async fn prune_expired_request_ledger(&self, retention_days: u32) -> Result<()> {
@@ -271,6 +343,7 @@ mod tests {
             completion_tokens: Some(6),
             total_tokens: Some(10),
             cost: Some(0.02),
+            billing: None,
             user_id: None,
             api_key_id: Some("key-id".to_string()),
             team_id: Some("team-id".to_string()),
@@ -422,5 +495,57 @@ mod tests {
         assert_eq!(by_id.len(), 1);
         assert_eq!(by_id[0].terminal_status, "failed");
         assert_eq!(by_id[0].provider.as_deref(), Some("anthropic"));
+    }
+    #[tokio::test]
+    async fn supplier_verification_is_preserved_and_conflicts_do_not_overwrite() {
+        use crate::core::request_ledger::RequestBilling;
+        let db = test_db().await;
+        let mut row = record("unknown-charge", Utc::now());
+        row.cost = None;
+        row.billing = Some(RequestBilling {
+            provider_reserved_amount: Some(1.0),
+            provider_charge_amount: Some(1.0),
+            provider_settlement: Some("settled".into()),
+            charge_basis: Some("reserved_estimate".into()),
+            unknown_reason: Some("provider_usage_missing".into()),
+            awaiting_since: Some(Utc::now() - Duration::seconds(30)),
+            ..Default::default()
+        });
+        db.store_request_ledger(&row, 30).await.unwrap();
+        let verified = db
+            .reconcile_request_ledger("unknown-charge", 0.2, "invoice-line-42".into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(verified.budget_review_required);
+        assert_eq!(
+            db.reconcile_request_ledger("unknown-charge", 0.2, "invoice-line-42".into())
+                .await
+                .unwrap(),
+            Some(verified.clone())
+        );
+        assert!(matches!(
+            db.reconcile_request_ledger("unknown-charge", 0.3, "invoice-line-43".into())
+                .await,
+            Err(GatewayError::Conflict(_))
+        ));
+        db.store_request_ledger(&row, 30).await.unwrap();
+        let rows = db
+            .list_request_ledger(&RequestLedgerListFilter::default(), 10)
+            .await
+            .unwrap();
+        let stored: crate::core::request_ledger::RequestReconciliation =
+            serde_json::from_value(rows[0].reconciliation.clone().unwrap()).unwrap();
+        assert_eq!(stored, verified);
+        assert_eq!(rows[0].cost, None);
+        let billing: RequestBilling =
+            serde_json::from_value(rows[0].billing.clone().unwrap()).unwrap();
+        assert_eq!(billing.provider_charge_amount, Some(1.0));
+        assert!(
+            db.reconcile_request_ledger("missing", 0.0, "invoice-line-0".into())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -50,17 +50,31 @@ async fn stream_disconnect_without_usage_records_reserved_key_cost() {
         .await
         .expect("test key should be created");
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .expect("reservation should succeed")
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();
 
-    record_stream_disconnect_spend_with_reservation(usage_spend_settlement(
-        (&budget, &keys, Some(key_id)),
-        ("openai", "gpt-4o", None),
-        Some(reservation),
-        None,
-    ))
+    let facts = SharedRequestLedgerFacts::new(std::sync::Mutex::new(Default::default()));
+    record_stream_disconnect_spend_with_reservation(
+        usage_spend_settlement(
+            (&budget, &keys, Some(key_id)),
+            ("openai", "gpt-4o", None),
+            Some(reservation),
+            None,
+        )
+        .with_ledger_facts(Some(facts.clone())),
+    )
     .await;
+    let recorded = crate::core::request_ledger::snapshot_facts(&facts);
+    assert_eq!(recorded.cost, None);
+    let billing = recorded.billing.unwrap();
+    assert_eq!(
+        billing.unknown_reason.as_deref(),
+        Some("stream_cancelled_before_usage")
+    );
+    assert_eq!(billing.provider_charge_amount, Some(reserved));
+    assert_eq!(billing.provider_settlement.as_deref(), Some("settled"));
 
     let stats = keys
         .get_usage_stats(key_id)
@@ -91,6 +105,7 @@ async fn finished_stream_without_usage_records_reserved_key_cost_after_output() 
         .await
         .expect("test key should be created");
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .expect("reservation should succeed")
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();

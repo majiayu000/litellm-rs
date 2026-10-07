@@ -240,7 +240,7 @@ mod tests {
         // Create a mock byte stream
         let data = vec![
             Ok(Bytes::from(
-                "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":\"stop\"}]}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ];
@@ -271,7 +271,7 @@ mod tests {
                 "data: {\"id\":\"chunk1\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"A\"},\"finish_reason\":null}]}\n\n",
             )),
             Ok(Bytes::from(
-                "data: {\"id\":\"chunk2\",\"object\":\"chat.completion.chunk\",\"created\":124,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"B\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"chunk2\",\"object\":\"chat.completion.chunk\",\"created\":124,\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"B\"},\"finish_reason\":\"stop\"}]}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ];
@@ -305,7 +305,8 @@ mod tests {
         let mut openai_stream = create_openai_stream(mock_stream);
 
         let result = openai_stream.next().await;
-        assert!(result.is_none());
+        assert!(result.unwrap().is_err());
+        assert!(openai_stream.next().await.is_none());
     }
 
     // ==================== Edge Cases ====================

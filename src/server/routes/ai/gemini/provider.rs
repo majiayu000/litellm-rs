@@ -104,7 +104,7 @@ pub(super) async fn send_gemini_request(
             ApiKeyBudgetPolicy::FromProviderReservation,
         )
         .reserve_call(
-            |_budget| {
+            async |_budget| {
                 super::spend::reserve_gemini_budget(
                     pricing.as_ref(),
                     &pricing_config,
@@ -112,6 +112,7 @@ pub(super) async fn send_gemini_request(
                     provider,
                     &budget_request,
                 )
+                .await
                 .map_err(gemini_gateway_error_to_provider_error)
             },
             || selected_provider.gemini_generate_content(native_request),

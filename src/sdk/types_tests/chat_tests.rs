@@ -54,6 +54,7 @@ fn test_chat_request_creation() {
     let request = SdkChatRequest {
         model: "gpt-4".to_string(),
         messages: vec![Message {
+            tool_call_id: None,
             role: Role::User,
             content: Some(Content::Text("Hello".to_string())),
             name: None,
@@ -71,12 +72,14 @@ fn test_chat_request_multiple_messages() {
         model: "claude-3-opus".to_string(),
         messages: vec![
             Message {
+                tool_call_id: None,
                 role: Role::System,
                 content: Some(Content::Text("You are helpful.".to_string())),
                 name: None,
                 tool_calls: None,
             },
             Message {
+                tool_call_id: None,
                 role: Role::User,
                 content: Some(Content::Text("Hi".to_string())),
                 name: None,
@@ -125,6 +128,7 @@ fn test_chat_response_with_choices() {
         choices: vec![ChatChoice {
             index: 0,
             message: Message {
+                tool_call_id: None,
                 role: Role::Assistant,
                 content: Some(Content::Text("Hello!".to_string())),
                 name: None,
@@ -164,6 +168,7 @@ fn test_chat_choice_creation() {
     let choice = ChatChoice {
         index: 0,
         message: Message {
+            tool_call_id: None,
             role: Role::Assistant,
             content: Some(Content::Text("Response".to_string())),
             name: None,
@@ -180,6 +185,7 @@ fn test_chat_choice_no_finish_reason() {
     let choice = ChatChoice {
         index: 1,
         message: Message {
+            tool_call_id: None,
             role: Role::Assistant,
             content: None,
             name: None,

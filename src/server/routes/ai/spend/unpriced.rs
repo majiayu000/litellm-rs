@@ -88,7 +88,7 @@ fn fallback_cost_for_units(pricing_config: &GatewayPricingConfig, usage_units: u
         / 1000.0
 }
 
-pub(in crate::server::routes::ai) fn reserve_unpriced_completion_budget(
+pub(in crate::server::routes::ai) async fn reserve_unpriced_completion_budget(
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
@@ -108,11 +108,12 @@ pub(in crate::server::routes::ai) fn reserve_unpriced_completion_budget(
                 max_output_tokens,
             );
             reserve_unpriced_fallback_budget(budget_limits, budget_provider, budget_model, cost)
+                .await
         }
     }
 }
 
-pub(in crate::server::routes::ai) fn reserve_unpriced_usage_budget(
+pub(in crate::server::routes::ai) async fn reserve_unpriced_usage_budget(
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
@@ -127,11 +128,12 @@ pub(in crate::server::routes::ai) fn reserve_unpriced_usage_budget(
         UnpricedModelPolicy::AllowUnpriced => {
             let cost = fallback_cost_for_usage(pricing_config, usage);
             reserve_unpriced_fallback_budget(budget_limits, budget_provider, budget_model, cost)
+                .await
         }
     }
 }
 
-fn reserve_unpriced_fallback_budget(
+async fn reserve_unpriced_fallback_budget(
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
@@ -143,7 +145,8 @@ fn reserve_unpriced_fallback_budget(
     }
 
     budget_limits
-        .reserve_spend(budget_provider, budget_model, cost)
+        .reserve_spend_async(budget_provider, budget_model, cost)
+        .await
         .map(Some)
         .map_err(|error| {
             super::reservation_error_to_provider_error(error, budget_provider, budget_model)
@@ -164,6 +167,12 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
     context: &str,
 ) {
     let cost = fallback_cost_for_usage(pricing_config, usage);
+    super::capture_ledger_settlement(None, budget_provider, budget_model, None, None);
+    crate::core::request_ledger::update_billing(None, |billing| {
+        billing.charge_basis = Some("fallback_pricing".into());
+        billing.unknown_reason = Some("pricing_unavailable".into());
+        billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+    });
     crate::server::middleware::record_unpriced_spend(
         budget_provider,
         budget_model,
@@ -181,32 +190,36 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
         context = %context,
         "unpriced model settled through fallback pricing"
     );
-    if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
-            tracing::error!(
-                "failed to settle unpriced budget for '{budget_provider}'/'{budget_model}': \
-                 {error:?}; spend not recorded because reservation settlement failed"
-            );
-        }
-    } else {
-        budget_limits.record_spend(budget_provider, budget_model, cost);
-    }
     super::settle_api_key_budget_reservation(
         key_budget_reservation,
         cost,
         &format!("{context}: {budget_provider}/{budget_model}"),
     );
-
-    if let Some(key_id) = api_key_id {
-        let mut record = UsageRecord::unpriced(
-            u64::from(usage_units(usage)),
-            cost,
-            unpriced_policy_name(pricing_config),
-        );
-        record.provider = Some(budget_provider.to_string());
-        record.model = Some(budget_model.to_string());
-        if let Err(error) = key_manager.record_usage_record(key_id, record).await {
-            tracing::error!("failed to record unpriced usage for key {key_id}: {error}");
+    let budget_settlement = async {
+        if let Some(reservation) = budget_reservation {
+            if let Err(error) = reservation.settle_async(cost).await {
+                tracing::error!(
+                    "failed to settle unpriced budget for '{budget_provider}'/'{budget_model}': \
+                 {error:?}; spend not recorded because reservation settlement failed"
+                );
+            }
+        } else {
+            budget_limits.record_spend(budget_provider, budget_model, cost);
         }
-    }
+    };
+    let usage_record = async {
+        if let Some(key_id) = api_key_id {
+            let mut record = UsageRecord::unpriced(
+                u64::from(usage_units(usage)),
+                cost,
+                unpriced_policy_name(pricing_config),
+            );
+            record.provider = Some(budget_provider.to_string());
+            record.model = Some(budget_model.to_string());
+            if let Err(error) = key_manager.record_usage_record(key_id, record).await {
+                tracing::error!("failed to record unpriced usage for key {key_id}: {error}");
+            }
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }

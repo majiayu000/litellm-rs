@@ -111,7 +111,7 @@ async fn proxy_moderation(
                             .for_selected(budget_provider, resolved_model.clone())
                             .with_settlement_mode(SettlementMode::AvailabilityOnly)
                             .reserve_call_settle(
-                                |_budget| Ok(None),
+                                async |_budget| Ok(None),
                                 || async move {
                                     let url = moderation_url(&provider)
                                         .map_err(moderation_gateway_error_to_provider_error)?;

@@ -21,6 +21,28 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+    async fn within<T>(
+        phase: &str,
+        endpoints: &str,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        within_timeout(phase, endpoints, REQUEST_TIMEOUT, future).await
+    }
+
+    async fn within_timeout<T>(
+        phase: &str,
+        endpoints: &str,
+        limit: Duration,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        tokio::time::timeout(limit, future).await.unwrap_or_else(|_| {
+            panic!("fine-tuning test timed out after {limit:?} during {phase}; endpoints: {endpoints}")
+        })
+    }
+
     #[derive(Clone, Debug)]
     struct CapturedFineTuningRequest {
         method: String,
@@ -101,12 +123,39 @@ mod tests {
             self.captured_requests.lock().unwrap().clone()
         }
 
-        async fn shutdown(self) {
-            self.handle.stop(true).await;
-            let result = self.task.await.expect("mock server task should join");
+        async fn shutdown(mut self) {
+            // These tests already awaited provider responses and asserted their
+            // contents. They test routing, not graceful draining of idle clients.
+            within_timeout(
+                "stop mock server",
+                &self.base_url,
+                SHUTDOWN_TIMEOUT,
+                self.handle.stop(false),
+            )
+            .await;
+            let result = within_timeout(
+                "join mock server task",
+                &self.base_url,
+                SHUTDOWN_TIMEOUT,
+                &mut self.task,
+            )
+            .await
+            .expect("mock server task should join");
             if let Err(error) = result {
-                panic!("mock server should stop cleanly: {error}");
+                panic!(
+                    "mock server at {} should stop cleanly: {error}",
+                    self.base_url
+                );
             }
+        }
+    }
+
+    impl Drop for MockFineTuningServer {
+        fn drop(&mut self) {
+            // Best-effort cleanup also applies when a request assertion or its
+            // timeout panics; this handle/task belong only to this test's mock.
+            drop(self.handle.stop(false));
+            self.task.abort();
         }
     }
 
@@ -350,10 +399,20 @@ mod tests {
                 "training_file": "file-train"
             }))
             .to_request();
-        let resp = test::call_service(&app, req).await;
+        let resp = within(
+            "request dispatch",
+            "no upstream provider",
+            test::call_service(&app, req),
+        )
+        .await;
 
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body: Value = test::read_body_json(resp).await;
+        let body: Value = within(
+            "read response body",
+            "no upstream provider",
+            test::read_body_json(resp),
+        )
+        .await;
         assert!(
             body["error"]["message"]
                 .as_str()
@@ -383,57 +442,92 @@ mod tests {
                 "metadata": { "owner": "route-test" }
             }))
             .to_request();
-        let create_resp = test::call_service(&app, create_req).await;
+        let create_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(&app, create_req),
+        )
+        .await;
         assert_eq!(create_resp.status(), StatusCode::OK);
-        let create_body: Value = test::read_body_json(create_resp).await;
+        let create_body: Value = within(
+            "read response body",
+            &mock.base_url,
+            test::read_body_json(create_resp),
+        )
+        .await;
         assert_eq!(create_body["id"], "ftjob_mock");
         assert_eq!(create_body["provider"], "mock-openai-compatible");
 
-        let list_resp = test::call_service(
-            &app,
-            test::TestRequest::get()
-                .uri("/v1/fine_tuning/jobs?after=ftjob_prev&limit=1")
-                .to_request(),
+        let list_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri("/v1/fine_tuning/jobs?after=ftjob_prev&limit=1")
+                    .to_request(),
+            ),
         )
         .await;
         assert_eq!(list_resp.status(), StatusCode::OK);
 
-        let get_resp = test::call_service(
-            &app,
-            test::TestRequest::get()
-                .uri("/v1/fine_tuning/jobs/ftjob_mock")
-                .to_request(),
+        let get_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri("/v1/fine_tuning/jobs/ftjob_mock")
+                    .to_request(),
+            ),
         )
         .await;
         assert_eq!(get_resp.status(), StatusCode::OK);
 
-        let cancel_resp = test::call_service(
-            &app,
-            test::TestRequest::post()
-                .uri("/v1/fine_tuning/jobs/ftjob_mock/cancel")
-                .to_request(),
+        let cancel_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/fine_tuning/jobs/ftjob_mock/cancel")
+                    .to_request(),
+            ),
         )
         .await;
         assert_eq!(cancel_resp.status(), StatusCode::OK);
 
-        let events_resp = test::call_service(
-            &app,
-            test::TestRequest::get()
-                .uri("/v1/fine_tuning/jobs/ftjob_mock/events?after=ftevent_prev&limit=2")
-                .to_request(),
+        let events_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri("/v1/fine_tuning/jobs/ftjob_mock/events?after=ftevent_prev&limit=2")
+                    .to_request(),
+            ),
         )
         .await;
         assert_eq!(events_resp.status(), StatusCode::OK);
 
-        let checkpoints_resp = test::call_service(
-            &app,
-            test::TestRequest::get()
-                .uri("/v1/fine_tuning/jobs/ftjob_mock/checkpoints")
-                .to_request(),
+        let checkpoints_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri("/v1/fine_tuning/jobs/ftjob_mock/checkpoints")
+                    .to_request(),
+            ),
         )
         .await;
         assert_eq!(checkpoints_resp.status(), StatusCode::OK);
-        let checkpoints_body: Value = test::read_body_json(checkpoints_resp).await;
+        let checkpoints_body: Value = within(
+            "read response body",
+            &mock.base_url,
+            test::read_body_json(checkpoints_resp),
+        )
+        .await;
         assert_eq!(checkpoints_body["object"], "list");
         assert_eq!(checkpoints_body["data"][0]["id"], "ftckpt_mock");
 
@@ -514,10 +608,20 @@ mod tests {
                 "training_file": "file-train"
             }))
             .to_request();
-        let create_resp = test::call_service(&app, create_req).await;
+        let create_resp = within(
+            "request dispatch",
+            &mock.base_url,
+            test::call_service(&app, create_req),
+        )
+        .await;
 
         assert_eq!(create_resp.status(), StatusCode::PAYMENT_REQUIRED);
-        let body: Value = test::read_body_json(create_resp).await;
+        let body: Value = within(
+            "read response body",
+            &mock.base_url,
+            test::read_body_json(create_resp),
+        )
+        .await;
         assert_eq!(body["error"]["type"], "insufficient_quota");
         assert!(
             body["error"]["message"]
@@ -565,20 +669,29 @@ mod tests {
         )
         .await;
 
-        let response = test::call_service(
-            &app,
-            test::TestRequest::post()
-                .uri("/v1/fine_tuning/jobs")
-                .set_json(json!({
-                    "model": "gpt-4o-mini",
-                    "training_file": "file-train"
-                }))
-                .to_request(),
+        let response = within(
+            "request dispatch",
+            &format!("{} -> {}", primary.base_url, fallback.base_url),
+            test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/fine_tuning/jobs")
+                    .set_json(json!({
+                        "model": "gpt-4o-mini",
+                        "training_file": "file-train"
+                    }))
+                    .to_request(),
+            ),
         )
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body: Value = test::read_body_json(response).await;
+        let body: Value = within(
+            "read response body",
+            &format!("{} -> {}", primary.base_url, fallback.base_url),
+            test::read_body_json(response),
+        )
+        .await;
         assert_eq!(body["provider"], "fallback-fine-tuning");
         assert!(
             primary.requests().is_empty(),
@@ -654,7 +767,12 @@ mod tests {
                     "training_file": "file-train"
                 }));
             }
-            let response = test::call_service(&app, request.to_request()).await;
+            let response = within(
+                "request dispatch",
+                &format!("{} -> {}", primary.base_url, fallback.base_url),
+                test::call_service(&app, request.to_request()),
+            )
+            .await;
             assert!(
                 response.status().is_success(),
                 "{uri} should succeed via fallback, got {}",
@@ -699,15 +817,19 @@ mod tests {
         )
         .await;
 
-        let response = test::call_service(
-            &app,
-            test::TestRequest::post()
-                .uri("/v1/fine_tuning/jobs")
-                .set_json(json!({
-                    "model": "gpt-4o-mini",
-                    "training_file": "file-train"
-                }))
-                .to_request(),
+        let response = within(
+            "request dispatch",
+            &primary.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/fine_tuning/jobs")
+                    .set_json(json!({
+                        "model": "gpt-4o-mini",
+                        "training_file": "file-train"
+                    }))
+                    .to_request(),
+            ),
         )
         .await;
 

@@ -70,7 +70,7 @@ pub(super) async fn response(
             }
             call.callback.fail(error.to_string(), "background_error");
             // A local storage/guardrail failure is not an upstream health failure.
-            lease.finish_success(0);
+            lease.finish_success(0).await;
             return Err(error);
         }
     };
@@ -126,11 +126,13 @@ pub(super) async fn response(
             .await;
         }
         // GET/cancel/delete on another replica cannot cancel this settlement owner.
-        lease.finish_success(
-            usage
-                .as_ref()
-                .map_or(0, |usage| u64::from(usage.total_tokens)),
-        );
+        lease
+            .finish_success(
+                usage
+                    .as_ref()
+                    .map_or(0, |usage| u64::from(usage.total_tokens)),
+            )
+            .await;
         match result {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("failed");

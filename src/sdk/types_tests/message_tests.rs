@@ -1,5 +1,31 @@
 use crate::sdk::types::*;
 
+#[test]
+fn standard_tool_messages_round_trip_without_definition_fields() {
+    let wire = serde_json::json!({
+        "role":"assistant", "content":null,
+        "tool_calls":[{"id":"call-weather","type":"function",
+            "function":{"name":"weather","arguments":"{\"city\":\"Paris\"}"}}]
+    });
+    let message: Message = serde_json::from_value(wire).unwrap();
+    let call = &message.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(call.function.name, "weather");
+    assert!(call.function.parameters.is_null());
+    let serialized = serde_json::to_value(&message).unwrap();
+    assert!(
+        serialized["tool_calls"][0]["function"]
+            .get("parameters")
+            .is_none()
+    );
+
+    let result = Message::tool_result(&call.id, "18 C");
+    let serialized = serde_json::to_value(&result).unwrap();
+    assert_eq!(serialized["role"], "tool");
+    assert_eq!(serialized["tool_call_id"], "call-weather");
+    let decoded: Message = serde_json::from_value(serialized).unwrap();
+    assert_eq!(decoded.tool_call_id.as_deref(), Some("call-weather"));
+}
+
 // ==================== Role Tests ====================
 
 #[test]
@@ -247,6 +273,7 @@ fn test_audio_data_clone() {
 #[test]
 fn test_message_creation() {
     let msg = Message {
+        tool_call_id: None,
         role: Role::User,
         content: Some(Content::Text("Hello".to_string())),
         name: None,
@@ -261,6 +288,7 @@ fn test_message_creation() {
 #[test]
 fn test_message_with_name() {
     let msg = Message {
+        tool_call_id: None,
         role: Role::User,
         content: Some(Content::Text("Hi".to_string())),
         name: Some("John".to_string()),
@@ -272,6 +300,7 @@ fn test_message_with_name() {
 #[test]
 fn test_message_system() {
     let msg = Message {
+        tool_call_id: None,
         role: Role::System,
         content: Some(Content::Text("You are a helpful assistant.".to_string())),
         name: None,
@@ -283,6 +312,7 @@ fn test_message_system() {
 #[test]
 fn test_message_clone() {
     let msg = Message {
+        tool_call_id: None,
         role: Role::Assistant,
         content: Some(Content::Text("Response".to_string())),
         name: None,
@@ -295,6 +325,7 @@ fn test_message_clone() {
 #[test]
 fn test_message_serialization() {
     let msg = Message {
+        tool_call_id: None,
         role: Role::User,
         content: Some(Content::Text("Hello".to_string())),
         name: None,

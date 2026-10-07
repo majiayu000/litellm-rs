@@ -5,6 +5,7 @@ mod message;
 mod tool;
 mod usage;
 
+pub use crate::core::types::responses::{FunctionCallDelta, ToolCallDelta};
 pub use chat::{ChatChoice, ChatChunk, ChatOptions, ChatResponse, ChunkChoice, SdkChatRequest};
 pub use message::{AudioData, Content, ContentPart, ImageUrl, Message, MessageDelta, Role};
 pub use tool::{Function, Tool, ToolCall, ToolChoice};

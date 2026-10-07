@@ -27,7 +27,17 @@ pub(in crate::server::routes::ai) fn reserve_api_key_budget(
     budget_manager
         .tracker()
         .reserve_spend(&scope, estimated_cost)
-        .map(Some)
+        .map(|reservation| {
+            if reservation.is_tracked() {
+                crate::core::request_ledger::update_billing(None, |billing| {
+                    billing.key_reserved_amount = Some(reservation.reserved_amount());
+                    billing.reserved_at.get_or_insert_with(chrono::Utc::now);
+                    billing.key_settlement = Some("reserved".into());
+                    billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+                });
+            }
+            Some(reservation)
+        })
         .map_err(|error| key_reservation_error_to_provider_error(error, budget_id))
 }
 
@@ -55,7 +65,27 @@ pub(in crate::server::routes::ai) fn settle_api_key_budget_reservation(
         return;
     };
 
-    if let Err(error) = reservation.settle(actual_cost) {
+    let reserved = reservation.reserved_amount();
+    let tracked = reservation.is_tracked();
+    let result = reservation.settle(actual_cost);
+    if tracked {
+        crate::core::request_ledger::update_billing(None, |billing| {
+            billing.key_reserved_amount.get_or_insert(reserved);
+            billing.key_settlement = Some(
+                if result.is_ok() {
+                    "settled"
+                } else {
+                    "settlement_backend_failed"
+                }
+                .into(),
+            );
+            if result.is_ok() {
+                billing.key_charge_amount = Some(actual_cost);
+            }
+            billing.settlement_updated_at = Some(chrono::Utc::now());
+        });
+    }
+    if let Err(error) = result {
         tracing::error!("failed to settle API key budget for {context}: {error:?}");
     }
 }

@@ -111,7 +111,29 @@ window.createRequestLedgerView = function createRequestLedgerView({
       ["Prompt tokens", item.prompt_tokens == null ? "—" : String(item.prompt_tokens)],
       ["Completion tokens", item.completion_tokens == null ? "—" : String(item.completion_tokens)],
       ["Total tokens", item.total_tokens == null ? "—" : String(item.total_tokens)],
-      ["Cost", formatMoney(item.cost)],
+      ["Gateway priced cost", formatMoney(item.cost)],
+      ["Charge basis", item.billing?.charge_basis || "Not recorded"],
+      ["Known Realtime subtotal", formatMoney(item.billing?.known_cost_subtotal)],
+      ["Unknown Realtime responses", item.billing?.unknown_response_count == null ? "—" : String(item.billing.unknown_response_count)],
+      ["Pending Realtime responses", item.billing?.pending_response_count == null ? "—" : String(item.billing.pending_response_count)],
+      ["Unknown reason", item.billing?.unknown_reason || "—"],
+      ["Awaiting reconciliation", item.awaiting_duration_ms == null ? "—" : `${Math.floor(item.awaiting_duration_ms / 1000)} s`],
+      ["Provider budget reserved", formatMoney(item.billing?.provider_reserved_amount)],
+      ["Model budget reserved", formatMoney(item.billing?.model_reserved_amount)],
+      ["Key budget reserved", formatMoney(item.billing?.key_reserved_amount)],
+      ["Latest reservation", formatDateTime(item.billing?.reserved_at)],
+      ["Last provider lease identity", item.billing?.provider_lease_id || "—"],
+      ["Last model lease identity", item.billing?.model_lease_id || "—"],
+      ["Provider budget state", item.billing?.provider_settlement || "Not recorded"],
+      ["Model budget state", item.billing?.model_settlement || "Not recorded"],
+      ["Key budget state", item.billing?.key_settlement || "Not recorded"],
+      ["Provider budget charged", formatMoney(item.billing?.provider_charge_amount)],
+      ["Model budget charged", formatMoney(item.billing?.model_charge_amount)],
+      ["Key budget charged", formatMoney(item.billing?.key_charge_amount)],
+      ["Supplier verified cost", formatMoney(item.reconciliation?.verified_actual_cost)],
+      ["Supplier evidence reference", item.reconciliation?.evidence_reference || "—"],
+      ["Verified at", formatDateTime(item.reconciliation?.verified_at)],
+      ["Reconciliation", item.reconciliation ? (item.reconciliation.budget_review_required ? "Supplier verified; budget reconciliation / manual review required" : "Supplier verified; budget charges match") : (item.billing?.unknown_reason ? "Awaiting supplier verification" : "—")],
       ["User", labeledId("User", item.user_id)],
       ["API key", labeledId("Key", item.api_key_id)],
       ["Team", labeledId("Team", item.team_id)],
@@ -124,6 +146,48 @@ window.createRequestLedgerView = function createRequestLedgerView({
       list.append(term, definition);
     }
     detail.append(title, list);
+    const note = document.createElement("p");
+    note.textContent = "Budget scopes enforce the same request: do not add their reserved or charged amounts. Supplier verification records evidence and does not adjust budget counters.";
+    detail.append(note);
+    if (item.billing?.unknown_reason && !item.reconciliation) {
+      const form = document.createElement("form");
+      const amount = document.createElement("input");
+      amount.type = "number";
+      amount.min = "0";
+      amount.step = "any";
+      amount.required = true;
+      amount.setAttribute("aria-label", "Supplier verified cost");
+      amount.placeholder = "Supplier verified cost";
+      const evidence = document.createElement("input");
+      evidence.required = true;
+      evidence.maxLength = 512;
+      evidence.setAttribute("aria-label", "Invoice or receipt reference (no secrets)");
+      evidence.placeholder = "Invoice / receipt reference (no secrets)";
+      const submit = document.createElement("button");
+      submit.type = "submit";
+      submit.textContent = "Record supplier verification";
+      form.append(amount, evidence, submit);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        const session = captureSession();
+        clearError();
+        try {
+          await apiRequest(`/admin/request-ledger/${encodeURIComponent(item.request_id)}/reconciliation`, {
+            method: "POST",
+            body: JSON.stringify({ verified_actual_cost: Number(amount.value), evidence_reference: evidence.value }),
+          }, session);
+          ensureCurrent(session);
+          await load(session);
+          setStatus("Supplier verification recorded; budget counters were not adjusted.");
+        } catch (error) {
+          reportRequestError(error, "Supplier verification failed.");
+        } finally {
+          submit.disabled = false;
+        }
+      });
+      detail.append(form);
+    }
   }
 
   function render() {

@@ -290,12 +290,12 @@ async fn create_native(
                             context.api_key_budget_id(),
                             budgeted::ApiKeyBudgetPolicy::FromProviderReservation,
                         )
-                        .reserve_for_call(|_| {
+                        .reserve_for_call(async |_| {
                             if let Some(calls) = file_search_calls {
                                 reserve_file_search_budget(
                                     &pricing, &limits, &provider_name, &model,
                                     counted_input, budget_request.max_tokens, calls,
-                                )
+                                ).await
                             } else if let Some(input_tokens) = counted_input {
                                 spend::reserve_completion_budget_with_counted_input(
                                     &pricing,
@@ -305,7 +305,7 @@ async fn create_native(
                                     &model,
                                     input_tokens,
                                     budget_request.max_tokens,
-                                )
+                                ).await
                             } else {
                                 spend::reserve_chat_completion_budget_with_request_pricing(
                                     &pricing,
@@ -315,9 +315,9 @@ async fn create_native(
                                     &model,
                                     spend::ChatCompletionBudgetRequest::from(&budget_request)
                                         .with_retained_prompt_tokens(retained_prompt_tokens),
-                                )
+                                ).await
                             }
-                        })?;
+                        }).await?;
                     let (mut reservation, key_reservation) = reservations.into_parts();
                     if background {
                         super::responses_settlement::prepare(
@@ -443,7 +443,7 @@ async fn create_native(
     .await;
     if let Some(error) = failure {
         callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
         return Err(error.into());
     }
     let value = match value {
@@ -451,7 +451,7 @@ async fn create_native(
         Err(_) => {
             let error = ProviderError::response_parsing("responses", "Invalid Responses JSON");
             callback.fail(error.to_string(), "provider_error");
-            lease.finish_failure(&error);
+            lease.finish_failure(&error).await;
             return Err(error.into());
         }
     };
@@ -467,24 +467,28 @@ async fn create_native(
     {
         let error = ProviderError::response_parsing("responses", "Invalid compaction response");
         callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
         return Err(error.into());
     }
     if value.get("error").is_some_and(|error| !error.is_null())
         || value.get("status").and_then(Value::as_str) == Some("failed")
     {
         callback.fail("Upstream response failed", "provider_error");
-        lease.finish_failure(&ProviderError::api_error(
-            "responses",
-            502,
-            "Upstream response failed",
-        ));
+        lease
+            .finish_failure(&ProviderError::api_error(
+                "responses",
+                502,
+                "Upstream response failed",
+            ))
+            .await;
     } else {
-        lease.finish_success(
-            usage
-                .as_ref()
-                .map_or(0, |usage| u64::from(usage.total_tokens)),
-        );
+        lease
+            .finish_success(
+                usage
+                    .as_ref()
+                    .map_or(0, |usage| u64::from(usage.total_tokens)),
+            )
+            .await;
     }
     let sink =
         GuardrailDecisionSink::from_state(state, Some(&model), Some(&provider), Some(&deployment));
@@ -506,7 +510,7 @@ async fn create_native(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reserve_file_search_budget(
+async fn reserve_file_search_budget(
     pricing: &spend::RequestPricing,
     limits: &crate::core::budget::UnifiedBudgetLimits,
     provider: &str,
@@ -553,7 +557,8 @@ fn reserve_file_search_budget(
         .map_err(|error| ProviderError::configuration("responses", error.to_string()))?
         .tool_cost;
     limits
-        .reserve_spend(provider, model, estimate.max_cost + tool_cost)
+        .reserve_spend_async(provider, model, estimate.max_cost + tool_cost)
+        .await
         .map(Some)
         .map_err(|error| spend::reservation_error_to_provider_error(error, provider, model))
 }
@@ -671,57 +676,69 @@ async fn settle(
     key_reservation: Option<BudgetReservation>,
     facts: Option<SharedRequestLedgerFacts>,
 ) {
-    let budgeted = &state.budgeted;
-    let limits = budgeted.budget_limits();
-    let keys = budgeted.key_manager();
-    if pricing_usage.is_none() {
-        spend::capture_ledger_settlement(facts.as_ref(), provider, model, usage, None);
-        // Preserve the budget upper bound without presenting it as an actual bill.
-        if let Some(reservation) = reservation {
-            let reserved = reservation.reserved_amount();
-            if let Err(error) = reservation.settle(reserved) {
-                tracing::error!(%provider, %model, ?error, "failed to retain unknown Responses budget");
+    let captured_facts = facts.clone();
+    let work = async move {
+        let budgeted = &state.budgeted;
+        let limits = budgeted.budget_limits();
+        let keys = budgeted.key_manager();
+        if pricing_usage.is_none() {
+            spend::capture_ledger_settlement(facts.as_ref(), provider, model, usage, None);
+            // Preserve the budget upper bound without presenting it as an actual bill.
+            if let Some(reservation) = key_reservation {
+                let reserved = reservation.reserved_amount();
+                spend::settle_api_key_budget_reservation(
+                    Some(reservation),
+                    reserved,
+                    "Responses usage unknown",
+                );
             }
+            let budget_settlement = async {
+                if let Some(reservation) = reservation {
+                    let reserved = reservation.reserved_amount();
+                    if let Err(error) = reservation.settle_async(reserved).await {
+                        tracing::error!(%provider, %model, ?error, "failed to retain unknown Responses budget");
+                    }
+                }
+            };
+            let usage_record = async {
+                if let Some(key_id) = context.api_key_id()
+                    && let Err(error) = keys
+                        .record_usage_record(
+                            key_id,
+                            crate::core::keys::UsageRecord::unpriced(
+                                usage.map_or(0, |usage| u64::from(usage.total_tokens)),
+                                0.0,
+                                "responses_usage_unknown",
+                            ),
+                        )
+                        .await
+                {
+                    tracing::error!(%key_id, %error, "failed to record unknown Responses usage");
+                }
+            };
+            tokio::join!(budget_settlement, usage_record);
+            return;
         }
-        if let Some(reservation) = key_reservation {
-            let reserved = reservation.reserved_amount();
-            spend::settle_api_key_budget_reservation(
-                Some(reservation),
-                reserved,
-                "Responses usage unknown",
-            );
-        }
-        if let Some(key_id) = context.api_key_id()
-            && let Err(error) = keys
-                .record_usage_record(
-                    key_id,
-                    crate::core::keys::UsageRecord::unpriced(
-                        usage.map_or(0, |usage| u64::from(usage.total_tokens)),
-                        0.0,
-                        "responses_usage_unknown",
-                    ),
-                )
-                .await
-        {
-            tracing::error!(%key_id, %error, "failed to record unknown Responses usage");
-        }
-        return;
+        let settlement = spend::usage_spend_settlement_with_request_pricing(
+            (&limits, &keys, context.api_key_id()),
+            (provider, model, usage),
+            pricing,
+            reservation,
+            key_reservation,
+        )
+        .with_pricing_usage(pricing_usage)
+        .with_ledger_facts(facts);
+        spend::record_completion_spend_with_reservation_with_policy(
+            &budgeted.pricing(),
+            &state.config().gateway.pricing,
+            settlement,
+        )
+        .await;
+    };
+    match captured_facts {
+        Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+        None => work.await,
     }
-    let settlement = spend::usage_spend_settlement_with_request_pricing(
-        (&limits, &keys, context.api_key_id()),
-        (provider, model, usage),
-        pricing,
-        reservation,
-        key_reservation,
-    )
-    .with_pricing_usage(pricing_usage)
-    .with_ledger_facts(facts);
-    spend::record_completion_spend_with_reservation_with_policy(
-        &budgeted.pricing(),
-        &state.config().gateway.pricing,
-        settlement,
-    )
-    .await;
 }
 
 #[cfg(test)]
