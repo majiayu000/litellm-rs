@@ -269,7 +269,7 @@ pub(super) fn response(
             if blocked {
                 drop(lease);
             } else {
-                lease.finish_failure(&error);
+                lease.finish_failure(&error).await;
             }
             let kind = if blocked {
                 "permission_error"
@@ -282,22 +282,26 @@ pub(super) fn response(
                 .await;
         } else if upstream_failed {
             callback.fail("Upstream Messages stream failed", "provider_error");
-            lease.finish_failure(&ProviderError::api_error(
-                "anthropic",
-                502,
-                "Upstream Messages stream failed",
-            ));
+            lease
+                .finish_failure(&ProviderError::api_error(
+                    "anthropic",
+                    502,
+                    "Upstream Messages stream failed",
+                ))
+                .await;
         } else if terminal {
             callback.complete_pricing_usage(
                 usage.as_ref().map(|u| &u.normalized),
                 usage.as_ref().map(|u| &u.pricing),
                 "success",
             );
-            lease.finish_success(
-                usage
-                    .as_ref()
-                    .map_or(0, |u| u64::from(u.normalized.total_tokens)),
-            );
+            lease
+                .finish_success(
+                    usage
+                        .as_ref()
+                        .map_or(0, |u| u64::from(u.normalized.total_tokens)),
+                )
+                .await;
         } else {
             callback.fail("Client disconnected", "client_disconnect");
         }

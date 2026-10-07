@@ -126,7 +126,7 @@ async fn selected_stream_retry_uses_deployment_schedule() {
 
     assert_eq!(model, "gpt-4o-mini");
     assert_eq!(attempts.load(Ordering::Relaxed), 2);
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 async fn build_same_provider_budget_fallback_router(num_retries: u32) -> UnifiedRouter {
@@ -343,7 +343,7 @@ async fn stream_budget_fallback_ignores_retry_limit() {
         attempts.lock().unwrap().as_slice(),
         ["openai:gpt-expensive", "openai:gpt-cheap"]
     );
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 #[tokio::test]

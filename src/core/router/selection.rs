@@ -29,6 +29,7 @@ pub struct DeploymentLease {
     release_on_drop: bool,
     admission: AdmissionBackend,
     hold: Option<AdmissionHold>,
+    async_cleanup: bool,
 }
 
 impl DeploymentLease {
@@ -42,13 +43,32 @@ impl DeploymentLease {
             release_on_drop: true,
             admission,
             hold,
+            async_cleanup: true,
         }
     }
 
+    #[cfg(all(test, feature = "gateway"))]
     pub(crate) fn commit_admission(&mut self, actual_tokens: u64) {
         if let Some(hold) = self.hold.take() {
             self.admission.settle(&hold, actual_tokens);
         }
+    }
+
+    pub(crate) async fn commit_admission_async(&mut self, actual_tokens: u64) {
+        if let Some(hold) = self.hold.take() {
+            self.admission.settle_async(&hold, actual_tokens).await;
+        }
+    }
+
+    pub(crate) async fn cancel_admission_async(&mut self) {
+        if let Some(hold) = self.hold.take() {
+            self.admission.cancel_async(&hold).await;
+        }
+    }
+
+    fn synchronous_cleanup(mut self) -> Self {
+        self.async_cleanup = false;
+        self
     }
 
     #[cfg(feature = "gateway")]
@@ -78,6 +98,10 @@ impl DeploymentLease {
     /// deployment. This exists for deprecated ID-returning selectors.
     pub fn into_deployment_id(mut self) -> DeploymentId {
         self.release_on_drop = false;
+        #[cfg(feature = "gateway")]
+        if let Some(hold) = &self.hold {
+            hold.detach();
+        }
         self.deployment_id().to_string()
     }
 }
@@ -86,7 +110,9 @@ impl Drop for DeploymentLease {
     fn drop(&mut self) {
         if self.release_on_drop {
             Router::release_selected_deployment(self.deployment());
-            if let Some(hold) = self.hold.take() {
+            if !self.async_cleanup
+                && let Some(hold) = self.hold.take()
+            {
                 self.admission.cancel(&hold);
             }
         }
@@ -120,11 +146,21 @@ impl Router {
         &self,
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
-        let snapshot = self.load_routing_snapshot();
-        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None, 0)
+        super::sync_compat::wait(self.select_deployment_lease_async(model_name))
+            .map(DeploymentLease::synchronous_cleanup)
     }
 
-    pub(crate) fn select_deployment_lease_matching_in_snapshot<F>(
+    /// Select without blocking the caller's executor on shared Redis state.
+    pub async fn select_deployment_lease_async(
+        &self,
+        model_name: &str,
+    ) -> Result<DeploymentLease, RouterError> {
+        let snapshot = self.load_routing_snapshot();
+        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None, 0)
+            .await
+    }
+
+    pub(crate) async fn select_deployment_lease_matching_in_snapshot<F>(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,
@@ -134,6 +170,7 @@ impl Router {
         F: Fn(&Deployment) -> bool,
     {
         self.select_deployment_matching(snapshot, model_name, is_candidate, None, 0)
+            .await
     }
 
     /// Select the best deployment for a model that supports `capability`.
@@ -175,6 +212,24 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
+        super::sync_compat::wait(self.select_deployment_lease_for_capability_matching_async(
+            model_name,
+            capability,
+            is_candidate,
+        ))
+        .map(DeploymentLease::synchronous_cleanup)
+    }
+
+    /// Capability selection with asynchronous shared admission and circuit checks.
+    pub async fn select_deployment_lease_for_capability_matching_async<F>(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+        is_candidate: F,
+    ) -> Result<DeploymentLease, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+    {
         let snapshot = self.load_routing_snapshot();
         self.select_deployment_lease_for_capability_matching_in_snapshot(
             snapshot.as_ref(),
@@ -182,9 +237,10 @@ impl Router {
             capability,
             is_candidate,
         )
+        .await
     }
 
-    pub(crate) fn select_deployment_lease_for_capability_matching_in_snapshot<F>(
+    pub(crate) async fn select_deployment_lease_for_capability_matching_in_snapshot<F>(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,
@@ -234,6 +290,7 @@ impl Router {
             Some(no_matching_candidate_error),
             0,
         )
+        .await
     }
 
     /// Select a deployment ID from pre-built routing contexts.
@@ -271,7 +328,7 @@ impl Router {
         }
     }
 
-    fn select_deployment_matching<F>(
+    async fn select_deployment_matching<F>(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,
@@ -333,7 +390,7 @@ impl Router {
             matching_deployments += 1;
 
             // Shared circuit (or local cooldown/health) owns selection eligibility.
-            if !self.deployment_is_selectable(deployment) {
+            if !self.deployment_is_selectable_async(deployment).await {
                 tracing::trace!(
                     deployment_id = id.as_str(),
                     model = %resolved_name,
@@ -429,8 +486,9 @@ impl Router {
                 continue;
             };
 
-            if let Ok(hold) =
-                self.try_reserve_deployment(&deployment, &resolved_name, estimated_tokens)
+            if let Ok(hold) = self
+                .try_reserve_deployment(&deployment, &resolved_name, estimated_tokens)
+                .await
             {
                 self.provider_selected_count.fetch_add(1, Relaxed);
                 self.strategy_used_count.fetch_add(1, Relaxed);
@@ -467,7 +525,7 @@ impl Router {
         Err(RouterError::NoAvailableDeployment(model_name.to_string()))
     }
 
-    fn try_reserve_deployment(
+    async fn try_reserve_deployment(
         &self,
         deployment: &Deployment,
         expected_model: &str,
@@ -477,7 +535,11 @@ impl Router {
             return Err(RouterError::DeploymentNotFound(deployment.id.clone()));
         }
 
-        let hold = match self.admission.reserve(deployment, estimated_tokens) {
+        let hold = match self
+            .admission
+            .reserve_async(deployment, estimated_tokens)
+            .await
+        {
             AdmissionReserve::Skipped => None,
             #[cfg(feature = "gateway")]
             AdmissionReserve::Denied => {
@@ -520,7 +582,7 @@ impl Router {
             Ok(hold)
         } else {
             if let Some(hold) = hold {
-                self.admission.cancel(&hold);
+                self.admission.cancel_async(&hold).await;
             }
             Err(RouterError::RateLimitExceeded(expected_model.into()))
         }
@@ -534,17 +596,30 @@ impl Router {
         estimated_tokens: u64,
     ) -> Result<DeploymentLease, RouterError> {
         let snapshot = self.load_routing_snapshot();
-        self.select_deployment_matching(
+        super::sync_compat::wait(self.select_deployment_matching(
             snapshot.as_ref(),
             model_name,
             |_| true,
             None,
             estimated_tokens,
+        ))
+        .map(DeploymentLease::synchronous_cleanup)
+    }
+
+    #[cfg(all(test, feature = "gateway", feature = "websockets"))]
+    pub(crate) fn select_pinned_response_lease(
+        &self,
+        deployment: &Deployment,
+        estimated_tokens: u64,
+    ) -> Result<DeploymentLease, RouterError> {
+        super::sync_compat::wait(
+            self.select_pinned_response_lease_async(deployment, estimated_tokens),
         )
+        .map(DeploymentLease::synchronous_cleanup)
     }
 
     #[cfg(all(feature = "gateway", feature = "websockets"))]
-    pub(crate) fn select_pinned_response_lease(
+    pub(crate) async fn select_pinned_response_lease_async(
         &self,
         deployment: &Deployment,
         estimated_tokens: u64,
@@ -555,7 +630,7 @@ impl Router {
             .get(&deployment.id)
             .filter(|current| std::ptr::eq(current.as_ref(), deployment))
             .ok_or_else(|| RouterError::DeploymentNotFound(deployment.id.clone()))?;
-        if !self.deployment_is_selectable(current) {
+        if !self.deployment_is_selectable_async(current).await {
             return Err(RouterError::NoAvailableDeployment(
                 deployment.model_name.clone(),
             ));
@@ -574,8 +649,9 @@ impl Router {
                 deployment.model_name.clone(),
             ));
         }
-        let hold =
-            self.try_reserve_deployment(current, &deployment.model_name, estimated_tokens)?;
+        let hold = self
+            .try_reserve_deployment(current, &deployment.model_name, estimated_tokens)
+            .await?;
         self.provider_selected_count.fetch_add(1, Relaxed);
         self.strategy_used_count.fetch_add(1, Relaxed);
         Ok(DeploymentLease::new(
@@ -616,15 +692,18 @@ impl RuntimeHandle {
         model_name: &str,
         capability: &ProviderCapability,
     ) -> Result<DeploymentLease, crate::core::providers::ProviderError> {
-        self.binding
-            .router
-            .select_deployment_lease_for_capability_matching_in_snapshot(
-                self.snapshot.as_ref(),
-                model_name,
-                capability,
-                |_| true,
-            )
-            .map_err(router_error_to_provider_error)
+        super::sync_compat::wait(
+            self.binding
+                .router
+                .select_deployment_lease_for_capability_matching_in_snapshot(
+                    self.snapshot.as_ref(),
+                    model_name,
+                    capability,
+                    |_| true,
+                ),
+        )
+        .map(DeploymentLease::synchronous_cleanup)
+        .map_err(router_error_to_provider_error)
     }
 }
 
@@ -633,12 +712,17 @@ impl RuntimeHandle {
         &self,
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
-        self.binding.router.select_deployment_matching(
-            self.snapshot.as_ref(),
-            model_name,
-            |_| true,
-            None,
-            0,
-        )
+        super::sync_compat::wait(self.select_deployment_lease_async(model_name))
+            .map(DeploymentLease::synchronous_cleanup)
+    }
+
+    pub async fn select_deployment_lease_async(
+        &self,
+        model_name: &str,
+    ) -> Result<DeploymentLease, RouterError> {
+        self.binding
+            .router
+            .select_deployment_matching(self.snapshot.as_ref(), model_name, |_| true, None, 0)
+            .await
     }
 }

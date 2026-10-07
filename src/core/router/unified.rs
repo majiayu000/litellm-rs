@@ -693,8 +693,33 @@ impl Router {
         tokens: u64,
         latency_us: u64,
     ) {
+        super::sync_compat::wait(
+            self.record_success_for_deployment_async(deployment, tokens, latency_us),
+        );
+    }
+
+    pub(crate) async fn record_success_for_deployment_async(
+        &self,
+        deployment: &Deployment,
+        tokens: u64,
+        latency_us: u64,
+    ) {
         deployment.record_success(tokens, latency_us);
-        match self.circuit.record_success(deployment, &self.config) {
+        self.record_success_circuit_for_deployment_async(deployment)
+            .await;
+    }
+
+    /// Update shared breaker state after the caller has synchronously recorded
+    /// the known successful outcome. Never records local request/token counts.
+    pub(crate) async fn record_success_circuit_for_deployment_async(
+        &self,
+        deployment: &Deployment,
+    ) {
+        match self
+            .circuit
+            .record_success_async(deployment, &self.config)
+            .await
+        {
             CircuitWrite::Local => self.promote_from_local_success(deployment),
             #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {}
@@ -745,9 +770,20 @@ impl Router {
         deployment: &Deployment,
         reason: CooldownReason,
     ) {
+        super::sync_compat::wait(
+            self.record_failure_with_reason_for_deployment_async(deployment, reason),
+        );
+    }
+
+    pub(crate) async fn record_failure_with_reason_for_deployment_async(
+        &self,
+        deployment: &Deployment,
+        reason: CooldownReason,
+    ) {
         match self
             .circuit
-            .record_failure(deployment, &self.config, reason)
+            .record_failure_async(deployment, &self.config, reason)
+            .await
         {
             CircuitWrite::Local => self.record_local_failure(deployment, reason),
             #[cfg(any(feature = "gateway", test))]
@@ -801,7 +837,11 @@ impl Router {
     }
 
     pub(crate) fn deployment_is_selectable(&self, deployment: &Deployment) -> bool {
-        match self.circuit.observe(deployment, &self.config) {
+        super::sync_compat::wait(self.deployment_is_selectable_async(deployment))
+    }
+
+    pub(crate) async fn deployment_is_selectable_async(&self, deployment: &Deployment) -> bool {
+        match self.circuit.observe_async(deployment, &self.config).await {
             CircuitObserve::UseLocal => !deployment.is_in_cooldown() && deployment.is_healthy(),
             #[cfg(any(feature = "gateway", test))]
             CircuitObserve::Blocked => false,

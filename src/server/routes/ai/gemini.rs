@@ -442,7 +442,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
                             None,
                             "Gemini upstream stream error",
                         );
-                        lease.finish_failure(&error);
+                        lease.finish_failure(&error).await;
                     }
                     let spend_state = GeminiSpendState {
                         pricing: pricing.as_ref(),
@@ -535,7 +535,7 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
         )
         .await;
         if let Some(lease) = stream_lease.take() {
-            lease.finish_success(tokens_used);
+            lease.finish_success(tokens_used).await;
         }
     });
 

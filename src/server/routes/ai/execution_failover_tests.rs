@@ -142,7 +142,7 @@ async fn test_execute_stream_failover_excludes_failed_deployment() {
 
     assert_eq!(provider_name, "openai");
     assert_eq!(attempts.lock().unwrap().as_slice(), ["anthropic", "openai"]);
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 #[tokio::test]
@@ -248,7 +248,7 @@ async fn test_execute_stream_single_target_still_retries() {
         .expect("deployment should exist");
     assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
     drop(deployment);
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 #[tokio::test]
@@ -339,7 +339,7 @@ async fn test_execute_stream_rotates_soft_exclusions_each_sweep() {
             "fallback-retry-target",
         ]
     );
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 async fn release_fallback_at_attempt_two_deadline<T>(
@@ -491,7 +491,7 @@ async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() 
         attempts.lock().unwrap().as_slice(),
         ["primary-retry-target", "fallback-retry-target"]
     );
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 #[tokio::test]

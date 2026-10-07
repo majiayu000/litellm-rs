@@ -294,7 +294,7 @@ async fn create(
         Err(error) => {
             callback.fail(error.to_string(), "provider_error");
             if let GatewayError::Provider(provider_error) = &error {
-                lease.finish_failure(provider_error);
+                lease.finish_failure(provider_error).await;
             }
             return Err(error);
         }
@@ -308,14 +308,16 @@ async fn create(
     {
         let error = ProviderError::response_parsing("anthropic", "Invalid Messages response");
         callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
         return Err(error.into());
     }
-    lease.finish_success(
-        usage
-            .as_ref()
-            .map_or(0, |usage| u64::from(usage.normalized.total_tokens)),
-    );
+    lease
+        .finish_success(
+            usage
+                .as_ref()
+                .map_or(0, |usage| u64::from(usage.normalized.total_tokens)),
+        )
+        .await;
     let sink =
         GuardrailDecisionSink::from_state(state, Some(&model), Some(&provider), Some(&deployment));
     let value = guardrails::apply_native_messages(state.guardrails().as_ref(), value, true, &sink)

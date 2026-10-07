@@ -443,7 +443,7 @@ async fn create_native(
     .await;
     if let Some(error) = failure {
         callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
         return Err(error.into());
     }
     let value = match value {
@@ -451,7 +451,7 @@ async fn create_native(
         Err(_) => {
             let error = ProviderError::response_parsing("responses", "Invalid Responses JSON");
             callback.fail(error.to_string(), "provider_error");
-            lease.finish_failure(&error);
+            lease.finish_failure(&error).await;
             return Err(error.into());
         }
     };
@@ -467,24 +467,28 @@ async fn create_native(
     {
         let error = ProviderError::response_parsing("responses", "Invalid compaction response");
         callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
         return Err(error.into());
     }
     if value.get("error").is_some_and(|error| !error.is_null())
         || value.get("status").and_then(Value::as_str) == Some("failed")
     {
         callback.fail("Upstream response failed", "provider_error");
-        lease.finish_failure(&ProviderError::api_error(
-            "responses",
-            502,
-            "Upstream response failed",
-        ));
+        lease
+            .finish_failure(&ProviderError::api_error(
+                "responses",
+                502,
+                "Upstream response failed",
+            ))
+            .await;
     } else {
-        lease.finish_success(
-            usage
-                .as_ref()
-                .map_or(0, |usage| u64::from(usage.total_tokens)),
-        );
+        lease
+            .finish_success(
+                usage
+                    .as_ref()
+                    .map_or(0, |usage| u64::from(usage.total_tokens)),
+            )
+            .await;
     }
     let sink =
         GuardrailDecisionSink::from_state(state, Some(&model), Some(&provider), Some(&deployment));
