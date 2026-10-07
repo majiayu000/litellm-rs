@@ -201,7 +201,7 @@ mod redis {
         let Some(pool) = live_redis_pool().await else {
             return;
         };
-        for retry in [false, true] {
+        for execution in ["once", "retry", "stream"] {
             let id = unique("cancel-success");
             let router = Arc::new(router_with(pool.clone()).with_circuit_redis(pool.clone()));
             seed(&router, &id, Some(1), Some(10), Some(100)).await;
@@ -209,6 +209,16 @@ mod redis {
             let started = Arc::new(std::sync::Mutex::new(Some(started)));
             let worker = router.clone();
             let task = tokio::spawn(async move {
+                if execution == "stream" {
+                    let lease = worker.select_deployment_lease_async("gpt-4").await.unwrap();
+                    let handle = crate::core::router::RuntimeBinding::new(worker.clone()).bind();
+                    let mut completion = handle.stream_completion(lease, std::time::Instant::now());
+                    completion.observe_usage(42);
+                    let _slots = crate::core::router::admission::pause_admission_io().await;
+                    let _ = started.lock().unwrap().take().unwrap().send(());
+                    completion.finish_success().await;
+                    return Ok(());
+                }
                 let operation = move |_| {
                     let started = started.clone();
                     async move {
@@ -219,7 +229,7 @@ mod redis {
                         Ok((slots, 42))
                     }
                 };
-                if retry {
+                if execution == "retry" {
                     worker
                         .execute_with_selected_deployment_retry("gpt-4", operation)
                         .await

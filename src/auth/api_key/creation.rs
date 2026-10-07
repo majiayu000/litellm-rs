@@ -210,7 +210,7 @@ impl ApiKeyHandler {
     /// A key remains valid only while all of its associated principals do.
     /// Team lifecycle state comes from the same repository as team management;
     /// no cached key or handler-local state can outlive a committed team change.
-    async fn principal_invalid_reason(
+    pub(crate) async fn principal_invalid_reason(
         &self,
         api_key: &ApiKey,
         user: Option<&User>,
