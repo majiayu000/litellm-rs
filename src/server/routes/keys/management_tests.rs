@@ -277,6 +277,161 @@ async fn management_grants_are_operation_specific_and_keep_owner_isolation() {
 }
 
 #[actix_web::test]
+async fn scoped_admin_management_credentials_cannot_inherit_global_target_scope() {
+    let state = auth_enabled_test_state().await;
+    let admin = seed_user(&state, UserRole::Admin).await;
+    let foreign = seed_user(&state, UserRole::User).await;
+    let (foreign_id, _) = seed_key(&state, &foreign, KeyPermissions::default()).await;
+    let (unowned_id, _) = state
+        .key_manager
+        .generate_key(CreateKeyConfig {
+            name: "unowned target".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (_, credential) = seed_key(
+        &state,
+        &admin,
+        KeyPermissions {
+            custom_permissions: vec![
+                "api_keys.read".into(),
+                "api_keys.write".into(),
+                "api_keys.delete".into(),
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+    let app = test::init_service(
+        App::new()
+            .app_data(state.clone())
+            .wrap(AuthMiddleware)
+            .configure(configure_routes),
+    )
+    .await;
+
+    let count = state.key_manager.count_keys(None).await.unwrap();
+    for scope in [
+        json!({"user_id": foreign.id()}),
+        json!({"team_id": Uuid::new_v4()}),
+    ] {
+        let mut body = scope;
+        body["name"] = json!("foreign child");
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/keys")
+                .insert_header(("x-api-key", credential.clone()))
+                .set_json(body)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    for id in [foreign_id, unowned_id] {
+        let before = state.key_manager.get_key(id).await.unwrap().unwrap();
+        for (method, path) in [
+            (Method::GET, format!("/v1/keys/{id}")),
+            (Method::PUT, format!("/v1/keys/{id}")),
+            (Method::POST, format!("/v1/keys/{id}/rotate")),
+            (Method::DELETE, format!("/v1/keys/{id}")),
+        ] {
+            let response = test::call_service(
+                &app,
+                test::TestRequest::default()
+                    .method(method.clone())
+                    .uri(&path)
+                    .insert_header(("x-api-key", credential.clone()))
+                    .set_json(json!({"name": "unauthorized change"}))
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+        }
+        let after = state.key_manager.get_key(id).await.unwrap().unwrap();
+        assert_eq!(after.status, KeyStatus::Active);
+        assert_eq!(after.name, before.name);
+    }
+    for path in [
+        "/v1/keys".to_string(),
+        format!("/v1/keys?user_id={}", foreign.id()),
+        format!("/v1/keys?team_id={}", Uuid::new_v4()),
+    ] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&path)
+                .insert_header(("x-api-key", credential.clone()))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    assert_eq!(
+        state.key_manager.count_keys(None).await.unwrap(),
+        count,
+        "denied create/rotate must not create credentials"
+    );
+
+    // Omitting create scope retains the ordinary self default, never a
+    // globally unowned target inherited from the administrator's role.
+    let own_count = state
+        .key_manager
+        .list_user_keys(admin.id())
+        .await
+        .unwrap()
+        .len();
+    let response = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/v1/keys")
+            .insert_header(("x-api-key", credential.clone()))
+            .set_json(json!({"name": "own child"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        state
+            .key_manager
+            .list_user_keys(admin.id())
+            .await
+            .unwrap()
+            .len(),
+        own_count + 1
+    );
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/v1/keys?user_id={}", admin.id()))
+            .insert_header(("x-api-key", credential.clone()))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    for method in [Method::GET, Method::PUT, Method::POST, Method::DELETE] {
+        let (id, _) = seed_key(&state, &admin, KeyPermissions::default()).await;
+        let path = if method == Method::POST {
+            format!("/v1/keys/{id}/rotate")
+        } else {
+            format!("/v1/keys/{id}")
+        };
+        let response = test::call_service(
+            &app,
+            test::TestRequest::default()
+                .method(method.clone())
+                .uri(&path)
+                .insert_header(("x-api-key", credential.clone()))
+                .set_json(json!({"name": "own update"}))
+                .to_request(),
+        )
+        .await;
+        assert!(response.status().is_success(), "self {method} {path}");
+    }
+}
+
+#[actix_web::test]
 async fn logged_in_users_keep_their_existing_key_management_workflow() {
     let state = auth_enabled_test_state().await;
     let user = seed_user(&state, UserRole::User).await;

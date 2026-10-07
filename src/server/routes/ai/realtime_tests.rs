@@ -1329,6 +1329,10 @@ async fn response_boundaries_recheck_deployment_rpm_tpm_and_parallel_admission()
 
 #[actix_web::test]
 async fn response_boundaries_reauthorize_current_keys() {
+    use crate::core::models::team::{Team, TeamStatus};
+    use crate::core::teams::TeamRepository;
+    use crate::storage::database::SeaOrmTeamRepository;
+
     for change in [
         "deleted",
         "revoked",
@@ -1337,6 +1341,9 @@ async fn response_boundaries_reauthorize_current_keys() {
         "model",
         "endpoint",
         "rpm",
+        "team-active",
+        "team-inactive",
+        "team-deleted",
     ] {
         let (state, url, raw, calls, handles) = fixture().await;
         let (mut key, _) = state
@@ -1346,9 +1353,38 @@ async fn response_boundaries_reauthorize_current_keys() {
             .await
             .unwrap()
             .unwrap();
+        let repository = SeaOrmTeamRepository::new(state.storage.database.clone());
+        let team_case = change.starts_with("team-");
+        let mut team = if team_case {
+            let team = repository
+                .create(Team::new("realtime-key-team".into(), None))
+                .await
+                .unwrap();
+            key.team_id = Some(team.id());
+            state.storage.db().update_api_key(&key).await.unwrap();
+            state.budget_limits.providers.set_provider_limit(
+                "openai",
+                ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+            );
+            Some(team)
+        } else {
+            None
+        };
         let mut client = client(&url, &raw).await;
         next_json(&mut client).await;
         next_json(&mut client).await;
+        if team_case {
+            client
+                .send(Message::Text(
+                    json!({"type":"response.create"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            for _ in 0..4 {
+                next_json(&mut client).await;
+            }
+        }
+        let budget_before = state.budget_limits.providers.get_provider_usage("openai");
         match change {
             "revoked" => key.is_active = false,
             "expired" => key.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
@@ -1365,6 +1401,12 @@ async fn response_boundaries_reauthorize_current_keys() {
                     concurrent: None,
                 })
             }
+            "team-inactive" => {
+                let mut team = team.take().unwrap();
+                team.status = TeamStatus::Inactive;
+                repository.update(team).await.unwrap();
+            }
+            "team-deleted" => repository.delete(team.take().unwrap().id()).await.unwrap(),
             _ => {}
         }
         if change == "deleted" {
@@ -1394,17 +1436,24 @@ async fn response_boundaries_reauthorize_current_keys() {
                 .await
                 .unwrap();
         }
-        let error = next_json(&mut client).await;
-        assert_eq!(error["type"], "error", "{change}");
-        assert_eq!(
-            error["error"]["type"],
-            if change == "rpm" {
-                "rate_limit_error"
-            } else {
-                "authentication_error"
-            },
-            "{change}"
-        );
+        let event = next_json(&mut client).await;
+        if change == "team-active" {
+            assert_eq!(event["type"], "response.created");
+            for _ in 0..3 {
+                next_json(&mut client).await;
+            }
+        } else {
+            assert_eq!(event["type"], "error", "{change}");
+            assert_eq!(
+                event["error"]["type"],
+                if change == "rpm" {
+                    "rate_limit_error"
+                } else {
+                    "authentication_error"
+                },
+                "{change}"
+            );
+        }
         assert_eq!(
             calls
                 .lock()
@@ -1412,9 +1461,51 @@ async fn response_boundaries_reauthorize_current_keys() {
                 .iter()
                 .filter(|v| v["type"] == "response.create")
                 .count(),
-            usize::from(change == "rpm"),
+            if change == "team-active" {
+                2
+            } else {
+                usize::from(change == "rpm" || team_case)
+            },
             "{change}"
         );
+        if matches!(change, "team-inactive" | "team-deleted") {
+            let before = budget_before.unwrap();
+            let after = state
+                .budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .unwrap();
+            assert_eq!(after.current_spend, before.current_spend, "{change}");
+            assert_eq!(after.request_count, before.request_count, "{change}");
+            assert!(
+                !state
+                    .budget_limits
+                    .providers
+                    .reserved_spend
+                    .contains_key("openai"),
+                "{change}"
+            );
+            let router = state.pin_runtime().unified_router.clone();
+            let deployment = router
+                .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+                .unwrap();
+            assert_eq!(
+                deployment
+                    .state
+                    .active_requests
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0,
+                "{change}"
+            );
+            assert_eq!(
+                deployment
+                    .state
+                    .rpm_current
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "{change}"
+            );
+        }
         drop(client);
         for handle in handles {
             handle.stop(false).await;

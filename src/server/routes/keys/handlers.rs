@@ -2,9 +2,9 @@
 
 use super::access::{
     auth_result_from_request_extensions, authenticate_management_request,
-    check_auth_result_ownership, check_ownership, filter_and_paginate_keys,
-    invalidate_api_key_auth_cache, is_auth_enabled, management_key_grant_allowed,
-    resolve_create_key_scope, validate_create_key_rate_limits, validate_update_key_permissions,
+    check_auth_result_ownership, filter_and_paginate_keys, invalidate_api_key_auth_cache,
+    is_auth_enabled, management_key_grant_allowed, resolve_create_key_scope,
+    validate_create_key_rate_limits, validate_update_key_permissions,
     validate_update_key_rate_limits, verify_key_access_allowed, verify_unknown_key_access_allowed,
 };
 use super::types::{
@@ -14,7 +14,6 @@ use super::types::{
 };
 use crate::core::keys::KeyManager;
 use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
-use crate::core::models::user::types::UserRole;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -143,11 +142,7 @@ pub async fn list_keys(
         if let Some(requested_user_id) = query.user_id {
             // Users can list their own keys; admins can list any user's keys.
             // Team-only API keys (user == None) cannot list by user_id.
-            let allowed = auth
-                .user
-                .as_ref()
-                .map(|u| check_ownership(u, Some(requested_user_id), None))
-                .unwrap_or(false);
+            let allowed = check_auth_result_ownership(&auth, Some(requested_user_id), None);
             if !allowed {
                 warn!(
                     "Caller attempted to list keys for user {} without permission",
@@ -162,13 +157,7 @@ pub async fn list_keys(
         } else if let Some(team_id) = query.team_id {
             // Listing keys for a specific team.
             // Managers belonging to that team and team-only API keys for that team are allowed.
-            let allowed = match &auth.user {
-                Some(user) => {
-                    user.has_role(&UserRole::Admin)
-                        || (user.has_role(&UserRole::Manager) && user.team_ids.contains(&team_id))
-                }
-                None => auth.context.team_id() == Some(team_id),
-            };
+            let allowed = check_auth_result_ownership(&auth, None, Some(team_id));
             if !allowed {
                 warn!(
                     "Caller attempted to list keys for team {} without permission",
@@ -182,11 +171,7 @@ pub async fn list_keys(
             }
         } else {
             // Listing all keys (no filter) requires admin privileges.
-            let is_admin = auth
-                .user
-                .as_ref()
-                .map(|u| u.has_role(&UserRole::Admin))
-                .unwrap_or(false);
+            let is_admin = check_auth_result_ownership(&auth, None, None);
             if !is_admin {
                 warn!("Non-admin caller attempted to list all keys");
                 let error_response =
