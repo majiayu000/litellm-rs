@@ -1,19 +1,51 @@
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use super::SSETransformer;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice};
 use crate::core::types::thinking::ThinkingDelta;
 
+#[cfg(test)]
+#[path = "openai_stream_tests.rs"]
+mod stream_tests;
+
 /// OpenAI-compatible SSE Transformer (can be reused by many providers)
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpenAICompatibleTransformer {
     provider: &'static str,
+    /// Only the streaming entry point advances lifecycle state; stand-alone
+    /// chunk conversion remains usable without constructing an entire stream.
+    choices: Mutex<BTreeMap<u32, bool>>,
+    error_usage: Mutex<Option<ChatChunk>>,
+}
+
+impl Clone for OpenAICompatibleTransformer {
+    fn clone(&self) -> Self {
+        // A transformer clone belongs to a new request, never to the stream
+        // whose completion state is currently being observed.
+        Self::new(self.provider)
+    }
 }
 
 impl OpenAICompatibleTransformer {
     pub fn new(provider: &'static str) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            choices: Mutex::new(BTreeMap::new()),
+            error_usage: Mutex::new(None),
+        }
+    }
+
+    fn lifecycle_error(&self, index: Option<u32>, message: &str) -> ProviderError {
+        ProviderError::streaming_error(
+            self.provider,
+            "chat.completion",
+            index.map(u64::from),
+            None,
+            message,
+        )
     }
 }
 
@@ -157,6 +189,60 @@ impl SSETransformer for OpenAICompatibleTransformer {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         }))
+    }
+
+    fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
+        let chunk = self.transform_chunk(data)?;
+        if let Some(chunk) = &chunk {
+            let mut choices = self.choices.lock().map_err(|_| {
+                self.lifecycle_error(None, "OpenAI-compatible stream state lock poisoned")
+            })?;
+            for choice in &chunk.choices {
+                if choices.get(&choice.index) == Some(&true) {
+                    // Usage is independently validated by transform_chunk.
+                    // Preserve it without accepting content from an event that
+                    // violates the choice lifecycle.
+                    if chunk.usage.is_some() {
+                        let mut usage_only = chunk.clone();
+                        usage_only.choices.clear();
+                        *self.error_usage.lock().map_err(|_| {
+                            self.lifecycle_error(
+                                None,
+                                "OpenAI-compatible usage state lock poisoned",
+                            )
+                        })? = Some(usage_only);
+                    }
+                    return Err(self.lifecycle_error(
+                        Some(choice.index),
+                        "received a choice after its terminal finish_reason",
+                    ));
+                }
+                choices.insert(choice.index, choice.finish_reason.is_some());
+            }
+        }
+        Ok(chunk)
+    }
+
+    fn take_stream_error_chunk(&self) -> Option<ChatChunk> {
+        self.error_usage.lock().ok()?.take()
+    }
+
+    fn finish_stream(&self) -> Result<Option<ChatChunk>, ProviderError> {
+        let choices = self.choices.lock().map_err(|_| {
+            self.lifecycle_error(None, "OpenAI-compatible stream state lock poisoned")
+        })?;
+        if choices.is_empty() {
+            return Err(self.lifecycle_error(None, "stream ended without a completed choice"));
+        }
+        if let Some((&index, _)) = choices.iter().find(|(_, finished)| !**finished) {
+            return Err(self.lifecycle_error(
+                Some(index),
+                "stream ended before the choice's terminal finish_reason",
+            ));
+        }
+        // Some compatible providers end the HTTP body after final choices
+        // without a [DONE] sentinel. Every observed choice must still finish.
+        Ok(None)
     }
 }
 

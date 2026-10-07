@@ -188,9 +188,10 @@ fn unary_ok(model: &str) -> String {
     )
 }
 
-fn sse_chunk(model: &str) -> String {
+fn sse_chunk(model: &str, finish_reason: Option<&str>) -> String {
+    let finish_reason = serde_json::to_string(&finish_reason).unwrap();
     format!(
-        "data: {{\"id\":\"chatcmpl-conf\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"{model}\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"content\":\"hi\"}},\"finish_reason\":null}}]}}\n\n"
+        "data: {{\"id\":\"chatcmpl-conf\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"{model}\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"content\":\"hi\"}},\"finish_reason\":{finish_reason}}}]}}\n\n"
     )
 }
 
@@ -250,9 +251,10 @@ async fn handle_conn(mut socket: TcpStream, ctl: Arc<MockCtl>) {
     }
 
     let mode = *ctl.stream_mode.lock().unwrap();
-    let chunk = sse_chunk(&model);
+    let chunk = sse_chunk(&model, None);
     match mode {
         StreamMode::Normal => {
+            let chunk = sse_chunk(&model, Some("stop"));
             let body = format!("{chunk}data: [DONE]\n\n");
             write_http(&mut socket, 200, "text/event-stream", &body).await;
         }
