@@ -279,15 +279,16 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     pricing_config: &GatewayPricingConfig,
     settlement: UsageSpendSettlement<'_>,
 ) {
-    match settlement.ledger_facts.clone() {
-        Some(facts) => {
-            crate::core::request_ledger::scope_facts(
-                facts,
-                record_completion_spend_inner(pricing_service, pricing_config, settlement),
-            )
-            .await
-        }
-        None => record_completion_spend_inner(pricing_service, pricing_config, settlement).await,
+    let facts = settlement.ledger_facts.clone();
+    // Keep the scoped settlement future out of the streaming producer's stack.
+    let work = Box::pin(record_completion_spend_inner(
+        pricing_service,
+        pricing_config,
+        settlement,
+    ));
+    match facts {
+        Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+        None => work.await,
     }
 }
 
@@ -543,7 +544,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
     }
 
     capture_ledger_settlement(ledger_facts.as_ref(), provider, model, None, None);
-    let work = record_reserved_spend_without_usage(
+    let work = Box::pin(record_reserved_spend_without_usage(
         key_manager,
         api_key_id,
         provider,
@@ -551,7 +552,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         budget_reservation,
         key_budget_reservation,
         "client disconnected before provider returned usage",
-    );
+    ));
     match ledger_facts {
         Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
         None => work.await,
