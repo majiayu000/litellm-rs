@@ -85,6 +85,26 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
     } else {
         config.provider_type.trim()
     };
+    if matches!(selector.parse::<ProviderType>(), Ok(ProviderType::Bedrock)) {
+        let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
+            &serde_json::json!(config.settings),
+        );
+        normalized.settings.insert(
+            "aws_access_key_id".into(),
+            resource.aws_access_key_id.into(),
+        );
+        normalized.settings.insert(
+            "aws_secret_access_key".into(),
+            resource.aws_secret_access_key.into(),
+        );
+        normalized.settings.insert(
+            "aws_session_token".into(),
+            resource.aws_session_token.into(),
+        );
+        normalized
+            .settings
+            .insert("aws_region".into(), resource.aws_region.into());
+    }
     let top_level = non_blank(&config.api_key).map(str::to_owned);
     let native_audio_environment = match selector.parse::<ProviderType>() {
         Ok(ProviderType::Deepgram) => Some(BaseConfig::from_env("deepgram")),

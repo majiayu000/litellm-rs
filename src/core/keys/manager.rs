@@ -13,6 +13,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::{Semaphore, oneshot};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -20,6 +21,8 @@ use uuid::Uuid;
 const LAST_USED_THROTTLE: Duration = Duration::from_secs(5 * 60);
 /// Maximum number of entries retained in the last-used throttle cache.
 const LAST_USED_CACHE_MAX_ENTRIES: usize = 10_000;
+/// Bound accepted usage writes, including writes whose request waiter was cancelled.
+const MAX_USAGE_WRITES: usize = 1024;
 
 /// API Key Manager for handling all key operations
 #[derive(Clone)]
@@ -28,6 +31,7 @@ pub struct KeyManager {
     repository: Arc<dyn KeyRepository>,
     /// Tracks when each key's `last_used_at` was last persisted.
     last_used_cache: Arc<DashMap<Uuid, Instant>>,
+    usage_write_slots: Arc<Semaphore>,
     /// Optional HMAC secret for key hashing.
     hmac_secret: Option<Arc<str>>,
 }
@@ -51,6 +55,7 @@ impl KeyManager {
         Self {
             repository: Arc::new(repository),
             last_used_cache: Arc::new(DashMap::new()),
+            usage_write_slots: Arc::new(Semaphore::new(MAX_USAGE_WRITES)),
             hmac_secret: None,
         }
     }
@@ -60,6 +65,7 @@ impl KeyManager {
         Self {
             repository,
             last_used_cache: Arc::new(DashMap::new()),
+            usage_write_slots: Arc::new(Semaphore::new(MAX_USAGE_WRITES)),
             hmac_secret: None,
         }
     }
@@ -352,8 +358,29 @@ impl KeyManager {
     }
 
     /// Record usage for a key from an explicit usage record.
+    /// Once accepted on the first poll, the write survives cancellation of its waiter.
+    /// Capacity exhaustion and repository failures remain best-effort write errors;
+    /// runtime shutdown does not provide durable retry.
     pub async fn record_usage_record(&self, key_id: Uuid, record: UsageRecord) -> Result<()> {
-        self.repository.update_usage(key_id, record).await
+        let permit = self
+            .usage_write_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| GatewayError::unavailable("Key usage write capacity exhausted"))?;
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| GatewayError::internal("Key usage writes require a Tokio runtime"))?;
+        let repository = self.repository.clone();
+        let (sender, receiver) = oneshot::channel();
+        runtime.spawn(async move {
+            let _permit = permit;
+            let result = repository.update_usage(key_id, record).await;
+            if let Err(Err(error)) = sender.send(result) {
+                tracing::error!(%key_id, %error, "failed to record key usage after waiter cancellation");
+            }
+        });
+        receiver.await.map_err(|_| {
+            GatewayError::internal("Key usage write task stopped before returning its result")
+        })?
     }
 
     /// List keys for a user
@@ -677,5 +704,52 @@ mod manager_tests {
 
         let count = manager.count_keys(None).await.unwrap();
         assert_eq!(count, 5);
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiter_retains_write_capacity_until_repository_finishes() {
+        let mut manager = KeyManager::new(InMemoryKeyRepository::new());
+        manager.usage_write_slots = Arc::new(Semaphore::new(1));
+        let clone = manager.clone();
+        let (key_id, _) = manager
+            .generate_key(CreateKeyConfig {
+                name: "Cancelled usage waiter".to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let mut write = Box::pin(manager.record_usage(key_id, 100, 0.25));
+        assert!(futures::poll!(&mut write).is_pending());
+        drop(write);
+        // On this current-thread runtime the owned task has not run yet.
+        assert!(matches!(
+            clone.record_usage(key_id, 200, 0.50).await,
+            Err(GatewayError::Unavailable(message))
+                if message == "Key usage write capacity exhausted"
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if manager
+                    .get_usage_stats(key_id)
+                    .await
+                    .unwrap()
+                    .total_requests
+                    == 1
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(manager.usage_write_slots.available_permits(), 1);
+        clone.record_usage(key_id, 200, 0.50).await.unwrap();
+        let stats = manager.get_usage_stats(key_id).await.unwrap();
+        assert_eq!(stats.total_requests, 2);
+        assert_eq!(stats.total_tokens, 300);
+        assert_eq!(stats.total_cost, 0.75);
     }
 }

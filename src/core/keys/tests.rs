@@ -470,9 +470,27 @@ async fn test_record_usage() {
 
     let (key_id, _) = manager.generate_key(config).await.unwrap();
 
+    // Constructing the public async operation still has no side effects.
+    drop(manager.record_usage(key_id, 999, 9.0));
+    assert_eq!(
+        manager
+            .get_usage_stats(key_id)
+            .await
+            .unwrap()
+            .total_requests,
+        0
+    );
     manager.record_usage(key_id, 100, 0.01).await.unwrap();
     manager.record_usage(key_id, 200, 0.02).await.unwrap();
 
+    let stats = manager.get_usage_stats(key_id).await.unwrap();
+    assert_eq!(stats.total_requests, 2);
+    assert_eq!(stats.total_tokens, 300);
+    assert!((stats.total_cost - 0.03).abs() < f64::EPSILON);
+    // The in-memory repository retains its existing missing-key no-op contract.
+    let missing_id = Uuid::new_v4();
+    manager.record_usage(missing_id, 1, 0.01).await.unwrap();
+    assert!(manager.get_key(missing_id).await.unwrap().is_none());
     let stats = manager.get_usage_stats(key_id).await.unwrap();
     assert_eq!(stats.total_requests, 2);
     assert_eq!(stats.total_tokens, 300);

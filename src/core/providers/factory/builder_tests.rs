@@ -1,5 +1,6 @@
 //! Tests for provider-specific config builders
 
+use super::CONSTRUCTION_ENV_LOCK as ENV_LOCK;
 use super::builder::*;
 #[cfg(feature = "providers-extended")]
 use super::cohere_builder::build_cohere_config_from_factory;
@@ -7,9 +8,6 @@ use super::cohere_builder::build_cohere_config_from_factory;
 use super::gemini_builder::build_gemini_config_from_factory;
 use super::{Provider, ProviderType, create_provider};
 use crate::core::net::ProviderEndpointAccess;
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
 const BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION: [&str; 5] = [
     "AWS_ACCESS_KEY_ID",

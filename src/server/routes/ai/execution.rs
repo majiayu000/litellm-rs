@@ -162,16 +162,19 @@ impl StreamingDeploymentLease {
         }
         let latency_us = self.started_at.elapsed().as_micros() as u64;
         let hold = self.hold.take();
+        if let Some(hold) = &hold {
+            hold.prepare_settlement(tokens_used);
+        }
         self.deployment.record_success(tokens_used, latency_us);
         // Mark the local outcome before yielding. A cancelled completion may
         // be retried by a caller holding &mut self; it must never count twice.
         self.release();
-        if let Some(hold) = hold {
-            self.admission.settle_async(&hold, tokens_used).await;
-        }
         self.router
             .record_success_circuit_for_deployment_async(&self.deployment)
             .await;
+        if let Some(hold) = hold {
+            self.admission.settle_async(&hold, tokens_used).await;
+        }
     }
 
     pub(super) async fn finish_failure(self, error: &ProviderError) {
@@ -545,10 +548,10 @@ where
         match result {
             Ok((value, tokens_used)) => {
                 completion.complete_success(tokens_used);
-                deployment_lease.commit_admission_async(tokens_used).await;
                 router
                     .record_success_circuit_for_deployment_async(deployment_lease.deployment())
                     .await;
+                deployment_lease.commit_admission_async(tokens_used).await;
                 drop(deployment_lease);
                 return Ok(value);
             }
