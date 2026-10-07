@@ -553,12 +553,18 @@ impl Provider {
     pub(crate) async fn native_response(
         &self,
         body: serde_json::Value,
+        generation_attempted: &mut bool,
     ) -> Result<reqwest::Response, ProviderError> {
+        // Copilot has fallible account discovery before its generation POST.
+        #[cfg(feature = "providers-extended")]
+        if let Provider::GitHubCopilot(provider) = self {
+            return provider.native_response(body, generation_attempted).await;
+        }
+        // Other native providers retain their existing conservative boundary.
+        *generation_attempted = true;
         match self {
             Provider::OpenAI(provider) => provider.native_response(body).await,
             Provider::Bedrock(provider) => provider.native_response(body).await,
-            #[cfg(feature = "providers-extended")]
-            Provider::GitHubCopilot(provider) => provider.native_response(body).await,
             _ => Err(ProviderError::not_supported(
                 "provider",
                 "Native Responses API",

@@ -45,12 +45,14 @@ impl LLMClient {
     pub(super) async fn chat_with_runtime(&self, request: SdkChatRequest) -> Result<ChatResponse> {
         let model = self.runtime_model(&request.model)?.to_string();
         let core_request = sdk_request_to_core(&model, request)?;
+        let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&core_request)?;
         let context = RequestContext::new();
         let execution = self
             .runtime_handle()?
             .execute_with_selected_deployment_capability_typed(
                 &model,
                 &ProviderCapability::ChatCompletion,
+                estimated_tokens,
                 move |deployment| {
                     let mut request = core_request.clone();
                     let context = context.clone();
@@ -63,8 +65,7 @@ impl LLMClient {
                         let tokens = response
                             .usage
                             .as_ref()
-                            .map(|usage| u64::from(usage.total_tokens))
-                            .unwrap_or_default();
+                            .map(|usage| u64::from(usage.total_tokens));
                         Ok((response, tokens))
                     }
                 },

@@ -14,6 +14,7 @@ use crate::core::types::{
 };
 use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 use crate::utils::net::ClientUtils;
 
 impl LLMClient {
@@ -72,12 +73,21 @@ impl LLMClient {
         model: Option<&str>,
     ) -> Result<EmbeddingResponse> {
         let model = self.runtime_model(model.unwrap_or_default())?;
+        let estimated_tokens = u64::from(
+            TokenCounter::new()
+                .count_embedding_tokens(
+                    &TokenizerIdentity::approximate("runtime", model),
+                    &input.to_vec(),
+                )?
+                .input_tokens,
+        );
         let context = RequestContext::new();
         let execution = self
             .runtime_handle()?
             .execute_with_selected_deployment_capability_typed(
                 model,
                 &ProviderCapability::Embeddings,
+                estimated_tokens,
                 move |deployment| {
                     let input = input.clone();
                     let context = context.clone();
@@ -98,8 +108,7 @@ impl LLMClient {
                         let tokens = response
                             .usage
                             .as_ref()
-                            .map(|usage| u64::from(usage.total_tokens))
-                            .unwrap_or_default();
+                            .map(|usage| u64::from(usage.total_tokens));
                         Ok((response, tokens))
                     }
                 },

@@ -507,7 +507,9 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
             "streaming completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(stream.contains("let _lease = &lease"));
+    // Lease ownership is verified through both public stream facades in
+    // tests/sdk_runtime_stream_completion.rs, including real Redis cleanup.
+    // Keep this source guard focused on preventing legacy execution fallbacks.
 
     let facade = include_str!("default_router/mod.rs");
     let start = facade

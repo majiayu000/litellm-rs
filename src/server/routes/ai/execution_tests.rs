@@ -955,6 +955,105 @@ async fn cancelled_gateway_unary_settlement_retains_local_success() {
     assert_shared_success_once(&pool, &id).await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_stream_failure_publishes_shared_failure_before_admission_cleanup() {
+    for tokens in [0, 42] {
+        let Some((router, pool, id)) = cancellation_test_router().await else {
+            return;
+        };
+        let (_, mut lease) = execute_stream_with_selected_deployment(
+            router.clone(),
+            "gpt-4",
+            ProviderCapability::ChatCompletionStream,
+            |_, _, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        let key = crate::storage::redis::RedisPool::admission_key(&id);
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let slots = crate::core::router::admission::pause_admission_io().await;
+        let error = ProviderError::timeout("openai", "mid-stream timeout");
+        let mut completion = Box::pin(lease.complete_response(tokens, Some(&error)));
+        let shared_failure = async {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if shared_failure_counts(&pool, &id).await == (1, 1) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("shared circuit failure must precede paused admission cleanup");
+        };
+        tokio::select! {
+            () = completion.as_mut() => panic!("admission cleanup must remain paused"),
+            () = shared_failure => {}
+        }
+        assert!(futures::poll!(completion.as_mut()).is_pending());
+        let parallel: i64 = redis::cmd("HGET")
+            .arg(&key)
+            .arg("p")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(parallel, 1, "admission liability remains held");
+        drop(completion);
+        // Retrying a finalized failure and dropping its lease must not replace
+        // the prepared settlement/cancellation or publish the failure twice.
+        lease.complete_response(tokens, Some(&error)).await;
+        drop(lease);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), tokens);
+        drop(slots);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let state: (i64, i64, i64) = redis::cmd("HMGET")
+                    .arg(&key)
+                    .arg(&["p", "r", "t"])
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                let fields: Vec<String> = redis::cmd("HKEYS")
+                    .arg(&key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                if state == (0, 0, tokens as i64)
+                    && !fields.iter().any(|field| field.starts_with("l:"))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("prepared admission outcome must survive cancellation");
+        assert_eq!(shared_failure_counts(&pool, &id).await, (1, 1));
+        pool.delete(&key).await.unwrap();
+        pool.delete(&crate::storage::redis::RedisPool::circuit_key(&id))
+            .await
+            .unwrap();
+    }
+}
+
+async fn shared_failure_counts(pool: &crate::storage::redis::RedisPool, id: &str) -> (i64, i64) {
+    let key = crate::storage::redis::RedisPool::circuit_key(id);
+    let mut conn = pool.open_live_connection().await.unwrap();
+    let counts: (Option<i64>, Option<i64>) = redis::cmd("HMGET")
+        .arg(&key)
+        .arg(&["tot", "fail"])
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    (counts.0.unwrap_or(0), counts.1.unwrap_or(0))
+}
+
 async fn shared_success_counts(pool: &crate::storage::redis::RedisPool, id: &str) -> (i64, i64) {
     let key = crate::storage::redis::RedisPool::circuit_key(id);
     let mut conn = pool.open_live_connection().await.unwrap();

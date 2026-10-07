@@ -19,6 +19,9 @@ local tpm_inc = tonumber(ARGV[6]) or 0
 local lease_id = ARGV[7]
 local ttl = tonumber(ARGV[8]) or 1
 local actual_tpm = tonumber(ARGV[9]) or 0
+local finishing = op == 'settle' or op == 'cancel' or op == 'retain'
+-- Settled quota remains relevant until this Redis minute ends.
+local keep_until = (epoch + 1) * 60000
 
 local function nums()
   local p = tonumber(redis.call('HGET', KEYS[1], 'p') or '0') or 0
@@ -33,6 +36,7 @@ local function save(p, r, t, e)
   if r < 0 then r = 0 end
   if t < 0 then t = 0 end
   redis.call('HSET', KEYS[1], 'p', p, 'r', r, 't', t, 'e', e)
+  redis.call('PEXPIREAT', KEYS[1], keep_until)
 end
 
 local function reclaim()
@@ -63,14 +67,19 @@ local function reclaim()
           end
         end
         redis.call('HDEL', KEYS[1], fields[i])
-      elseif window_changed then
-        -- Carry outstanding TPM, but charge RPM only in the arrival window.
-        rpmInc = 0
-        t = t + tpmInc
-        redis.call(
-          'HSET', KEYS[1], fields[i],
-          tostring(pInc) .. ':' .. tostring(rpmInc) .. ':' .. tostring(tpmInc) .. ':' .. tostring(e) .. ':' .. tostring(expiry)
-        )
+      else
+        if not finishing or fields[i] ~= 'l:' .. lease_id then
+          keep_until = math.max(keep_until, expiry)
+        end
+        if window_changed then
+          -- Carry outstanding TPM, but charge RPM only in the arrival window.
+          rpmInc = 0
+          t = t + tpmInc
+          redis.call(
+            'HSET', KEYS[1], fields[i],
+            tostring(pInc) .. ':' .. tostring(rpmInc) .. ':' .. tostring(tpmInc) .. ':' .. tostring(e) .. ':' .. tostring(expiry)
+          )
+        end
       end
     end
   end
@@ -90,6 +99,7 @@ if op == 'reserve' then
   r = r + rpm_inc
   t = t + tpm_inc
   if ttl < 1 then ttl = 1 end
+  keep_until = math.max(keep_until, now + ttl)
   save(p, r, t, e)
   redis.call(
     'HSET',
@@ -100,7 +110,7 @@ if op == 'reserve' then
   return {1, p, r, t}
 end
 
-if op == 'settle' or op == 'cancel' or op == 'retain' then
+if finishing then
   local field = 'l:' .. lease_id
   local lease = redis.call('HGET', KEYS[1], field)
   if lease then
@@ -478,6 +488,19 @@ mod tests {
             (cancelled.parallel, cancelled.rpm, cancelled.tpm),
             (0, 0, 4)
         );
+        let (epoch, tokens): (i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["e", "t"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(tokens, 4, "terminal cleanup must retain settled quota");
+        assert_eq!(expires_at, (epoch + 1) * 60_000);
         redis::cmd("DEL")
             .arg(&key)
             .query_async::<i64>(&mut conn)
@@ -510,6 +533,55 @@ mod tests {
         );
         let expiry: i64 = lease.rsplit(':').next().unwrap().parse().unwrap();
         assert!((before + 600_000..=after + 600_000).contains(&expiry));
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            expires_at, expiry,
+            "new lease must extend the hash lifetime"
+        );
+
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", "other", 0, 2)
+                .await
+                .allowed
+        );
+        // Give the original lease a longer deadline without waiting for expiry.
+        let longer_expiry = expiry + 300_000;
+        let (prefix, _) = lease.rsplit_once(':').unwrap();
+        redis::cmd("HSET")
+            .arg(&key)
+            .arg("l:lease")
+            .arg(format!("{prefix}:{longer_expiry}"))
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+        let finished = invoke_script(&mut conn, &key, "settle", "other", 0, 2).await;
+        assert_eq!(finished.parallel, 1);
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            expires_at, longer_expiry,
+            "other live leases must survive cleanup"
+        );
+        invoke_script(&mut conn, &key, "cancel", "lease", 0, 2).await;
+        let epoch: i64 = redis::cmd("HGET")
+            .arg(&key)
+            .arg("e")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(expires_at, (epoch + 1) * 60_000);
         redis::cmd("DEL")
             .arg(&key)
             .query_async::<i64>(&mut conn)
