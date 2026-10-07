@@ -45,6 +45,7 @@ pub use audio::{audio_speech, audio_transcriptions, audio_translations};
 pub use batches::{cancel_batch, create_batch, get_batch, list_batches};
 pub use chat::chat_completions;
 pub use completions::{completions, engine_completions};
+pub(crate) use context::api_key_has_admin_permission_checked;
 pub use context::{
     api_key_allows_endpoint, check_permission, get_authenticated_api_key, get_authenticated_user,
     get_request_context, handle_ai_request, log_api_usage,
