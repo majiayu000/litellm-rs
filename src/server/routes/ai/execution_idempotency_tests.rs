@@ -107,5 +107,5 @@ async fn non_idempotent_creation_still_allows_preflight_budget_fallback() {
     .unwrap();
     assert_eq!(selected, "second");
     assert_eq!(*attempts.lock().unwrap(), ["first", "second"]);
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
