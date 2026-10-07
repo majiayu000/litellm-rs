@@ -555,15 +555,11 @@ async fn native_json_and_sse_preserve_tools_reasoning_and_extension_fields() {
 
 #[tokio::test]
 async fn native_stream_client_disconnect_preserves_tpm_and_rpm_admission() {
+    use litellm_rs::core::router::DeploymentConfig;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     for quota in ["tpm", "rpm"] {
         let (state, upstream, upstream_handle) = fixture(StatusCode::OK, |config| {
-            // Test each quota independently so one cannot hide a refund of the
-            // other. The real gateway and upstream both use loopback HTTP.
-            config.gateway.providers[0].tpm = if quota == "tpm" { 1000 } else { 0 };
-            config.gateway.providers[0].rpm = u32::from(quota == "rpm");
-            config.gateway.providers[0].max_concurrent_requests = 1;
             config.gateway.router.load_balancer.health_check_enabled = false;
         })
         .await;
@@ -571,6 +567,15 @@ async fn native_stream_client_disconnect_preserves_tpm_and_rpm_admission() {
         let router = state.unified_router();
         let ids = router.get_deployments_for_model("gpt-4o-mini");
         assert_eq!(ids.len(), 1);
+        let deployment = router.get_deployment(&ids[0]).unwrap();
+        // Bootstrap keeps valid provider limits. Express each independent quota
+        // on the existing deployment; None disables the other policy.
+        router.add_deployment(deployment.as_ref().clone().with_config(DeploymentConfig {
+            rpm_limit: (quota == "rpm").then_some(1),
+            tpm_limit: (quota == "tpm").then_some(1000),
+            max_parallel_requests: Some(1),
+            ..deployment.config.clone()
+        }));
         let deployment = router.get_deployment(&ids[0]).unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1227,7 +1232,13 @@ async fn previous_response_cannot_bypass_new_guardrails_for_stored_context() {
 #[tokio::test]
 async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
     use litellm_rs::core::types::context::RequestContext;
-    for cancel in [false, true] {
+    for (status, known_usage) in [
+        ("completed", true),
+        ("cancelled", true),
+        ("failed", true),
+        ("failed", false),
+    ] {
+        let cancel = status == "cancelled";
         let dir = tempfile::tempdir().unwrap();
         let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
             config.gateway.storage.database.enabled = true;
@@ -1238,6 +1249,20 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
             );
         })
         .await;
+        {
+            let mut output = upstream.output.lock().unwrap();
+            output["status"] = json!(status);
+            if !known_usage {
+                output["usage"] = Value::Null;
+            }
+        }
+        let router = state.unified_router();
+        let id = router
+            .get_deployments_for_model("gpt-4o-mini")
+            .pop()
+            .unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        let initial_health = deployment.state.health.load(Ordering::Relaxed);
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state.clone()))
@@ -1262,6 +1287,8 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         assert_eq!(upstream.count_seen.lock().unwrap().len(), 1);
         assert!((settlement_row(&state).await.reserved - 0.0018096).abs() < 1e-10);
         assert!(!settlement_row(&state).await.complete);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
         // Closing the creating HTTP service does not stop the background settlement.
         drop(app);
         let second = litellm_rs::server::HttpServer::new(state.config().as_ref())
@@ -1307,7 +1334,9 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if u8::from(settlement_row(&state).await.complete) == 1 {
+                if u8::from(settlement_row(&state).await.complete) == 1
+                    && deployment.state.active_requests.load(Ordering::Relaxed) == 0
+                {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1316,9 +1345,49 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
         .await
         .unwrap();
         let settled = settlement_row(&state).await;
-        assert_eq!(settled.outcome, "actual");
+        assert_eq!(
+            settled.outcome,
+            if known_usage {
+                "actual"
+            } else {
+                "reserved_unknown"
+            }
+        );
         assert!(settled.cost.unwrap() > 0.0);
-        assert_eq!(settled.tokens, 15);
+        assert_eq!(settled.tokens, if known_usage { 15 } else { 0 });
+        if !known_usage {
+            assert_eq!(settled.cost, Some(settled.reserved));
+        }
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            deployment.state.tpm_current.load(Ordering::Relaxed),
+            u64::from(known_usage) * 15
+        );
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            u64::from(status == "completed")
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            u64::from(status == "failed")
+        );
+        assert_eq!(
+            deployment.state.total_requests.load(Ordering::Relaxed),
+            u64::from(status != "cancelled")
+        );
+        if cancel {
+            assert_eq!(
+                deployment.state.health.load(Ordering::Relaxed),
+                initial_health
+            );
+        }
+        let counts = (
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            deployment.state.tpm_current.load(Ordering::Relaxed),
+            deployment.state.total_requests.load(Ordering::Relaxed),
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+        );
         for _ in 0..3 {
             let req = test::TestRequest::get()
                 .uri("/v1/responses/resp_native")
@@ -1326,13 +1395,22 @@ async fn native_background_settles_once_after_cross_gateway_reads_and_cancel() {
             req.extensions_mut()
                 .insert(RequestContext::new().with_user_id("alice"));
             let value: Value = test::call_and_read_body_json(&app, req).await;
-            assert_eq!(
-                value["status"],
-                if cancel { "cancelled" } else { "completed" }
-            );
+            assert_eq!(value["status"], status);
         }
         assert_eq!(u8::from(settlement_row(&state).await.complete), 1);
         assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            counts,
+            (
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                deployment.state.tpm_current.load(Ordering::Relaxed),
+                deployment.state.total_requests.load(Ordering::Relaxed),
+                deployment.state.success_requests.load(Ordering::Relaxed),
+                deployment.state.fail_requests.load(Ordering::Relaxed),
+            ),
+            "lifecycle reads must not duplicate usage or upstream health outcomes"
+        );
         handle.stop(false).await;
     }
 }

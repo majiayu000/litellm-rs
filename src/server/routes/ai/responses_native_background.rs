@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::{AppState, NativeCall, RequestContext, lifecycle, response_usage, settle};
-use crate::core::providers::{Provider, base::HttpMethod};
+use crate::core::providers::{Provider, ProviderError, base::HttpMethod};
 use crate::server::guardrails::{self, GuardrailDecisionSink};
 use crate::server::routes::ai::execution::StreamingDeploymentLease;
 use crate::utils::error::gateway_error::GatewayError;
@@ -137,8 +137,13 @@ pub(super) async fn response(
         let completed = result
             .as_ref()
             .is_ok_and(|value| value.get("status").and_then(Value::as_str) == Some("completed"));
+        let terminal_error = result
+            .as_ref()
+            .ok()
+            .filter(|value| value.get("status").and_then(Value::as_str) == Some("failed"))
+            .map(|_| ProviderError::api_error("responses", 502, "Upstream response failed"));
         lease
-            .settle_native_stream(tokens_used, completed, None, settlement)
+            .settle_native_stream(tokens_used, completed, terminal_error.as_ref(), settlement)
             .await;
         // GET/cancel/delete on another replica cannot cancel this settlement owner.
         match result {
