@@ -465,7 +465,7 @@ async fn bedrock_identity_binds_credentials_read_after_normalization() {
 #[cfg(feature = "providers-extended")]
 mod matrix {
     use super::super::*;
-    use super::{ENVS, EnvScope};
+    use super::{ENV_LOCK, ENVS, EnvScope};
     use crate::core::providers::unified_provider::ProviderError;
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";
@@ -498,10 +498,12 @@ mod matrix {
     }
 
     async fn run(case: &Case) {
-        let before = ENVS
-            .iter()
-            .map(|key| (*key, std::env::var(key).ok()))
-            .collect::<Vec<_>>();
+        let before = {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+            ENVS.iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect::<Vec<_>>()
+        };
         {
             let _env = EnvScope::new(case.env);
             let mut config = provider(case.name, case.top);
@@ -554,12 +556,13 @@ mod matrix {
                 }
             }
         }
-        assert_eq!(
-            before,
+        let after = {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
             ENVS.iter()
                 .map(|key| (*key, std::env::var(key).ok()))
                 .collect::<Vec<_>>()
-        );
+        };
+        assert_eq!(before, after);
     }
 
     #[tokio::test]
