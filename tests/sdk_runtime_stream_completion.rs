@@ -1,13 +1,11 @@
 //! Exercise completion through the public SDK stream, including its outer RAII owner.
 use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
-#[cfg(feature = "gateway")]
 use litellm_rs::core::completion::{CompletionOptions, DefaultRouter, Router as CompletionRouter};
-#[cfg(feature = "gateway")]
 use litellm_rs::sdk::types::{ChatOptions, SdkChatRequest};
 use litellm_rs::{
     core::{
         providers::{ExternalProvider, Provider, ProviderError},
-        router::{Deployment, RuntimeBinding, UnifiedRouter},
+        router::{Deployment, RouterConfig, RuntimeBinding, UnifiedRouter},
         types::{
             chat::ChatRequest,
             context::RequestContext,
@@ -101,6 +99,13 @@ fn usage_chunk(created: i64) -> ChatChunk {
 fn fixture(
     events: Vec<Result<ChatChunk, ProviderError>>,
 ) -> (LLMClient, Arc<UnifiedRouter>, Arc<AtomicBool>) {
+    let (client, router, provider) = fixture_with_config(events, RouterConfig::default());
+    (client, router, provider.dropped.clone())
+}
+fn fixture_with_config(
+    events: Vec<Result<ChatChunk, ProviderError>>,
+    config: RouterConfig,
+) -> (LLMClient, Arc<UnifiedRouter>, Arc<CompletionProvider>) {
     let dropped = Arc::new(AtomicBool::new(false));
     let provider = Arc::new(CompletionProvider {
         models: vec![ModelInfo {
@@ -111,16 +116,16 @@ fn fixture(
         events: Mutex::new(Some(events)),
         dropped: dropped.clone(),
     });
-    let router = Arc::new(UnifiedRouter::default());
+    let router = Arc::new(UnifiedRouter::new(config));
     router.add_deployment(Deployment::new(
         "completion".into(),
-        Provider::External(provider),
+        Provider::External(provider.clone()),
         "wire-model".into(),
         "public-model".into(),
     ));
     let client =
         LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model").unwrap();
-    (client, router, dropped)
+    (client, router, provider)
 }
 fn request() -> Vec<Message> {
     vec![Message {
@@ -132,7 +137,6 @@ fn request() -> Vec<Message> {
     }]
 }
 
-#[cfg(feature = "gateway")]
 fn bounded_request() -> SdkChatRequest {
     SdkChatRequest {
         model: "public-model".into(),
@@ -141,6 +145,216 @@ fn bounded_request() -> SdkChatRequest {
             max_tokens: Some(20),
             ..Default::default()
         },
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_stream_admission_retains_unknown_output_without_inventing_actual_usage() {
+    async fn start(
+        client: &LLMClient,
+        router: &Arc<UnifiedRouter>,
+        default_facade: bool,
+    ) -> Result<BoxStream<'static, Result<(), ()>>, String> {
+        if default_facade {
+            DefaultRouter::from_runtime(RuntimeBinding::new(router.clone()))
+                .complete_stream(
+                    "public-model",
+                    ChatRequest::new("public-model")
+                        .add_user_message("hello")
+                        .messages,
+                    CompletionOptions {
+                        max_tokens: Some(20),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|stream| {
+                    stream
+                        .map(|chunk| chunk.map(|_| ()).map_err(|_| ()))
+                        .boxed()
+                })
+                .map_err(|error| error.to_string())
+        } else {
+            client
+                .chat_stream_with_options(bounded_request())
+                .await
+                .map(|stream| {
+                    stream
+                        .map(|chunk| chunk.map(|_| ()).map_err(|_| ()))
+                        .boxed()
+                })
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    for default_facade in [false, true] {
+        let cases = [
+            "unpolled",
+            "heartbeat",
+            "heartbeat-error",
+            "drop",
+            "eof",
+            "error",
+            "known",
+            "known-error",
+        ]
+        .into_iter()
+        .map(|case| (case, 0_u32))
+        .chain(
+            [
+                "snapshot-drop",
+                "snapshot-eof",
+                "snapshot-error",
+                "snapshot-final",
+                "snapshot-zero",
+            ]
+            .into_iter()
+            .flat_map(|case| [4, 40].map(|tokens| (case, tokens))),
+        );
+        for (case, snapshot) in cases {
+            let mut events = vec![Ok(serde_json::from_value(serde_json::json!({
+                "id":"local", "object":"chat.completion.chunk", "created":1,
+                "model":"wire-model", "choices":[{"index":0,"delta":{
+                    "content":if case.starts_with("heartbeat") { "" } else { "partial" }
+                }}]
+            }))
+            .unwrap())];
+            if matches!(case, "known" | "known-error") {
+                events = vec![Ok(usage_chunk(1))];
+            }
+            if case.starts_with("snapshot-") {
+                let mut chunk = usage_chunk(1);
+                let usage = chunk.usage.as_mut().unwrap();
+                usage.prompt_tokens = snapshot;
+                usage.completion_tokens = 0;
+                usage.total_tokens = snapshot;
+                events.insert(0, Ok(chunk));
+                if matches!(case, "snapshot-final" | "snapshot-zero") {
+                    let mut chunk = usage_chunk(1);
+                    if case == "snapshot-zero" {
+                        let usage = chunk.usage.as_mut().unwrap();
+                        usage.prompt_tokens = 0;
+                        usage.completion_tokens = 0;
+                        usage.total_tokens = 0;
+                        chunk.choices = serde_json::from_value(serde_json::json!([
+                            {"index":0,"delta":{"content":"final"}}
+                        ]))
+                        .unwrap();
+                    }
+                    events.push(Ok(chunk));
+                }
+            }
+            let completed = matches!(
+                case,
+                "eof" | "known" | "snapshot-eof" | "snapshot-final" | "snapshot-zero"
+            );
+            let failed = matches!(
+                case,
+                "error" | "heartbeat-error" | "known-error" | "snapshot-error"
+            );
+            if failed {
+                events.push(Err(ProviderError::Other {
+                    provider: "sdk-completion-test",
+                    message: "stream failed".into(),
+                }));
+            }
+            let dropped = Arc::new(AtomicBool::new(false));
+            let provider = Arc::new(CompletionProvider {
+                models: vec![ModelInfo {
+                    id: "wire-model".into(),
+                    capabilities: vec![ProviderCapability::ChatCompletionStream],
+                    ..Default::default()
+                }],
+                events: Mutex::new(Some(events)),
+                dropped: dropped.clone(),
+            });
+            let router = Arc::new(UnifiedRouter::new(RouterConfig {
+                num_retries: 0,
+                max_fallbacks: 0,
+                allowed_fails: 100,
+                min_requests: 100,
+                ..Default::default()
+            }));
+            let mut deployment = Deployment::new(
+                "local-stream".into(),
+                Provider::External(provider.clone()),
+                "wire-model".into(),
+                "public-model".into(),
+            );
+            // TPM alone must enforce both in-flight and retained unknown work.
+            deployment.config.tpm_limit = Some(40);
+            router.add_deployment(deployment);
+            let client =
+                LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
+                    .unwrap();
+            let mut stream = start(&client, &router, default_facade).await.unwrap();
+            *provider.events.lock().unwrap() = Some(Vec::new());
+            assert!(
+                start(&client, &router, default_facade).await.is_err(),
+                "in-flight estimate must block a competing call"
+            );
+            let deployment = router.get_deployment("local-stream").unwrap();
+            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+            if case != "unpolled" {
+                assert!(stream.next().await.unwrap().is_ok());
+                if case.starts_with("snapshot-") {
+                    assert!(stream.next().await.unwrap().is_ok());
+                    if matches!(case, "snapshot-final" | "snapshot-zero") {
+                        assert!(stream.next().await.unwrap().is_ok());
+                    }
+                }
+                if completed {
+                    assert!(stream.next().await.is_none());
+                } else if failed {
+                    assert!(stream.next().await.unwrap().is_err());
+                }
+            }
+            drop(stream);
+            let observed = if matches!(case, "known" | "known-error" | "snapshot-final") {
+                12
+            } else if case == "snapshot-zero" {
+                0
+            } else {
+                u64::from(snapshot)
+            };
+            assert_counts(
+                &deployment,
+                u64::from(completed),
+                u64::from(failed),
+                observed,
+            );
+            let retained = matches!(case, "drop" | "eof" | "error")
+                || matches!(case, "snapshot-drop" | "snapshot-eof" | "snapshot-error");
+            let billable = retained
+                || matches!(
+                    case,
+                    "known" | "known-error" | "snapshot-final" | "snapshot-zero"
+                );
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                u64::from(billable)
+            );
+            assert!(dropped.load(Ordering::Relaxed));
+            assert!(
+                !deployment.is_in_cooldown(),
+                "the TPM assertion must not be explained by provider health"
+            );
+            *provider.events.lock().unwrap() = Some(Vec::new());
+            let next = start(&client, &router, default_facade).await;
+            assert_eq!(
+                next.is_err(),
+                retained,
+                "facade={default_facade}, case={case}, snapshot={snapshot}"
+            );
+            drop(next);
+            assert_counts(
+                &deployment,
+                u64::from(completed),
+                u64::from(failed),
+                observed,
+            );
+        }
     }
 }
 
@@ -174,6 +388,106 @@ async fn exhausted_sdk_stream_releases_and_records_success_before_drop() {
     drop(output);
     assert_counts(&deployment, 1, 0, 12);
 }
+#[tokio::test]
+async fn partial_stream_failures_count_once_toward_local_breaker_min_requests() {
+    for known_usage in [false, true] {
+        let prefix = if known_usage {
+            usage_chunk(1)
+        } else {
+            serde_json::from_value(serde_json::json!({
+                "id":"partial", "object":"chat.completion.chunk", "created":1,
+                "model":"wire-model", "choices":[{"index":0,"delta":{"content":"partial"}}]
+            }))
+            .unwrap()
+        };
+        let (client, router, provider) = fixture_with_config(
+            vec![],
+            RouterConfig {
+                allowed_fails: 1,
+                min_requests: 2,
+                cooldown_time_secs: 60,
+                ..Default::default()
+            },
+        );
+        for attempt in 1..=2 {
+            *provider.events.lock().unwrap() = Some(vec![
+                Ok(prefix.clone()),
+                Err(ProviderError::network(
+                    "sdk-completion-test",
+                    "stream failed",
+                )),
+            ]);
+            let mut output = client.chat_stream(request()).await.unwrap();
+            assert!(output.next().await.unwrap().is_ok());
+            assert!(output.next().await.unwrap().is_err());
+            let deployment = router.get_deployment("completion").unwrap();
+            assert_counts(
+                &deployment,
+                0,
+                attempt,
+                if known_usage { 12 * attempt } else { 0 },
+            );
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                attempt
+            );
+            assert_eq!(
+                deployment.is_in_cooldown(),
+                attempt == 2,
+                "known_usage={known_usage}: one failed request must count once toward min_requests"
+            );
+            assert!(output.next().await.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_breaker_success_window_resets_with_billing_counters() {
+    for reset in ["none", "explicit", "lazy"] {
+        let (client, router, provider) = fixture_with_config(
+            vec![Ok(usage_chunk(1))],
+            RouterConfig {
+                allowed_fails: 1,
+                min_requests: 2,
+                cooldown_time_secs: 60,
+                ..Default::default()
+            },
+        );
+        let mut successful = client.chat_stream(request()).await.unwrap();
+        assert!(successful.next().await.unwrap().is_ok());
+        assert!(successful.next().await.is_none());
+        let deployment = router.get_deployment("completion").unwrap();
+        assert_counts(&deployment, 1, 0, 12);
+        // Rollover through a cloned handle must reset the shared window.
+        let state = deployment.state.clone();
+        match reset {
+            "explicit" => state.reset_minute(),
+            "lazy" => state.minute_reset_at.store(0, Ordering::Release),
+            _ => {}
+        }
+        *provider.events.lock().unwrap() = Some(vec![
+            Ok(usage_chunk(2)),
+            Err(ProviderError::network(
+                "sdk-completion-test",
+                "stream failed",
+            )),
+        ]);
+        let mut failed = client.chat_stream(request()).await.unwrap();
+        assert!(failed.next().await.unwrap().is_ok());
+        assert!(failed.next().await.unwrap().is_err());
+        assert_counts(&deployment, 1, 1, if reset == "none" { 24 } else { 12 });
+        assert_eq!(
+            state.rpm_current.load(Ordering::Relaxed),
+            if reset == "none" { 2 } else { 1 }
+        );
+        assert_eq!(
+            deployment.is_in_cooldown(),
+            reset == "none",
+            "reset={reset}: only a success in the current window counts toward min_requests"
+        );
+    }
+}
+
 #[tokio::test]
 async fn provider_error_retains_observed_usage_and_releases_before_error_is_returned() {
     let (client, router, dropped) = fixture(vec![
@@ -532,7 +846,7 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
         .await
         .unwrap();
     for default_facade in [false, true] {
-        for terminal in [
+        let cases = [
             "drop",
             "eof",
             "error",
@@ -540,7 +854,22 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
             "unpolled",
             "heartbeat-error",
             "known",
-        ] {
+            "known-error",
+        ]
+        .into_iter()
+        .map(|terminal| (terminal, 0_u64))
+        .chain(
+            [
+                "snapshot-drop",
+                "snapshot-eof",
+                "snapshot-error",
+                "snapshot-final",
+                "snapshot-zero",
+            ]
+            .into_iter()
+            .flat_map(|terminal| [4, 40].map(|tokens| (terminal, tokens))),
+        );
+        for (terminal, snapshot_tokens) in cases {
             let mut events = vec![Ok(serde_json::from_value(serde_json::json!({
             "id":"unknown", "object":"chat.completion.chunk", "created":1,
             "model":"wire-model", "choices":[{"index":0,"delta":{
@@ -548,10 +877,35 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
             }}]
         }))
         .unwrap())];
-            if terminal == "known" {
+            if terminal == "known" || terminal == "known-error" {
                 events = vec![Ok(usage_chunk(1))];
             }
-            if terminal == "error" || terminal == "heartbeat-error" {
+            if terminal.starts_with("snapshot-") {
+                let mut snapshot = usage_chunk(1);
+                snapshot.usage.as_mut().unwrap().total_tokens = snapshot_tokens as u32;
+                events.insert(0, Ok(snapshot));
+                if terminal == "snapshot-final" || terminal == "snapshot-zero" {
+                    let mut final_chunk = usage_chunk(1);
+                    if terminal == "snapshot-zero" {
+                        final_chunk.usage.as_mut().unwrap().total_tokens = 0;
+                        // Same-chunk actual zero covers this newly observed payload.
+                        final_chunk.choices = serde_json::from_value(serde_json::json!([
+                            {"index":0,"delta":{"content":"final"}}
+                        ]))
+                        .unwrap();
+                    }
+                    events.push(Ok(final_chunk));
+                }
+            }
+            let completed = matches!(
+                terminal,
+                "eof" | "known" | "snapshot-eof" | "snapshot-final" | "snapshot-zero"
+            );
+            let failed = matches!(
+                terminal,
+                "error" | "heartbeat-error" | "snapshot-error" | "known-error"
+            );
+            if failed {
                 events.push(Err(ProviderError::authentication(
                     "sdk-completion-test",
                     "denied",
@@ -628,11 +982,23 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
                 reserved.2 > 1,
                 "admission must reserve the request estimate and output bound"
             );
+            if terminal.starts_with("snapshot-") {
+                assert!(
+                    (4..40).contains(&reserved.2),
+                    "snapshot matrix must straddle initial estimate: {reserved:?}"
+                );
+            }
             if terminal != "unpolled" {
                 assert!(output.next().await.unwrap().is_ok());
-                if terminal == "eof" || terminal == "known" {
+                if terminal.starts_with("snapshot-") {
+                    assert!(output.next().await.unwrap().is_ok());
+                    if terminal == "snapshot-final" || terminal == "snapshot-zero" {
+                        assert!(output.next().await.unwrap().is_ok());
+                    }
+                }
+                if completed {
                     assert!(output.next().await.is_none());
-                } else if terminal == "error" || terminal == "heartbeat-error" {
+                } else if failed {
                     assert!(output.next().await.unwrap().is_err());
                 }
             }
@@ -640,20 +1006,31 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
             let deployment = router.get_deployment(&id).unwrap();
             assert_counts(
                 &deployment,
-                u64::from(terminal == "eof" || terminal == "known"),
-                u64::from(terminal == "error" || terminal == "heartbeat-error"),
-                if terminal == "known" { 12 } else { 0 },
+                u64::from(completed),
+                u64::from(failed),
+                if matches!(terminal, "known" | "known-error" | "snapshot-final") {
+                    12
+                } else if terminal == "snapshot-zero" {
+                    0
+                } else if terminal.starts_with("snapshot-") {
+                    snapshot_tokens
+                } else {
+                    0
+                },
             );
-            let retain = matches!(terminal, "drop" | "eof" | "error" | "known");
+            let retain = matches!(terminal, "drop" | "eof" | "error" | "known" | "known-error")
+                || terminal.starts_with("snapshot-");
             assert_eq!(
                 deployment.state.rpm_current.load(Ordering::Relaxed),
                 u64::from(retain)
             );
             assert!(dropped.load(Ordering::Relaxed));
-            let expected = if terminal == "known" {
+            let expected = if matches!(terminal, "known" | "known-error" | "snapshot-final") {
                 (0, 1, 12)
+            } else if terminal == "snapshot-zero" {
+                (0, 1, 0)
             } else if retain {
-                (0, 1, reserved.2)
+                (0, 1, reserved.2.max(snapshot_tokens as i64))
             } else {
                 (0, 0, 0)
             };
@@ -682,7 +1059,7 @@ async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses()
                 !fields.iter().any(|field| field.starts_with("l:")),
                 "terminal cleanup must delete the lease"
             );
-            if terminal == "drop" || terminal == "eof" {
+            if matches!(terminal, "drop" | "eof" | "snapshot-drop" | "snapshot-eof") {
                 assert!(
                     matches!(
                         client.chat_stream_with_options(bounded_request()).await,

@@ -94,11 +94,14 @@ impl UnaryCompletion {
 
     pub(super) fn complete_success(&self, tokens: u64) {
         if !self.recorded.swap(true, Ordering::AcqRel) {
-            self.deployment
-                .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
             if let Some(hold) = &self.hold {
                 hold.prepare_settlement(tokens);
             }
+            self.deployment.record_success_with_admission(
+                tokens,
+                self.started_at.elapsed().as_micros() as u64,
+                self.hold.as_ref(),
+            );
         }
     }
 
@@ -119,22 +122,30 @@ impl UnaryCompletion {
         {
             // Local postprocessing failure or cancellation before a validated
             // settlement must retain usage without inventing provider success.
+            self.prepare_admission_usage(tokens);
             match &self.terminal {
                 Some(TerminalOutcome::Success)
                     if self.provider_succeeded.load(Ordering::Acquire) =>
                 {
-                    self.deployment
-                        .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
+                    self.deployment.record_success_with_admission(
+                        tokens,
+                        self.started_at.elapsed().as_micros() as u64,
+                        self.hold.as_ref(),
+                    );
                 }
                 Some(TerminalOutcome::Failure(router, reason, interrupted)) => {
                     if *interrupted {
-                        self.deployment.record_interrupted_usage(tokens);
+                        self.deployment
+                            .record_interrupted_usage_with_admission(tokens, self.hold.as_ref());
                     } else {
-                        self.deployment.record_partial_tokens(tokens);
+                        self.deployment
+                            .record_partial_tokens_with_admission(tokens, self.hold.as_ref());
                     }
                     router.record_local_failure(&self.deployment, *reason);
                 }
-                _ => self.deployment.record_interrupted_usage(tokens),
+                _ => self
+                    .deployment
+                    .record_interrupted_usage_with_admission(tokens, self.hold.as_ref()),
             }
         }
     }

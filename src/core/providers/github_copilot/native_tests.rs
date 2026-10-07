@@ -407,10 +407,9 @@ async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_re
                 // The reserved upper bound is never reported as an actual bill.
                 assert_eq!(ledger.cost, None);
                 assert_eq!(ledger.total_tokens, None);
-                assert_eq!(
-                    ledger.provider.as_deref(),
-                    generation_fault.then_some("github_copilot")
-                );
+                // Reservation identity is known before discovery or generation.
+                assert_eq!(ledger.provider.as_deref(), Some("github_copilot"));
+                assert_eq!(ledger.model.as_deref(), Some("gpt-4o"));
                 upstream.abort();
                 let _ = upstream.await;
             }

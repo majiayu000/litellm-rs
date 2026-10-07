@@ -52,6 +52,12 @@ Successful HTTP unary/streaming, SDK and runtime completion preserves known admi
 and publishes shared circuit success before awaiting admission settlement.
 Cancellation during that settlement cannot omit the already published outcome.
 
+Runtime unary failures and failures before a provider stream is returned record
+the local failure and cooldown before awaiting shared circuit publication. This
+also covers retries and single-attempt execution. A caller cancelled while
+waiting for a circuit bridge permit retains the completed local failure; Redis
+has not accepted that operation until the permit is acquired and its task starts.
+
 Gateway resources use the existing construction identity digest alongside the
 deployment ID for shared Redis admission, circuit state and the circuit cache.
 Replicas with the same resource share state; changing credentials or endpoints
@@ -77,8 +83,41 @@ backend and are outside this async-routing change.
 
 Vertex AI construction also captures the existing project/location environment fallbacks and the selected credential-file path before resource identity hashing. Explicit token or inline credentials retain precedence over an unused environment file. The identity also includes a digest of the parsed credentials held by the constructed provider, so same-path file content rotation changes identity without a second file read. This binds the configuration inputs used by the current factory; it does not claim identity discovery for a dynamically refreshed Application Default Credentials principal.
 
-With shared Redis admission, runtime-backed SDK and DefaultRouter streams reserve the existing request token estimate plus the configured output bound. Once billable output has been observed, cancellation or EOF without trustworthy usage retains the RPM and estimated TPM reservation while releasing parallel admission. These counters remain conservative reservations, not reported actual token usage. Cancellation before output still refunds admission; observed provider usage settles the actual count. In-process admission records known RPM and observed tokens; it has no separate estimated-TPM reservation ledger.
+With shared Redis admission, runtime-backed SDK and DefaultRouter streams reserve the existing request token estimate plus the configured output bound. Once billable output has been observed, cancellation or EOF without trustworthy usage retains the RPM and estimated TPM reservation while releasing parallel admission. These counters remain conservative reservations, not reported actual token usage. Cancellation before output still refunds admission; observed provider usage settles the actual count.
+
+In-process TPM admission also reserves each request's estimate before dispatch. Its private admission ledger combines outstanding estimates with completed unknown usage that is not represented by observed token counters. A successful unary response without usage or an interrupted stream with consumed output retains at least its estimate, raised to any observed token minimum. Final usage, including an explicit zero, replaces the estimate; cancellation before output refunds it. Runtime-backed SDK and DefaultRouter completion record observed usage and finalize the local reservation within the same minute window, so observed tokens are never charged twice. Public token counters and usage metrics continue to report actual usage only. HTTP completion guards that own an admission hold also replace their estimate in the same observation, before asynchronous circuit or settlement waits; cancellation cannot leave observed tokens temporarily charged alongside the full estimate. Minute rollover clears completed unknown reservations and carries outstanding requests into the new window. Reservations share state across snapshots and preserve existing resource identity rules; removing and re-adding a deployment ID does not let an old request alter the replacement's allowance.
 
 Shared admission hashes expire after both the current quota minute and every live lease deadline. Ending one lease cannot remove another replica's live reservation or the current minute's settled/retained quota. Shared circuit calls refresh a ten-minute idle retention period, extended through any later open-circuit or probe-owner deadline; observing a circuit does not extend its open deadline. Active namespaces retain cumulative circuit counters. After the idle retention period, the shared circuit history starts fresh. This applies to newly created or subsequently accessed hashes; pre-upgrade idle keys without TTL are not backfilled.
 
-Streaming provider failure preserves local failure and admission completion intent before notifying the shared circuit, then awaits admission settlement/cancellation. Cancellation during the later admission wait retains the captured failure and settlement responsibility. Circuit calls still use the existing bounded I/O bridge; a call cancelled before bridge admission has not been accepted for detached I/O.
+HTTP streaming provider failure preserves local failure and admission completion intent before notifying the shared circuit, then awaits admission settlement/cancellation. Cancellation during the later admission wait retains the captured failure and settlement responsibility. Circuit calls still use the existing bounded I/O bridge; a call cancelled before bridge admission has not been accepted for detached I/O.
+
+When more stream output follows a usage snapshot, that snapshot no longer covers
+the whole response. Admission retains the initial estimate until newer
+usage covers the output, with any already observed larger count as a minimum.
+A newer usage report, including an explicit zero, restores settlement to the
+reported count. Local counters retain observed token counts. Anthropic adapters
+expose complete, valid terminal usage; intermediate or incomplete token fields
+remain unknown for settlement.
+
+Runtime-backed SDK and DefaultRouter unary chat use the same input and output
+estimate before provider dispatch. Runtime-backed SDK embeddings reserve the
+existing input estimate for the whole single or batch request. Successful unary
+responses without usage retain their token reservation; an explicit zero
+or positive usage count settles to that reported count. Local token statistics
+continue to include only observed usage.
+
+Legacy OpenAI SDK streaming requests also ask for `stream_options.include_usage`.
+The SDK exposes a supplied terminal usage chunk, including an explicit zero,
+and preserves absent upstream usage as `None`.
+
+Bedrock also contributes a digest of the static credentials held by the
+constructed client. A fallback resolved during construction cannot share a
+namespace with different credentials merely because earlier normalized inputs
+matched. Vertex project normalization preserves the factory's existing
+precedence for an explicit top-level project and provider-specific settings.
+
+Accepted API-key usage writes outlive a cancelled request waiter. The key manager
+owns at most 1,024 concurrent writes and retains the complete usage record,
+including pricing and unpriced fields. Admission at that bound is best effort;
+an overloaded writer returns an error, and process shutdown is not a durable
+delivery guarantee. Normal callers continue to await the database result.

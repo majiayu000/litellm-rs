@@ -110,9 +110,7 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
         // Match the factory's top-level project merge before applying its aliases.
         let mut settings = config.settings.clone();
         if let Some(project) = config.project.as_ref().filter(|value| !value.is_empty()) {
-            settings
-                .entry("project".into())
-                .or_insert_with(|| project.clone().into());
+            settings.insert("project".into(), project.clone().into());
         }
         let resolved = crate::core::providers::factory::vertex_resource_config_from_factory(
             &serde_json::json!(settings),
@@ -300,13 +298,15 @@ impl Router {
                     provider_name, e
                 ))
             })?;
-            #[cfg(feature = "providers-extra")]
-            let runtime_identity = match &provider {
-                Provider::VertexAI(vertex) => {
-                    runtime_identity.with_credential_digest(vertex.credential_resource_identity())
-                }
-                _ => runtime_identity,
-            };
+            let runtime_identity =
+                match &provider {
+                    Provider::Bedrock(bedrock) => runtime_identity
+                        .with_credential_digest(bedrock.credential_resource_identity()),
+                    #[cfg(feature = "providers-extra")]
+                    Provider::VertexAI(vertex) => runtime_identity
+                        .with_credential_digest(vertex.credential_resource_identity()),
+                    _ => runtime_identity,
+                };
             let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
 

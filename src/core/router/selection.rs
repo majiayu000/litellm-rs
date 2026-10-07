@@ -60,15 +60,25 @@ impl DeploymentLease {
         }
     }
 
-    pub(crate) fn preserve_admission_reservation(&self) {
+    pub(crate) fn record_success(&self, tokens: u64, latency_us: u64) {
+        self.deployment
+            .record_success_with_admission(tokens, latency_us, self.hold.as_ref());
+    }
+
+    pub(crate) fn record_interrupted_usage(&self, tokens: u64) {
+        self.deployment
+            .record_interrupted_usage_with_admission(tokens, self.hold.as_ref());
+    }
+
+    pub(crate) fn preserve_admission_reservation(&self, minimum_tokens: u64) {
         if let Some(hold) = &self.hold {
-            hold.prepare_retention();
+            hold.prepare_retention(minimum_tokens);
         }
     }
 
-    pub(crate) async fn retain_admission_async(&mut self) {
+    pub(crate) async fn retain_admission_async(&mut self, minimum_tokens: u64) {
         if let Some(hold) = self.hold.take() {
-            self.admission.retain_async(&hold).await;
+            self.admission.retain_async(&hold, minimum_tokens).await;
         }
     }
 
@@ -473,7 +483,7 @@ impl Router {
                 continue;
             }
 
-            let tpm_current = minute.tpm;
+            let tpm_current = deployment.state.admission_tpm(now);
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {
@@ -587,7 +597,6 @@ impl Router {
             .await
         {
             AdmissionReserve::Skipped => None,
-            #[cfg(feature = "gateway")]
             AdmissionReserve::Denied => {
                 return Err(RouterError::RateLimitExceeded(expected_model.into()));
             }
@@ -595,7 +604,6 @@ impl Router {
             AdmissionReserve::Unavailable => {
                 return Err(RouterError::NoAvailableDeployment(expected_model.into()));
             }
-            #[cfg(feature = "gateway")]
             AdmissionReserve::Granted(hold) => Some(hold),
         };
 
@@ -635,7 +643,6 @@ impl Router {
     }
 
     #[cfg(test)]
-    #[cfg(feature = "gateway")]
     pub(crate) fn select_deployment_lease_with_tokens(
         &self,
         model_name: &str,
@@ -689,7 +696,7 @@ impl Router {
             || current
                 .config
                 .tpm_limit
-                .is_some_and(|limit| minute.tpm >= limit)
+                .is_some_and(|limit| current.state.admission_tpm(current_timestamp()) >= limit)
         {
             return Err(RouterError::RateLimitExceeded(
                 deployment.model_name.clone(),

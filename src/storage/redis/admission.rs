@@ -126,6 +126,9 @@ if finishing then
         t = t - tpmInc
       elseif op == 'settle' then
         t = t - tpmInc + actual_tpm
+      elseif op == 'retain' then
+        -- A partial usage snapshot can exceed the original estimate.
+        t = t - tpmInc + math.max(tpmInc, actual_tpm)
       end
     end
     redis.call('HDEL', KEYS[1], field)
@@ -293,8 +296,10 @@ impl RedisPool {
         &self,
         key: &str,
         lease_id: &str,
+        minimum_tpm: i64,
     ) -> Result<AdmissionState> {
-        self.admission_finish("retain", key, lease_id, 0).await
+        self.admission_finish("retain", key, lease_id, minimum_tpm)
+            .await
     }
 
     async fn admission_finish(
@@ -372,6 +377,59 @@ mod tests {
     async fn redis_time(conn: &mut RedisLiveConnection) -> (i64, i64) {
         let (seconds, micros): (i64, i64) = redis::cmd("TIME").query_async(conn).await.unwrap();
         (seconds * 1_000 + micros / 1_000, seconds / 60)
+    }
+
+    #[tokio::test]
+    async fn retain_preserves_known_usage_floor_and_other_live_lease() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+        for (lease, estimate, ttl_ms) in [("long", 2, 1_200_000), ("short", 70, 600_000)] {
+            let values = admission_script()
+                .key(&key)
+                .arg("reserve")
+                .arg(2)
+                .arg(10)
+                .arg(100)
+                .arg(1)
+                .arg(estimate)
+                .arg(lease)
+                .arg(ttl_ms)
+                .arg(0)
+                .invoke_async(&mut conn)
+                .await
+                .unwrap();
+            assert!(parse_admission_state(values).unwrap().allowed);
+        }
+        let long_lease: String = redis::cmd("HGET")
+            .arg(&key)
+            .arg("l:long")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let deadline: i64 = long_lease.rsplit(':').next().unwrap().parse().unwrap();
+        // A known 100-token prefix exceeds its 70-token estimate. Repeating
+        // completion with a different floor must not charge either lease again.
+        for minimum in [100, 1_000] {
+            let state = invoke_script(&mut conn, &key, "retain", "short", minimum, 10).await;
+            assert_eq!((state.parallel, state.rpm, state.tpm), (1, 2, 102));
+            let expires_at: i64 = redis::cmd("PEXPIRETIME")
+                .arg(&key)
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(expires_at, deadline, "the other live lease stays protected");
+        }
+        let state = invoke_script(&mut conn, &key, "retain", "long", 0, 10).await;
+        assert_eq!((state.parallel, state.rpm, state.tpm), (0, 2, 102));
+        let state = invoke_script(&mut conn, &key, "retain", "long", 1_000, 10).await;
+        assert_eq!((state.parallel, state.rpm, state.tpm), (0, 2, 102));
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
     }
 
     // Age stored accounting instead of waiting for a real minute boundary.

@@ -230,7 +230,6 @@ async fn sdk_embedding_requires_embedding_capability_before_dispatch() {
     assert!(calls.lock().unwrap().is_empty());
 }
 
-#[cfg(feature = "gateway")]
 async fn unary_admission_request(
     client: &LLMClient,
     router: &Arc<UnifiedRouter>,
@@ -284,6 +283,138 @@ async fn unary_admission_request(
             Ok(response.usage.map(|usage| usage.total_tokens))
         }
         _ => unreachable!("only the three runtime unary facades are exercised"),
+    }
+}
+
+#[tokio::test]
+async fn runtime_unary_facades_enforce_local_tpm_without_counting_estimates_as_actual() {
+    use litellm_rs::core::router::{DeploymentConfig, RouterConfig};
+    use std::time::Duration;
+
+    let text = "a".repeat(80);
+    for facade in ["embedding", "sdk-chat", "default-router"] {
+        for usage in [None, Some(0), Some(3)] {
+            let dispatches = Arc::new(AtomicUsize::new(0));
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let provider = Provider::External(Arc::new(EmbeddingProvider {
+                models: vec![ModelInfo {
+                    id: "vendor/unary".into(),
+                    capabilities: vec![
+                        ProviderCapability::Embeddings,
+                        ProviderCapability::ChatCompletion,
+                    ],
+                    ..Default::default()
+                }],
+                calls: Arc::new(Mutex::new(Vec::new())),
+                marker: 1.0,
+                fail: false,
+                usage,
+                gate: Some(gate.clone()),
+                dispatches: dispatches.clone(),
+            }));
+            let router = Arc::new(UnifiedRouter::new(RouterConfig {
+                num_retries: 0,
+                max_fallbacks: 0,
+                ..Default::default()
+            }));
+            let id = uuid::Uuid::new_v4().to_string();
+            router.add_deployment(
+                Deployment::new(
+                    id.clone(),
+                    provider,
+                    "vendor/unary".into(),
+                    "public-model".into(),
+                )
+                .with_config(DeploymentConfig {
+                    max_parallel_requests: None,
+                    rpm_limit: None,
+                    tpm_limit: Some(64),
+                    ..Default::default()
+                }),
+            );
+            let deployment = router.get_deployment(&id).unwrap();
+            let client = Arc::new(
+                LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
+                    .unwrap(),
+            );
+            let worker_client = client.clone();
+            let worker_router = router.clone();
+            let worker_text = text.clone();
+            let task = tokio::spawn(async move {
+                unary_admission_request(&worker_client, &worker_router, facade, &worker_text).await
+            });
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while dispatches.load(Ordering::Relaxed) != 1 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("first provider call must start after local admission");
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+
+            let denied = tokio::time::timeout(
+                Duration::from_secs(3),
+                unary_admission_request(&client, &router, facade, &text),
+            )
+            .await
+            .expect("TPM rejection must return without waiting at the provider");
+            assert!(denied.is_err(), "{facade}, usage={usage:?}");
+            assert_eq!(dispatches.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+
+            gate.add_permits(1);
+            let displayed_usage = tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .expect("the accepted request must finish after the provider is released")
+                .unwrap()
+                .unwrap();
+            if facade == "sdk-chat" {
+                assert_eq!(displayed_usage, Some(usage.unwrap_or(0)));
+            } else if facade == "default-router" {
+                assert_eq!(displayed_usage, usage);
+            }
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                deployment.state.tpm_current.load(Ordering::Relaxed),
+                u64::from(usage.unwrap_or(0))
+            );
+
+            if usage.is_none() {
+                let denied = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    unary_admission_request(&client, &router, facade, &text),
+                )
+                .await
+                .expect("retained unknown usage must reject before provider dispatch");
+                assert!(denied.is_err(), "{facade} must retain unknown local usage");
+                assert_eq!(dispatches.load(Ordering::Relaxed), 1);
+                assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+                assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+                assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+            } else {
+                gate.add_permits(1);
+                tokio::time::timeout(
+                    Duration::from_secs(3),
+                    unary_admission_request(&client, &router, facade, &text),
+                )
+                .await
+                .expect("known usage must release the unused estimate")
+                .unwrap();
+                assert_eq!(dispatches.load(Ordering::Relaxed), 2);
+                assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+                assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 2);
+                assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 2);
+                assert_eq!(
+                    deployment.state.tpm_current.load(Ordering::Relaxed),
+                    2 * u64::from(usage.unwrap_or(0))
+                );
+            }
+        }
     }
 }
 

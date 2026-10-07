@@ -627,7 +627,7 @@ impl Router {
                 continue;
             }
 
-            let tpm_current = minute.tpm;
+            let tpm_current = deployment.state.admission_tpm(now);
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {
@@ -800,7 +800,6 @@ impl Router {
     }
 
     /// Publish an already-recorded local failure to the shared breaker.
-    #[cfg(feature = "gateway")]
     pub(crate) async fn record_failure_circuit_for_deployment_async(
         &self,
         deployment: &Deployment,
@@ -812,9 +811,11 @@ impl Router {
             .await
         {
             CircuitWrite::Local => {}
+            #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {
                 deployment.enter_cooldown(self.config.cooldown_time_secs)
             }
+            #[cfg(feature = "gateway")]
             CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
         }
     }
@@ -831,7 +832,8 @@ impl Router {
 
             CooldownReason::ConsecutiveFailures => {
                 let fails = minute.failures;
-                let successes_this_minute = minute.rpm;
+                // Billing RPM also includes interrupted streams and consumed failures.
+                let successes_this_minute = minute.successes;
                 let total_this_minute = successes_this_minute + fails as u64;
                 fails >= self.config.allowed_fails
                     && total_this_minute >= self.config.min_requests as u64

@@ -29,6 +29,89 @@ fn test_provider_config(id: &str, provider_type: ProviderType, model: &str) -> S
 }
 
 #[tokio::test]
+async fn legacy_openai_stream_requests_and_preserves_terminal_usage() {
+    use futures::StreamExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for reported in [Some(5_u32), Some(0), None] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let (body_start, length) = loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0, "complete request headers are required");
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                    assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .expect("JSON request has a content length");
+                    break (end + 4, length);
+                }
+            };
+            while bytes.len() < body_start + length {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0, "complete request body is required");
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            let request: serde_json::Value =
+                serde_json::from_slice(&bytes[body_start..body_start + length]).unwrap();
+            let content = serde_json::json!({
+                "id":"legacy-stream", "model":"gpt-4o-mini", "choices":[{
+                    "index":0, "delta":{"content":"ready"}, "finish_reason":null
+                }]
+            });
+            let mut response_body = format!("data: {content}\n\n");
+            // Model the provider contract: no usage event is sent unless it
+            // was requested. An absent upstream count must still remain None.
+            if request["stream_options"]["include_usage"] == true
+                && let Some(tokens) = reported
+            {
+                let usage = serde_json::json!({
+                    "id":"legacy-stream", "model":"gpt-4o-mini", "choices":[],
+                    "usage":{"prompt_tokens":tokens,"completion_tokens":0,"total_tokens":tokens}
+                });
+                response_body.push_str(&format!("data: {usage}\n\n"));
+            }
+            response_body.push_str("data: [DONE]\n\n");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        let mut provider = test_provider_config("legacy", ProviderType::OpenAI, "gpt-4o-mini");
+        provider.base_url = Some(format!("http://{address}"));
+        let client = LLMClient::new(ConfigBuilder::new().add_provider(provider).build()).unwrap();
+        let mut stream = client.chat_stream(vec![]).await.unwrap();
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first.choices[0].delta.content.as_deref(), Some("ready"));
+        assert!(first.usage.is_none());
+        if let Some(tokens) = reported {
+            let terminal = stream.next().await.unwrap().unwrap();
+            assert!(terminal.choices.is_empty());
+            assert_eq!(terminal.usage.unwrap().total_tokens, tokens);
+        }
+        assert!(stream.next().await.is_none());
+        let request = server.await.unwrap();
+        assert_eq!(request["model"], "gpt-4o-mini");
+        assert_eq!(request["stream"], true);
+        assert_eq!(request["stream_options"]["include_usage"], true);
+    }
+}
+
+#[tokio::test]
 async fn test_llm_client_creation() {
     let config = ConfigBuilder::new()
         .add_provider(test_provider_config(

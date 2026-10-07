@@ -58,6 +58,7 @@ fn elapsed_window_resets_all_counters_before_publishing_timestamp() {
     state.tpm_current.store(1000, Ordering::Relaxed);
     state.rpm_current.store(50, Ordering::Relaxed);
     state.fails_this_minute.store(5, Ordering::Relaxed);
+    state.successes_this_minute.store(50, Ordering::Relaxed);
     state.minute_reset_at.store(now - 61, Ordering::Relaxed);
 
     let counters = state.minute_counters(now);
@@ -67,6 +68,7 @@ fn elapsed_window_resets_all_counters_before_publishing_timestamp() {
         MinuteCounters {
             tpm: 0,
             rpm: 0,
+            successes: 0,
             failures: 0
         }
     );

@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after cancellation, and persist cancellation facts even when audit logging is
   disabled. Realtime sessions retain unknown-cost responsibility across multiple
   generations.
+- Retain conservative local/shared token quota when usage is missing or a later
+  stream payload invalidates an earlier usage snapshot. Preserve known failure
+  counters before cancellable Redis publication and request usage on legacy
+  OpenAI streams. Bind Bedrock identity to constructed credentials and preserve
+  Vertex project precedence and trustworthy terminal Anthropic usage.
 
 ### Breaking changes
 
