@@ -226,7 +226,13 @@ async fn reconcile(state: &AppState, row: &mut Model) -> Result<bool> {
     if let Some(leases) = leases {
         state
             .budget_limits
-            .settle_response_leases(&row.provider, &row.model, &leases, row.cost.unwrap_or(0.0))
+            .settle_response_leases_async(
+                &row.provider,
+                &row.model,
+                &leases,
+                row.cost.unwrap_or(0.0),
+            )
+            .await
             .map_err(|error| {
                 GatewayError::Storage(format!("Response budget settlement failed: {error:?}"))
             })?;

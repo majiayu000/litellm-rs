@@ -347,7 +347,7 @@ async fn handle_chat_completion_internal(
                     ApiKeyBudgetPolicy::FromProviderReservation,
                 )
                 .reserve_call_settle(
-                    |budget| {
+                    async |budget| {
                         super::spend::reserve_chat_completion_budget_with_request_pricing(
                             &reserve_request_pricing,
                             &reserve_pricing_config,
@@ -356,6 +356,7 @@ async fn handle_chat_completion_internal(
                             budget.model(),
                             request_for_budget,
                         )
+                        .await
                     },
                     || {
                         callback.begin_provider_execution_with_pricing(

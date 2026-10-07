@@ -453,7 +453,7 @@ fn bulk_string(value: &str) -> Vec<u8> {
     format!("${}\r\n{}\r\n", value.len(), value).into_bytes()
 }
 
-fn cluster_slots_resp(host: &str, port: u16) -> Vec<u8> {
+pub(super) fn cluster_slots_resp(host: &str, port: u16) -> Vec<u8> {
     format!(
         "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n${}\r\n{host}\r\n:{port}\r\n",
         host.len()
@@ -469,7 +469,7 @@ fn scan_resp(keys: &[String]) -> Vec<u8> {
     out
 }
 
-fn parse_resp_array(buf: &[u8]) -> Option<(Vec<Vec<u8>>, usize)> {
+pub(super) fn parse_resp_array(buf: &[u8]) -> Option<(Vec<Vec<u8>>, usize)> {
     if buf.first()? != &b'*' {
         return None;
     }

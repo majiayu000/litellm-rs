@@ -171,7 +171,7 @@ pub(super) struct Pending {
     pub max_output: u32,
 }
 impl Pending {
-    pub fn reserve(
+    pub async fn reserve(
         state: &AppState,
         provider: &str,
         model: &str,
@@ -181,7 +181,8 @@ impl Pending {
     ) -> Result<Self, ProviderError> {
         let reservation = state
             .budget_limits
-            .reserve_spend(provider, model, bound)
+            .reserve_spend_async(provider, model, bound)
+            .await
             .map_err(|error| {
                 super::spend::reservation_error_to_provider_error(error, provider, model)
             })?;
@@ -201,28 +202,37 @@ impl Pending {
         actual: Option<(f64, u64)>,
     ) -> Result<u64, String> {
         let (cost, tokens) = actual.unwrap_or((self.bound, 0));
-        let provider_error = self.provider.take().and_then(|reservation| {
-            reservation
-                .settle(cost)
-                .err()
-                .map(|_| "Realtime budget settlement failed".to_string())
-        });
         let key_error = self.key.take().and_then(|reservation| {
             reservation
                 .settle(cost)
                 .err()
                 .map(|_| "Realtime key budget settlement failed".to_string())
         });
-        if let Some(key_id) = key_id
-            && let Err(error) = state
-                .budgeted
-                .key_manager()
-                .record_usage(key_id, tokens, cost)
-                .await
-        {
-            // Attempt usage persistence even when a separate budget ledger failed.
-            tracing::error!(%error, %key_id, tokens, cost, "Realtime key usage recording failed");
-        }
+        let reservation = self.provider.take();
+        let budget_settlement = async {
+            if let Some(reservation) = reservation {
+                reservation
+                    .settle_async(cost)
+                    .await
+                    .err()
+                    .map(|_| "Realtime budget settlement failed".to_string())
+            } else {
+                None
+            }
+        };
+        let usage_record = async {
+            if let Some(key_id) = key_id
+                && let Err(error) = state
+                    .budgeted
+                    .key_manager()
+                    .record_usage(key_id, tokens, cost)
+                    .await
+            {
+                // Attempt usage persistence even when a separate budget ledger failed.
+                tracing::error!(%error, %key_id, tokens, cost, "Realtime key usage recording failed");
+            }
+        };
+        let (provider_error, ()) = tokio::join!(budget_settlement, usage_record);
         match (provider_error, key_error) {
             (Some(provider), Some(key)) => Err(format!("{provider}; {key}")),
             (Some(error), None) | (None, Some(error)) => Err(error),
@@ -233,13 +243,8 @@ impl Pending {
 impl Drop for Pending {
     fn drop(&mut self) {
         // An aborted transport task must not refund a potentially billable response.
-        if let Some(reservation) = self.provider.take()
-            && let Err(error) = reservation.settle(self.bound)
-        {
-            tracing::error!(
-                ?error,
-                "Realtime aborted response fallback settlement failed"
-            );
+        if let Some(reservation) = self.provider.take() {
+            reservation.settle_detached(self.bound);
         }
         if let Some(reservation) = self.key.take()
             && let Err(error) = reservation.settle(self.bound)

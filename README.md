@@ -54,6 +54,12 @@ versioned source is
 control-plane contract is served at `GET /admin/openapi.json` (admin-authenticated)
 from [`docs/openapi/admin.json`](./docs/openapi/admin.json).
 
+API-key budgets currently use process-local definitions and counters. Persisting
+a key's `budget_id` does not restore its budget after restart or share its balance
+with another gateway; an unavailable binding fails closed. The key management API
+rejects `max_budget`. Redis-backed provider/model budgets are a separate scope;
+see the [budget capability boundary](docs/gateway/redis-budget-leases.md#api-key-budget-capability-boundary).
+
 For a first HTTP request or setup failure, use the [gateway setup and compatibility questions](docs/README.md#start-with-an-http-request).
 
 ## Supported Product Surfaces

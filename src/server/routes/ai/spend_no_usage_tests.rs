@@ -48,6 +48,7 @@ async fn successful_completion_without_usage_settles_reserved_budget() {
         .await
         .expect("test key should be created");
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .expect("reservation should succeed")
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();

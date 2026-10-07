@@ -135,7 +135,7 @@ pub async fn audio_speech(
                         ApiKeyBudgetPolicy::FromProviderReservation,
                     )
                     .reserve_call_settle(
-                        |budget| {
+                        async |budget| {
                             super::budgeting::reserve_audio_provider_budget_with_pricing(
                                 &reserve_request_pricing,
                                 &reserve_pricing_config,
@@ -145,6 +145,7 @@ pub async fn audio_speech(
                                 reserve_pricing_units,
                                 &reserve_usage,
                             )
+                            .await
                         },
                         || provider.text_to_speech(request, context),
                         |response, reservations, budget| {

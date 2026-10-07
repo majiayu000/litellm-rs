@@ -35,7 +35,7 @@ pub(super) fn estimated_audio_file_seconds(file: &[u8]) -> f64 {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn reserve_audio_provider_budget_with_pricing(
+pub(super) async fn reserve_audio_provider_budget_with_pricing(
     request_pricing: &super::super::spend::RequestPricing,
     pricing_config: &GatewayPricingConfig,
     budget_limits: &UnifiedBudgetLimits,
@@ -48,7 +48,8 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
     let budget_reservation = if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
         match cost {
             Ok(cost) if cost.total_cost > 0.0 => budget_limits
-                .reserve_spend(budget_provider, budget_model, cost.total_cost)
+                .reserve_spend_async(budget_provider, budget_model, cost.total_cost)
+                .await
                 .map(Some)
                 .map_err(|error| {
                     super::super::spend::reservation_error_to_provider_error(
@@ -65,14 +66,17 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
                 )?;
                 None
             }
-            Err(error) => super::super::spend::reserve_unpriced_usage_budget(
-                pricing_config,
-                budget_limits,
-                budget_provider,
-                budget_model,
-                usage,
-                error,
-            )?,
+            Err(error) => {
+                super::super::spend::reserve_unpriced_usage_budget(
+                    pricing_config,
+                    budget_limits,
+                    budget_provider,
+                    budget_model,
+                    usage,
+                    error,
+                )
+                .await?
+            }
         }
     } else {
         super::super::spend::reserve_pricing_usage_budget_with_request_pricing(
@@ -82,7 +86,8 @@ pub(super) fn reserve_audio_provider_budget_with_pricing(
             budget_provider,
             budget_model,
             usage,
-        )?
+        )
+        .await?
     };
     Ok(budget_reservation)
 }
@@ -104,20 +109,26 @@ pub(super) async fn record_audio_spend(
     if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
         match cost {
             Ok(cost) => {
-                settle_audio_budget_or_record(
-                    budget_limits,
-                    budget_provider,
-                    budget_model,
-                    budget_reservation,
-                    cost.total_cost,
-                    "time-based audio spend",
-                );
                 super::super::spend::settle_api_key_budget_reservation(
                     key_budget_reservation,
                     cost.total_cost,
                     "time-based audio spend",
                 );
-                record_key_usage(key_manager, api_key_id, usage, cost.total_cost).await;
+                let budget_settlement = async {
+                    settle_audio_budget_or_record(
+                        budget_limits,
+                        budget_provider,
+                        budget_model,
+                        budget_reservation,
+                        cost.total_cost,
+                        "time-based audio spend",
+                    )
+                    .await;
+                };
+                let usage_record = async {
+                    record_key_usage(key_manager, api_key_id, usage, cost.total_cost).await;
+                };
+                tokio::join!(budget_settlement, usage_record);
             }
             Err(error) => {
                 tracing::error!(
@@ -176,7 +187,7 @@ fn audio_unit_cost(
     }
 }
 
-fn settle_audio_budget_or_record(
+async fn settle_audio_budget_or_record(
     budget_limits: &UnifiedBudgetLimits,
     budget_provider: &str,
     budget_model: &str,
@@ -185,7 +196,7 @@ fn settle_audio_budget_or_record(
     context: &str,
 ) {
     if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
+        if let Err(error) = reservation.settle_async(cost).await {
             tracing::error!("failed to settle {context}: {error:?}");
         }
     } else {

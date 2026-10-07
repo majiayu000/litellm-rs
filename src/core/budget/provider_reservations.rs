@@ -1,3 +1,7 @@
+#[cfg(feature = "gateway")]
+#[path = "async_reservations.rs"]
+pub(super) mod asynchronous;
+
 use super::config::BudgetPersistenceEvent;
 use super::distributed::{BudgetLeaseScope, budget_period_epoch};
 use super::tracker::BudgetReservationError;
@@ -417,14 +421,48 @@ impl UnifiedBudgetLimits {
         model: &str,
         max_amount: f64,
     ) -> Result<UnifiedBudgetReservation, BudgetReservationError> {
+        self.reserve_spend_with_permit(
+            provider,
+            model,
+            max_amount,
+            #[cfg(feature = "gateway")]
+            None,
+        )
+    }
+
+    fn reserve_spend_with_permit(
+        &self,
+        provider: &str,
+        model: &str,
+        max_amount: f64,
+        #[cfg(feature = "gateway")] permit: Option<std::sync::Arc<asynchronous::AsyncBudgetPermit>>,
+    ) -> Result<UnifiedBudgetReservation, BudgetReservationError> {
         let provider_reservation = self
             .providers
             .reserve_provider_spend(provider, max_amount)?;
+        #[cfg(feature = "gateway")]
+        let provider_reservation = {
+            let mut reservation = provider_reservation;
+            if reservation.lease_id.is_some() {
+                reservation.async_permit = permit.clone();
+            }
+            reservation
+        };
         match self.models.reserve_model_spend(model, max_amount) {
-            Ok(model_reservation) => Ok(UnifiedBudgetReservation::new(
-                provider_reservation,
-                model_reservation,
-            )),
+            Ok(model_reservation) => {
+                #[cfg(feature = "gateway")]
+                let model_reservation = {
+                    let mut reservation = model_reservation;
+                    if reservation.lease_id.is_some() {
+                        reservation.async_permit = permit;
+                    }
+                    reservation
+                };
+                Ok(UnifiedBudgetReservation::new(
+                    provider_reservation,
+                    model_reservation,
+                ))
+            }
             Err(error) => {
                 provider_reservation.cancel();
                 Err(error)
@@ -442,6 +480,8 @@ pub struct ProviderBudgetReservation {
     settled: bool,
     lease_id: Option<String>,
     period_epoch: i64,
+    #[cfg(feature = "gateway")]
+    async_permit: Option<std::sync::Arc<asynchronous::AsyncBudgetPermit>>,
 }
 
 impl ProviderBudgetReservation {
@@ -460,6 +500,8 @@ impl ProviderBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -477,6 +519,8 @@ impl ProviderBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -504,17 +548,32 @@ impl ProviderBudgetReservation {
     ) -> Result<Option<BudgetStatus>, BudgetReservationError> {
         let actual = BudgetAmount::from_f64(actual_amount)?;
         if let Some(lease_id) = self.lease_id.clone() {
-            let snapshot = self.manager.backend.settle(
-                BudgetLeaseScope::Provider,
-                &self.provider,
-                &lease_id,
-                self.reserved,
-                actual,
-                self.period_epoch,
-            )?;
+            // A failed/expired reply does not prove that the actual charge was
+            // unapplied. Drop must not cancel potentially billable work.
+            self.settled = true;
+            let snapshot = self
+                .manager
+                .backend
+                .settle(
+                    BudgetLeaseScope::Provider,
+                    &self.provider,
+                    &lease_id,
+                    self.reserved,
+                    actual,
+                    self.period_epoch,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        scope = "provider",
+                        name = self.provider,
+                        lease_id,
+                        actual_amount,
+                        ?error,
+                        "budget settlement unacknowledged; retaining identity for reconciliation"
+                    );
+                })?;
             self.manager.sync_lease_snapshot(&self.provider, snapshot);
             let status = self.manager.finish_distributed_settle(&self.provider);
-            self.settled = true;
             return Ok(status);
         }
         let status = if self.tracked {
@@ -548,6 +607,8 @@ impl ProviderBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 ),
             }
             self.settled = true;
@@ -574,6 +635,8 @@ impl Drop for ProviderBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 );
             } else {
                 self.manager.release_provider_reservation(
@@ -595,6 +658,8 @@ pub struct ModelBudgetReservation {
     settled: bool,
     lease_id: Option<String>,
     period_epoch: i64,
+    #[cfg(feature = "gateway")]
+    async_permit: Option<std::sync::Arc<asynchronous::AsyncBudgetPermit>>,
 }
 
 impl ModelBudgetReservation {
@@ -613,6 +678,8 @@ impl ModelBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -630,6 +697,8 @@ impl ModelBudgetReservation {
             settled: false,
             lease_id: None,
             period_epoch: 0,
+            #[cfg(feature = "gateway")]
+            async_permit: None,
         }
     }
 
@@ -657,17 +726,32 @@ impl ModelBudgetReservation {
     ) -> Result<Option<BudgetStatus>, BudgetReservationError> {
         let actual = BudgetAmount::from_f64(actual_amount)?;
         if let Some(lease_id) = self.lease_id.clone() {
-            let snapshot = self.manager.backend.settle(
-                BudgetLeaseScope::Model,
-                &self.model,
-                &lease_id,
-                self.reserved,
-                actual,
-                self.period_epoch,
-            )?;
+            // Keep an uncertain actual charge available for reconciliation;
+            // unwinding this call must not turn it into a cancellation.
+            self.settled = true;
+            let snapshot = self
+                .manager
+                .backend
+                .settle(
+                    BudgetLeaseScope::Model,
+                    &self.model,
+                    &lease_id,
+                    self.reserved,
+                    actual,
+                    self.period_epoch,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        scope = "model",
+                        name = self.model,
+                        lease_id,
+                        actual_amount,
+                        ?error,
+                        "budget settlement unacknowledged; retaining identity for reconciliation"
+                    );
+                })?;
             self.manager.sync_lease_snapshot(&self.model, snapshot);
             let status = self.manager.finish_distributed_settle(&self.model);
-            self.settled = true;
             return Ok(status);
         }
         let status = if self.tracked {
@@ -701,6 +785,8 @@ impl ModelBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 ),
             }
             self.settled = true;
@@ -727,6 +813,8 @@ impl Drop for ModelBudgetReservation {
                     lease_id,
                     self.reserved,
                     self.period_epoch,
+                    #[cfg(feature = "gateway")]
+                    self.async_permit.clone(),
                 );
             } else {
                 self.manager.release_model_reservation(
@@ -785,9 +873,11 @@ impl UnifiedBudgetReservation {
                 model.reservation_reset_at,
             )?;
         }
-        let provider_status = provider.settle(actual_amount)?;
-        let model_status = model.settle(actual_amount)?;
-        Ok((provider_status, model_status))
+        // Both scopes own the same billable result. An unavailable provider
+        // backend must not skip model accounting or drop it as a cancellation.
+        let provider_status = provider.settle(actual_amount);
+        let model_status = model.settle(actual_amount);
+        Ok((provider_status?, model_status?))
     }
 
     pub fn cancel(self) {

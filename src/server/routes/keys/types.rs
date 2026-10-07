@@ -27,11 +27,11 @@ pub struct CreateKeyRequest {
     #[serde(default)]
     pub team_id: Option<Uuid>,
 
-    /// Associated budget ID
+    /// Existing process-local budget ID; its definition and counters are not persisted.
     #[serde(default)]
     pub budget_id: Option<Uuid>,
 
-    /// Unsupported until API-key-scoped budgets are persisted; use budget_id.
+    /// Unsupported until API-key-scoped budgets are persisted.
     #[serde(default)]
     pub max_budget: Option<f64>,
 
@@ -71,11 +71,11 @@ pub struct UpdateKeyRequest {
     #[serde(default)]
     pub rate_limits: Option<KeyRateLimits>,
 
-    /// Update budget ID
+    /// Update the process-local budget binding; null removes the binding.
     #[serde(default)]
     pub budget_id: Option<Option<Uuid>>,
 
-    /// Unsupported until API-key-scoped budgets are persisted; use budget_id.
+    /// Unsupported until API-key-scoped budgets are persisted.
     #[serde(default)]
     pub max_budget: Option<f64>,
 

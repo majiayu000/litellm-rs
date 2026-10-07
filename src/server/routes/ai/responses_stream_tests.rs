@@ -216,6 +216,7 @@ async fn disconnect_after_upstream_output_settles_reserved_budget() {
     );
     let reservation =
         spend::reserve_completion_budget(budget.as_ref(), "openai", "gpt-4o", 0, Some(100))
+            .await
             .unwrap()
             .unwrap();
     let reserved = reservation.reserved_amount();
@@ -269,6 +270,7 @@ async fn completed_stream_without_usage_after_output_settles_reserved_budget() {
     );
     let reservation =
         spend::reserve_completion_budget(budget.as_ref(), "openai", "gpt-4o", 0, Some(100))
+            .await
             .unwrap()
             .unwrap();
     let reserved = reservation.reserved_amount();
