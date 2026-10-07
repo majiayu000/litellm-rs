@@ -627,7 +627,7 @@ impl Router {
                 continue;
             }
 
-            let tpm_current = minute.tpm;
+            let tpm_current = deployment.state.admission_tpm(now);
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {

@@ -187,12 +187,17 @@ impl LLMClient {
         provider: &crate::sdk::config::SdkProviderConfig,
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": provider.models.first().unwrap_or(&"gpt-4".to_string()),
             "messages": messages,
             "stream": true,
-            "stream_options": { "include_usage": true },
         });
+        if matches!(
+            &provider.provider_type,
+            crate::sdk::config::ProviderType::OpenAI
+        ) {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
 
         let default_url = "https://api.openai.com".to_string();
         let base_url = provider.base_url.as_ref().unwrap_or(&default_url);

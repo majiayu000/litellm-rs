@@ -843,6 +843,16 @@ async fn cancellation_test_router() -> Option<(
     Arc<crate::storage::redis::RedisPool>,
     String,
 )> {
+    cancellation_test_router_with_local_limit(None).await
+}
+
+async fn cancellation_test_router_with_local_limit(
+    local_tpm: Option<u64>,
+) -> Option<(
+    Arc<UnifiedRouter>,
+    Arc<crate::storage::redis::RedisPool>,
+    String,
+)> {
     use crate::config::models::storage::RedisConfig;
     let Ok(url) = std::env::var("REDIS_URL") else {
         assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
@@ -858,9 +868,12 @@ async fn cancellation_test_router() -> Option<(
         .await
         .unwrap(),
     );
-    let router = UnifiedRouter::default()
-        .with_admission_redis(pool.clone())
-        .with_circuit_redis(pool.clone());
+    let router = UnifiedRouter::default().with_circuit_redis(pool.clone());
+    let router = if local_tpm.is_some() {
+        router
+    } else {
+        router.with_admission_redis(pool.clone())
+    };
     let id = uuid::Uuid::new_v4().to_string();
     router.add_deployment(
         Deployment::new(
@@ -870,7 +883,8 @@ async fn cancellation_test_router() -> Option<(
             "gpt-4".into(),
         )
         .with_config(DeploymentConfig {
-            max_parallel_requests: Some(1),
+            max_parallel_requests: local_tpm.is_none().then_some(1),
+            tpm_limit: local_tpm,
             ..Default::default()
         }),
     );
@@ -883,6 +897,271 @@ fn assert_one_completed_request(deployment: &Deployment) {
     assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
     assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
     assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 42);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_http_observation_replaces_estimate_before_cancelled_circuit_wait() {
+    const CHILD: &str = "LITELLM_HTTP_LOCAL_OBSERVATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // The deliberate 64-slot pause belongs to this isolated test process.
+        let output = tokio::task::spawn_blocking(|| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "server::routes::ai::execution::tests::local_http_observation_replaces_estimate_before_cancelled_circuit_wait",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed; 0 failed"),
+            "isolated HTTP observation must pass once:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    for mode in [
+        "unary",
+        "success",
+        "failure",
+        #[cfg(feature = "websockets")]
+        "interrupted",
+    ] {
+        let Some((router, pool, id)) = cancellation_test_router_with_local_limit(Some(10)).await
+        else {
+            return;
+        };
+        let deployment = router.get_deployment(&id).unwrap();
+        let paused = Arc::new(Mutex::new(None));
+        let error = ProviderError::timeout("openai", "completed stream failure");
+        let mut stream = if mode == "unary" {
+            None
+        } else {
+            Some(
+                execute_stream_with_selected_deployment(
+                    router.clone(),
+                    "gpt-4",
+                    ProviderCapability::ChatCompletionStream,
+                    |_, _, _| async { Ok(()) },
+                )
+                .await
+                .unwrap()
+                .1,
+            )
+        };
+        if mode != "unary" {
+            *paused.lock().unwrap() = Some(crate::core::router::circuit::pause_circuit_io().await);
+        }
+        let pause_in_provider = paused.clone();
+        let mut completion = Box::pin(async {
+            if mode == "unary" {
+                execute_with_selected_deployment(
+                    &router,
+                    "gpt-4",
+                    ProviderCapability::ChatCompletion,
+                    move |_, _, _| {
+                        let paused = pause_in_provider.clone();
+                        async move {
+                            *paused.lock().unwrap() =
+                                Some(crate::core::router::circuit::pause_circuit_io().await);
+                            Ok(((), 6))
+                        }
+                    },
+                )
+                .await
+                .unwrap();
+            } else {
+                let lease = stream.as_mut().unwrap();
+                match mode {
+                    "success" => lease.complete_response(6, None).await,
+                    "failure" => lease.complete_response(6, Some(&error)).await,
+                    #[cfg(feature = "websockets")]
+                    "interrupted" => lease.finish_interrupted(6, Some(&error)).await,
+                    _ => unreachable!(),
+                }
+            }
+        });
+        let observed = async {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while deployment.state.tpm_current.load(Ordering::Relaxed) != 6 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("known tokens must be observed before the paused circuit wait");
+        };
+        tokio::select! {
+            () = completion.as_mut() => panic!("shared circuit I/O must remain paused"),
+            () = observed => {}
+        }
+        assert!(futures::poll!(completion.as_mut()).is_pending());
+        let expected_rpm = u64::from(mode != "failure");
+        let expected_success = u64::from(matches!(mode, "unary" | "success"));
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            expected_rpm
+        );
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            expected_success
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            1 - expected_success
+        );
+        // Probe the production local-admission boundary directly: selecting
+        // through the router would itself wait on the deliberately paused
+        // circuit bridge. Six observed tokens plus four must fit a limit of
+        // ten; the unreplaced one-token HTTP estimate would reject it.
+        let next = deployment
+            .state
+            .reserve_local_tokens(4, 10)
+            .expect("known usage must replace the owned estimate before yielding");
+        drop(next);
+        assert_eq!(shared_failure_counts(&pool, &id).await, (0, 0));
+        drop(completion);
+        if let Some(lease) = &mut stream {
+            match mode {
+                "success" => lease.complete_response(6, None).await,
+                "failure" => lease.complete_response(6, Some(&error)).await,
+                #[cfg(feature = "websockets")]
+                "interrupted" => lease.finish_interrupted(6, Some(&error)).await,
+                _ => unreachable!(),
+            }
+        }
+        drop(stream);
+        drop(paused.lock().unwrap().take());
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 6);
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            expected_rpm
+        );
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            expected_success
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            1 - expected_success
+        );
+        let next = router
+            .select_deployment_lease_with_tokens("gpt-4", 4)
+            .unwrap();
+        drop(next);
+        // Cancellation before a circuit slot is acquired publishes no ACK.
+        assert_eq!(shared_failure_counts(&pool, &id).await, (0, 0));
+        pool.delete(&crate::storage::redis::RedisPool::circuit_key(&id))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_http_terminal_cancellation_replaces_estimate_exactly_once() {
+    for mode in ["success", "failure", "interrupted_failure", "interrupted"] {
+        let Some((router, _, id)) = cancellation_test_router_with_local_limit(Some(10)).await
+        else {
+            return;
+        };
+        let (_, mut lease) = execute_stream_with_selected_deployment(
+            router.clone(),
+            "gpt-4",
+            ProviderCapability::ChatCompletionStream,
+            |_, _, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        let error = ProviderError::timeout("openai", "terminal cancellation");
+        let mut settlement = Box::pin(async {
+            match mode {
+                "success" => {
+                    lease
+                        .settle_terminal(6, None, std::future::pending::<()>())
+                        .await
+                }
+                "failure" => {
+                    lease
+                        .settle_terminal(6, Some(&error), std::future::pending::<()>())
+                        .await
+                }
+                "interrupted_failure" => {
+                    lease
+                        .settle_interrupted(6, Some(&error), std::future::pending::<()>())
+                        .await
+                }
+                "interrupted" => {
+                    lease
+                        .settle_interrupted(6, None, std::future::pending::<()>())
+                        .await
+                }
+                _ => unreachable!(),
+            }
+        });
+        assert!(futures::poll!(settlement.as_mut()).is_pending());
+        drop(settlement);
+        lease.complete_response(6, None).await;
+        drop(lease);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 6);
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            u64::from(mode != "failure")
+        );
+        assert_eq!(
+            deployment.state.total_requests.load(Ordering::Relaxed),
+            u64::from(mode != "interrupted")
+        );
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            u64::from(mode == "success")
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            u64::from(matches!(mode, "failure" | "interrupted_failure"))
+        );
+        let next = router
+            .select_deployment_lease_with_tokens("gpt-4", 4)
+            .unwrap();
+        drop(next);
+    }
+}
+
+#[cfg(feature = "websockets")]
+#[tokio::test(flavor = "current_thread")]
+async fn local_http_neutral_completion_replaces_estimate_exactly_once() {
+    let Some((router, _, id)) = cancellation_test_router_with_local_limit(Some(10)).await else {
+        return;
+    };
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        router.clone(),
+        "gpt-4",
+        ProviderCapability::ChatCompletionStream,
+        |_, _, _| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    lease.finish_neutral(6).await;
+    lease.finish_neutral(6).await;
+    drop(lease);
+    let deployment = router.get_deployment(&id).unwrap();
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 6);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+    let next = router
+        .select_deployment_lease_with_tokens("gpt-4", 4)
+        .unwrap();
+    drop(next);
 }
 
 #[tokio::test(flavor = "current_thread")]

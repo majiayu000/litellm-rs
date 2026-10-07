@@ -332,14 +332,14 @@ fn circuit_io_handle() -> tokio::runtime::Handle {
 }
 
 #[cfg(feature = "gateway")]
-static CIRCUIT_IO_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+fn circuit_io_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+    &SLOTS
+}
 
 #[cfg(all(test, feature = "gateway"))]
 pub(crate) async fn pause_circuit_io() -> tokio::sync::SemaphorePermit<'static> {
-    CIRCUIT_IO_SLOTS
-        .acquire_many(64)
-        .await
-        .expect("circuit test permits")
+    circuit_io_slots().acquire_many(64).await.unwrap()
 }
 
 #[cfg(feature = "gateway")]
@@ -358,7 +358,7 @@ where
     let fut: futures::future::BoxFuture<'static, crate::utils::error::gateway_error::Result<T>> =
         Box::pin(fut);
     async move {
-        let permit = CIRCUIT_IO_SLOTS.acquire().await.map_err(|_| ())?;
+        let permit = circuit_io_slots().acquire().await.map_err(|_| ())?;
         let task = circuit_io_handle().spawn(async move {
             let _permit = permit;
             fut.await

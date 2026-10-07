@@ -30,7 +30,6 @@ pub struct DeploymentLease {
     admission: AdmissionBackend,
     hold: Option<AdmissionHold>,
     async_cleanup: bool,
-    estimated_tokens: u64,
 }
 
 impl DeploymentLease {
@@ -38,7 +37,6 @@ impl DeploymentLease {
         deployment: Arc<Deployment>,
         admission: AdmissionBackend,
         hold: Option<AdmissionHold>,
-        estimated_tokens: u64,
     ) -> Self {
         Self {
             deployment,
@@ -46,7 +44,6 @@ impl DeploymentLease {
             admission,
             hold,
             async_cleanup: true,
-            estimated_tokens,
         }
     }
 
@@ -63,8 +60,14 @@ impl DeploymentLease {
         }
     }
 
-    pub(crate) fn estimated_tokens(&self) -> u64 {
-        self.estimated_tokens
+    pub(crate) fn record_success(&self, tokens: u64, latency_us: u64) {
+        self.deployment
+            .record_success_with_admission(tokens, latency_us, self.hold.as_ref());
+    }
+
+    pub(crate) fn record_interrupted_usage(&self, tokens: u64) {
+        self.deployment
+            .record_interrupted_usage_with_admission(tokens, self.hold.as_ref());
     }
 
     pub(crate) fn preserve_admission_reservation(&self, minimum_tokens: u64) {
@@ -480,7 +483,7 @@ impl Router {
                 continue;
             }
 
-            let tpm_current = minute.tpm;
+            let tpm_current = deployment.state.admission_tpm(now);
             if let Some(limit) = deployment.config.tpm_limit
                 && tpm_current >= limit
             {
@@ -558,7 +561,6 @@ impl Router {
                     deployment,
                     self.admission.clone(),
                     hold,
-                    estimated_tokens,
                 ));
             }
 
@@ -595,7 +597,6 @@ impl Router {
             .await
         {
             AdmissionReserve::Skipped => None,
-            #[cfg(feature = "gateway")]
             AdmissionReserve::Denied => {
                 return Err(RouterError::RateLimitExceeded(expected_model.into()));
             }
@@ -603,7 +604,6 @@ impl Router {
             AdmissionReserve::Unavailable => {
                 return Err(RouterError::NoAvailableDeployment(expected_model.into()));
             }
-            #[cfg(feature = "gateway")]
             AdmissionReserve::Granted(hold) => Some(hold),
         };
 
@@ -643,7 +643,6 @@ impl Router {
     }
 
     #[cfg(test)]
-    #[cfg(feature = "gateway")]
     pub(crate) fn select_deployment_lease_with_tokens(
         &self,
         model_name: &str,
@@ -697,7 +696,7 @@ impl Router {
             || current
                 .config
                 .tpm_limit
-                .is_some_and(|limit| minute.tpm >= limit)
+                .is_some_and(|limit| current.state.admission_tpm(current_timestamp()) >= limit)
         {
             return Err(RouterError::RateLimitExceeded(
                 deployment.model_name.clone(),
@@ -712,7 +711,6 @@ impl Router {
             current.clone(),
             self.admission.clone(),
             hold,
-            estimated_tokens,
         ))
     }
 

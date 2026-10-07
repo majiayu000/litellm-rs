@@ -165,7 +165,8 @@ impl StreamingDeploymentLease {
         if let Some(hold) = &hold {
             hold.prepare_settlement(tokens_used);
         }
-        self.deployment.record_success(tokens_used, latency_us);
+        self.deployment
+            .record_success_with_admission(tokens_used, latency_us, hold.as_ref());
         // Mark the local outcome before yielding. A cancelled completion may
         // be retried by a caller holding &mut self; it must never count twice.
         self.release();
@@ -198,9 +199,6 @@ impl StreamingDeploymentLease {
         if self.finalized {
             return;
         }
-        if tokens_used > 0 {
-            self.deployment.record_partial_tokens(tokens_used);
-        }
         let inferred = infer_cooldown_reason(error);
         let cooldown_reason = match inferred {
             CooldownReason::RateLimit | CooldownReason::AuthError | CooldownReason::NotFound => {
@@ -208,8 +206,6 @@ impl StreamingDeploymentLease {
             }
             _ => CooldownReason::ConsecutiveFailures,
         };
-        self.router
-            .record_local_failure(&self.deployment, cooldown_reason);
         let retain_admission = completion::retain_failure_admission(tokens_used, interrupted);
         let hold = self.hold.take();
         if let Some(hold) = &hold {
@@ -219,6 +215,15 @@ impl StreamingDeploymentLease {
                 hold.prepare_cancellation();
             }
         }
+        if interrupted {
+            self.deployment
+                .record_interrupted_usage_with_admission(tokens_used, hold.as_ref());
+        } else {
+            self.deployment
+                .record_partial_tokens_with_admission(tokens_used, hold.as_ref());
+        }
+        self.router
+            .record_local_failure(&self.deployment, cooldown_reason);
         self.release();
         self.router
             .record_failure_circuit_for_deployment_async(&self.deployment, cooldown_reason)
@@ -311,13 +316,19 @@ impl StreamingDeploymentLease {
 
     #[cfg(feature = "websockets")]
     pub(super) async fn finish_neutral(&mut self, tokens_used: u64) {
-        if tokens_used > 0 {
-            self.deployment.record_partial_tokens(tokens_used);
+        if self.finalized {
+            return;
         }
-        if let Some(hold) = self.hold.take() {
+        let hold = self.hold.take();
+        if let Some(hold) = &hold {
+            hold.prepare_settlement(tokens_used);
+        }
+        self.deployment
+            .record_partial_tokens_with_admission(tokens_used, hold.as_ref());
+        self.release();
+        if let Some(hold) = hold {
             self.admission.settle_async(&hold, tokens_used).await;
         }
-        self.release();
     }
 
     #[cfg(feature = "websockets")]
@@ -337,14 +348,14 @@ impl StreamingDeploymentLease {
         }
         if let Some(error) = error {
             // complete_failure owns tokens and the known failure before I/O.
-            self.deployment.record_interrupted_usage(0);
             self.complete_failure(error, tokens_used, true).await;
         } else {
-            self.deployment.record_interrupted_usage(tokens_used);
             let hold = self.hold.take();
             if let Some(hold) = &hold {
                 hold.prepare_settlement(tokens_used);
             }
+            self.deployment
+                .record_interrupted_usage_with_admission(tokens_used, hold.as_ref());
             self.release();
             if let Some(hold) = hold {
                 self.admission.settle_async(&hold, tokens_used).await;

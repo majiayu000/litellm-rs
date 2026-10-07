@@ -94,7 +94,7 @@ impl RuntimeStateRegistry {
             let minute = state.minute_counters(now);
             state.active_requests.load(Ordering::Acquire) > 0
                 || minute.rpm > 0
-                || minute.tpm > 0
+                || state.admission_tpm(now) > 0
                 || minute.failures > 0
                 || state.cooldown_until.load(Ordering::Acquire) > now
         });

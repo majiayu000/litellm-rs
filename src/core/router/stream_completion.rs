@@ -63,7 +63,7 @@ impl RuntimeStreamCompletion {
     pub(crate) fn observe_output(&mut self) {
         self.output_observed = true;
         // A prior usage snapshot cannot settle output generated after it.
-        // Keep that observed count locally, but retain the shared reservation
+        // Keep that observed count locally, but retain the admission reservation
         // until another usage record covers the newly observed payload.
         self.usage_covers_output = false;
         if let Some(lease) = &self.lease {
@@ -81,20 +81,14 @@ impl RuntimeStreamCompletion {
 
     pub(crate) async fn finish_success(mut self) {
         let lease = self.lease.as_mut().expect("live stream completion");
-        let tokens = if self.usage_covers_output {
-            self.usage.unwrap_or_default()
-        } else {
-            lease.estimated_tokens().max(self.usage.unwrap_or_default())
-        };
-        lease
-            .deployment()
-            .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
-        self.outcome_recorded = true;
+        let tokens = self.usage.unwrap_or_default();
         if self.usage_covers_output {
             lease.preserve_admission_usage(tokens);
         } else {
             lease.preserve_admission_reservation(self.usage.unwrap_or_default());
         }
+        lease.record_success(tokens, self.started_at.elapsed().as_micros() as u64);
+        self.outcome_recorded = true;
         self.router
             .record_success_circuit_for_deployment_async(lease.deployment())
             .await;
@@ -119,13 +113,10 @@ impl RuntimeStreamCompletion {
         };
         self.terminal_failure = Some(reason);
         let lease = self.lease.as_mut().expect("live stream completion");
-        if self.usage.is_some() || self.output_observed {
-            let tokens = if self.usage_covers_output {
-                self.usage.unwrap_or_default()
-            } else {
-                lease.estimated_tokens().max(self.usage.unwrap_or_default())
-            };
-            lease.deployment().record_interrupted_usage(tokens);
+        if let Some(tokens) = self.usage {
+            lease.record_interrupted_usage(tokens);
+        } else if self.output_observed {
+            lease.record_interrupted_usage(0);
         }
         self.router
             .record_failure_with_reason_for_deployment_async(lease.deployment(), reason)
@@ -183,20 +174,12 @@ impl Drop for RuntimeStreamCompletion {
                 self.router.record_local_failure(lease.deployment(), reason);
             } else if let Some(tokens) = self.usage {
                 // Consumer cancellation or SDK conversion failure is neutral
-                // for provider health. Later output needs a conservative quota
-                // floor until a newer usage report covers the response.
-                let tokens = if self.usage_covers_output {
-                    tokens
-                } else {
-                    lease.estimated_tokens().max(tokens)
-                };
-                lease.deployment().record_interrupted_usage(tokens);
+                // for provider health, but observed usage is still real.
+                lease.record_interrupted_usage(tokens);
             } else if self.output_observed {
-                // Local TPM is quota accounting; this fallback is not reported
-                // as actual provider usage in the response or billing ledger.
-                lease
-                    .deployment()
-                    .record_interrupted_usage(lease.estimated_tokens());
+                // RPM is known; the retained admission estimate is not an
+                // observed token count and must not enter actual local TPM.
+                lease.record_interrupted_usage(0);
             }
         }
         // DeploymentLease releases local active requests. AdmissionHold has
