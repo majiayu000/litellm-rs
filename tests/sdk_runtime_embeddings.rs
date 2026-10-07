@@ -29,6 +29,7 @@ struct EmbeddingProvider {
     marker: f32,
     fail: bool,
     empty_responses: AtomicUsize,
+    response_indices: Mutex<Option<Vec<usize>>>,
     usage: Option<u32>,
     gate: Option<Arc<tokio::sync::Semaphore>>,
     dispatches: Arc<AtomicUsize>,
@@ -110,8 +111,14 @@ impl ExternalProvider for EmbeddingProvider {
             };
             // Upstreams may return entries out of order; preserve input order
             // in the SDK batch result by respecting each entry's index.
-            let data: Vec<_> = (0..count)
-                .rev()
+            let indices = self
+                .response_indices
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| (0..count).rev().collect());
+            let data: Vec<_> = indices
+                .into_iter()
                 .map(|index| {
                     json!({"object":"embedding", "index":index,
                         "embedding":[self.marker, index as f32]})
@@ -140,6 +147,7 @@ fn client(marker: f32, fail: bool) -> (LLMClient, Calls, Arc<UnifiedRouter>) {
         marker,
         fail,
         empty_responses: AtomicUsize::new(0),
+        response_indices: Mutex::new(None),
         usage: Some(3),
         gate: None,
         dispatches: Arc::new(AtomicUsize::new(0)),
@@ -194,6 +202,7 @@ async fn sdk_empty_embedding_data_retries_before_recording_success() {
                         marker,
                         fail: false,
                         empty_responses: AtomicUsize::new(empty_responses),
+                        response_indices: Mutex::new(None),
                         usage,
                         gate: None,
                         dispatches: Arc::new(AtomicUsize::new(0)),
@@ -321,6 +330,167 @@ async fn sdk_empty_embedding_data_retries_before_recording_success() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn sdk_embedding_cardinality_and_indices_retry_without_losing_usage() {
+    use litellm_rs::core::router::{
+        DeploymentConfig, FallbackConfig, RetrySchedule, RouterConfig, UnifiedRoutingStrategy,
+    };
+
+    // A nonempty response can still omit inputs, repeat an index, invent an
+    // index, or return surplus vectors. The single-text API requires index 0.
+    for (batch, indices) in [
+        (true, vec![0]),
+        (true, vec![1]),
+        (true, vec![0, 0]),
+        (true, vec![0, 2]),
+        (true, vec![0, u32::MAX as usize]),
+        (true, vec![0, 1, 2]),
+        (false, vec![1]),
+        (false, vec![0, 1]),
+    ] {
+        for fallback in [false, true] {
+            for malformed_usage in [None, Some(0), Some(3)] {
+                let make_provider = |marker, response_indices, usage| {
+                    Arc::new(EmbeddingProvider {
+                        models: vec![ModelInfo {
+                            id: "vendor/embed-v1".into(),
+                            capabilities: vec![ProviderCapability::Embeddings],
+                            ..Default::default()
+                        }],
+                        calls: Arc::new(Mutex::new(Vec::new())),
+                        marker,
+                        fail: false,
+                        empty_responses: AtomicUsize::new(0),
+                        response_indices: Mutex::new(response_indices),
+                        usage,
+                        gate: None,
+                        dispatches: Arc::new(AtomicUsize::new(0)),
+                    })
+                };
+                let malformed = make_provider(1.0, Some(indices.clone()), malformed_usage);
+                let healthy = make_provider(2.0, None, Some(3));
+                let router = Arc::new(UnifiedRouter::new(RouterConfig {
+                    routing_strategy: UnifiedRoutingStrategy::PriorityBased,
+                    num_retries: u32::from(!fallback),
+                    max_fallbacks: u32::from(fallback),
+                    ..Default::default()
+                }));
+                for (id, provider, model, priority) in [
+                    ("malformed", malformed.clone(), "primary", 0),
+                    (
+                        "healthy",
+                        healthy.clone(),
+                        if fallback { "backup" } else { "primary" },
+                        1,
+                    ),
+                ] {
+                    router.add_deployment(
+                        Deployment::new(
+                            id.into(),
+                            Provider::External(provider),
+                            "vendor/embed-v1".into(),
+                            model.into(),
+                        )
+                        .with_config(DeploymentConfig {
+                            priority,
+                            max_parallel_requests: Some(1),
+                            rpm_limit: Some(2),
+                            tpm_limit: Some(if batch { 64 } else { 32 }),
+                            retry_schedule: Some(RetrySchedule {
+                                base_delay_ms: 0,
+                                max_delay_ms: 0,
+                                backoff_multiplier: 1.0,
+                                jitter_ratio: 0.0,
+                            }),
+                            ..Default::default()
+                        }),
+                    );
+                }
+                if fallback {
+                    router.set_fallback_config(
+                        FallbackConfig::new().add_general("primary", vec!["backup".into()]),
+                    );
+                }
+                let client =
+                    LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "primary")
+                        .unwrap();
+                let texts = vec!["a".repeat(80); if batch { 2 } else { 1 }];
+                let expected = |marker: f32| {
+                    (0..texts.len())
+                        .map(|index| vec![marker, index as f32])
+                        .collect::<Vec<_>>()
+                };
+                // The healthy provider deliberately returns indices in reverse
+                // order. A valid permutation must succeed in input order.
+                assert_eq!(
+                    request_embedding_vectors(&client, &texts, batch)
+                        .await
+                        .unwrap(),
+                    expected(2.0),
+                    "batch={batch}, indices={indices:?}, fallback={fallback}, usage={malformed_usage:?}"
+                );
+                let bad = router.get_deployment("malformed").unwrap();
+                let good = router.get_deployment("healthy").unwrap();
+                for (deployment, successes, failures, tokens) in [
+                    (&bad, 0, 1, u64::from(malformed_usage.unwrap_or(0))),
+                    (&good, 1, 0, 3),
+                ] {
+                    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+                    assert_eq!(
+                        deployment.state.success_requests.load(Ordering::Relaxed),
+                        successes
+                    );
+                    assert_eq!(
+                        deployment.state.fail_requests.load(Ordering::Relaxed),
+                        failures
+                    );
+                    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+                    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), tokens);
+                    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+                }
+
+                // Each input estimate exceeds half the configured TPM limit.
+                // A malformed completed response still consumes known usage or
+                // conservatively retains unknown usage before retrying.
+                let known = usize::from(malformed_usage.is_some());
+                assert_eq!(
+                    request_embedding_vectors(&client, &texts, batch)
+                        .await
+                        .unwrap(),
+                    expected(if known == 1 { 1.0 } else { 2.0 })
+                );
+                assert_eq!(malformed.dispatches.load(Ordering::Relaxed), 1 + known);
+                assert_eq!(healthy.dispatches.load(Ordering::Relaxed), 2 - known);
+                assert_eq!(
+                    bad.state.success_requests.load(Ordering::Relaxed),
+                    known as u64
+                );
+                assert_eq!(bad.state.fail_requests.load(Ordering::Relaxed), 1);
+                for (deployment, requests, tokens) in [
+                    (&bad, 1 + known, 2 * u64::from(malformed_usage.unwrap_or(0))),
+                    (&good, 2 - known, 3 * (2 - known) as u64),
+                ] {
+                    assert_eq!(
+                        deployment.state.total_requests.load(Ordering::Relaxed),
+                        requests as u64
+                    );
+                    assert_eq!(
+                        deployment.state.rpm_current.load(Ordering::Relaxed),
+                        requests as u64
+                    );
+                    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), tokens);
+                    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+                }
+                for provider in [&malformed, &healthy] {
+                    for request in provider.calls.lock().unwrap().iter() {
+                        assert_eq!(request.input.to_vec(), texts);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn sdk_empty_embedding_inputs_preserve_existing_output_contract() {
     let (client, calls, router) = client(1.0, false);
@@ -377,6 +547,7 @@ async fn sdk_malformed_embedding_terminal_response_preserves_usage() {
                 marker: 1.0,
                 fail: false,
                 empty_responses: AtomicUsize::new(usize::MAX),
+                response_indices: Mutex::new(None),
                 usage,
                 gate: None,
                 dispatches: Arc::new(AtomicUsize::new(0)),
@@ -658,6 +829,7 @@ async fn runtime_unary_facades_enforce_local_tpm_without_counting_estimates_as_a
                 marker: 1.0,
                 fail: false,
                 empty_responses: AtomicUsize::new(0),
+                response_indices: Mutex::new(None),
                 usage,
                 gate: Some(gate.clone()),
                 dispatches: dispatches.clone(),
@@ -809,6 +981,7 @@ async fn runtime_unary_facades_reserve_estimates_and_preserve_unknown_usage() {
                 marker: 1.0,
                 fail: false,
                 empty_responses: AtomicUsize::new(0),
+                response_indices: Mutex::new(None),
                 usage,
                 gate: Some(gate.clone()),
                 dispatches: dispatches.clone(),

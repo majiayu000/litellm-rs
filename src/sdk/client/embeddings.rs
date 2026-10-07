@@ -73,7 +73,10 @@ impl LLMClient {
         model: Option<&str>,
     ) -> Result<EmbeddingResponse> {
         let model = self.runtime_model(model.unwrap_or_default())?;
-        let expects_data = !matches!(&input, EmbeddingInput::Array(texts) if texts.is_empty());
+        let expected_count = match &input {
+            EmbeddingInput::Text(_) => 1,
+            EmbeddingInput::Array(texts) => texts.len(),
+        };
         let estimated_tokens = u64::from(
             TokenCounter::new()
                 .count_embedding_tokens(
@@ -111,12 +114,23 @@ impl LLMClient {
                             .usage
                             .as_ref()
                             .map(|usage| u64::from(usage.total_tokens));
-                        if expects_data && response.data.is_empty() {
+                        let mut indices: Vec<_> =
+                            response.data.iter().map(|item| item.index).collect();
+                        indices.sort_unstable();
+                        if indices.len() != expected_count
+                            || indices.iter().enumerate().any(|(expected, &actual)| {
+                                u32::try_from(expected).ok() != Some(actual)
+                            })
+                        {
                             return Err((
                                 ProviderError::api_error(
                                     "embedding",
                                     502,
-                                    "No embedding data in response",
+                                    if response.data.is_empty() {
+                                        "No embedding data in response"
+                                    } else {
+                                        "Embedding data count or indices do not match input"
+                                    },
                                 ),
                                 Some(tokens),
                             ));

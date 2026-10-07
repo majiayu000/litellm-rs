@@ -144,6 +144,72 @@ impl StreamingDeploymentLease {
         }
     }
 
+    /// Native streams have completed or accepted upstream work even when their
+    /// final usage is unavailable. Preserve that distinction through accounting
+    /// cancellation and finish the exact lease on both normal and dropped waits.
+    pub(super) fn settle_native_stream<'a, F: std::future::Future + 'a>(
+        &'a mut self,
+        usage: Option<u64>,
+        terminal: bool,
+        error: Option<&'a ProviderError>,
+        settlement: F,
+    ) -> impl std::future::Future<Output = F::Output> + 'a {
+        let outcome = match error {
+            Some(error) => self.failure_outcome(error, true),
+            None if terminal => completion::TerminalOutcome::Success,
+            None => completion::TerminalOutcome::Interrupted,
+        };
+        let settlement = Box::pin(settlement);
+        async move {
+            if self.finalized {
+                return settlement.await;
+            }
+            let completion = completion::UnaryCompletion::native_terminal(
+                self.deployment.clone(),
+                self.hold.clone(),
+                self.started_at,
+                usage,
+                outcome.clone(),
+            );
+            let guard = TerminalSettlementGuard {
+                lease: self,
+                completion,
+                finished: false,
+            };
+            let result = completion::CURRENT
+                .scope(guard.completion.clone(), settlement)
+                .await;
+            // The same one-shot recorder handles a cancelled accounting wait.
+            // Retention and actual metrics are replaced under the minute gate.
+            guard.completion.record_cancelled();
+            let hold = guard.lease.hold.take();
+            guard.lease.release();
+            guard.finish();
+            // Local outcome and release precede shared I/O. The owned hold's
+            // prepared cleanup survives cancellation during these awaits.
+            match outcome {
+                completion::TerminalOutcome::Success => {
+                    self.router
+                        .record_success_circuit_for_deployment_async(&self.deployment)
+                        .await;
+                }
+                completion::TerminalOutcome::Failure(router, reason, _) => {
+                    router
+                        .record_failure_circuit_for_deployment_async(&self.deployment, reason)
+                        .await;
+                }
+                completion::TerminalOutcome::Interrupted => {}
+            }
+            if let Some(hold) = hold {
+                match usage {
+                    Some(tokens) => self.admission.settle_async(&hold, tokens).await,
+                    None => self.admission.retain_async(&hold, 0).await,
+                }
+            }
+            result
+        }
+    }
+
     pub(super) async fn finish_success(mut self, tokens_used: u64) {
         self.complete_response(tokens_used, None).await;
     }
@@ -911,6 +977,10 @@ where
 #[cfg(test)]
 #[path = "execution_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "execution_native_tests.rs"]
+mod native_tests;
 
 #[cfg(test)]
 #[path = "execution_failover_tests.rs"]

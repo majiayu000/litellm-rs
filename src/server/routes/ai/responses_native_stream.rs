@@ -93,7 +93,7 @@ pub(super) fn response(
                 .await;
             return;
         }
-        let tokens_used = usage.as_ref().map_or(0, |u| u64::from(u.total_tokens));
+        let tokens_used = usage.as_ref().map(|u| u64::from(u.total_tokens));
         let terminal_error = failure.clone().or_else(|| {
             upstream_failed
                 .then(|| ProviderError::api_error("responses", 502, "Upstream response failed"))
@@ -126,20 +126,11 @@ pub(super) fn response(
                 .await;
             }
         };
-        if let Some(error) = terminal_error.as_ref() {
-            lease
-                .settle_terminal(tokens_used, Some(error), settlement)
-                .await;
-        } else if terminal {
-            lease.settle_terminal(tokens_used, None, settlement).await;
-        } else {
-            lease
-                .settle_interrupted(tokens_used, None, settlement)
-                .await;
-        }
+        lease
+            .settle_native_stream(tokens_used, terminal, terminal_error.as_ref(), settlement)
+            .await;
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
-            lease.finish_failure_with_tokens(&error, tokens_used).await;
             let code = if provider_error_is_guardrail(&error) {
                 "guardrail_violation"
             } else {
@@ -152,21 +143,8 @@ pub(super) fn response(
                 .await;
         } else if upstream_failed {
             callback.fail("Upstream response failed", "provider_error");
-            lease
-                .finish_failure_with_tokens(
-                    &ProviderError::api_error("responses", 502, "Upstream response failed"),
-                    tokens_used,
-                )
-                .await;
         } else if terminal {
             callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");
-            lease
-                .finish_success(
-                    usage
-                        .as_ref()
-                        .map_or(0, |usage| u64::from(usage.total_tokens)),
-                )
-                .await;
         } else {
             callback.fail("Client disconnected", "client_disconnect");
         }
