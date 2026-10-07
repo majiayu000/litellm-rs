@@ -4,10 +4,13 @@ mod tests {
     use actix_web::{App, test, web};
     use litellm_rs::Config;
     use litellm_rs::config::models::provider::ProviderConfig;
+    use litellm_rs::core::models::team::Team;
     use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
+    use litellm_rs::core::teams::TeamRepository;
     use litellm_rs::server::http::HttpServer;
     use litellm_rs::server::middleware::AuthMiddleware;
+    use litellm_rs::storage::database::SeaOrmTeamRepository;
     use litellm_rs::utils::auth::crypto::keys::{extract_api_key_prefix, hash_api_key};
     use serde_json::Value;
     use uuid::Uuid;
@@ -64,6 +67,15 @@ mod tests {
         user.role = role;
         user.status = UserStatus::Active;
         let user = state.storage.db().create_user(&user).await.unwrap();
+
+        if let Some(team_id) = team_id {
+            let repository = SeaOrmTeamRepository::new(state.storage.database.clone());
+            if repository.get(team_id).await.unwrap().is_none() {
+                let mut team = Team::new(format!("files-team-{team_id}"), None);
+                team.metadata.id = team_id;
+                repository.create(team).await.unwrap();
+            }
+        }
 
         let raw_key = format!("gw-files-{name}-{}", Uuid::new_v4());
         let api_key = ApiKey {
