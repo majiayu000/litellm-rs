@@ -47,10 +47,11 @@ impl RuntimeStreamCompletion {
             .deployment()
             .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
         self.outcome_recorded = true;
-        lease.commit_admission_async(tokens).await;
+        lease.preserve_admission_usage(tokens);
         self.router
             .record_success_circuit_for_deployment_async(lease.deployment())
             .await;
+        lease.commit_admission_async(tokens).await;
         // EOF releases the exact snapshot lease even if the caller retains
         // the exhausted Stream object indefinitely.
         self.lease.take();

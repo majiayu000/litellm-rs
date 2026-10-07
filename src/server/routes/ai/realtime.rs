@@ -610,9 +610,13 @@ async fn relay(
                                     error_type = "authentication_error";
                                     return Err("Realtime API key is no longer authorized".into());
                                 }
-                                if let Some(user_id) = key.user_id {
-                                    let owner = state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?;
-                                    if !owner.is_some_and(|owner| owner.is_active()) { error_type = "authentication_error"; return Err("Realtime API key owner is no longer authorized".into()); }
+                                let owner = match key.user_id {
+                                    Some(user_id) => state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?,
+                                    None => None,
+                                };
+                                if state.auth.api_key().principal_invalid_reason(&key, owner.as_ref()).await.map_err(|_| "Realtime key principal verification unavailable")?.is_some() {
+                                    error_type = "authentication_error";
+                                    return Err("Realtime API key principal is no longer authorized".into());
                                 }
                                 context::enforce_key_model_and_token_limits(&key, &public_model, if unbounded_output { None } else { value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok()) }).map_err(|_| { error_type = "authentication_error"; "Realtime model or output policy denied" })?;
                                 output_limit = context::api_key_output_limit(&key).map_err(|_| "Invalid Realtime key policy")?.map_or(output_limit, |limit| limit.min(output_limit));

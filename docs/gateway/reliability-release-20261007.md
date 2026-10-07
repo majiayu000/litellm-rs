@@ -24,8 +24,8 @@ these exact heads and was produced without text conflicts:
 These original PRs were subsequently closed as superseded by the existing
 [audit combination #1470](https://github.com/majiayu000/litellm-rs/pull/1470),
 not marked merged. The accounting candidate #1471 builds on its validated head
-`d88fec44a166b2c566a5b62fb34ae29f0b9867d4`, retaining its lifecycle/SDK and cache
-follow-ups rather than opening a competing repair delivery. Three settlement
+`d88fec44a166b2c566a5b62fb34ae29f0b9867d4` and subsequent reviewed corrections,
+retaining its lifecycle/SDK and cache follow-ups. Three settlement
 conflicts combine lifecycle usage observation/completion with captured billing
 facts; the scoped settlement futures remain heap-pinned for the default thread
 stack. Original commit ancestry is preserved. Acceptance of either previous
@@ -46,6 +46,13 @@ block; they are not the HTTP execution path.
   `ToolCallDelta` fragments. HTTP text-message JSON remains valid.
 - Routing lease success/failure completion is asynchronous. Embedded callers of
   those APIs must await completion; retain the lease rather than detaching its ID.
+- Deprecated deployment-ID selectors and `DeploymentLease::into_deployment_id`
+  detach Redis admission ownership. Use the owned lease APIs for asynchronous
+  shared-admission settlement and cancellation.
+- Shared Redis admission/circuit keys use the logical deployment ID. Reusing that
+  ID during credential or endpoint rotation retains prior shared leases and
+  circuit state; distinct deployment IDs separate those shared states. The local
+  resource-identity registry alone does not isolate their Redis namespaces.
 - SSE EOF without a provider terminal indication is an error, not a completed
   answer. Consumers must handle that existing stream-error boundary.
 - Key management requires the credential's own management grant as well as the
