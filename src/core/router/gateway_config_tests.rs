@@ -1,18 +1,146 @@
+use std::sync::{Mutex, MutexGuard};
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+#[rustfmt::skip]
+const ENVS: &[&str] = &[
+    "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
+    "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
+    "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
+    "BASETEN_API_KEY", "HEROKU_API_KEY", "INFERENCE_KEY", "EMBEDDING_KEY",
+    "OVHCLOUD_API_KEY", "OVH_AI_ENDPOINTS_ACCESS_TOKEN",
+    "DEEPGRAM_API_KEY", "DEEPGRAM_API_BASE",
+    "ELEVENLABS_API_KEY", "ELEVENLABS_API_BASE",
+];
+struct EnvScope {
+    previous: Vec<(&'static str, Option<String>)>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl EnvScope {
+    fn new(values: &[(&str, &str)]) -> Self {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let previous = ENVS
+            .iter()
+            .map(|key| (*key, std::env::var(key).ok()))
+            .collect();
+        for key in ENVS {
+            unsafe { std::env::remove_var(key) };
+        }
+        for &(key, value) in values {
+            unsafe { std::env::set_var(key, value) };
+        }
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.previous.drain(..).rev() {
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_audio_environment_rotations_change_runtime_resource_identity() {
+    use super::*;
+
+    for (selector, key_env, base_env, base) in [
+        (
+            "deepgram",
+            "DEEPGRAM_API_KEY",
+            "DEEPGRAM_API_BASE",
+            "https://api.deepgram.com",
+        ),
+        (
+            "elevenlabs",
+            "ELEVENLABS_API_KEY",
+            "ELEVENLABS_API_BASE",
+            "https://api.elevenlabs.io",
+        ),
+    ] {
+        let config = ProviderConfig {
+            name: selector.to_string(),
+            provider_type: selector.to_string(),
+            api_key: String::new(),
+            models: vec!["fixture-model".to_string()],
+            ..ProviderConfig::default()
+        };
+        let mut identities = Vec::new();
+        for (key, suffix) in [
+            ("audio-fixture-key-a", "a"),
+            ("audio-fixture-key-b", "a"),
+            ("audio-fixture-key-b", "b"),
+        ] {
+            let endpoint = format!("{base}/fixture-{suffix}");
+            let _env = EnvScope::new(&[(key_env, key), (base_env, &endpoint)]);
+            let normalized = normalize_provider_construction(&config);
+            assert_eq!(normalized.config.api_key, key);
+            assert_eq!(
+                normalized.config.base_url.as_deref(),
+                Some(endpoint.as_str())
+            );
+            let router = Router::from_gateway_config(&[config.clone()], None)
+                .await
+                .unwrap();
+            let deployment = router
+                .get_deployment(&format!("{selector}-fixture-model"))
+                .unwrap();
+            identities.push(deployment.state.runtime_identity.clone().unwrap());
+            assert!(
+                router
+                    .load_routing_snapshot()
+                    .resolve_legacy_credential("fixture-model", key)
+                    .is_ok()
+            );
+
+            let mut null_endpoint = config.clone();
+            null_endpoint
+                .settings
+                .insert("base_url".to_string(), serde_json::Value::Null);
+            assert_eq!(
+                normalize_provider_construction(&null_endpoint)
+                    .config
+                    .base_url
+                    .as_deref(),
+                Some(endpoint.as_str())
+            );
+
+            let mut explicit = config.clone();
+            explicit.api_key = "explicit-audio-fixture".to_string();
+            explicit
+                .settings
+                .insert("api_base".to_string(), format!("{base}/explicit").into());
+            let normalized = normalize_provider_construction(&explicit);
+            assert_eq!(normalized.config.api_key, explicit.api_key);
+            assert!(normalized.config.base_url.is_none());
+            assert_eq!(
+                normalized.config.settings["api_base"],
+                explicit.settings["api_base"]
+            );
+        }
+        assert_ne!(
+            identities[0], identities[1],
+            "credential rotation must retire the prior resource"
+        );
+        assert_ne!(
+            identities[1], identities[2],
+            "endpoint rotation must retire the prior resource"
+        );
+    }
+}
+
 #[cfg(feature = "providers-extended")]
 mod matrix {
     use super::super::*;
+    use super::{ENVS, EnvScope};
     use crate::core::providers::unified_provider::ProviderError;
-    use std::sync::{Mutex, MutexGuard};
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    #[rustfmt::skip]
-    const ENVS: &[&str] = &[
-        "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
-        "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
-        "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
-        "BASETEN_API_KEY", "HEROKU_API_KEY", "INFERENCE_KEY", "EMBEDDING_KEY",
-        "OVHCLOUD_API_KEY", "OVH_AI_ENDPOINTS_ACCESS_TOKEN",
-    ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";
     const GEM_GOOGLE: &str = "gem-google-test-api-key-12345678901234567890";
@@ -23,42 +151,6 @@ mod matrix {
         assert!(GEM_TOP.len() >= 20 && GEM_SETTINGS.len() >= 20 && GEM_GOOGLE.len() >= 20);
     const _: () =
         assert!(GEM_SETTING.len() >= 20 && GEM_ENV.len() >= 20 && GEM_GOOGLE_ENV.len() >= 20);
-
-    struct EnvScope {
-        previous: Vec<(&'static str, Option<String>)>,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl EnvScope {
-        fn new(values: &[(&str, &str)]) -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-            let previous = ENVS
-                .iter()
-                .map(|key| (*key, std::env::var(key).ok()))
-                .collect();
-            for key in ENVS {
-                unsafe { std::env::remove_var(key) };
-            }
-            for &(key, value) in values {
-                unsafe { std::env::set_var(key, value) };
-            }
-            Self {
-                previous,
-                _lock: lock,
-            }
-        }
-    }
-
-    impl Drop for EnvScope {
-        fn drop(&mut self) {
-            for (key, value) in self.previous.drain(..).rev() {
-                match value {
-                    Some(value) => unsafe { std::env::set_var(key, value) },
-                    None => unsafe { std::env::remove_var(key) },
-                }
-            }
-        }
-    }
 
     struct Case {
         name: &'static str,
