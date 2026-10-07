@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - Candidate
+
+### Added
+
+- Request-ledger billing facts expose tracked holds, acknowledged charges,
+  unknown-cost reasons, elapsed waiting time and reconciliation status. Admins
+  can record idempotent verified cost/evidence without inventing actual cost or
+  silently rewriting Redis balances.
+- Reproducible deployment measurements with real gateway authentication, shared
+  Redis budgets, SQL request ledger, long SSE, slow consumers and cancellation
+  recovery; measurements identify their exact source and binary.
+
+### Fixed
+
+- Integrate runtime SDK embeddings, lease expiry identity, strict SSE terminals,
+  tool-result identity/deltas, credential authority, inactive teams, reload quota
+  continuity and async Redis routing/accounting (#1458–#1465).
+- Keep HTTP budget waits asynchronous and bounded, retain billable reservations
+  after cancellation, and persist cancellation facts even when audit logging is
+  disabled. Realtime sessions retain unknown-cost responsibility across multiple
+  generations.
+
+### Breaking changes
+
+- SDK struct literals must provide `Message.tool_call_id` and `ChatChunk.usage`;
+  streamed tool calls use canonical `ToolCallDelta` fragments. Routing completion
+  callers must await asynchronous lease settlement. See
+  [compatibility and rollout notes](docs/gateway/reliability-release-20261007.md).
+- This section describes an unreleased candidate. Tag, registry, release archives,
+  container and installation verification remain required for publication.
+
 ## [0.8.2] - 2026-10-04
 
 ### Fixed
