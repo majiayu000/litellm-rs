@@ -292,7 +292,6 @@ async fn unary_admission_request(
 async fn runtime_unary_facades_reserve_estimates_and_preserve_unknown_usage() {
     use litellm_rs::config::models::storage::RedisConfig;
     use litellm_rs::core::router::{DeploymentConfig, RouterConfig};
-    use litellm_rs::storage::redis::RedisPool;
     use litellm_rs::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 
     let Ok(url) = std::env::var("REDIS_URL") else {
@@ -371,7 +370,7 @@ async fn runtime_unary_facades_reserve_estimates_and_preserve_unknown_usage() {
             })
             .await
             .expect("first provider request must have reserved admission");
-            let key = RedisPool::admission_key(&id);
+            let key = format!("litellm-rs:admission:v1:{id}");
             let redis_client = redis::Client::open(url.as_str()).unwrap();
             let mut conn = redis_client
                 .get_multiplexed_async_connection()
