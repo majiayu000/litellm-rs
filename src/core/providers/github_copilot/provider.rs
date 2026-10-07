@@ -65,7 +65,7 @@ impl Clone for GitHubCopilotProvider {
             cached_api_key: Arc::new(RwLock::new(None)),
             cached_api_base: Arc::new(RwLock::new(None)),
             #[cfg(test)]
-            native_endpoint_access: crate::core::net::ProviderEndpointAccess::PublicOnly,
+            native_endpoint_access: self.native_endpoint_access,
         }
     }
 }
@@ -228,6 +228,7 @@ impl GitHubCopilotProvider {
     pub(crate) async fn native_response(
         &self,
         body: serde_json::Value,
+        generation_attempted: &mut bool,
     ) -> Result<reqwest::Response, ProviderError> {
         use serde_json::Value;
         let model = body.get("model").and_then(Value::as_str).ok_or_else(|| {
@@ -264,9 +265,13 @@ impl GitHubCopilotProvider {
         let url = format!("{}/responses", api_base.trim_end_matches('/'));
         let client =
             self.native_http_client(&api_base, body.get("stream") == Some(&Value::Bool(true)))?;
+        let request = client.post(url)?.headers(headers).json(&body);
+        // Discovery/authentication failures above cannot have created a response.
+        // Once send is polled, a transport failure can hide an accepted POST.
+        *generation_attempted = true;
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(self.config.timeout),
-            client.post(url)?.headers(headers).json(&body).send(),
+            request.send(),
         )
         .await
         .map_err(|_| ProviderError::timeout("github_copilot", "Responses upstream timed out"))?
