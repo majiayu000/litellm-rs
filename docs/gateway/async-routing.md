@@ -48,7 +48,7 @@ The cleanup holds no HTTP-worker thread. Redis cleanup failures are still logged
 and retain the existing lease-expiry fallback; this queue does not provide durable
 token accounting during an outage.
 
-Successful unary and runtime-stream completion preserves known admission usage
+Successful HTTP unary/streaming, SDK and runtime completion preserves known admission usage
 and publishes shared circuit success before awaiting admission settlement.
 Cancellation during that settlement cannot omit the already published outcome.
 
@@ -57,6 +57,11 @@ deployment ID for shared Redis admission, circuit state and the circuit cache.
 Replicas with the same resource share state; changing credentials or endpoints
 isolates the replacement from retired leases and cooldowns. Old holds retain the
 original namespace, so their completion cannot alter the replacement's quota.
+
+Construction resolves native-audio environment keys/endpoints and Bedrock's current
+static AWS credentials/session token/region before hashing and factory creation.
+Explicit settings keep their provider precedence and error behavior. This uses
+Bedrock's existing static/environment factory, not a dynamic IAM refresh service.
 
 The synchronous owned-lease selectors preserve their synchronous drop behavior.
 

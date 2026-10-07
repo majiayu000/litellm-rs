@@ -514,21 +514,16 @@ pub(super) fn build_azure_config_from_factory(
     Ok(azure_config)
 }
 
-pub(super) fn build_bedrock_config_from_factory(
+pub(crate) fn bedrock_resource_config_from_factory(
     config: &serde_json::Value,
-) -> Result<bedrock::BedrockConfig, ProviderError> {
+) -> bedrock::BedrockConfig {
     let aws_access_key_id = config_str_any(
         config,
         &["aws_access_key_id", "aws_access_key", "access_key"],
     )
     .map(str::to_string)
     .or_else(|| env_str_any(&["AWS_ACCESS_KEY_ID"]))
-    .ok_or_else(|| {
-        ProviderError::configuration(
-            "bedrock",
-            "aws_access_key_id or AWS_ACCESS_KEY_ID is required",
-        )
-    })?;
+    .unwrap_or_default();
 
     let aws_secret_access_key = config_str_any(
         config,
@@ -536,12 +531,7 @@ pub(super) fn build_bedrock_config_from_factory(
     )
     .map(str::to_string)
     .or_else(|| env_str_any(&["AWS_SECRET_ACCESS_KEY"]))
-    .ok_or_else(|| {
-        ProviderError::configuration(
-            "bedrock",
-            "aws_secret_access_key or AWS_SECRET_ACCESS_KEY is required",
-        )
-    })?;
+    .unwrap_or_default();
 
     let aws_session_token = config_str_any(config, &["aws_session_token", "session_token"])
         .map(str::to_string)
@@ -552,13 +542,31 @@ pub(super) fn build_bedrock_config_from_factory(
         .or_else(|| env_str_any(&["AWS_REGION", "AWS_DEFAULT_REGION"]))
         .unwrap_or_else(|| "us-east-1".to_string());
 
-    let mut bedrock_config = bedrock::BedrockConfig {
+    bedrock::BedrockConfig {
         aws_access_key_id,
         aws_secret_access_key,
         aws_session_token,
         aws_region,
         ..Default::default()
-    };
+    }
+}
+
+pub(super) fn build_bedrock_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<bedrock::BedrockConfig, ProviderError> {
+    let mut bedrock_config = bedrock_resource_config_from_factory(config);
+    if bedrock_config.aws_access_key_id.is_empty() {
+        return Err(ProviderError::configuration(
+            "bedrock",
+            "aws_access_key_id or AWS_ACCESS_KEY_ID is required",
+        ));
+    }
+    if bedrock_config.aws_secret_access_key.is_empty() {
+        return Err(ProviderError::configuration(
+            "bedrock",
+            "aws_secret_access_key or AWS_SECRET_ACCESS_KEY is required",
+        ));
+    }
     bedrock_config.endpoint_access = config_endpoint_access(config, "bedrock")?;
 
     if let Some(timeout) =
