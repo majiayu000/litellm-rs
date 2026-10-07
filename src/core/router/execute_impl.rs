@@ -145,9 +145,10 @@ impl Router {
                     deployment_lease
                         .deployment()
                         .record_success(tokens_used, latency_us);
-                    deployment_lease.commit_admission_async(tokens_used).await;
+                    deployment_lease.preserve_admission_usage(tokens_used);
                     self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
                         .await;
+                    deployment_lease.commit_admission_async(tokens_used).await;
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
@@ -584,9 +585,10 @@ impl Router {
                 deployment_lease
                     .deployment()
                     .record_success(tokens_used, latency_us);
-                deployment_lease.commit_admission_async(tokens_used).await;
+                deployment_lease.preserve_admission_usage(tokens_used);
                 self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
                     .await;
+                deployment_lease.commit_admission_async(tokens_used).await;
                 drop(deployment_lease);
 
                 Ok(build_execution_result(
