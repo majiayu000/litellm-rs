@@ -45,6 +45,38 @@ same router generation, provider instance, selection state, and typed error
 mapping as the gateway and completion facade. The compatibility constructor is
 not used as a fallback by the runtime-backed client.
 
+### SDK tool turns and streaming migration
+
+Runtime-backed clients support complete tool turns with
+`Message::tool_result(call_id, text)`. Preserve the assistant message containing
+the tool calls, then append one tool-result message for each call being answered.
+The SDK forwards `tool_call_id` to the canonical provider request.
+
+Use `chat_stream_with_options(SdkChatRequest)` to send a model, tool definitions,
+and tool choice with a streamed request. It enables streaming and requests usage
+from providers that support usage reporting. This method requires
+`LLMClient::from_runtime`; a legacy client returns `SDKError::NotSupported`.
+The existing `chat_stream(messages)` entry point remains available for both
+constructors.
+
+This changes the Rust SDK's source-level DTO contract:
+
+- Add `tool_call_id: None` to existing `Message` struct literals; use
+  `Message::tool_result` for tool results.
+- Add `usage: None` to existing `ChatChunk` literals. The optional field reuses
+  canonical `responses::Usage` and preserves token details. A usage-only final
+  chunk can have an empty `choices` list; consume the stream through its end.
+- `MessageDelta.tool_calls` contains canonical `ToolCallDelta` values, re-exported
+  from `sdk::types`. Accumulate argument fragments by `(choice.index, call.index)`.
+  Each call's ID, type, function, and function name may be absent on later
+  fragments; keep previously observed values. Complete non-streaming messages
+  continue using `ToolCall`.
+
+Existing text-message and text-stream JSON remains valid. Standard tool-call
+responses need not include function parameter schemas. The runtime SDK still
+returns `NotSupported` for thinking, audio, and legacy `function_call` deltas
+that its facade cannot represent, instead of silently dropping them.
+
 Physical removal of these compatibility surfaces is a 0.7 breaking change and
 requires a published 0.6 migration window plus explicit release-policy
 approval. It must not be hidden in a non-breaking version bump.
