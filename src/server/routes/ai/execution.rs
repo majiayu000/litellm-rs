@@ -3,7 +3,7 @@ use crate::core::router::admission::{AdmissionBackend, AdmissionHold};
 use crate::core::router::deployment::Deployment;
 use crate::core::router::error::CooldownReason;
 use crate::core::router::execution::{infer_cooldown_reason, router_error_to_provider_error};
-use crate::core::router::retry_policy::{RetryContext, RetryPolicy};
+use crate::core::router::retry_policy::{RequestIdempotency, RetryContext, RetryPolicy};
 use crate::core::router::{RouterError, UnifiedRouter};
 use crate::core::types::model::ProviderCapability;
 use crate::utils::error::gateway_error::GatewayError;
@@ -220,6 +220,9 @@ impl StreamingDeploymentLease {
             }
         }
         self.release();
+        self.router
+            .record_failure_circuit_for_deployment_async(&self.deployment, cooldown_reason)
+            .await;
         if let Some(hold) = hold {
             if retain_admission {
                 self.admission.settle_async(&hold, tokens_used).await;
@@ -227,9 +230,6 @@ impl StreamingDeploymentLease {
                 self.admission.cancel_async(&hold).await;
             }
         }
-        self.router
-            .record_failure_circuit_for_deployment_async(&self.deployment, cooldown_reason)
-            .await;
     }
 
     #[cfg(feature = "websockets")]
@@ -677,6 +677,37 @@ where
     Fut: std::future::Future<Output = Result<T, ProviderError>>,
     P: Fn(&Deployment) -> bool,
 {
+    execute_stream_with_selected_deployment_matching_with_idempotency(
+        router,
+        requested_model,
+        capability,
+        is_candidate,
+        RequestIdempotency::Idempotent,
+        operation,
+    )
+    .await
+}
+
+/// Carry operation safety separately from whether response bytes were received.
+/// A native creation may already exist upstream before its response headers arrive.
+pub(super) async fn execute_stream_with_selected_deployment_matching_with_idempotency<
+    T,
+    F,
+    Fut,
+    P,
+>(
+    router: Arc<UnifiedRouter>,
+    requested_model: &str,
+    capability: ProviderCapability,
+    is_candidate: P,
+    idempotency: RequestIdempotency,
+    operation: F,
+) -> Result<(T, StreamingDeploymentLease), GatewayError>
+where
+    F: Fn(Provider, String, String) -> Fut + Clone,
+    Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    P: Fn(&Deployment) -> bool,
+{
     let max_attempts = router.config().num_retries + 1;
     let mut attempt = 1;
     // Selection failures control retry timing but must not replace the most
@@ -815,7 +846,10 @@ where
                     router.config(),
                     &deployment_lease.deployment().config,
                     &err,
-                    RetryContext::stream_pre_output(attempt, max_attempts),
+                    RetryContext {
+                        idempotency,
+                        ..RetryContext::stream_pre_output(attempt, max_attempts)
+                    },
                 );
                 if retry_decision.should_retry {
                     router
@@ -873,3 +907,7 @@ mod failover_tests;
 #[cfg(test)]
 #[path = "execution_exclusion_tests.rs"]
 mod exclusion_tests;
+
+#[cfg(test)]
+#[path = "execution_idempotency_tests.rs"]
+mod idempotency_tests;

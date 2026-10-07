@@ -38,11 +38,13 @@ pub(super) async fn complete_with_runtime_handle(
     reject_provider_overrides(&options)?;
     let chat_messages = convert_messages_to_chat_messages(messages);
     let chat_request = convert_to_chat_completion_request(model, chat_messages, options)?;
+    let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&chat_request)?;
     let context = RequestContext::new();
     let execution = handle
         .execute_with_selected_deployment_capability_typed(
             model,
             &ProviderCapability::ChatCompletion,
+            estimated_tokens,
             move |deployment| {
                 let mut request = chat_request.clone();
                 let context = context.clone();
@@ -55,8 +57,7 @@ pub(super) async fn complete_with_runtime_handle(
                     let tokens = response
                         .usage
                         .as_ref()
-                        .map(|usage| u64::from(usage.total_tokens))
-                        .unwrap_or_default();
+                        .map(|usage| u64::from(usage.total_tokens));
                     Ok((response, tokens))
                 }
             },

@@ -82,8 +82,14 @@ block; they are not the HTTP execution path.
 The source candidate is version 0.9.0 and follows the existing pre-1.0
 breaking-release path (minor version rather than a 0.8 patch).
 No tag, registry upload, archive, container or Homebrew update is implied by local
-source validation. The independent native Responses draft #1449 is not merged
-into this repair scope.
+source validation. Native Responses #1449 was independently merged into main as
+`f053e1c0f50570c1e3c388de74dee419981992c9`; this candidate preserves that accepted
+base change when integrating main. Its implementation remains separate from the
+repairs owned here, and subsequent external work on #1471 is not overwritten.
+Its ambiguous native dispatch path retains provider/model cost responsibility,
+but cancellation before response headers is outside the post-response completion
+guard: shared admission and circuit failure are not guaranteed in that window.
+Integrating this base does not establish that additional guarantee.
 
 ## Full requested scope
 
@@ -115,3 +121,7 @@ version must be verified by tag commit, registry checksum and archive/container
 identities before this scope can be called delivered.
 
 SDK stream compatibility: terminal provider usage is available in the chunk DTO for OpenAI and legacy Anthropic streams. Anthropic input/output counts are combined only when both are known. A runtime-backed stream that produced content but ended before trustworthy usage conservatively retains its admission estimate; it does not report that estimate as actual usage.
+
+Runtime-backed unary SDK chat, embeddings and DefaultRouter reserve the existing request estimate. A successful response with missing usage retains shared Redis RPM/estimated TPM and releases parallel admission; known usage, including a real zero, settles its actual count. The SDK chat response's existing required `usage` DTO still displays zeros when provider usage is absent; those display values are not used as authoritative accounting. The core response preserves optional usage, and the embedding facade returns vectors without a usage DTO.
+
+Redis state retention: admission state lasts through current-minute quota and all live lease deadlines. Circuit history is retained while calls continue, then expires after ten minutes idle or any later cooldown/probe-owner deadline. A deployment reused after that idle period starts fresh shared circuit history. Existing idle hashes from prior deployments that never received a TTL are not backfilled by this release.

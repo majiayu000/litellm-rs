@@ -32,13 +32,16 @@ impl Router {
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
         let snapshot = self.load_routing_snapshot();
-        self.execute_with_retry_inner(snapshot.as_ref(), model_name, None, operation)
-            .await
-            .map(
-                |(value, deployment_id, _model_used, attempts, latency_us)| {
-                    (value, deployment_id, attempts, latency_us)
-                },
-            )
+        self.execute_with_retry_inner(snapshot.as_ref(), model_name, None, 0, move |deployment| {
+            let result = operation(deployment);
+            async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+        })
+        .await
+        .map(
+            |(value, deployment_id, _model_used, attempts, latency_us)| {
+                (value, deployment_id, attempts, latency_us)
+            },
+        )
     }
 
     /// Execute a request for a single model with retry logic.
@@ -69,11 +72,12 @@ impl Router {
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: Option<&ProviderCapability>,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<(T, DeploymentId, String, u32, u64), (ProviderError, u32)>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+        Fut: std::future::Future<Output = Result<(T, Option<u64>), ProviderError>>,
     {
         let max_attempts = self.config.num_retries + 1;
         let mut attempt = 1;
@@ -91,7 +95,7 @@ impl Router {
                     capability,
                     &excluded_budget_deployments,
                     &mut tried_deployments,
-                    0,
+                    estimated_tokens,
                 )
                 .await
             {
@@ -145,11 +149,19 @@ impl Router {
                     // Cancellation may stop I/O, but must not erase local accounting.
                     deployment_lease
                         .deployment()
-                        .record_success(tokens_used, latency_us);
-                    deployment_lease.preserve_admission_usage(tokens_used);
+                        .record_success(tokens_used.unwrap_or(0), latency_us);
+                    if let Some(tokens) = tokens_used {
+                        deployment_lease.preserve_admission_usage(tokens);
+                    } else {
+                        deployment_lease.preserve_admission_reservation();
+                    }
                     self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
                         .await;
-                    deployment_lease.commit_admission_async(tokens_used).await;
+                    if let Some(tokens) = tokens_used {
+                        deployment_lease.commit_admission_async(tokens).await;
+                    } else {
+                        deployment_lease.retain_admission_async().await;
+                    }
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
@@ -401,13 +413,22 @@ impl Router {
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
         let snapshot = self.load_routing_snapshot();
-        self.execute_with_retry_inner(snapshot.as_ref(), model_name, Some(capability), operation)
-            .await
-            .map(
-                |(value, deployment_id, _model_used, attempts, latency_us)| {
-                    (value, deployment_id, attempts, latency_us)
-                },
-            )
+        self.execute_with_retry_inner(
+            snapshot.as_ref(),
+            model_name,
+            Some(capability),
+            0,
+            move |deployment| {
+                let result = operation(deployment);
+                async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+            },
+        )
+        .await
+        .map(
+            |(value, deployment_id, _model_used, attempts, latency_us)| {
+                (value, deployment_id, attempts, latency_us)
+            },
+        )
     }
 
     /// Execute a request for a single model with retry logic, constrained to
@@ -457,7 +478,11 @@ impl Router {
             snapshot.as_ref(),
             model_name,
             None,
-            operation,
+            0,
+            move |deployment| {
+                let result = operation(deployment);
+                async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+            },
         )
         .await
         .map_err(|error| provider_error_to_router_error(error, model_name))
@@ -468,11 +493,12 @@ impl Router {
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: Option<&ProviderCapability>,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<ExecutionResult<T>, ProviderError>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+        Fut: std::future::Future<Output = Result<(T, Option<u64>), ProviderError>>,
     {
         let start = std::time::Instant::now();
 
@@ -509,7 +535,13 @@ impl Router {
             }
 
             match self
-                .execute_with_retry_inner(snapshot, model, capability, operation.clone())
+                .execute_with_retry_inner(
+                    snapshot,
+                    model,
+                    capability,
+                    estimated_tokens,
+                    operation.clone(),
+                )
                 .await
             {
                 Ok((result, deployment_id, model_used, attempts, _latency_us)) => {
@@ -660,7 +692,11 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 None,
-                operation,
+                0,
+                move |deployment| {
+                    let result = operation(deployment);
+                    async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+                },
             )
             .await
     }
@@ -669,11 +705,12 @@ impl RuntimeHandle {
         &self,
         model_name: &str,
         capability: &ProviderCapability,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<ExecutionResult<T>, ProviderError>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+        Fut: std::future::Future<Output = Result<(T, Option<u64>), ProviderError>>,
     {
         self.binding
             .router
@@ -681,6 +718,7 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 Some(capability),
+                estimated_tokens,
                 operation,
             )
             .await

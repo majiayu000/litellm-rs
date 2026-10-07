@@ -208,7 +208,7 @@ async fn create_native(
         &requested_model,
         &context,
     );
-    let (mut call, mut lease) = super::execution::execute_stream_with_selected_deployment_matching(
+    let (mut call, mut lease) = super::execution::execute_stream_with_selected_deployment_matching_with_idempotency(
         state.unified_router(),
         &model,
         ProviderCapability::Responses,
@@ -219,6 +219,7 @@ async fn create_native(
                     && deployment.provider.native_response_binding() == record.deployment_binding
             })
         },
+        crate::core::router::retry_policy::RequestIdempotency::NonIdempotent,
         {
             let context = context.clone();
             let callback = callback.clone();
@@ -342,10 +343,32 @@ async fn create_native(
                         &model,
                         pricing.clone(),
                     );
+                    let mut generation_attempted = false;
                     let response = if compact {
-                        provider.compact_response(body).await?
+                        generation_attempted = true;
+                        provider.compact_response(body).await
                     } else {
-                        provider.native_response(body).await?
+                        provider.native_response(body, &mut generation_attempted).await
+                    };
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => {
+                            // An accepted POST can lose its response headers. Foreground
+                            // calls have no durable owner yet, so settle unknown usage
+                            // before dropping their reservations. Background obligations
+                            // already belong to the durable recovery path above.
+                            if !background && generation_attempted && matches!(
+                                error,
+                                ProviderError::Network { .. } | ProviderError::Timeout { .. }
+                            ) {
+                                settle(
+                                    state, &context, &provider_name, &model, pricing,
+                                    None, None, reservation, key_reservation,
+                                    crate::core::request_ledger::current_facts(),
+                                ).await;
+                            }
+                            return Err(error);
+                        }
                     };
                     Ok(NativeCall {
                         callback,
@@ -768,66 +791,5 @@ async fn settle(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn native_usage_checks_totals_and_details_without_double_counting_reasoning() {
-        let valid = json!({"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15,"input_tokens_details":{"cached_tokens":4},"output_tokens_details":{"reasoning_tokens":2}}});
-        let usage = response_usage(&valid).unwrap();
-        assert_eq!(usage.total_tokens, 15);
-        assert_eq!(usage.completion_tokens, 3);
-        assert_eq!(usage.prompt_tokens_details.unwrap().cached_tokens, Some(4));
-        assert_eq!(
-            usage.completion_tokens_details.unwrap().reasoning_tokens,
-            Some(2)
-        );
-        for (path, value) in [
-            ("/usage/total_tokens", json!(14)),
-            ("/usage/input_tokens", json!(-1)),
-            ("/usage/input_tokens_details/cached_tokens", json!(13)),
-            ("/usage/output_tokens_details/reasoning_tokens", json!(4)),
-        ] {
-            let mut invalid = valid.clone();
-            *invalid.pointer_mut(path).unwrap() = value;
-            assert!(response_usage(&invalid).is_none(), "{invalid}");
-        }
-    }
-
-    #[test]
-    fn budget_projection_includes_image_overhead_and_native_fields() {
-        let body = json!({"input":[{"role":"user","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}],"tools":[{"type":"web_search"}],"max_output_tokens":10});
-        let projected = budget_request(&body, "gpt-4o-mini");
-        let Some(MessageContent::Parts(parts)) = &projected.messages[0].content else {
-            panic!("missing parts");
-        };
-        assert!(matches!(&parts[1], ContentPart::ImageUrl { .. }));
-        assert_eq!(projected.max_tokens, Some(10));
-    }
-    #[test]
-    fn budget_projection_does_not_count_image_data_as_text() {
-        let image_data = format!("data:image/png;base64,{}", "A".repeat(100_000));
-        let body = json!({"instructions":"follow the schema", "input":[{"role":"user","content":[{"type":"input_text","text":"describe this"},{"type":"input_image","image_url":image_data,"detail":"low"}]}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]});
-        let projected = budget_request(&body, "gpt-4o-mini");
-        let Some(MessageContent::Parts(parts)) = &projected.messages[0].content else {
-            panic!("missing parts")
-        };
-        let ContentPart::Text { text } = &parts[0] else {
-            panic!("missing text")
-        };
-        assert!(text.len() < 1_000);
-        for expected in ["follow the schema", "describe this", "lookup", "parameters"] {
-            assert!(text.contains(expected));
-        }
-        let ContentPart::ImageUrl { image_url } = &parts[1] else {
-            panic!("missing image")
-        };
-        assert_eq!(image_url.url, image_data);
-        assert_eq!(image_url.detail.as_deref(), Some("low"));
-        assert_eq!(
-            body.pointer("/input/0/content/1/image_url").unwrap(),
-            &json!(image_data)
-        );
-    }
-}
+#[path = "responses_native_tests.rs"]
+mod tests;
