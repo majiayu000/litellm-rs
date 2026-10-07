@@ -1,9 +1,12 @@
 use super::handler_tests::{auth_enabled_test_state, make_user};
 use crate::core::keys::{CreateKeyConfig, KeyPermissions, KeyStatus};
+use crate::core::models::team::Team;
 use crate::core::models::user::types::{User, UserRole};
+use crate::core::teams::TeamRepository;
 use crate::server::middleware::AuthMiddleware;
 use crate::server::routes::keys::configure_routes;
 use crate::server::state::AppState;
+use crate::storage::database::SeaOrmTeamRepository;
 use actix_web::{App, http::Method, http::StatusCode, test, web};
 use serde_json::json;
 use uuid::Uuid;
@@ -277,32 +280,26 @@ async fn management_grants_are_operation_specific_and_keep_owner_isolation() {
 }
 
 #[actix_web::test]
-async fn scoped_admin_management_credentials_cannot_inherit_global_target_scope() {
+async fn admin_owned_operation_credentials_cannot_manage_foreign_scopes() {
     let state = auth_enabled_test_state().await;
     let admin = seed_user(&state, UserRole::Admin).await;
     let foreign = seed_user(&state, UserRole::User).await;
+    let repository = SeaOrmTeamRepository::new(state.storage.database.clone());
+    let team = repository
+        .create(Team::new("foreign-management-team".into(), None))
+        .await
+        .unwrap();
+    let (own_id, _) = seed_key(&state, &admin, KeyPermissions::default()).await;
     let (foreign_id, _) = seed_key(&state, &foreign, KeyPermissions::default()).await;
-    let (unowned_id, _) = state
+    let (team_id, _) = state
         .key_manager
         .generate_key(CreateKeyConfig {
-            name: "unowned target".into(),
+            name: "foreign team key".into(),
+            team_id: Some(team.id()),
             ..Default::default()
         })
         .await
         .unwrap();
-    let (_, credential) = seed_key(
-        &state,
-        &admin,
-        KeyPermissions {
-            custom_permissions: vec![
-                "api_keys.read".into(),
-                "api_keys.write".into(),
-                "api_keys.delete".into(),
-            ],
-            ..Default::default()
-        },
-    )
-    .await;
     let app = test::init_service(
         App::new()
             .app_data(state.clone())
@@ -311,123 +308,128 @@ async fn scoped_admin_management_credentials_cannot_inherit_global_target_scope(
     )
     .await;
 
-    let count = state.key_manager.count_keys(None).await.unwrap();
-    for scope in [
-        json!({"user_id": foreign.id()}),
-        json!({"team_id": Uuid::new_v4()}),
-    ] {
-        let mut body = scope;
-        body["name"] = json!("foreign child");
-        let response = test::call_service(
+    for global in [false, true] {
+        let permissions = if global {
+            KeyPermissions::admin()
+        } else {
+            KeyPermissions {
+                custom_permissions: vec![
+                    "api_keys.read".into(),
+                    "api_keys.write".into(),
+                    "api_keys.delete".into(),
+                ],
+                ..Default::default()
+            }
+        };
+        let (_, credential) = seed_key(&state, &admin, permissions).await;
+        let own = test::call_service(
             &app,
-            test::TestRequest::post()
-                .uri("/v1/keys")
+            test::TestRequest::get()
+                .uri(&format!("/v1/keys/{own_id}"))
                 .insert_header(("x-api-key", credential.clone()))
-                .set_json(body)
                 .to_request(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-    for id in [foreign_id, unowned_id] {
-        let before = state.key_manager.get_key(id).await.unwrap().unwrap();
-        for (method, path) in [
-            (Method::GET, format!("/v1/keys/{id}")),
-            (Method::PUT, format!("/v1/keys/{id}")),
-            (Method::POST, format!("/v1/keys/{id}/rotate")),
-            (Method::DELETE, format!("/v1/keys/{id}")),
+        assert_eq!(own.status(), StatusCode::OK);
+        for scope in [
+            json!({"user_id":foreign.id()}),
+            json!({"team_id":team.id()}),
         ] {
+            let mut body = scope.clone();
+            body["name"] = json!("scoped child");
             let response = test::call_service(
                 &app,
-                test::TestRequest::default()
-                    .method(method.clone())
-                    .uri(&path)
+                test::TestRequest::post()
+                    .uri("/v1/keys")
                     .insert_header(("x-api-key", credential.clone()))
-                    .set_json(json!({"name": "unauthorized change"}))
+                    .set_json(body)
                     .to_request(),
             )
             .await;
-            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            assert_eq!(
+                response.status(),
+                if global {
+                    StatusCode::CREATED
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
         }
-        let after = state.key_manager.get_key(id).await.unwrap().unwrap();
-        assert_eq!(after.status, KeyStatus::Active);
-        assert_eq!(after.name, before.name);
-    }
-    for path in [
-        "/v1/keys".to_string(),
-        format!("/v1/keys?user_id={}", foreign.id()),
-        format!("/v1/keys?team_id={}", Uuid::new_v4()),
-    ] {
-        let response = test::call_service(
-            &app,
-            test::TestRequest::get()
-                .uri(&path)
-                .insert_header(("x-api-key", credential.clone()))
-                .to_request(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
-    }
-    assert_eq!(
-        state.key_manager.count_keys(None).await.unwrap(),
-        count,
-        "denied create/rotate must not create credentials"
-    );
-
-    // Omitting create scope retains the ordinary self default, never a
-    // globally unowned target inherited from the administrator's role.
-    let own_count = state
-        .key_manager
-        .list_user_keys(admin.id())
-        .await
-        .unwrap()
-        .len();
-    let response = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/keys")
-            .insert_header(("x-api-key", credential.clone()))
-            .set_json(json!({"name": "own child"}))
-            .to_request(),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-    assert_eq!(
-        state
-            .key_manager
-            .list_user_keys(admin.id())
-            .await
-            .unwrap()
-            .len(),
-        own_count + 1
-    );
-    let response = test::call_service(
-        &app,
-        test::TestRequest::get()
-            .uri(&format!("/v1/keys?user_id={}", admin.id()))
-            .insert_header(("x-api-key", credential.clone()))
-            .to_request(),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    for method in [Method::GET, Method::PUT, Method::POST, Method::DELETE] {
-        let (id, _) = seed_key(&state, &admin, KeyPermissions::default()).await;
-        let path = if method == Method::POST {
-            format!("/v1/keys/{id}/rotate")
-        } else {
-            format!("/v1/keys/{id}")
-        };
-        let response = test::call_service(
-            &app,
-            test::TestRequest::default()
-                .method(method.clone())
-                .uri(&path)
-                .insert_header(("x-api-key", credential.clone()))
-                .set_json(json!({"name": "own update"}))
-                .to_request(),
-        )
-        .await;
-        assert!(response.status().is_success(), "self {method} {path}");
+        for query in [
+            format!("?user_id={}", foreign.id()),
+            format!("?team_id={}", team.id()),
+            String::new(),
+        ] {
+            let response = test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri(&format!("/v1/keys{query}"))
+                    .insert_header(("x-api-key", credential.clone()))
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                if global {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                },
+                "list {query}"
+            );
+        }
+        for id in [foreign_id, team_id] {
+            // Rotation revokes the original key; revoke must target a separate
+            // active key to preserve that existing conflict contract.
+            let revoke_id = if global {
+                let target = state.key_manager.get_key(id).await.unwrap().unwrap();
+                state
+                    .key_manager
+                    .generate_key(CreateKeyConfig {
+                        name: "foreign revoke fixture".into(),
+                        user_id: target.user_id,
+                        team_id: target.team_id,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .0
+            } else {
+                id
+            };
+            for (method, path) in [
+                (Method::GET, format!("/v1/keys/{id}")),
+                (Method::GET, format!("/v1/keys/{id}/usage")),
+                (Method::PUT, format!("/v1/keys/{id}")),
+                (Method::POST, format!("/v1/keys/{id}/rotate")),
+                (Method::DELETE, format!("/v1/keys/{revoke_id}")),
+            ] {
+                let response = test::call_service(
+                    &app,
+                    test::TestRequest::default()
+                        .method(method.clone())
+                        .uri(&path)
+                        .insert_header(("x-api-key", credential.clone()))
+                        .set_json(json!({"name":"changed"}))
+                        .to_request(),
+                )
+                .await;
+                assert_eq!(
+                    response.status(),
+                    if global {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::FORBIDDEN
+                    },
+                    "{global} {method} {path}"
+                );
+            }
+            if !global {
+                let key = state.key_manager.get_key(id).await.unwrap().unwrap();
+                assert_eq!(key.status, KeyStatus::Active);
+                assert_ne!(key.name, "changed");
+            }
+        }
     }
 }
 

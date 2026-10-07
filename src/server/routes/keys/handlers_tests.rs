@@ -671,8 +671,8 @@ fn test_verify_key_access_preserves_api_key_team_when_user_is_loaded() {
 
     assert!(verify_key_access_allowed(&auth, &target));
     assert!(
-        !check_auth_result_ownership(&auth, target.user_id, target.team_id),
-        "general key routes must retain user-first ownership semantics"
+        check_auth_result_ownership(&auth, target.user_id, target.team_id),
+        "management routes must honor the presented key's explicit team scope"
     );
 }
 

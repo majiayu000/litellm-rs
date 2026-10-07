@@ -106,12 +106,14 @@ impl DeploymentLease {
     /// Convert this lease into the legacy deployment-id API.
     ///
     /// Prefer keeping the lease alive so drop releases the exact snapshot
-    /// deployment. This exists for deprecated ID-returning selectors.
+    /// deployment. Deprecated ID selectors retain only the local active count
+    /// until `release_deployment`; shared admission requires an owned lease.
     pub fn into_deployment_id(mut self) -> DeploymentId {
         self.release_on_drop = false;
-        #[cfg(feature = "gateway")]
-        if let Some(hold) = &self.hold {
-            hold.detach();
+        if let Some(hold) = self.hold.take() {
+            // The ID cannot carry a shared reservation's cleanup obligation.
+            // Failed cancellation leaves the hold's Drop retry intact.
+            self.admission.cancel(&hold);
         }
         self.deployment_id().to_string()
     }

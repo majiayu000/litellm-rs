@@ -41,6 +41,9 @@ development mode is unchanged.
 `api_keys.write` permits ordinary key creation, updates, and rotation within the
 caller's existing ownership scope. It does not permit a restricted automation
 key to inherit global authority from its administrator owner.
+For operation-only API keys, ownership comes from the presented key's user and
+team IDs. An administrator session or administrator-owned key with a global
+admin grant retains access across scopes, including unfiltered listing.
 
 Creating a key with management permissions, upgrading a key to those permissions,
 or rotating an existing management key requires both an administrator owner and
