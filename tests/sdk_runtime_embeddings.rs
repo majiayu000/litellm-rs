@@ -295,88 +295,31 @@ async fn runtime_unary_facades_reserve_estimates_and_preserve_unknown_usage() {
     use litellm_rs::storage::redis::RedisPool;
     use litellm_rs::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
-        return;
-    };
-    let pool = Arc::new(
-        RedisPool::new(&RedisConfig {
-            url: url.clone(),
-            enabled: true,
-            allow_degraded: false,
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
+    let url = std::env::var("REDIS_URL").ok();
+    assert!(
+        url.is_some() || std::env::var("CI").is_err(),
+        "REDIS_URL is required in CI"
     );
-    let text = "a".repeat(80);
-    for facade in ["embedding", "sdk-chat", "default-router"] {
-        for usage in [None, Some(0), Some(3)] {
-            let calls = Arc::new(Mutex::new(Vec::new()));
-            let dispatches = Arc::new(AtomicUsize::new(0));
-            let gate = Arc::new(tokio::sync::Semaphore::new(0));
-            let provider = Provider::External(Arc::new(EmbeddingProvider {
-                models: vec![ModelInfo {
-                    id: "vendor/unary".into(),
-                    capabilities: vec![
-                        ProviderCapability::Embeddings,
-                        ProviderCapability::ChatCompletion,
-                    ],
-                    ..Default::default()
-                }],
-                calls,
-                marker: 1.0,
-                fail: false,
-                usage,
-                gate: Some(gate.clone()),
-                dispatches: dispatches.clone(),
-            }));
-            let router = Arc::new(
-                UnifiedRouter::new(RouterConfig {
-                    num_retries: 0,
-                    max_fallbacks: 0,
-                    ..Default::default()
-                })
-                .with_admission_redis(pool.clone()),
-            );
-            let id = uuid::Uuid::new_v4().to_string();
-            router.add_deployment(
-                Deployment::new(
-                    id.clone(),
-                    provider,
-                    "vendor/unary".into(),
-                    "public-model".into(),
-                )
-                .with_config(DeploymentConfig {
-                    max_parallel_requests: Some(2),
-                    rpm_limit: Some(100),
-                    tpm_limit: Some(64),
-                    ..Default::default()
-                }),
-            );
-            let client = Arc::new(
-                LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
-                    .unwrap(),
-            );
-            let worker_client = client.clone();
-            let worker_router = router.clone();
-            let worker_text = text.clone();
-            let task = tokio::spawn(async move {
-                unary_admission_request(&worker_client, &worker_router, facade, &worker_text).await
-            });
-            tokio::time::timeout(std::time::Duration::from_secs(3), async {
-                while dispatches.load(Ordering::Relaxed) != 1 {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
+    let pool = if let Some(url) = &url {
+        Some(Arc::new(
+            RedisPool::new(&RedisConfig {
+                url: url.clone(),
+                enabled: true,
+                allow_degraded: false,
+                ..Default::default()
             })
             .await
-            .expect("first provider request must have reserved admission");
-            let key = format!("litellm-rs:admission:v1:{id}");
-            let redis_client = redis::Client::open(url.as_str()).unwrap();
-            let mut conn = redis_client
-                .get_multiplexed_async_connection()
-                .await
-                .unwrap();
+            .unwrap(),
+        ))
+    } else {
+        None
+    };
+    let text = "a".repeat(80);
+    for shared in [false, true] {
+        if shared && pool.is_none() {
+            continue;
+        }
+        for facade in ["embedding", "sdk-chat", "default-router"] {
             let expected = if facade == "embedding" {
                 u64::from(
                     TokenCounter::new()
@@ -394,69 +337,163 @@ async fn runtime_unary_facades_reserve_estimates_and_preserve_unknown_usage() {
                         .estimate_input_tokens(),
                 ) + 20
             };
-            let reserved: (i64, i64, i64) = redis::cmd("HMGET")
-                .arg(&key)
-                .arg(&["p", "r", "t"])
-                .query_async(&mut conn)
-                .await
-                .unwrap();
-            assert_eq!(reserved, (1, 1, expected as i64), "{facade}");
-            assert!(expected > 32 && expected <= 64);
-            assert!(
-                unary_admission_request(&client, &router, facade, &text)
-                    .await
-                    .is_err(),
-                "a second request must fail the TPM check before provider dispatch"
-            );
-            assert_eq!(dispatches.load(Ordering::Relaxed), 1);
-            gate.add_permits(1);
-            let displayed_usage = task.await.unwrap().unwrap();
-            if facade == "sdk-chat" {
-                // Its existing required usage DTO displays unknown as zero;
-                // accounting must retain the original core Option independently.
-                assert_eq!(displayed_usage, Some(usage.unwrap_or(0)));
-            } else if facade == "default-router" {
-                assert_eq!(displayed_usage, usage);
-            }
-            let final_state: (i64, i64, i64) = redis::cmd("HMGET")
-                .arg(&key)
-                .arg(&["p", "r", "t"])
-                .query_async(&mut conn)
-                .await
-                .unwrap();
-            assert_eq!(
-                final_state,
-                (0, 1, usage.map(i64::from).unwrap_or(expected as i64)),
-                "{facade}, usage={usage:?}"
-            );
-            let fields: Vec<String> = redis::cmd("HKEYS")
-                .arg(&key)
-                .query_async(&mut conn)
-                .await
-                .unwrap();
-            assert!(!fields.iter().any(|field| field.starts_with("l:")));
-            let deployment = router.get_deployment(&id).unwrap();
-            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
-            assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
-            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
-            assert_eq!(
-                deployment.state.tpm_current.load(Ordering::Relaxed),
-                u64::from(usage.unwrap_or(0))
-            );
-            if usage.is_none() {
-                assert!(
-                    unary_admission_request(&client, &router, facade, &text)
-                        .await
-                        .is_err(),
-                    "unknown usage must keep the estimate for subsequent requests"
+            for usage in [None, Some(0), Some(3)] {
+                let calls = Arc::new(Mutex::new(Vec::new()));
+                let dispatches = Arc::new(AtomicUsize::new(0));
+                let gate = Arc::new(tokio::sync::Semaphore::new(0));
+                let provider = Provider::External(Arc::new(EmbeddingProvider {
+                    models: vec![ModelInfo {
+                        id: "vendor/unary".into(),
+                        capabilities: vec![
+                            ProviderCapability::Embeddings,
+                            ProviderCapability::ChatCompletion,
+                        ],
+                        ..Default::default()
+                    }],
+                    calls,
+                    marker: 1.0,
+                    fail: false,
+                    usage,
+                    gate: Some(gate.clone()),
+                    dispatches: dispatches.clone(),
+                }));
+                let router = UnifiedRouter::new(RouterConfig {
+                    num_retries: 0,
+                    max_fallbacks: 0,
+                    ..Default::default()
+                });
+                let router = Arc::new(if shared {
+                    router.with_admission_redis(pool.as_ref().unwrap().clone())
+                } else {
+                    router
+                });
+                let id = uuid::Uuid::new_v4().to_string();
+                router.add_deployment(
+                    Deployment::new(
+                        id.clone(),
+                        provider,
+                        "vendor/unary".into(),
+                        "public-model".into(),
+                    )
+                    .with_config(DeploymentConfig {
+                        max_parallel_requests: Some(2),
+                        rpm_limit: Some(100),
+                        tpm_limit: Some(if shared { 64 } else { expected }),
+                        ..Default::default()
+                    }),
                 );
-                assert_eq!(dispatches.load(Ordering::Relaxed), 1);
-            }
-            redis::cmd("DEL")
-                .arg(&key)
-                .query_async::<i64>(&mut conn)
+                let client = Arc::new(
+                    LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
+                        .unwrap(),
+                );
+                let worker_client = client.clone();
+                let worker_router = router.clone();
+                let worker_text = text.clone();
+                let task = tokio::spawn(async move {
+                    unary_admission_request(&worker_client, &worker_router, facade, &worker_text)
+                        .await
+                });
+                tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                    while dispatches.load(Ordering::Relaxed) != 1 {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
                 .await
-                .unwrap();
+                .expect("first provider request must have reserved admission");
+                let key = format!("litellm-rs:admission:v1:{id}");
+                let mut conn = if shared {
+                    Some(
+                        redis::Client::open(url.as_ref().unwrap().as_str())
+                            .unwrap()
+                            .get_multiplexed_async_connection()
+                            .await
+                            .unwrap(),
+                    )
+                } else {
+                    None
+                };
+                if let Some(conn) = conn.as_mut() {
+                    let reserved: (i64, i64, i64) = redis::cmd("HMGET")
+                        .arg(&key)
+                        .arg(&["p", "r", "t"])
+                        .query_async(conn)
+                        .await
+                        .unwrap();
+                    assert_eq!(reserved, (1, 1, expected as i64), "{facade}");
+                    assert!(expected > 32 && expected <= 64);
+                    assert!(
+                        unary_admission_request(&client, &router, facade, &text)
+                            .await
+                            .is_err(),
+                        "a second request must fail the TPM check before provider dispatch"
+                    );
+                    assert_eq!(dispatches.load(Ordering::Relaxed), 1);
+                }
+                gate.add_permits(1);
+                let displayed_usage = task.await.unwrap().unwrap();
+                if facade == "sdk-chat" {
+                    // Its existing required usage DTO displays unknown as zero;
+                    // accounting must retain the original core Option independently.
+                    assert_eq!(displayed_usage, Some(usage.unwrap_or(0)));
+                } else if facade == "default-router" {
+                    assert_eq!(displayed_usage, usage);
+                }
+                if let Some(conn) = conn.as_mut() {
+                    let final_state: (i64, i64, i64) = redis::cmd("HMGET")
+                        .arg(&key)
+                        .arg(&["p", "r", "t"])
+                        .query_async(conn)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        final_state,
+                        (0, 1, usage.map(i64::from).unwrap_or(expected as i64)),
+                        "{facade}, usage={usage:?}"
+                    );
+                    let fields: Vec<String> = redis::cmd("HKEYS")
+                        .arg(&key)
+                        .query_async(conn)
+                        .await
+                        .unwrap();
+                    assert!(!fields.iter().any(|field| field.starts_with("l:")));
+                }
+                let deployment = router.get_deployment(&id).unwrap();
+                assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+                assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+                assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+                assert_eq!(
+                    deployment.state.tpm_current.load(Ordering::Relaxed),
+                    usage.map(u64::from).unwrap_or(expected)
+                );
+                if usage.is_none() {
+                    assert!(
+                        unary_admission_request(&client, &router, facade, &text)
+                            .await
+                            .is_err(),
+                        "unknown usage must keep the estimate for subsequent requests"
+                    );
+                    assert_eq!(dispatches.load(Ordering::Relaxed), 1);
+                } else if !shared {
+                    gate.add_permits(1);
+                    assert!(
+                        unary_admission_request(&client, &router, facade, &text)
+                            .await
+                            .is_ok()
+                    );
+                    assert_eq!(dispatches.load(Ordering::Relaxed), 2);
+                    assert_eq!(
+                        deployment.state.tpm_current.load(Ordering::Relaxed),
+                        u64::from(usage.unwrap()) * 2
+                    );
+                }
+                if let Some(conn) = conn.as_mut() {
+                    redis::cmd("DEL")
+                        .arg(&key)
+                        .query_async::<i64>(conn)
+                        .await
+                        .unwrap();
+                }
+            }
         }
     }
 }

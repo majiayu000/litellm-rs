@@ -800,7 +800,6 @@ impl Router {
     }
 
     /// Publish an already-recorded local failure to the shared breaker.
-    #[cfg(feature = "gateway")]
     pub(crate) async fn record_failure_circuit_for_deployment_async(
         &self,
         deployment: &Deployment,
@@ -812,9 +811,11 @@ impl Router {
             .await
         {
             CircuitWrite::Local => {}
+            #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {
                 deployment.enter_cooldown(self.config.cooldown_time_secs)
             }
+            #[cfg(feature = "gateway")]
             CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
         }
     }

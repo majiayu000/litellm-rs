@@ -30,6 +30,7 @@ pub struct DeploymentLease {
     admission: AdmissionBackend,
     hold: Option<AdmissionHold>,
     async_cleanup: bool,
+    estimated_tokens: u64,
 }
 
 impl DeploymentLease {
@@ -37,6 +38,7 @@ impl DeploymentLease {
         deployment: Arc<Deployment>,
         admission: AdmissionBackend,
         hold: Option<AdmissionHold>,
+        estimated_tokens: u64,
     ) -> Self {
         Self {
             deployment,
@@ -44,6 +46,7 @@ impl DeploymentLease {
             admission,
             hold,
             async_cleanup: true,
+            estimated_tokens,
         }
     }
 
@@ -58,6 +61,10 @@ impl DeploymentLease {
         if let Some(hold) = &self.hold {
             hold.prepare_settlement(actual_tokens);
         }
+    }
+
+    pub(crate) fn estimated_tokens(&self) -> u64 {
+        self.estimated_tokens
     }
 
     pub(crate) fn preserve_admission_reservation(&self, minimum_tokens: u64) {
@@ -551,6 +558,7 @@ impl Router {
                     deployment,
                     self.admission.clone(),
                     hold,
+                    estimated_tokens,
                 ));
             }
 
@@ -704,6 +712,7 @@ impl Router {
             current.clone(),
             self.admission.clone(),
             hold,
+            estimated_tokens,
         ))
     }
 

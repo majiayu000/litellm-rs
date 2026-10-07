@@ -77,7 +77,7 @@ backend and are outside this async-routing change.
 
 Vertex AI construction also captures the existing project/location environment fallbacks and the selected credential-file path before resource identity hashing. Explicit token or inline credentials retain precedence over an unused environment file. The identity also includes a digest of the parsed credentials held by the constructed provider, so same-path file content rotation changes identity without a second file read. This binds the configuration inputs used by the current factory; it does not claim identity discovery for a dynamically refreshed Application Default Credentials principal.
 
-With shared Redis admission, runtime-backed SDK and DefaultRouter streams reserve the existing request token estimate plus the configured output bound. Once billable output has been observed, cancellation or EOF without trustworthy usage retains the RPM and estimated TPM reservation while releasing parallel admission. These counters remain conservative reservations, not reported actual token usage. Cancellation before output still refunds admission; observed provider usage settles the actual count. In-process admission records known RPM and observed tokens; it has no separate estimated-TPM reservation ledger.
+With shared Redis admission, runtime-backed SDK and DefaultRouter streams reserve the existing request token estimate plus the configured output bound. Once billable output has been observed, cancellation or EOF without trustworthy usage retains the RPM and estimated TPM reservation while releasing parallel admission. These counters remain conservative reservations, not reported actual token usage. Cancellation before output still refunds admission; observed provider usage settles the actual count. In-process completion also charges the request estimate to its local TPM quota counter when final usage is unknown. This is conservative quota accounting, not actual provider usage; response and billing usage remain unknown. No separate concurrent estimated-TPM reservation ledger is added.
 
 Shared admission hashes expire after both the current quota minute and every live lease deadline. Ending one lease cannot remove another replica's live reservation or the current minute's settled/retained quota. Shared circuit calls refresh a ten-minute idle retention period, extended through any later open-circuit or probe-owner deadline; observing a circuit does not extend its open deadline. Active namespaces retain cumulative circuit counters. After the idle retention period, the shared circuit history starts fresh. This applies to newly created or subsequently accessed hashes; pre-upgrade idle keys without TTL are not backfilled.
 
@@ -87,7 +87,7 @@ When more stream output follows a usage snapshot, that snapshot no longer covers
 the whole response. Shared admission retains the initial estimate until newer
 usage covers the output, with any already observed larger count as a minimum.
 A newer usage report, including an explicit zero, restores settlement to the
-reported count. Local counters retain observed token counts. Anthropic adapters
+reported count. Local TPM quota counters use the same conservative floor when later output makes the snapshot incomplete. Anthropic adapters
 expose complete, valid terminal usage; intermediate or incomplete token fields
 remain unknown for settlement.
 
@@ -95,8 +95,9 @@ Runtime-backed SDK and DefaultRouter unary chat use the same input and output
 estimate before provider dispatch. Runtime-backed SDK embeddings reserve the
 existing input estimate for the whole single or batch request. Successful unary
 responses without usage retain their shared token reservation; an explicit zero
-or positive usage count settles to that reported count. Local token statistics
-continue to include only observed usage.
+or positive usage count settles to that reported count. Local TPM quota accounting
+uses the estimate for unknown usage and the reported count for known usage,
+including zero; it does not replace unknown response or billing usage.
 
 Bedrock also contributes a digest of the static credentials held by the
 constructed client. A fallback resolved during construction cannot share a

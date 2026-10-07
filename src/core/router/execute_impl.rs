@@ -149,7 +149,7 @@ impl Router {
                     // Cancellation may stop I/O, but must not erase local accounting.
                     deployment_lease
                         .deployment()
-                        .record_success(tokens_used.unwrap_or(0), latency_us);
+                        .record_success(tokens_used.unwrap_or(estimated_tokens), latency_us);
                     if let Some(tokens) = tokens_used {
                         deployment_lease.preserve_admission_usage(tokens);
                     } else {
@@ -184,7 +184,11 @@ impl Router {
                         // Use ConsecutiveFailures so the deployment only enters
                         // cooldown after exceeding allowed_fails threshold,
                         // giving retries a chance to succeed.
-                        self.record_failure_with_reason_for_deployment_async(
+                        self.record_local_failure(
+                            deployment_lease.deployment(),
+                            CooldownReason::ConsecutiveFailures,
+                        );
+                        self.record_failure_circuit_for_deployment_async(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
                         )
@@ -200,7 +204,8 @@ impl Router {
                         continue;
                     } else {
                         let cooldown_reason = infer_cooldown_reason(&err);
-                        self.record_failure_with_reason_for_deployment_async(
+                        self.record_local_failure(deployment_lease.deployment(), cooldown_reason);
+                        self.record_failure_circuit_for_deployment_async(
                             deployment_lease.deployment(),
                             cooldown_reason,
                         )
@@ -363,7 +368,11 @@ impl Router {
                         RetryContext::stream_pre_output(attempt, max_attempts),
                     );
                     if retry_decision.should_retry {
-                        self.record_failure_with_reason_for_deployment_async(
+                        self.record_local_failure(
+                            deployment_lease.deployment(),
+                            CooldownReason::ConsecutiveFailures,
+                        );
+                        self.record_failure_circuit_for_deployment_async(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
                         )
@@ -380,7 +389,8 @@ impl Router {
                     }
 
                     let cooldown_reason = infer_cooldown_reason(&err);
-                    self.record_failure_with_reason_for_deployment_async(
+                    self.record_local_failure(deployment_lease.deployment(), cooldown_reason);
+                    self.record_failure_circuit_for_deployment_async(
                         deployment_lease.deployment(),
                         cooldown_reason,
                     )
@@ -639,7 +649,8 @@ impl Router {
             }
             Err(err) => {
                 let cooldown_reason = infer_cooldown_reason(&err);
-                self.record_failure_with_reason_for_deployment_async(
+                self.record_local_failure(deployment_lease.deployment(), cooldown_reason);
+                self.record_failure_circuit_for_deployment_async(
                     deployment_lease.deployment(),
                     cooldown_reason,
                 )

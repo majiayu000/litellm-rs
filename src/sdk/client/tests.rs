@@ -762,12 +762,76 @@ fn test_parse_anthropic_sse_record_message_delta_tool_use_maps_to_tool_calls() {
     );
 }
 
-#[test]
-fn legacy_openai_sse_preserves_partial_tool_arguments_and_usage() {
-    let line = r#"data: {"id":"tools","model":"gpt-4","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"Paris"}}]}}]}"#;
-    let chunk = super::completions::parse_openai_sse_line(line)
-        .unwrap()
-        .unwrap();
+#[tokio::test]
+async fn legacy_openai_sse_preserves_partial_tool_arguments_and_usage() {
+    use futures::StreamExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let body = loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0, "request ended before its body");
+            request.extend_from_slice(&buffer[..count]);
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let headers = std::str::from_utf8(&request[..end]).unwrap();
+                assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                if request.len() >= end + 4 + length {
+                    break serde_json::from_slice::<serde_json::Value>(
+                        &request[end + 4..end + 4 + length],
+                    )
+                    .unwrap();
+                }
+            }
+        };
+        // Reuse the partial-tool and terminal-usage SSE fixtures over the real transport.
+        let response = concat!(
+            "data: {\"id\":\"tools\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"Paris\"}}]}}]}\n\n",
+            "data: {\"id\":\"tools\",\"model\":\"gpt-4\",\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8,\"total_tokens\":12}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        socket.write_all(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+            response.len(),
+        ).as_bytes()).await.unwrap();
+        body
+    });
+    let mut provider = test_provider_config("openai", ProviderType::OpenAI, "gpt-4");
+    provider.base_url = Some(base_url);
+    let client = LLMClient::new(ConfigBuilder::new().add_provider(provider).build()).unwrap();
+    let messages = vec![Message {
+        role: Role::User,
+        content: Some(Content::Text("Hi".into())),
+        name: None,
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.chat_stream(messages),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let body = upstream.await.unwrap();
+    assert_eq!(body["stream_options"]["include_usage"], true);
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["model"], "gpt-4");
+    assert_eq!(body["messages"][0]["content"], "Hi");
+
+    let chunk = stream.next().await.unwrap().unwrap();
     let delta = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
     assert_eq!(delta.index, 1);
     assert!(delta.id.is_none());
@@ -775,12 +839,14 @@ fn legacy_openai_sse_preserves_partial_tool_arguments_and_usage() {
     assert!(function.name.is_none());
     assert_eq!(function.arguments.as_deref(), Some("Paris"));
 
-    let line = r#"data: {"id":"tools","model":"gpt-4","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":8,"total_tokens":12}}"#;
-    let chunk = super::completions::parse_openai_sse_line(line)
-        .unwrap()
-        .unwrap();
+    assert!(chunk.usage.is_none());
+    let chunk = stream.next().await.unwrap().unwrap();
     assert!(chunk.choices.is_empty());
-    assert_eq!(chunk.usage.unwrap().total_tokens, 12);
+    let usage = chunk.usage.unwrap();
+    assert_eq!(usage.prompt_tokens, 4);
+    assert_eq!(usage.completion_tokens, 8);
+    assert_eq!(usage.total_tokens, 12);
+    assert!(stream.next().await.is_none());
 }
 
 #[test]

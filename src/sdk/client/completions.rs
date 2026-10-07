@@ -191,6 +191,7 @@ impl LLMClient {
             "model": provider.models.first().unwrap_or(&"gpt-4".to_string()),
             "messages": messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
 
         let default_url = "https://api.openai.com".to_string();

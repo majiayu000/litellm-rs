@@ -512,253 +512,278 @@ async fn cancelling_sdk_eof_during_redis_io_keeps_exactly_one_success_and_actual
 #[tokio::test(flavor = "current_thread")]
 async fn sdk_unknown_usage_retains_only_consumed_output_or_completed_responses() {
     use litellm_rs::{config::models::storage::RedisConfig, storage::redis::RedisPool};
-    let Ok(url) = std::env::var("REDIS_URL") else {
-        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
-        return;
-    };
-    let pool = Arc::new(
-        RedisPool::new(&RedisConfig {
-            url: url.clone(),
-            enabled: true,
-            allow_degraded: false,
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
+    let url = std::env::var("REDIS_URL").ok();
+    assert!(
+        url.is_some() || std::env::var("CI").is_err(),
+        "REDIS_URL is required in CI"
     );
-    let mut connection = redis::Client::open(url)
-        .unwrap()
-        .get_multiplexed_async_connection()
-        .await
-        .unwrap();
-    for default_facade in [false, true] {
-        let cases = [
-            "drop",
-            "eof",
-            "error",
-            "heartbeat",
-            "unpolled",
-            "heartbeat-error",
-            "known",
-            "known-error",
-        ]
-        .into_iter()
-        .map(|terminal| (terminal, 0_u64))
-        .chain(
-            [
-                "snapshot-drop",
-                "snapshot-eof",
-                "snapshot-error",
-                "snapshot-final",
-                "snapshot-zero",
+    let pool = if let Some(url) = &url {
+        Some(Arc::new(
+            RedisPool::new(&RedisConfig {
+                url: url.clone(),
+                enabled: true,
+                allow_degraded: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        ))
+    } else {
+        None
+    };
+    let mut connection = if let Some(url) = &url {
+        Some(
+            redis::Client::open(url.as_str())
+                .unwrap()
+                .get_multiplexed_async_connection()
+                .await
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let estimate = u64::from(
+        ChatRequest::new("public-model")
+            .add_user_message("hello")
+            .estimate_input_tokens(),
+    ) + 20;
+    for shared in [false, true] {
+        if shared && pool.is_none() {
+            continue;
+        }
+        for default_facade in [false, true] {
+            let cases = [
+                "drop",
+                "eof",
+                "error",
+                "heartbeat",
+                "unpolled",
+                "heartbeat-error",
+                "known",
+                "known-error",
             ]
             .into_iter()
-            .flat_map(|terminal| [4, 40].map(|tokens| (terminal, tokens))),
-        );
-        for (terminal, snapshot_tokens) in cases {
-            let mut events = vec![Ok(serde_json::from_value(serde_json::json!({
+            .map(|terminal| (terminal, 0_u64))
+            .chain(
+                [
+                    "snapshot-drop",
+                    "snapshot-eof",
+                    "snapshot-error",
+                    "snapshot-final",
+                    "snapshot-zero",
+                ]
+                .into_iter()
+                .flat_map(|terminal| [4, 40].map(|tokens| (terminal, tokens))),
+            );
+            for (terminal, snapshot_tokens) in cases {
+                let mut events = vec![Ok(serde_json::from_value(serde_json::json!({
             "id":"unknown", "object":"chat.completion.chunk", "created":1,
             "model":"wire-model", "choices":[{"index":0,"delta":{
                 "role":"assistant", "content":if terminal.starts_with("heartbeat") { "" } else { "partial" }
             }}]
         }))
         .unwrap())];
-            if terminal == "known" || terminal == "known-error" {
-                events = vec![Ok(usage_chunk(1))];
-            }
-            if terminal.starts_with("snapshot-") {
-                let mut snapshot = usage_chunk(1);
-                snapshot.usage.as_mut().unwrap().total_tokens = snapshot_tokens as u32;
-                events.insert(0, Ok(snapshot));
-                if terminal == "snapshot-final" || terminal == "snapshot-zero" {
-                    let mut final_chunk = usage_chunk(1);
-                    if terminal == "snapshot-zero" {
-                        final_chunk.usage.as_mut().unwrap().total_tokens = 0;
-                        // Same-chunk actual zero covers this newly observed payload.
-                        final_chunk.choices = serde_json::from_value(serde_json::json!([
-                            {"index":0,"delta":{"content":"final"}}
-                        ]))
-                        .unwrap();
-                    }
-                    events.push(Ok(final_chunk));
+                if terminal == "known" || terminal == "known-error" {
+                    events = vec![Ok(usage_chunk(1))];
                 }
-            }
-            let completed = matches!(
-                terminal,
-                "eof" | "known" | "snapshot-eof" | "snapshot-final" | "snapshot-zero"
-            );
-            let failed = matches!(
-                terminal,
-                "error" | "heartbeat-error" | "snapshot-error" | "known-error"
-            );
-            if failed {
-                events.push(Err(ProviderError::authentication(
-                    "sdk-completion-test",
-                    "denied",
-                )));
-            }
-            let (old_client, router, dropped) = fixture(events);
-            drop(old_client);
-            let router = Arc::try_unwrap(router)
-                .ok()
-                .unwrap()
-                .with_admission_redis(pool.clone());
-            let mut deployment = router
-                .get_deployment("completion")
-                .unwrap()
-                .as_ref()
-                .clone();
-            deployment.id = uuid::Uuid::new_v4().to_string();
-            deployment.config.max_parallel_requests = Some(1);
-            deployment.config.rpm_limit = Some(1);
-            deployment.config.tpm_limit = Some(100);
-            let _ = router.remove_deployment("completion");
-            let id = deployment.id.clone();
-            router.add_deployment(deployment);
-            let router = Arc::new(router);
-            let client =
-                LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
-                    .unwrap();
-            let mut output: BoxStream<'static, Result<(), ()>> = if default_facade {
-                DefaultRouter::from_runtime(RuntimeBinding::new(router.clone()))
-                    .complete_stream(
-                        "public-model",
-                        ChatRequest::new("public-model")
-                            .add_user_message("hello")
-                            .messages,
-                        CompletionOptions {
-                            max_tokens: Some(20),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                    .unwrap()
-                    .map(|result| {
-                        result.map(|_| ()).map_err(|error| {
-                            assert!(matches!(
-                                error,
-                                litellm_rs::utils::error::gateway_error::GatewayError::Provider(
-                                    ProviderError::Authentication { .. }
-                                )
-                            ));
-                        })
-                    })
-                    .boxed()
-            } else {
-                client
-                    .chat_stream_with_options(bounded_request())
-                    .await
-                    .unwrap()
-                    .map(|result| {
-                        result.map(|_| ()).map_err(|error| {
-                            assert!(matches!(error, SDKError::AuthError(_)));
-                        })
-                    })
-                    .boxed()
-            };
-            let key = format!("litellm-rs:admission:v1:{id}");
-            let reserved: (i64, i64, i64) = redis::cmd("HMGET")
-                .arg(&key)
-                .arg(&["p", "r", "t"])
-                .query_async(&mut connection)
-                .await
-                .unwrap();
-            assert_eq!((reserved.0, reserved.1), (1, 1));
-            assert!(
-                reserved.2 > 1,
-                "admission must reserve the request estimate and output bound"
-            );
-            if terminal.starts_with("snapshot-") {
-                assert!(
-                    (4..40).contains(&reserved.2),
-                    "snapshot matrix must straddle initial estimate: {reserved:?}"
-                );
-            }
-            if terminal != "unpolled" {
-                assert!(output.next().await.unwrap().is_ok());
                 if terminal.starts_with("snapshot-") {
-                    assert!(output.next().await.unwrap().is_ok());
+                    let mut snapshot = usage_chunk(1);
+                    snapshot.usage.as_mut().unwrap().total_tokens = snapshot_tokens as u32;
+                    events.insert(0, Ok(snapshot));
                     if terminal == "snapshot-final" || terminal == "snapshot-zero" {
-                        assert!(output.next().await.unwrap().is_ok());
+                        let mut final_chunk = usage_chunk(1);
+                        if terminal == "snapshot-zero" {
+                            final_chunk.usage.as_mut().unwrap().total_tokens = 0;
+                            // Same-chunk actual zero covers this newly observed payload.
+                            final_chunk.choices = serde_json::from_value(serde_json::json!([
+                                {"index":0,"delta":{"content":"final"}}
+                            ]))
+                            .unwrap();
+                        }
+                        events.push(Ok(final_chunk));
                     }
                 }
-                if completed {
-                    assert!(output.next().await.is_none());
-                } else if failed {
-                    assert!(output.next().await.unwrap().is_err());
+                let completed = matches!(
+                    terminal,
+                    "eof" | "known" | "snapshot-eof" | "snapshot-final" | "snapshot-zero"
+                );
+                let failed = matches!(
+                    terminal,
+                    "error" | "heartbeat-error" | "snapshot-error" | "known-error"
+                );
+                if failed {
+                    events.push(Err(ProviderError::authentication(
+                        "sdk-completion-test",
+                        "denied",
+                    )));
                 }
-            }
-            drop(output);
-            let deployment = router.get_deployment(&id).unwrap();
-            assert_counts(
-                &deployment,
-                u64::from(completed),
-                u64::from(failed),
-                if matches!(terminal, "known" | "known-error" | "snapshot-final") {
-                    12
-                } else if terminal == "snapshot-zero" {
-                    0
-                } else if terminal.starts_with("snapshot-") {
-                    snapshot_tokens
+                let (old_client, router, dropped) = fixture(events);
+                drop(old_client);
+                let router = Arc::try_unwrap(router).ok().unwrap();
+                let router = if shared {
+                    router.with_admission_redis(pool.as_ref().unwrap().clone())
                 } else {
-                    0
-                },
-            );
-            let retain = matches!(terminal, "drop" | "eof" | "error" | "known" | "known-error")
-                || terminal.starts_with("snapshot-");
-            assert_eq!(
-                deployment.state.rpm_current.load(Ordering::Relaxed),
-                u64::from(retain)
-            );
-            assert!(dropped.load(Ordering::Relaxed));
-            let expected = if matches!(terminal, "known" | "known-error" | "snapshot-final") {
-                (0, 1, 12)
-            } else if terminal == "snapshot-zero" {
-                (0, 1, 0)
-            } else if retain {
-                (0, 1, reserved.2.max(snapshot_tokens as i64))
-            } else {
-                (0, 0, 0)
-            };
-            tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                loop {
-                    let state: (i64, i64, i64) = redis::cmd("HMGET")
+                    router
+                };
+                let mut deployment = router
+                    .get_deployment("completion")
+                    .unwrap()
+                    .as_ref()
+                    .clone();
+                deployment.id = uuid::Uuid::new_v4().to_string();
+                deployment.config.max_parallel_requests = Some(1);
+                deployment.config.rpm_limit = Some(if shared { 1 } else { 100 });
+                deployment.config.tpm_limit = Some(if shared { 100 } else { estimate });
+                let _ = router.remove_deployment("completion");
+                let id = deployment.id.clone();
+                router.add_deployment(deployment);
+                let router = Arc::new(router);
+                let client =
+                    LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model")
+                        .unwrap();
+                let mut output: BoxStream<'static, Result<(), ()>> = if default_facade {
+                    DefaultRouter::from_runtime(RuntimeBinding::new(router.clone()))
+                        .complete_stream(
+                            "public-model",
+                            ChatRequest::new("public-model")
+                                .add_user_message("hello")
+                                .messages,
+                            CompletionOptions {
+                                max_tokens: Some(20),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .unwrap()
+                        .map(|result| {
+                            result.map(|_| ()).map_err(|error| {
+                                assert!(matches!(
+                                    error,
+                                    litellm_rs::utils::error::gateway_error::GatewayError::Provider(
+                                        ProviderError::Authentication { .. }
+                                    )
+                                ));
+                            })
+                        })
+                        .boxed()
+                } else {
+                    client
+                        .chat_stream_with_options(bounded_request())
+                        .await
+                        .unwrap()
+                        .map(|result| {
+                            result.map(|_| ()).map_err(|error| {
+                                assert!(matches!(error, SDKError::AuthError(_)));
+                            })
+                        })
+                        .boxed()
+                };
+                let key = format!("litellm-rs:admission:v1:{id}");
+                let reserved = if shared {
+                    let reserved: (i64, i64, i64) = redis::cmd("HMGET")
                         .arg(&key)
                         .arg(&["p", "r", "t"])
-                        .query_async(&mut connection)
+                        .query_async(connection.as_mut().unwrap())
                         .await
                         .unwrap();
-                    if state == expected {
-                        break;
+                    assert_eq!((reserved.0, reserved.1), (1, 1));
+                    assert!(
+                        reserved.2 > 1,
+                        "admission must reserve the request estimate and output bound"
+                    );
+                    if terminal.starts_with("snapshot-") {
+                        assert!(
+                            (4..40).contains(&reserved.2),
+                            "snapshot matrix must straddle initial estimate: {reserved:?}"
+                        );
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    reserved
+                } else {
+                    (1, 1, estimate as i64)
+                };
+                assert_eq!(reserved.2, estimate as i64);
+                if terminal != "unpolled" {
+                    assert!(output.next().await.unwrap().is_ok());
+                    if terminal.starts_with("snapshot-") {
+                        assert!(output.next().await.unwrap().is_ok());
+                        if terminal == "snapshot-final" || terminal == "snapshot-zero" {
+                            assert!(output.next().await.unwrap().is_ok());
+                        }
+                    }
+                    if completed {
+                        assert!(output.next().await.is_none());
+                    } else if failed {
+                        assert!(output.next().await.unwrap().is_err());
+                    }
                 }
-            })
-            .await
-            .unwrap();
-            let fields: Vec<String> = redis::cmd("HKEYS")
-                .arg(&key)
-                .query_async(&mut connection)
-                .await
-                .unwrap();
-            assert!(
-                !fields.iter().any(|field| field.starts_with("l:")),
-                "terminal cleanup must delete the lease"
-            );
-            if matches!(terminal, "drop" | "eof" | "snapshot-drop" | "snapshot-eof") {
-                assert!(
-                    matches!(
-                        client.chat_stream_with_options(bounded_request()).await,
-                        Err(SDKError::Unavailable(_))
-                    ),
-                    "retained RPM must block another admission"
+                drop(output);
+                let deployment = router.get_deployment(&id).unwrap();
+                let retain = matches!(terminal, "drop" | "eof" | "error" | "known" | "known-error")
+                    || terminal.starts_with("snapshot-");
+                let expected = if matches!(terminal, "known" | "known-error" | "snapshot-final") {
+                    (0, 1, 12)
+                } else if terminal == "snapshot-zero" {
+                    (0, 1, 0)
+                } else if retain {
+                    (0, 1, reserved.2.max(snapshot_tokens as i64))
+                } else {
+                    (0, 0, 0)
+                };
+                assert_counts(
+                    &deployment,
+                    u64::from(completed),
+                    u64::from(failed),
+                    expected.2 as u64,
                 );
+                assert_eq!(
+                    deployment.state.rpm_current.load(Ordering::Relaxed),
+                    u64::from(retain)
+                );
+                assert!(dropped.load(Ordering::Relaxed));
+                if shared {
+                    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                        loop {
+                            let state: (i64, i64, i64) = redis::cmd("HMGET")
+                                .arg(&key)
+                                .arg(&["p", "r", "t"])
+                                .query_async(connection.as_mut().unwrap())
+                                .await
+                                .unwrap();
+                            if state == expected {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .unwrap();
+                    let fields: Vec<String> = redis::cmd("HKEYS")
+                        .arg(&key)
+                        .query_async(connection.as_mut().unwrap())
+                        .await
+                        .unwrap();
+                    assert!(
+                        !fields.iter().any(|field| field.starts_with("l:")),
+                        "terminal cleanup must delete the lease"
+                    );
+                }
+                if matches!(terminal, "drop" | "eof" | "snapshot-drop" | "snapshot-eof") {
+                    assert!(
+                        matches!(
+                            client.chat_stream_with_options(bounded_request()).await,
+                            Err(SDKError::Unavailable(_))
+                        ),
+                        "retained quota must block another admission"
+                    );
+                }
+                if shared {
+                    redis::cmd("DEL")
+                        .arg(key)
+                        .query_async::<i64>(connection.as_mut().unwrap())
+                        .await
+                        .unwrap();
+                }
             }
-            redis::cmd("DEL")
-                .arg(key)
-                .query_async::<i64>(&mut connection)
-                .await
-                .unwrap();
         }
     }
 }

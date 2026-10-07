@@ -465,7 +465,7 @@ async fn bedrock_identity_binds_credentials_read_after_normalization() {
 #[cfg(feature = "providers-extended")]
 mod matrix {
     use super::super::*;
-    use super::{ENVS, EnvScope};
+    use super::{ENV_LOCK, ENVS, EnvScope};
     use crate::core::providers::unified_provider::ProviderError;
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";

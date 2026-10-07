@@ -256,6 +256,123 @@ mod redis {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_provider_failure_keeps_local_outcome_before_circuit_dispatch() {
+        use crate::core::providers::unified_provider::ProviderError;
+        const CHILD: &str = "LITELLM_PROVIDER_FAILURE_CIRCUIT_TEST_CHILD";
+        let module = module_path!().split_once("::").unwrap().1;
+        let name = format!(
+            "{module}::cancelled_provider_failure_keeps_local_outcome_before_circuit_dispatch"
+        );
+        if std::env::var(CHILD).as_deref() != Ok(name.as_str()) {
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", &name, "--nocapture", "--test-threads=1"])
+                    .env(CHILD, &name)
+                    .output()
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "isolated circuit cancellation regression: {stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let Some(pool) = live_redis_pool().await else {
+            return;
+        };
+        for (execution, retryable) in [
+            ("once", false),
+            ("retry", false),
+            ("retry", true),
+            ("stream", false),
+            ("stream", true),
+        ] {
+            let id = unique("cancel-failure");
+            let router = Arc::new(router_with(pool.clone()).with_circuit_redis(pool.clone()));
+            seed(&router, &id, Some(1), Some(10), Some(100)).await;
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let started = Arc::new(std::sync::Mutex::new(Some(started)));
+            let worker = router.clone();
+            let task = tokio::spawn(async move {
+                let operation = move |_| {
+                    let started = started.clone();
+                    async move {
+                        let slots = crate::core::router::circuit::pause_circuit_io().await;
+                        started.lock().unwrap().take().unwrap().send(slots).unwrap();
+                        let error = if retryable {
+                            ProviderError::network("fixture", "connection lost")
+                        } else {
+                            ProviderError::authentication("fixture", "denied")
+                        };
+                        Err::<((), u64), _>(error)
+                    }
+                };
+                if execution == "retry" {
+                    let _ = worker
+                        .execute_with_selected_deployment_retry("gpt-4", operation)
+                        .await;
+                } else if execution == "stream" {
+                    let _ = crate::core::router::RuntimeBinding::new(worker.clone())
+                        .bind()
+                        .execute_stream_with_selected_deployment_capability_typed(
+                            "gpt-4",
+                            &ProviderCapability::ChatCompletionStream,
+                            0,
+                            move |deployment| {
+                                let future = operation(deployment);
+                                async move { future.await.map(|_| ()) }
+                            },
+                        )
+                        .await;
+                } else {
+                    let _ = worker
+                        .execute_once_with_selected_deployment("gpt-4", operation)
+                        .await;
+                }
+            });
+            let slots = tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            let deployment = router.get_deployment(&id).unwrap();
+            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            drop(slots);
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+            let mut conn = pool.open_live_connection().await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    let state: (i64, i64, i64) = ::redis::cmd("HMGET")
+                        .arg(RedisPool::admission_key(&id))
+                        .arg(&["p", "r", "t"])
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap();
+                    if state == (0, 0, 0) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("cancelled provider failure must refund routing admission");
+            assert!(
+                !pool.exists(&RedisPool::circuit_key(&id)).await.unwrap(),
+                "cancelled wait before dispatch must not invent a shared failure ACK"
+            );
+            cleanup(&pool, &id).await;
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn cancelled_success_settlement_retains_local_counts_for_all_execution_paths() {
         let Some(pool) = live_redis_pool().await else {
             return;

@@ -81,7 +81,11 @@ impl RuntimeStreamCompletion {
 
     pub(crate) async fn finish_success(mut self) {
         let lease = self.lease.as_mut().expect("live stream completion");
-        let tokens = self.usage.unwrap_or_default();
+        let tokens = if self.usage_covers_output {
+            self.usage.unwrap_or_default()
+        } else {
+            lease.estimated_tokens().max(self.usage.unwrap_or_default())
+        };
         lease
             .deployment()
             .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
@@ -115,10 +119,13 @@ impl RuntimeStreamCompletion {
         };
         self.terminal_failure = Some(reason);
         let lease = self.lease.as_mut().expect("live stream completion");
-        if let Some(tokens) = self.usage {
+        if self.usage.is_some() || self.output_observed {
+            let tokens = if self.usage_covers_output {
+                self.usage.unwrap_or_default()
+            } else {
+                lease.estimated_tokens().max(self.usage.unwrap_or_default())
+            };
             lease.deployment().record_interrupted_usage(tokens);
-        } else if self.output_observed {
-            lease.deployment().record_interrupted_usage(0);
         }
         self.router
             .record_failure_with_reason_for_deployment_async(lease.deployment(), reason)
@@ -176,12 +183,20 @@ impl Drop for RuntimeStreamCompletion {
                 self.router.record_local_failure(lease.deployment(), reason);
             } else if let Some(tokens) = self.usage {
                 // Consumer cancellation or SDK conversion failure is neutral
-                // for provider health, but observed usage is still real.
+                // for provider health. Later output needs a conservative quota
+                // floor until a newer usage report covers the response.
+                let tokens = if self.usage_covers_output {
+                    tokens
+                } else {
+                    lease.estimated_tokens().max(tokens)
+                };
                 lease.deployment().record_interrupted_usage(tokens);
             } else if self.output_observed {
-                // RPM is known; the retained distributed estimate is not an
-                // observed token count and must not enter actual local TPM.
-                lease.deployment().record_interrupted_usage(0);
+                // Local TPM is quota accounting; this fallback is not reported
+                // as actual provider usage in the response or billing ledger.
+                lease
+                    .deployment()
+                    .record_interrupted_usage(lease.estimated_tokens());
             }
         }
         // DeploymentLease releases local active requests. AdmissionHold has
