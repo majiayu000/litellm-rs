@@ -72,6 +72,17 @@ async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResp
         }
         let created = json!({"type":"response.created", "response":{"id":data.output.lock().unwrap()["id"],"object":"response","status":"in_progress","output":[]}});
         let delta = json!({"type":"response.output_text.delta","output_index":0,"delta":"你好","future_event_field":{"native":true}});
+        if data.output.lock().unwrap()["test_pause_after_output"] == true {
+            use futures::StreamExt;
+            let prefix = bytes::Bytes::from(format!(
+                "event: response.created\ndata: {created}\n\nevent: response.output_text.delta\ndata: {delta}\n\n"
+            ));
+            let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(prefix) })
+                .chain(futures::stream::pending());
+            return HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(stream);
+        }
         let output = data.output.lock().unwrap().clone();
         let completed = json!({"type":format!("response.{}", output["status"].as_str().unwrap_or("completed")), "response":output});
         return HttpResponse::Ok().insert_header(("content-type", "text/event-stream")).body(format!("event: response.created\ndata: {created}\n\nevent: response.output_text.delta\ndata: {delta}\n\nevent: response.completed\ndata: {completed}\n\n"));
@@ -540,6 +551,141 @@ async fn native_json_and_sse_preserve_tools_reasoning_and_extension_fields() {
     assert_eq!(seen[0], request(false));
     assert_eq!(seen[1], request(true));
     handle.stop(false).await;
+}
+
+#[tokio::test]
+async fn native_stream_client_disconnect_preserves_tpm_and_rpm_admission() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    for quota in ["tpm", "rpm"] {
+        let (state, upstream, upstream_handle) = fixture(StatusCode::OK, |config| {
+            // Test each quota independently so one cannot hide a refund of the
+            // other. The real gateway and upstream both use loopback HTTP.
+            config.gateway.providers[0].tpm = if quota == "tpm" { 1000 } else { 0 };
+            config.gateway.providers[0].rpm = u32::from(quota == "rpm");
+            config.gateway.providers[0].max_concurrent_requests = 1;
+            config.gateway.router.load_balancer.health_check_enabled = false;
+        })
+        .await;
+        upstream.output.lock().unwrap()["test_pause_after_output"] = json!(true);
+        let router = state.unified_router();
+        let ids = router.get_deployments_for_model("gpt-4o-mini");
+        assert_eq!(ids.len(), 1);
+        let deployment = router.get_deployment(&ids[0]).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let gateway = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes)
+        })
+        .workers(1)
+        .listen(listener)
+        .unwrap()
+        .run();
+        let gateway_handle = gateway.handle();
+        tokio::spawn(gateway);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+
+        // These are real sockets and the production quota uses wall time.
+        // Start away from the minute boundary rather than faking that clock.
+        let second = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            % 60;
+        if second >= 38 {
+            tokio::time::sleep(Duration::from_secs(61 - second)).await;
+        }
+        let mut body = request(true);
+        if quota == "tpm" {
+            // One input/output estimate fits; two 700-token output bounds do not.
+            body["max_output_tokens"] = json!(700);
+        }
+        let mut response = client
+            .post(format!("http://{address}/v1/responses"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let mut wire = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !String::from_utf8_lossy(&wire).contains("你好") {
+                let chunk = response
+                    .chunk()
+                    .await
+                    .unwrap()
+                    .expect("upstream stays open after its output delta");
+                wire.extend_from_slice(&chunk);
+            }
+        })
+        .await
+        .expect("the client must receive actual native output before disconnecting");
+        let wire = String::from_utf8(wire).unwrap();
+        assert!(wire.contains("response.created"));
+        assert!(wire.contains("response.output_text.delta"));
+        assert!(!wire.contains("response.completed"));
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        drop(response);
+        drop(client);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the actual HTTP disconnect must release the selected lease");
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            1,
+            "{quota}"
+        );
+        assert_eq!(
+            deployment.state.tpm_current.load(Ordering::Relaxed),
+            0,
+            "{quota}"
+        );
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+        assert!(deployment.is_healthy());
+
+        if quota == "tpm" {
+            // The HTTP route supplies the same positive request estimate. Its
+            // quota retry waits 60s; bound this probe before the minute rolls.
+            let client = reqwest::Client::new();
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(1),
+                    client
+                        .post(format!("http://{address}/v1/responses"))
+                        .json(&body)
+                        .send(),
+                )
+                .await
+                .is_err(),
+                "retained estimate must deny another positive native request"
+            );
+        } else {
+            // RPM denial does not depend on an input/output estimate.
+            assert!(
+                router
+                    .select_deployment_lease_async("gpt-4o-mini")
+                    .await
+                    .is_err(),
+                "{quota}: a partial native response must consume the current-minute quota"
+            );
+        }
+        assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+        gateway_handle.stop(false).await;
+        upstream_handle.stop(false).await;
+    }
 }
 
 #[tokio::test]
@@ -1989,7 +2135,7 @@ async fn native_counted_input_settles_terminal_usage_and_retains_unknown_budget(
 }
 
 #[tokio::test]
-async fn native_unknown_usage_retains_admission_but_zero_and_no_output_do_not() {
+async fn native_unknown_usage_retains_admission_but_known_zero_does_not() {
     use actix_web::body::MessageBody;
     use litellm_rs::core::router::DeploymentConfig;
     use std::time::Duration;
@@ -2089,11 +2235,10 @@ async fn native_unknown_usage_retains_admission_but_zero_and_no_output_do_not() 
             })
             .await
             .expect("native completion must release the original lease");
-            let retained = !known_zero && (terminal || output);
-            assert_eq!(
-                deployment.state.rpm_current.load(Ordering::Relaxed),
-                u64::from(terminal || output)
-            );
+            // Acceptance is known even when only response.created reached the client.
+            // Retain its estimate without inventing observed tokens or health.
+            let retained = !known_zero;
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
             assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
             assert_eq!(
                 deployment.state.success_requests.load(Ordering::Relaxed),
@@ -2119,7 +2264,7 @@ async fn native_unknown_usage_retains_admission_but_zero_and_no_output_do_not() 
                             .arg(&key).arg(&["p", "r", "t"])
                             .query_async(&mut conn).await.unwrap();
                         if counts[0] == Some(0) {
-                            assert_eq!(counts[1], Some(i64::from(terminal || output)));
+                            assert_eq!(counts[1], Some(1));
                             let tokens = counts[2].unwrap();
                             assert!(if retained { tokens > 700 && tokens < 1000 } else { tokens == 0 });
                             let fields: Vec<String> = redis::cmd("HKEYS").arg(&key).query_async(&mut conn).await.unwrap();
@@ -2149,7 +2294,7 @@ async fn native_unknown_usage_retains_admission_but_zero_and_no_output_do_not() 
                     "retained estimate must deny the next admission"
                 );
             } else {
-                let next = next.expect("zero/no-output request must remain admissible");
+                let next = next.expect("known-zero request must remain admissible");
                 assert_eq!(next.status(), StatusCode::OK);
                 drop(next);
             }

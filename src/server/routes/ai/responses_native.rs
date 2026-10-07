@@ -492,9 +492,7 @@ async fn create_native(
             Ok(value)
         }
     });
-    let tokens_used = usage
-        .as_ref()
-        .map_or(0, |usage| u64::from(usage.total_tokens));
+    let tokens_used = usage.as_ref().map(|usage| u64::from(usage.total_tokens));
     let terminal_error = value.as_ref().err().cloned().or_else(|| {
         value
             .as_ref()
@@ -505,12 +503,10 @@ async fn create_native(
             })
             .map(|_| ProviderError::api_error("responses", 502, "Upstream response failed"))
     });
-    if usage.is_none() {
-        lease.finish_unknown(true, terminal_error.as_ref()).await;
-    }
     lease
-        .settle_terminal(
+        .settle_native_stream(
             tokens_used,
+            true,
             terminal_error.as_ref(),
             settle(
                 state,
@@ -530,7 +526,6 @@ async fn create_native(
         Ok(value) => value,
         Err(error) => {
             callback.fail(error.to_string(), "provider_error");
-            lease.finish_failure_with_tokens(&error, tokens_used).await;
             return Err(error.into());
         }
     };
@@ -538,20 +533,6 @@ async fn create_native(
         || value.get("status").and_then(Value::as_str) == Some("failed")
     {
         callback.fail("Upstream response failed", "provider_error");
-        lease
-            .finish_failure_with_tokens(
-                &ProviderError::api_error("responses", 502, "Upstream response failed"),
-                tokens_used,
-            )
-            .await;
-    } else {
-        lease
-            .finish_success(
-                usage
-                    .as_ref()
-                    .map_or(0, |usage| u64::from(usage.total_tokens)),
-            )
-            .await;
     }
     let sink =
         GuardrailDecisionSink::from_state(state, Some(&model), Some(&provider), Some(&deployment));

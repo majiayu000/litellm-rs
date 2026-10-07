@@ -144,6 +144,72 @@ impl StreamingDeploymentLease {
         }
     }
 
+    /// Native streams have completed or accepted upstream work even when their
+    /// final usage is unavailable. Preserve that distinction through accounting
+    /// cancellation and finish the exact lease on both normal and dropped waits.
+    pub(super) fn settle_native_stream<'a, F: std::future::Future + 'a>(
+        &'a mut self,
+        usage: Option<u64>,
+        terminal: bool,
+        error: Option<&'a ProviderError>,
+        settlement: F,
+    ) -> impl std::future::Future<Output = F::Output> + 'a {
+        let outcome = match error {
+            Some(error) => self.failure_outcome(error, true),
+            None if terminal => completion::TerminalOutcome::Success,
+            None => completion::TerminalOutcome::Interrupted,
+        };
+        let settlement = Box::pin(settlement);
+        async move {
+            if self.finalized {
+                return settlement.await;
+            }
+            let completion = completion::UnaryCompletion::native_terminal(
+                self.deployment.clone(),
+                self.hold.clone(),
+                self.started_at,
+                usage,
+                outcome.clone(),
+            );
+            let guard = TerminalSettlementGuard {
+                lease: self,
+                completion,
+                finished: false,
+            };
+            let result = completion::CURRENT
+                .scope(guard.completion.clone(), settlement)
+                .await;
+            // The same one-shot recorder handles a cancelled accounting wait.
+            // Retention and actual metrics are replaced under the minute gate.
+            guard.completion.record_cancelled();
+            let hold = guard.lease.hold.take();
+            guard.lease.release();
+            guard.finish();
+            // Local outcome and release precede shared I/O. The owned hold's
+            // prepared cleanup survives cancellation during these awaits.
+            match outcome {
+                completion::TerminalOutcome::Success => {
+                    self.router
+                        .record_success_circuit_for_deployment_async(&self.deployment)
+                        .await;
+                }
+                completion::TerminalOutcome::Failure(router, reason, _) => {
+                    router
+                        .record_failure_circuit_for_deployment_async(&self.deployment, reason)
+                        .await;
+                }
+                completion::TerminalOutcome::Interrupted => {}
+            }
+            if let Some(hold) = hold {
+                match usage {
+                    Some(tokens) => self.admission.settle_async(&hold, tokens).await,
+                    None => self.admission.retain_async(&hold, 0).await,
+                }
+            }
+            result
+        }
+    }
+
     pub(super) async fn finish_success(mut self, tokens_used: u64) {
         self.complete_response(tokens_used, None).await;
     }
@@ -331,6 +397,7 @@ impl StreamingDeploymentLease {
         }
     }
 
+    #[cfg(feature = "websockets")]
     pub(super) async fn cancel_response(&mut self) {
         self.cancel_admission().await;
         self.release();
@@ -362,50 +429,6 @@ impl StreamingDeploymentLease {
         }
     }
 
-    /// Unknown generation keeps its admission estimate without inventing actual tokens.
-    pub(super) async fn finish_unknown(&mut self, terminal: bool, error: Option<&ProviderError>) {
-        if self.finalized {
-            return;
-        }
-        let hold = self.hold.take();
-        if let Some(hold) = &hold {
-            hold.prepare_retention(0);
-        }
-        let failure = error.map(|error| match infer_cooldown_reason(error) {
-            reason @ (CooldownReason::RateLimit
-            | CooldownReason::AuthError
-            | CooldownReason::NotFound) => reason,
-            _ => CooldownReason::ConsecutiveFailures,
-        });
-        if failure.is_some() || !terminal {
-            self.deployment
-                .record_interrupted_usage_with_admission(0, hold.as_ref());
-        } else {
-            self.deployment.record_success_with_admission(
-                0,
-                self.started_at.elapsed().as_micros() as u64,
-                hold.as_ref(),
-            );
-        }
-        if let Some(reason) = failure {
-            self.router.record_local_failure(&self.deployment, reason);
-        }
-        // Own the final admission/outcome before circuit or accounting can yield.
-        self.release();
-        if let Some(reason) = failure {
-            self.router
-                .record_failure_circuit_for_deployment_async(&self.deployment, reason)
-                .await;
-        } else if terminal {
-            self.router
-                .record_success_circuit_for_deployment_async(&self.deployment)
-                .await;
-        }
-        if let Some(hold) = hold {
-            self.admission.retain_async(&hold, 0).await;
-        }
-    }
-
     pub(super) fn deployment_id(&self) -> &str {
         self.deployment.id.as_str()
     }
@@ -420,6 +443,7 @@ impl StreamingDeploymentLease {
         }
     }
 
+    #[cfg(feature = "websockets")]
     async fn cancel_admission(&mut self) {
         if let Some(hold) = self.hold.take() {
             self.admission.cancel_async(&hold).await;
@@ -960,6 +984,10 @@ where
 #[cfg(test)]
 #[path = "execution_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "execution_native_tests.rs"]
+mod native_tests;
 
 #[cfg(test)]
 #[path = "execution_failover_tests.rs"]

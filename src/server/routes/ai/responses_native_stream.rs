@@ -43,7 +43,6 @@ pub(super) fn response(
             usage,
             pricing_usage,
             terminal,
-            output_observed,
             upstream_failed,
             failure,
         } = forward(
@@ -94,22 +93,11 @@ pub(super) fn response(
                 .await;
             return;
         }
-        let tokens_used = usage.as_ref().map_or(0, |u| u64::from(u.total_tokens));
+        let tokens_used = usage.as_ref().map(|u| u64::from(u.total_tokens));
         let terminal_error = failure.clone().or_else(|| {
             upstream_failed
                 .then(|| ProviderError::api_error("responses", 502, "Upstream response failed"))
         });
-        if usage.is_none() && (terminal || output_observed) {
-            lease
-                .finish_unknown(terminal, terminal_error.as_ref())
-                .await;
-        } else if usage.is_none() && !terminal {
-            if let Some(error) = terminal_error.as_ref() {
-                lease.complete_response(0, Some(error)).await;
-            } else {
-                lease.cancel_response().await;
-            }
-        }
         let settlement = async {
             // A disconnect or malformed usage never releases a possibly consumed reservation.
             if let Some(id) = storage
@@ -138,20 +126,11 @@ pub(super) fn response(
                 .await;
             }
         };
-        if let Some(error) = terminal_error.as_ref() {
-            lease
-                .settle_terminal(tokens_used, Some(error), settlement)
-                .await;
-        } else if terminal {
-            lease.settle_terminal(tokens_used, None, settlement).await;
-        } else {
-            lease
-                .settle_interrupted(tokens_used, None, settlement)
-                .await;
-        }
+        lease
+            .settle_native_stream(tokens_used, terminal, terminal_error.as_ref(), settlement)
+            .await;
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
-            lease.finish_failure_with_tokens(&error, tokens_used).await;
             let code = if provider_error_is_guardrail(&error) {
                 "guardrail_violation"
             } else {
@@ -164,21 +143,8 @@ pub(super) fn response(
                 .await;
         } else if upstream_failed {
             callback.fail("Upstream response failed", "provider_error");
-            lease
-                .finish_failure_with_tokens(
-                    &ProviderError::api_error("responses", 502, "Upstream response failed"),
-                    tokens_used,
-                )
-                .await;
         } else if terminal {
             callback.complete_pricing_usage(usage.as_ref(), pricing_usage.as_ref(), "success");
-            lease
-                .finish_success(
-                    usage
-                        .as_ref()
-                        .map_or(0, |usage| u64::from(usage.total_tokens)),
-                )
-                .await;
         } else {
             callback.fail("Client disconnected", "client_disconnect");
         }
@@ -195,7 +161,6 @@ struct StreamResult {
     usage: Option<super::Usage>,
     pricing_usage: Option<crate::core::pricing_service::PricingUsage>,
     terminal: bool,
-    output_observed: bool,
     upstream_failed: bool,
     failure: Option<ProviderError>,
 }
@@ -216,7 +181,6 @@ async fn forward(
     let mut usage = None;
     let mut pricing_usage = None;
     let mut terminal = false;
-    let mut output_observed = false;
     let mut upstream_failed = false;
     let mut failure = None;
     let sink = GuardrailDecisionSink::from_state(state, None, Some(provider), deployment);
@@ -258,15 +222,6 @@ async fn forward(
                         == Some("response.created");
                     let mut surfaces = Vec::new();
                     if let Some(value) = value {
-                        output_observed |= value
-                            .get("delta")
-                            .and_then(Value::as_str)
-                            .is_some_and(|delta| !delta.is_empty())
-                            || value.get("item").is_some_and(Value::is_object)
-                            || value
-                                .pointer("/response/output")
-                                .and_then(Value::as_array)
-                                .is_some_and(|output| !output.is_empty());
                         if let (Some(expected), Some(id)) = (
                             expected_id,
                             value.pointer("/response/id").and_then(Value::as_str),
@@ -411,7 +366,6 @@ async fn forward(
         usage,
         pricing_usage,
         terminal,
-        output_observed,
         upstream_failed,
         failure,
     }

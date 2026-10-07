@@ -16,7 +16,6 @@ use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
 use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 use crate::utils::net::ClientUtils;
-use std::collections::HashSet;
 
 impl LLMClient {
     /// Generate embeddings for a single text via the core embedding path.
@@ -115,14 +114,14 @@ impl LLMClient {
                             .usage
                             .as_ref()
                             .map(|usage| u64::from(usage.total_tokens));
-                        let mut indices = HashSet::new();
-                        let complete = response.data.len() == expected_count
-                            && response.data.iter().all(|item| {
-                                usize::try_from(item.index).is_ok_and(|index| {
-                                    index < expected_count && indices.insert(index)
-                                })
-                            });
-                        if !complete {
+                        let mut indices: Vec<_> =
+                            response.data.iter().map(|item| item.index).collect();
+                        indices.sort_unstable();
+                        if indices.len() != expected_count
+                            || indices.iter().enumerate().any(|(expected, &actual)| {
+                                u32::try_from(expected).ok() != Some(actual)
+                            })
+                        {
                             return Err((
                                 ProviderError::api_error(
                                     "embedding",
@@ -130,7 +129,7 @@ impl LLMClient {
                                     if response.data.is_empty() {
                                         "No embedding data in response"
                                     } else {
-                                        "Embedding data does not match requested inputs"
+                                        "Embedding data count or indices do not match input"
                                     },
                                 ),
                                 Some(tokens),

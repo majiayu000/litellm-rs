@@ -26,9 +26,13 @@ pub(super) struct UnaryCompletion {
     provider_succeeded: AtomicBool,
     recorded: AtomicBool,
     usage: Mutex<Option<u64>>,
+    // Native response facts are authoritative even when usage is unknown.
+    // Legacy budget hooks must not replace None (or a known count) with zero.
+    native_usage: Option<Option<u64>>,
     terminal: Option<TerminalOutcome>,
 }
 
+#[derive(Clone)]
 pub(super) enum TerminalOutcome {
     Success,
     Failure(Arc<UnifiedRouter>, CooldownReason, bool),
@@ -48,6 +52,7 @@ impl UnaryCompletion {
             provider_succeeded: AtomicBool::new(false),
             recorded: AtomicBool::new(false),
             usage: Mutex::new(None),
+            native_usage: None,
             terminal: None,
         })
     }
@@ -66,13 +71,44 @@ impl UnaryCompletion {
             provider_succeeded: AtomicBool::new(matches!(outcome, TerminalOutcome::Success)),
             recorded: AtomicBool::new(false),
             usage: Mutex::new(Some(tokens)),
+            native_usage: None,
             terminal: Some(outcome),
         });
         completion.prepare_admission_usage(tokens);
         completion
     }
 
+    pub(super) fn native_terminal(
+        deployment: Arc<Deployment>,
+        hold: Option<AdmissionHold>,
+        started_at: Instant,
+        usage: Option<u64>,
+        outcome: TerminalOutcome,
+    ) -> Arc<Self> {
+        let completion = Arc::new(Self {
+            deployment,
+            hold,
+            started_at,
+            provider_succeeded: AtomicBool::new(matches!(outcome, TerminalOutcome::Success)),
+            recorded: AtomicBool::new(false),
+            usage: Mutex::new(None),
+            native_usage: Some(usage),
+            terminal: Some(outcome),
+        });
+        completion.prepare_admission_usage(usage.unwrap_or(0));
+        completion
+    }
+
     fn prepare_admission_usage(&self, tokens: u64) {
+        if let Some(usage) = self.native_usage {
+            if let Some(hold) = &self.hold {
+                match usage {
+                    Some(tokens) => hold.prepare_settlement(tokens),
+                    None => hold.prepare_retention(0),
+                }
+            }
+            return;
+        }
         let retain = match &self.terminal {
             Some(TerminalOutcome::Failure(_, _, interrupted)) => {
                 retain_failure_admission(tokens, *interrupted)
@@ -93,6 +129,10 @@ impl UnaryCompletion {
     }
 
     pub(super) fn complete_success(&self, tokens: u64) {
+        if self.native_usage.is_some() {
+            self.record_cancelled();
+            return;
+        }
         if !self.recorded.swap(true, Ordering::AcqRel) {
             if let Some(hold) = &self.hold {
                 hold.prepare_settlement(tokens);
@@ -118,7 +158,10 @@ impl UnaryCompletion {
 impl UnaryCompletion {
     pub(super) fn record_cancelled(&self) {
         if !self.recorded.swap(true, Ordering::AcqRel)
-            && let Some(tokens) = *self.usage.lock()
+            && let Some(tokens) = self
+                .native_usage
+                .map(|usage| usage.unwrap_or(0))
+                .or_else(|| *self.usage.lock())
         {
             // Local postprocessing failure or cancellation before a validated
             // settlement must retain usage without inventing provider success.
@@ -165,8 +208,10 @@ pub(in crate::server::routes::ai) fn provider_succeeded() {
 
 pub(in crate::server::routes::ai) fn observe_usage(tokens: u64) {
     let _ = CURRENT.try_with(|completion| {
-        *completion.usage.lock() = Some(tokens);
-        completion.prepare_admission_usage(tokens);
+        if completion.native_usage.is_none() {
+            *completion.usage.lock() = Some(tokens);
+            completion.prepare_admission_usage(tokens);
+        }
     });
 }
 

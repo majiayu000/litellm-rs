@@ -42,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleanup, invalidate the
   failed connection generation, and avoid replaying uncertain Cluster writes.
 - Pass the existing native Responses request estimate through admission. Retain
-  unknown usage after output or completion, distinguish known zero and no-output
-  cancellation, and keep background work with its original reservation owner.
+  unknown usage after an accepted stream or completion, distinguish known zero
+  from missing usage, and keep background work with its original reservation owner.
 
 ### Breaking changes
 

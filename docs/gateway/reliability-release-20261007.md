@@ -133,11 +133,11 @@ SDK stream compatibility: terminal provider usage is available in the chunk DTO 
 Runtime-backed unary SDK chat, embeddings and DefaultRouter reserve the existing request estimate. A successful response with missing usage retains shared Redis RPM/estimated TPM and releases parallel admission; known usage, including a real zero, settles its actual count. The SDK chat response's existing required `usage` DTO still displays zeros when provider usage is absent; those display values are not used as authoritative accounting. The core response preserves optional usage, and the embedding facade returns vectors without a usage DTO. Local admission retains in-flight estimates and completed unknown responsibility separately from observed token counters. Known usage (including zero) replaces its estimate. A partial stream whose last usage snapshot no longer covers later output retains at least the larger of its estimate and observed count. Public usage and supplier-cost fields remain factual; interrupted streams count one known request.
 
 Native Responses admission uses the existing projected request estimate, retained
-prompt estimate and explicit output cap through each selection attempt. Output
-followed by interruption, or a complete response without trustworthy usage,
+prompt estimate and explicit output cap through each selection attempt. Once a
+native stream is accepted, completion or disconnect without trustworthy usage
 retains estimated quota and records one request without reporting estimated
-tokens as actual. Known zero settles zero; a creation-only stream cancelled before
-output releases admission. Background work keeps the same lease and reservations
-until its existing polling owner completes them.
+tokens as actual. Known zero settles zero; an accepted creation without usage
+remains unknown even if output has not arrived. Background work keeps the same
+lease and reservations until its existing polling owner completes them.
 
 Redis state retention: admission state lasts through current-minute quota and all live lease deadlines. Circuit history is retained while calls continue, then expires after ten minutes idle or any later cooldown/probe-owner deadline. A deployment reused after that idle period starts fresh shared circuit history. Existing idle hashes from prior deployments that never received a TTL are not backfilled by this release.
