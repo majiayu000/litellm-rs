@@ -160,13 +160,14 @@ pub(super) async fn connect(
         .max_frame_size(max_size)
         .aggregate_continuations()
         .max_continuation_size(max_size);
+    let ledger_facts = crate::core::request_ledger::current_facts();
     actix_web::rt::spawn(async move {
         for event in initial {
             if session.text(event).await.is_err() {
                 return;
             }
         }
-        relay(
+        let work = relay(
             session,
             stream,
             upstream,
@@ -180,8 +181,11 @@ pub(super) async fn connect(
             query.model.clone(),
             wire_model,
             jwt_token,
-        )
-        .await;
+        );
+        match ledger_facts {
+            Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+            None => work.await,
+        }
     });
     Ok(response)
 }

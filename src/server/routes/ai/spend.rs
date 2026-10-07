@@ -279,6 +279,23 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     pricing_config: &GatewayPricingConfig,
     settlement: UsageSpendSettlement<'_>,
 ) {
+    match settlement.ledger_facts.clone() {
+        Some(facts) => {
+            crate::core::request_ledger::scope_facts(
+                facts,
+                record_completion_spend_inner(pricing_service, pricing_config, settlement),
+            )
+            .await
+        }
+        None => record_completion_spend_inner(pricing_service, pricing_config, settlement).await,
+    }
+}
+
+async fn record_completion_spend_inner(
+    pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
+    settlement: UsageSpendSettlement<'_>,
+) {
     let UsageSpendSettlement {
         budget_limits,
         key_manager,
@@ -387,6 +404,18 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
+    crate::core::request_ledger::update_billing(None, |billing| {
+        billing.charge_basis = Some("reserved_estimate".into());
+        billing.unknown_reason = Some(
+            if context.contains("disconnected") {
+                "stream_cancelled_before_usage"
+            } else {
+                "provider_usage_missing"
+            }
+            .into(),
+        );
+        billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+    });
     let provider_reserved = budget_reservation
         .as_ref()
         .map(UnifiedBudgetReservation::reserved_amount);
@@ -514,7 +543,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
     }
 
     capture_ledger_settlement(ledger_facts.as_ref(), provider, model, None, None);
-    record_reserved_spend_without_usage(
+    let work = record_reserved_spend_without_usage(
         key_manager,
         api_key_id,
         provider,
@@ -522,8 +551,11 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         budget_reservation,
         key_budget_reservation,
         "client disconnected before provider returned usage",
-    )
-    .await;
+    );
+    match ledger_facts {
+        Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+        None => work.await,
+    }
 }
 
 pub(super) struct StreamSpendSettlement<'a> {

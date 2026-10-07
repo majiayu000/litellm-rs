@@ -53,13 +53,29 @@ async fn successful_completion_without_usage_settles_reserved_budget() {
         .expect("priced model should reserve budget");
     let reserved = reservation.reserved_amount();
 
-    record_completion_spend_with_reservation(usage_spend_settlement(
-        (&budget, &keys, Some(key_id)),
-        ("openai", "gpt-4o", None),
-        Some(reservation),
-        None,
-    ))
+    let facts = SharedRequestLedgerFacts::new(Mutex::new(Default::default()));
+    record_completion_spend_with_reservation(
+        usage_spend_settlement(
+            (&budget, &keys, Some(key_id)),
+            ("openai", "gpt-4o", None),
+            Some(reservation),
+            None,
+        )
+        .with_ledger_facts(Some(facts.clone())),
+    )
     .await;
+    let recorded = crate::core::request_ledger::snapshot_facts(&facts);
+    assert_eq!(recorded.cost, None);
+    let billing = recorded.billing.unwrap();
+    assert_eq!(billing.charge_basis.as_deref(), Some("reserved_estimate"));
+    assert_eq!(
+        billing.unknown_reason.as_deref(),
+        Some("provider_usage_missing")
+    );
+    assert_eq!(billing.provider_charge_amount, Some(reserved));
+    assert_eq!(billing.model_charge_amount, Some(reserved));
+    assert_eq!(billing.provider_settlement.as_deref(), Some("settled"));
+    assert!(billing.awaiting_since.is_some());
 
     assert_eq!(
         budget

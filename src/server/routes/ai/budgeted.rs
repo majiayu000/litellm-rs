@@ -363,7 +363,15 @@ impl BudgetReservations {
             tracing::error!(?error, "provider/model budget cancellation failed");
         }
         if let Some(reservation) = self.key.take() {
+            let tracked = reservation.is_tracked();
             reservation.cancel();
+            if tracked {
+                crate::core::request_ledger::update_billing(None, |billing| {
+                    billing.key_settlement = Some("released".into());
+                    billing.key_charge_amount = Some(0.0);
+                    billing.settlement_updated_at = Some(chrono::Utc::now());
+                });
+            }
         }
     }
 }

@@ -86,6 +86,10 @@ const ADMIN_CONTROL_PLANE_ROUTES: &[AdminControlPlaneRoute] = &[
         method: AdminMethod::Get,
     },
     AdminControlPlaneRoute {
+        path: "/admin/request-ledger/{request_id}/reconciliation",
+        method: AdminMethod::Post,
+    },
+    AdminControlPlaneRoute {
         path: "/admin/routing/inventory",
         method: AdminMethod::Get,
     },

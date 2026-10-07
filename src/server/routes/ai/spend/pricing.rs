@@ -596,6 +596,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reque
             return;
         }
     };
+    super::capture_ledger_settlement(None, budget_provider, budget_model, None, Some(cost));
     super::settle_api_key_budget_reservation(
         key_budget_reservation,
         cost,

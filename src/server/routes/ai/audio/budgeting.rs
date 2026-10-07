@@ -109,6 +109,13 @@ pub(super) async fn record_audio_spend(
     if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
         match cost {
             Ok(cost) => {
+                super::super::spend::capture_ledger_settlement(
+                    None,
+                    budget_provider,
+                    budget_model,
+                    None,
+                    Some(cost.total_cost),
+                );
                 super::super::spend::settle_api_key_budget_reservation(
                     key_budget_reservation,
                     cost.total_cost,

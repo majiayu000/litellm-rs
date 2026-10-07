@@ -281,7 +281,7 @@ impl AuditLogger {
         cancellation: impl FnOnce() -> AuditEvent + 'static,
     ) -> AuditResult<AuditEventPermit> {
         if !self.config.enabled {
-            return Ok(AuditEventPermit::disabled());
+            return Ok(AuditEventPermit::disabled(cancellation));
         }
         self.ensure_available()?;
         let (terminal, terminal_receiver) = oneshot::channel();

@@ -1729,7 +1729,8 @@ async fn rejected_session_updates_do_not_change_the_response_cap() {
 
 #[actix_web::test]
 async fn completed_responses_survive_failed_budget_settlement() {
-    let (state, url, raw, _, handles) = fixture().await;
+    let (state, url, raw, _, handles) =
+        fixture_with_config(|config| config.gateway.storage.request_ledger.enabled = true).await;
     state.budget_limits.providers.set_provider_limit(
         "openai",
         ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
@@ -1792,6 +1793,36 @@ async fn completed_responses_survive_failed_budget_settlement() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+    // A later acknowledged generation must not erase the earlier failed
+    // budget operation in the one terminal WebSocket session row.
+    state
+        .budget_limits
+        .providers
+        .budgets
+        .get_mut("openai")
+        .unwrap()
+        .current_spend = 0.0;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    client.close(None).await.unwrap();
+    let row = terminal_realtime_ledger(&state).await;
+    let billing: crate::core::request_ledger::RequestBilling =
+        serde_json::from_value(row.billing.unwrap()).unwrap();
+    assert!((row.cost.unwrap() - cost * 2.0).abs() < 1e-12);
+    assert_eq!(billing.unknown_response_count, Some(0));
+    assert_eq!(billing.pending_response_count, Some(0));
+    assert_eq!(
+        billing.provider_settlement.as_deref(),
+        Some("settlement_unconfirmed")
+    );
+    assert!(billing.requires_budget_review(row.cost.unwrap()));
     drop(client);
     for handle in handles {
         handle.stop(false).await;
@@ -3263,6 +3294,153 @@ async fn admission_backend_failure_keeps_unavailable_classification() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+async fn terminal_realtime_ledger(
+    state: &AppState,
+) -> crate::storage::database::entities::request_ledger::Model {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let rows = state
+                .storage
+                .database
+                .list_request_ledger(
+                    &crate::storage::database::RequestLedgerListFilter::default(),
+                    10,
+                )
+                .await
+                .unwrap();
+            if let Some(row) = rows.into_iter().find(|row| row.endpoint == "/v1/realtime") {
+                return row;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("one terminal WebSocket session ledger row")
+}
+
+#[actix_web::test]
+async fn realtime_session_ledger_keeps_unknown_generation_before_known_generation() {
+    let (state, url, raw, _, handles) =
+        fixture_with_config(|config| config.gateway.storage.request_ledger.enabled = true).await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    for metadata in [json!({"usage":"absent"}), json!({})] {
+        client
+            .send(Message::Text(
+                json!({"type":"response.create","response":{"metadata":metadata}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            next_json(&mut client).await;
+        }
+    }
+    assert!(
+        state
+            .storage
+            .database
+            .list_request_ledger(
+                &crate::storage::database::RequestLedgerListFilter::default(),
+                10
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+        "101 upgrade does not terminate the session ledger"
+    );
+    client.close(None).await.unwrap();
+    let row = terminal_realtime_ledger(&state).await;
+    assert_eq!(row.cost, None);
+    assert_eq!(row.status_code, 101);
+    assert_eq!(row.provider.as_deref(), Some("openai"));
+    let billing: crate::core::request_ledger::RequestBilling =
+        serde_json::from_value(row.billing.unwrap()).unwrap();
+    let actual = rates()
+        .cost(&usage(), rates().max_output)
+        .unwrap()
+        .unwrap()
+        .0;
+    assert!((billing.known_cost_subtotal.unwrap() - actual).abs() < 1e-12);
+    assert_eq!(billing.unknown_response_count, Some(1));
+    assert_eq!(billing.pending_response_count, Some(0));
+    assert!(
+        (billing.provider_reserved_amount.unwrap() - rates().bound(rates().max_output) * 2.0).abs()
+            < 1e-12
+    );
+    assert!(
+        (billing.provider_charge_amount.unwrap() - (rates().bound(rates().max_output) + actual))
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(billing.provider_settlement.as_deref(), Some("settled"));
+    assert!(billing.model_reserved_amount.is_none());
+    assert!(billing.key_reserved_amount.is_none());
+    assert!(billing.unknown_reason.is_some());
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn realtime_terminal_body_during_pending_generation_keeps_total_cost_unknown() {
+    let (state, url, raw, _, handles) =
+        fixture_with_config(|config| config.gateway.storage.request_ledger.enabled = true).await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"hold":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.created");
+    client.close(None).await.unwrap();
+    let row = terminal_realtime_ledger(&state).await;
+    assert_eq!(
+        row.cost, None,
+        "known subtotal is not the total actual for a pending/unknown generation"
+    );
+    let billing: crate::core::request_ledger::RequestBilling =
+        serde_json::from_value(row.billing.unwrap()).unwrap();
+    let actual = rates()
+        .cost(&usage(), rates().max_output)
+        .unwrap()
+        .unwrap()
+        .0;
+    assert!((billing.known_cost_subtotal.unwrap() - actual).abs() < 1e-12);
+    assert!(
+        billing.pending_response_count.unwrap_or(0) + billing.unknown_response_count.unwrap_or(0)
+            >= 1
+    );
+    assert!(billing.unknown_reason.is_some());
     for handle in handles {
         handle.stop(false).await;
     }

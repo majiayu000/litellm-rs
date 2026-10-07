@@ -167,6 +167,12 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
     context: &str,
 ) {
     let cost = fallback_cost_for_usage(pricing_config, usage);
+    super::capture_ledger_settlement(None, budget_provider, budget_model, None, None);
+    crate::core::request_ledger::update_billing(None, |billing| {
+        billing.charge_basis = Some("fallback_pricing".into());
+        billing.unknown_reason = Some("pricing_unavailable".into());
+        billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+    });
     crate::server::middleware::record_unpriced_spend(
         budget_provider,
         budget_model,

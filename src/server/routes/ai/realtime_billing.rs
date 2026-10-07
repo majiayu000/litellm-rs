@@ -2,8 +2,13 @@
 use crate::core::budget::{BudgetReservation, UnifiedBudgetReservation};
 use crate::core::pricing_service::LiteLLMModelInfo;
 use crate::core::providers::ProviderError;
+use crate::core::request_ledger::{
+    RequestBilling, RequestLedgerFacts, SharedRequestLedgerFacts, apply_settlement, current_facts,
+    scope_facts, snapshot_facts, update_billing,
+};
 use crate::server::state::AppState;
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -169,6 +174,8 @@ pub(super) struct Pending {
     key: Option<BudgetReservation>,
     bound: f64,
     pub max_output: u32,
+    facts: Option<SharedRequestLedgerFacts>,
+    session_facts: Option<SharedRequestLedgerFacts>,
 }
 impl Pending {
     pub async fn reserve(
@@ -179,20 +186,39 @@ impl Pending {
         bound: f64,
         max_output: u32,
     ) -> Result<Self, ProviderError> {
-        let reservation = state
-            .budget_limits
-            .reserve_spend_async(provider, model, bound)
-            .await
-            .map_err(|error| {
-                super::spend::reservation_error_to_provider_error(error, provider, model)
-            })?;
-        let key =
-            super::spend::reserve_api_key_budget(&state.budget_manager, key_budget, Some(bound))?;
+        let session_facts = current_facts();
+        let facts = session_facts
+            .as_ref()
+            .map(|_| Arc::new(Mutex::new(RequestLedgerFacts::default())));
+        let reserve = async {
+            let reservation = state
+                .budget_limits
+                .reserve_spend_async(provider, model, bound)
+                .await
+                .map_err(|error| {
+                    super::spend::reservation_error_to_provider_error(error, provider, model)
+                })?;
+            let key = super::spend::reserve_api_key_budget(
+                &state.budget_manager,
+                key_budget,
+                Some(bound),
+            )?;
+            Ok::<_, ProviderError>((reservation, key))
+        };
+        let (reservation, key) = match &facts {
+            Some(facts) => scope_facts(facts.clone(), reserve).await?,
+            None => reserve.await?,
+        };
+        if let (Some(session), Some(facts)) = (&session_facts, &facts) {
+            start_response(session, &snapshot_facts(facts));
+        }
         Ok(Self {
             provider: Some(reservation),
             key,
             bound,
             max_output,
+            facts,
+            session_facts,
         })
     }
     pub async fn settle(
@@ -202,18 +228,31 @@ impl Pending {
         actual: Option<(f64, u64)>,
     ) -> Result<u64, String> {
         let (cost, tokens) = actual.unwrap_or((self.bound, 0));
+        if let (Some(facts), Some(reservation)) = (&self.facts, &self.provider) {
+            apply_settlement(
+                facts,
+                reservation.provider(),
+                reservation.model(),
+                None,
+                None,
+                actual.map(|(_, tokens)| i64::try_from(tokens).unwrap_or(i64::MAX)),
+                actual.map(|(cost, _)| cost),
+            );
+        }
         let key_error = self.key.take().and_then(|reservation| {
-            reservation
-                .settle(cost)
+            settle_key(reservation, cost, self.facts.as_ref())
                 .err()
                 .map(|_| "Realtime key budget settlement failed".to_string())
         });
         let reservation = self.provider.take();
         let budget_settlement = async {
             if let Some(reservation) = reservation {
-                reservation
-                    .settle_async(cost)
-                    .await
+                let settle = reservation.settle_async(cost);
+                let result = match self.facts.as_ref() {
+                    Some(facts) => scope_facts(facts.clone(), settle).await,
+                    None => settle.await,
+                };
+                result
                     .err()
                     .map(|_| "Realtime budget settlement failed".to_string())
             } else {
@@ -243,16 +282,190 @@ impl Pending {
 impl Drop for Pending {
     fn drop(&mut self) {
         // An aborted transport task must not refund a potentially billable response.
+        if (self.provider.is_some() || self.key.is_some())
+            && let Some(facts) = &self.facts
+        {
+            update_billing(Some(facts), |billing| {
+                billing.charge_basis = Some("reserved_estimate".into());
+                billing.unknown_reason = Some("stream_cancelled_before_usage".into());
+                billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+            });
+        }
         if let Some(reservation) = self.provider.take() {
-            reservation.settle_detached(self.bound);
+            reservation.settle_detached(self.bound, self.facts.clone());
         }
         if let Some(reservation) = self.key.take()
-            && let Err(error) = reservation.settle(self.bound)
+            && let Err(error) = settle_key(reservation, self.bound, self.facts.as_ref())
         {
             tracing::error!(
                 ?error,
                 "Realtime aborted response fallback settlement failed"
             );
+        }
+        if let (Some(session), Some(facts)) = (&self.session_facts, &self.facts) {
+            finish_response(session, &snapshot_facts(facts));
+        }
+    }
+}
+
+fn settle_key(
+    reservation: BudgetReservation,
+    cost: f64,
+    facts: Option<&SharedRequestLedgerFacts>,
+) -> Result<(), crate::core::budget::BudgetReservationError> {
+    let tracked = reservation.is_tracked();
+    let reserved = reservation.reserved_amount();
+    let result = reservation.settle(cost);
+    if tracked && facts.is_some() {
+        update_billing(facts, |billing| {
+            billing.key_reserved_amount = Some(reserved);
+            billing.key_settlement = Some(
+                if result.is_ok() {
+                    "settled"
+                } else {
+                    "settlement_unconfirmed"
+                }
+                .into(),
+            );
+            if result.is_ok() {
+                billing.key_charge_amount = Some(cost);
+            }
+            billing.settlement_updated_at = Some(chrono::Utc::now());
+        });
+    }
+    result.map(|_| ())
+}
+
+// Only one Realtime generation may be active. Merge each generation once into
+// the existing HTTP session row; this is metadata, not another budget ledger.
+fn start_response(session: &SharedRequestLedgerFacts, response: &RequestLedgerFacts) {
+    let mut session = session
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    session.provider.clone_from(&response.provider);
+    session.model.clone_from(&response.model);
+    session.deployment.clone_from(&response.deployment);
+    let billing = session.billing.get_or_insert_with(RequestBilling::default);
+    billing.known_cost_subtotal.get_or_insert(0.0);
+    billing.unknown_response_count.get_or_insert(0);
+    *billing.pending_response_count.get_or_insert(0) += 1;
+    if billing.unknown_response_count == Some(0) {
+        billing.unknown_reason = Some("awaiting_provider_usage".into());
+    }
+    billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+    if let Some(response) = &response.billing {
+        add_amount(
+            &mut billing.provider_reserved_amount,
+            response.provider_reserved_amount,
+        );
+        add_amount(
+            &mut billing.model_reserved_amount,
+            response.model_reserved_amount,
+        );
+        add_amount(
+            &mut billing.key_reserved_amount,
+            response.key_reserved_amount,
+        );
+        billing.reserved_at = response.reserved_at.or(billing.reserved_at);
+        billing
+            .provider_lease_id
+            .clone_from(&response.provider_lease_id);
+        billing.model_lease_id.clone_from(&response.model_lease_id);
+        mark_pending(
+            &mut billing.provider_settlement,
+            response.provider_reserved_amount.is_some(),
+        );
+        mark_pending(
+            &mut billing.model_settlement,
+            response.model_reserved_amount.is_some(),
+        );
+        mark_pending(
+            &mut billing.key_settlement,
+            response.key_reserved_amount.is_some(),
+        );
+    }
+    session.cost = None;
+}
+
+fn finish_response(session: &SharedRequestLedgerFacts, response: &RequestLedgerFacts) {
+    let mut session = session
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(tokens) = response.total_tokens {
+        session.total_tokens = Some(session.total_tokens.unwrap_or(0).saturating_add(tokens));
+    }
+    let billing = session.billing.get_or_insert_with(RequestBilling::default);
+    let pending = billing.pending_response_count.get_or_insert(0);
+    *pending = pending.saturating_sub(1);
+    match response.cost {
+        Some(cost) => *billing.known_cost_subtotal.get_or_insert(0.0) += cost,
+        None => {
+            if billing.unknown_response_count.unwrap_or(0) == 0 {
+                billing.unknown_reason = response
+                    .billing
+                    .as_ref()
+                    .and_then(|response| response.unknown_reason.clone())
+                    .or_else(|| Some("provider_usage_missing".into()));
+            }
+            *billing.unknown_response_count.get_or_insert(0) += 1;
+            billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+        }
+    }
+    if let Some(response) = &response.billing {
+        add_amount(
+            &mut billing.provider_charge_amount,
+            response.provider_charge_amount,
+        );
+        add_amount(
+            &mut billing.model_charge_amount,
+            response.model_charge_amount,
+        );
+        add_amount(&mut billing.key_charge_amount, response.key_charge_amount);
+        merge_settlement(
+            &mut billing.provider_settlement,
+            response.provider_settlement.as_deref(),
+        );
+        merge_settlement(
+            &mut billing.model_settlement,
+            response.model_settlement.as_deref(),
+        );
+        merge_settlement(
+            &mut billing.key_settlement,
+            response.key_settlement.as_deref(),
+        );
+    }
+    billing.settlement_updated_at = Some(chrono::Utc::now());
+    let all_known = billing.unknown_response_count.unwrap_or(0) == 0
+        && billing.pending_response_count.unwrap_or(0) == 0;
+    let subtotal = billing.known_cost_subtotal;
+    if all_known {
+        billing.unknown_reason = None;
+        billing.awaiting_since = None;
+        billing.charge_basis = Some("gateway_pricing".into());
+    } else {
+        billing.charge_basis = Some("realtime_known_and_unknown".into());
+    }
+    session.cost = if all_known { subtotal } else { None };
+}
+
+fn add_amount(total: &mut Option<f64>, amount: Option<f64>) {
+    if let Some(amount) = amount {
+        *total = Some(total.unwrap_or(0.0) + amount);
+    }
+}
+
+fn mark_pending(status: &mut Option<String>, tracked: bool) {
+    if tracked && status.as_deref() != Some("settlement_unconfirmed") {
+        *status = Some("settlement_pending".into());
+    }
+}
+
+fn merge_settlement(status: &mut Option<String>, response: Option<&str>) {
+    if let Some(response) = response {
+        if status.as_deref() == Some("settlement_unconfirmed") || response != "settled" {
+            *status = Some("settlement_unconfirmed".into());
+        } else {
+            *status = Some("settled".into());
         }
     }
 }

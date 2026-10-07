@@ -343,6 +343,76 @@ async fn async_budget_gateway_waits_without_blocking_current_thread() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn slow_budget_redis_does_not_block_an_unrelated_http_request_on_the_same_thread() {
+    use actix_web::{App, HttpResponse, test, web};
+
+    let _test = TESTS.lock().await;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let data = web::Data::new((
+        Arc::clone(&fixture.limits),
+        fixture.provider.clone(),
+        fixture.model.clone(),
+    ));
+    let app = test::init_service(
+        App::new()
+            .app_data(data)
+            .route(
+                "/budgeted",
+                web::post().to(
+                    |data: web::Data<(Arc<UnifiedBudgetLimits>, String, String)>| async move {
+                        let (limits, provider, model) = data.get_ref();
+                        let call =
+                            BudgetedCall::new(Arc::clone(limits), provider.clone(), model.clone());
+                        let (_, mut reservations) = call
+                            .reserve_call(
+                                async |context| context.reserve_spend(1.0).await.map(Some),
+                                || async { Ok(()) },
+                            )
+                            .await
+                            .unwrap();
+                        reservations.cancel().await;
+                        HttpResponse::Ok().finish()
+                    },
+                ),
+            )
+            .route(
+                "/unrelated",
+                web::get().to(|| async { HttpResponse::Ok().finish() }),
+            ),
+    )
+    .await;
+    fixture.pause_reply();
+    let mut budgeted = Box::pin(test::call_service(
+        &app,
+        test::TestRequest::post().uri("/budgeted").to_request(),
+    ));
+    tokio::select! {
+        _ = fixture.reply_held() => {},
+        _ = &mut budgeted => panic!("budgeted HTTP request must wait for Redis"),
+    }
+    let unrelated = tokio::time::timeout(
+        Duration::from_secs(1),
+        test::call_service(
+            &app,
+            test::TestRequest::get().uri("/unrelated").to_request(),
+        ),
+    )
+    .await;
+    fixture.gate.release.notify_one();
+    assert!(budgeted.await.status().is_success());
+    fixture.wait_state(0, 0).await;
+    fixture.finish().await;
+    assert!(
+        unrelated
+            .expect("same-thread HTTP progress")
+            .status()
+            .is_success()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn async_budget_cancelled_admission_reclaims_an_accepted_lease() {
     let _test = TESTS.lock().await;
     let Some(fixture) = Fixture::new().await else {
@@ -546,13 +616,34 @@ async fn async_budget_terminal_operations_survive_cancelled_waiters() {
         .await
         .unwrap();
     fixture.pause_reply();
-    let mut settlement = Box::pin(reservation.settle_async(0.25));
+    let facts = crate::core::request_ledger::SharedRequestLedgerFacts::new(std::sync::Mutex::new(
+        Default::default(),
+    ));
+    let mut settlement = Box::pin(crate::core::request_ledger::scope_facts(
+        facts.clone(),
+        reservation.settle_async(0.25),
+    ));
     tokio::select! {
         _ = fixture.reply_held() => {},
         _ = &mut settlement => panic!("settlement cannot finish before Redis replies"),
     }
     assert_eq!(fixture.state("provider").await, (250_000_000, 0));
+    let snapshot = crate::core::request_ledger::snapshot_facts(&facts);
+    let billing = snapshot.billing.unwrap();
+    assert_eq!(
+        billing.provider_settlement.as_deref(),
+        Some("settlement_pending")
+    );
+    assert_eq!(billing.provider_charge_amount, None);
     drop(settlement);
+    assert_eq!(
+        crate::core::request_ledger::snapshot_facts(&facts)
+            .billing
+            .unwrap()
+            .provider_settlement
+            .as_deref(),
+        Some("settlement_pending")
+    );
     fixture.gate.release.notify_one();
     fixture.wait_state(250_000_000, 0).await;
 
@@ -579,6 +670,9 @@ async fn async_budget_detached_settlement_preserves_billable_cost() {
     let Some(fixture) = Fixture::new().await else {
         return;
     };
+    let facts = crate::core::request_ledger::SharedRequestLedgerFacts::new(std::sync::Mutex::new(
+        Default::default(),
+    ));
     let reservation = fixture
         .limits
         .reserve_spend_async(&fixture.provider, &fixture.model, 1.0)
@@ -586,11 +680,33 @@ async fn async_budget_detached_settlement_preserves_billable_cost() {
         .unwrap();
     fixture.pause_reply();
     let started = std::time::Instant::now();
-    reservation.settle_detached(0.6);
+    reservation.settle_detached(0.6, Some(facts.clone()));
     assert!(started.elapsed() < Duration::from_millis(100));
     fixture.reply_held().await;
+    let billing = crate::core::request_ledger::snapshot_facts(&facts)
+        .billing
+        .unwrap();
+    assert_eq!(
+        billing.provider_settlement.as_deref(),
+        Some("settlement_pending")
+    );
+    assert_eq!(billing.provider_charge_amount, None);
     fixture.gate.release.notify_one();
     fixture.wait_state(600_000_000, 0).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let billing = crate::core::request_ledger::snapshot_facts(&facts)
+                .billing
+                .unwrap();
+            if billing.provider_settlement.as_deref() == Some("settled") {
+                assert_eq!(billing.provider_charge_amount, Some(0.6));
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     fixture.finish().await;
 }
 

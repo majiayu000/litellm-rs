@@ -263,6 +263,13 @@ async fn record_gemini_usage(
         }
     };
 
+    super::super::spend::capture_ledger_settlement(
+        None,
+        &provider.provider_name,
+        &provider.model,
+        None,
+        Some(cost),
+    );
     super::super::spend::settle_api_key_budget_reservation(
         key_budget_reservation,
         cost,

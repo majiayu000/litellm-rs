@@ -417,6 +417,12 @@ impl BudgetReservation {
         }
     }
 
+    /// Whether this reservation holds a configured budget counter.
+    #[cfg(feature = "gateway")]
+    pub(crate) fn is_tracked(&self) -> bool {
+        self.key.is_some()
+    }
+
     pub fn scope(&self) -> &BudgetScope {
         &self.scope
     }

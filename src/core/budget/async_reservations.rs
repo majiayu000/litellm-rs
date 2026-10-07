@@ -14,6 +14,7 @@ use super::{
     UnifiedBudgetReservation,
 };
 use crate::core::budget::{BudgetReservationError, BudgetStatus};
+use crate::core::request_ledger::{current_facts, update_billing};
 
 /// Bounds queued work, active reservations, and their terminal cleanup together.
 /// A reservation can own at most two drop-cancel tasks (provider and model).
@@ -95,6 +96,107 @@ fn dispatch<T: Send + 'static>(
     rx
 }
 
+fn record_reservation(
+    facts: Option<&crate::core::request_ledger::SharedRequestLedgerFacts>,
+    reservation: &UnifiedBudgetReservation,
+) {
+    if let Some(facts) = facts {
+        let mut facts = facts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        facts.provider = Some(reservation.provider().to_string());
+        facts.model = Some(reservation.model().to_string());
+        facts
+            .deployment
+            .get_or_insert_with(|| reservation.provider().to_string());
+    }
+    if !reservation.provider.tracked && !reservation.model.tracked {
+        return;
+    }
+    update_billing(facts, |billing| {
+        if reservation.provider.tracked {
+            billing.provider_reserved_amount = Some(reservation.provider.reserved_amount());
+            billing
+                .provider_lease_id
+                .clone_from(&reservation.provider.lease_id);
+            billing.provider_settlement = Some("reserved".into());
+        }
+        if reservation.model.tracked {
+            billing.model_reserved_amount = Some(reservation.model.reserved_amount());
+            billing
+                .model_lease_id
+                .clone_from(&reservation.model.lease_id);
+            billing.model_settlement = Some("reserved".into());
+        }
+        billing.reserved_at = Some(chrono::Utc::now());
+        billing.unknown_reason = Some("awaiting_provider_usage".into());
+        billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+    });
+}
+
+fn record_settlement_result(
+    facts: Option<&crate::core::request_ledger::SharedRequestLedgerFacts>,
+    amount: f64,
+    acknowledged: bool,
+    provider: bool,
+    model: bool,
+) {
+    if !provider && !model {
+        return;
+    }
+    update_billing(facts, |billing| {
+        let status = if acknowledged {
+            "settled"
+        } else {
+            "settlement_unconfirmed"
+        };
+        if provider {
+            billing.provider_settlement = Some(status.into());
+            if acknowledged {
+                billing.provider_charge_amount = Some(amount);
+            }
+        }
+        if model {
+            billing.model_settlement = Some(status.into());
+            if acknowledged {
+                billing.model_charge_amount = Some(amount);
+            }
+        }
+        billing.settlement_updated_at = Some(chrono::Utc::now());
+    });
+}
+
+fn record_cancellation(
+    facts: Option<&crate::core::request_ledger::SharedRequestLedgerFacts>,
+    distributed: bool,
+    provider: bool,
+    model: bool,
+) {
+    if !provider && !model {
+        return;
+    }
+    update_billing(facts, |billing| {
+        let status = if distributed {
+            "cancellation_unconfirmed"
+        } else {
+            "released"
+        };
+        if provider {
+            billing.provider_settlement = Some(status.into());
+            if !distributed {
+                billing.provider_charge_amount = Some(0.0);
+            }
+        }
+        if model {
+            billing.model_settlement = Some(status.into());
+            if !distributed {
+                billing.model_charge_amount = Some(0.0);
+            }
+        }
+        billing.settlement_updated_at = Some(chrono::Utc::now());
+    });
+}
+
 impl ProviderBudgetManager {
     /// Reset a distributed budget without blocking a gateway admin handler.
     pub async fn reset_provider_budget_async(
@@ -148,8 +250,13 @@ impl UnifiedBudgetLimits {
         model: &str,
         max_amount: f64,
     ) -> Result<UnifiedBudgetReservation, BudgetReservationError> {
+        let facts = current_facts();
         if !self.providers.backend.is_distributed() && !self.models.backend.is_distributed() {
-            return self.reserve_spend(provider, model, max_amount);
+            let result = self.reserve_spend(provider, model, max_amount);
+            if let Ok(reservation) = &result {
+                record_reservation(facts.as_ref(), reservation);
+            }
+            return result;
         }
         let permit = try_budget_permit()?;
         let limits = self.clone();
@@ -167,10 +274,16 @@ impl UnifiedBudgetLimits {
                 max_amount,
                 Some(Arc::clone(&permit)),
             );
+            if let Ok(reservation) = &result {
+                record_reservation(facts.as_ref(), reservation);
+            }
             if let Err(Ok(reservation)) = tx.send(result) {
                 // Keep the permit while both terminal operations run. A failed
                 // cancellation also passes that permit to its existing fallback.
+                let provider = reservation.provider.tracked;
+                let model = reservation.model.tracked;
                 reservation.cancel();
+                record_cancellation(facts.as_ref(), true, provider, model);
             }
         });
         receive(rx, "reserve").await?
@@ -231,8 +344,36 @@ impl UnifiedBudgetReservation {
         mut self,
         actual_amount: f64,
     ) -> Result<(Option<BudgetStatus>, Option<BudgetStatus>), BudgetReservationError> {
+        let facts = current_facts();
+        let provider = self.provider.tracked;
+        let model = self.model.tracked;
+        if provider || model {
+            update_billing(facts.as_ref(), |billing| {
+                if provider {
+                    billing
+                        .provider_reserved_amount
+                        .get_or_insert(self.provider.reserved_amount());
+                    billing.provider_settlement = Some("settlement_pending".into());
+                }
+                if model {
+                    billing
+                        .model_reserved_amount
+                        .get_or_insert(self.model.reserved_amount());
+                    billing.model_settlement = Some("settlement_pending".into());
+                }
+                billing.settlement_updated_at = Some(chrono::Utc::now());
+            });
+        }
         if !self.has_distributed_lease() {
-            return self.settle(actual_amount);
+            let result = self.settle(actual_amount);
+            record_settlement_result(
+                facts.as_ref(),
+                actual_amount,
+                result.is_ok(),
+                provider,
+                model,
+            );
+            return result;
         }
         let permit = match self.async_permit() {
             Ok(permit) => permit,
@@ -242,11 +383,22 @@ impl UnifiedBudgetReservation {
                 // that legacy caller attempts async settlement under overload.
                 self.provider.settled = true;
                 self.model.settled = true;
+                record_settlement_result(facts.as_ref(), actual_amount, false, provider, model);
                 return Err(error);
             }
         };
         receive(
-            dispatch(permit, move || self.settle(actual_amount)),
+            dispatch(permit, move || {
+                let result = self.settle(actual_amount);
+                record_settlement_result(
+                    facts.as_ref(),
+                    actual_amount,
+                    result.is_ok(),
+                    provider,
+                    model,
+                );
+                result
+            }),
             "settle",
         )
         .await?
@@ -254,20 +406,69 @@ impl UnifiedBudgetReservation {
 
     /// Cancel without blocking the async executor, even if this future is dropped.
     pub async fn cancel_async(mut self) -> Result<(), BudgetReservationError> {
-        if !self.has_distributed_lease() {
+        let facts = current_facts();
+        let distributed = self.has_distributed_lease();
+        let provider = self.provider.tracked;
+        let model = self.model.tracked;
+        if provider || model {
+            update_billing(facts.as_ref(), |billing| {
+                if provider {
+                    billing.provider_settlement = Some("cancellation_pending".into());
+                }
+                if model {
+                    billing.model_settlement = Some("cancellation_pending".into());
+                }
+                billing.settlement_updated_at = Some(chrono::Utc::now());
+            });
+        }
+        if !distributed {
             self.cancel();
+            record_cancellation(facts.as_ref(), false, provider, model);
             return Ok(());
         }
         let permit = self.async_permit()?;
-        receive(dispatch(permit, move || self.cancel()), "cancel").await
+        receive(
+            dispatch(permit, move || {
+                self.cancel();
+                // The synchronous cancel API logs backend errors but returns no ACK.
+                record_cancellation(facts.as_ref(), true, provider, model);
+            }),
+            "cancel",
+        )
+        .await
     }
 
     /// Used by Realtime transport Drop: output may already have been consumed,
     /// so complete the conservative settlement rather than cancelling the hold.
     #[cfg(any(feature = "websockets", test))]
-    pub(crate) fn settle_detached(mut self, actual_amount: f64) {
+    pub(crate) fn settle_detached(
+        mut self,
+        actual_amount: f64,
+        facts: Option<crate::core::request_ledger::SharedRequestLedgerFacts>,
+    ) {
+        let provider = self.provider.tracked;
+        let model = self.model.tracked;
+        if provider || model {
+            update_billing(facts.as_ref(), |billing| {
+                if provider {
+                    billing.provider_settlement = Some("settlement_pending".into());
+                }
+                if model {
+                    billing.model_settlement = Some("settlement_pending".into());
+                }
+                billing.settlement_updated_at = Some(chrono::Utc::now());
+            });
+        }
         if !self.has_distributed_lease() {
-            if let Err(error) = self.settle(actual_amount) {
+            let result = self.settle(actual_amount);
+            record_settlement_result(
+                facts.as_ref(),
+                actual_amount,
+                result.is_ok(),
+                provider,
+                model,
+            );
+            if let Err(error) = result {
                 tracing::error!(?error, "detached budget settlement failed");
             }
             return;
@@ -277,12 +478,21 @@ impl UnifiedBudgetReservation {
             Err(error) => {
                 self.provider.settled = true;
                 self.model.settled = true;
+                record_settlement_result(facts.as_ref(), actual_amount, false, provider, model);
                 tracing::error!(?error, "detached budget settlement could not be admitted");
                 return;
             }
         };
         drop(dispatch(permit, move || {
-            if let Err(error) = self.settle(actual_amount) {
+            let result = self.settle(actual_amount);
+            record_settlement_result(
+                facts.as_ref(),
+                actual_amount,
+                result.is_ok(),
+                provider,
+                model,
+            );
+            if let Err(error) = result {
                 tracing::error!(?error, "detached budget settlement failed");
             }
         }));
@@ -340,5 +550,77 @@ mod deadline_tests {
             queued.is_closed(),
             "queued admission must observe expiration"
         );
+    }
+    #[tokio::test]
+    async fn untracked_reservation_does_not_fabricate_budget_holds() {
+        let limits = UnifiedBudgetLimits::new();
+        let facts = crate::core::request_ledger::SharedRequestLedgerFacts::new(
+            std::sync::Mutex::new(Default::default()),
+        );
+        crate::core::request_ledger::scope_facts(facts.clone(), async {
+            limits
+                .reserve_spend_async("disabled", "disabled", 1.0)
+                .await
+                .unwrap()
+                .settle_async(0.2)
+                .await
+                .unwrap();
+        })
+        .await;
+        assert!(
+            crate::core::request_ledger::snapshot_facts(&facts)
+                .billing
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn backend_failure_keeps_known_cost_and_unacknowledged_budget() {
+        use super::super::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
+        let limits = UnifiedBudgetLimits::new();
+        limits.providers.set_provider_limit(
+            "provider",
+            ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+        );
+        limits
+            .models
+            .set_model_limit("model", ModelLimitConfig::new(10.0, ResetPeriod::Monthly));
+        let facts = crate::core::request_ledger::SharedRequestLedgerFacts::new(
+            std::sync::Mutex::new(Default::default()),
+        );
+        crate::core::request_ledger::scope_facts(facts.clone(), async {
+            let mut reservation = limits
+                .reserve_spend_async("provider", "model", 1.0)
+                .await
+                .unwrap();
+            // Simulate loss of the distributed backend after obtaining its identity.
+            reservation.provider.lease_id = Some("unavailable-provider-lease".into());
+            reservation.model.lease_id = Some("unavailable-model-lease".into());
+            reservation.provider.manager.backend =
+                super::super::distributed::BudgetLeaseBackend::Unavailable;
+            reservation.model.manager.backend =
+                super::super::distributed::BudgetLeaseBackend::Unavailable;
+            crate::core::request_ledger::record_current_settlement(
+                "provider",
+                "model",
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(0.2),
+            );
+            assert!(reservation.settle_async(0.2).await.is_err());
+        })
+        .await;
+        let recorded = crate::core::request_ledger::snapshot_facts(&facts);
+        assert_eq!(recorded.cost, Some(0.2));
+        let billing = recorded.billing.unwrap();
+        assert_eq!(billing.unknown_reason, None);
+        assert_eq!(billing.awaiting_since, None);
+        assert_eq!(billing.provider_charge_amount, None);
+        assert_eq!(
+            billing.provider_settlement.as_deref(),
+            Some("settlement_unconfirmed")
+        );
+        assert!(billing.requires_budget_review(0.2));
     }
 }
