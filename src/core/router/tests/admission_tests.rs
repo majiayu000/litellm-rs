@@ -59,7 +59,7 @@ mod redis {
                     .load(Ordering::Relaxed),
                 1
             );
-            a.release_deployment(&selected);
+            Router::release_selected_deployment(&a.get_deployment(&selected).unwrap());
             assert_eq!(
                 a.get_deployment(&id)
                     .unwrap()
@@ -78,7 +78,7 @@ mod redis {
             }
             .map(DeploymentLease::into_deployment_id)
             .expect("legacy release must leave the shared parallel slot reusable immediately");
-            b.release_deployment(&second);
+            Router::release_selected_deployment(&b.get_deployment(&second).unwrap());
             drop(
                 a.select_deployment_lease("gpt-4")
                     .expect("owned admission remains reusable"),

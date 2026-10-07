@@ -134,7 +134,19 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
                 .or_else(|| environment(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])),
             Ok(ProviderType::Deepgram | ProviderType::ElevenLabs) => top_level
                 .or_else(|| setting(config, "api_key"))
-                .or_else(|| native_audio_environment.and_then(|environment| environment.api_key)),
+                .or_else(|| {
+                    match config
+                        .settings
+                        .get("api_key")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        // Keep an explicit blank setting for the provider's existing error path.
+                        Some(_) => None,
+                        None => {
+                            native_audio_environment.and_then(|environment| environment.api_key)
+                        }
+                    }
+                }),
             Ok(ProviderType::Bedrock) | Err(_) => None,
             Ok(_) => top_level.or_else(|| setting(config, "api_key")),
         }
