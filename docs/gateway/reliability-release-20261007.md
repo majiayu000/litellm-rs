@@ -113,3 +113,5 @@ Publication remains pending until candidate CI/reviews, immutable version select
 and the existing release artifact/installation checks complete. The actual published
 version must be verified by tag commit, registry checksum and archive/container
 identities before this scope can be called delivered.
+
+SDK stream compatibility: terminal provider usage is available in the chunk DTO for OpenAI and legacy Anthropic streams. Anthropic input/output counts are combined only when both are known. A runtime-backed stream that produced content but ended before trustworthy usage conservatively retains its admission estimate; it does not report that estimate as actual usage.

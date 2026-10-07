@@ -12,6 +12,8 @@ const ENVS: &[&str] = &[
     "ELEVENLABS_API_KEY", "ELEVENLABS_API_BASE",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
     "AWS_REGION", "AWS_DEFAULT_REGION",
+    "GOOGLE_CLOUD_PROJECT", "GOOGLE_PROJECT_ID", "GCP_PROJECT", "GCLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS",
 ];
 struct EnvScope {
     previous: Vec<(&'static str, Option<String>)>,
@@ -147,6 +149,164 @@ async fn native_audio_environment_rotations_change_runtime_resource_identity() {
             identities[1], identities[2],
             "endpoint rotation must retire the prior resource"
         );
+    }
+}
+
+#[cfg(feature = "providers-extra")]
+#[tokio::test]
+async fn vertex_environment_rotations_change_runtime_resource_identity() {
+    use super::*;
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("fixture-a.json");
+    let second = directory.path().join("fixture-b.json");
+    let contents = r#"{"type":"authorized_user","client_id":"fixture-client","client_secret":"fixture-secret","refresh_token":"fixture-refresh"}"#;
+    std::fs::write(&first, contents).unwrap();
+    std::fs::write(&second, contents).unwrap();
+    let config = ProviderConfig {
+        name: "vertex-fixture".to_string(),
+        provider_type: "vertex_ai".to_string(),
+        models: vec!["gemini-2.5-flash".to_string()],
+        ..ProviderConfig::default()
+    };
+    let mut identities = Vec::new();
+    for (project, location, file) in [
+        ("fixture-project-a", "us-central1", &first),
+        ("fixture-project-b", "us-central1", &first),
+        ("fixture-project-b", "europe-west1", &first),
+        ("fixture-project-b", "europe-west1", &second),
+    ] {
+        let file = file.to_str().unwrap();
+        let _env = EnvScope::new(&[
+            ("GOOGLE_CLOUD_PROJECT", project),
+            ("GOOGLE_CLOUD_LOCATION", location),
+            ("GOOGLE_APPLICATION_CREDENTIALS", file),
+        ]);
+        let normalized = normalize_provider_construction(&config);
+        assert_eq!(normalized.config.settings["project_id"], project);
+        assert_eq!(normalized.config.settings["location"], location);
+        assert_eq!(normalized.config.settings["credentials_file"], file);
+        let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        identities.push(
+            router
+                .get_deployment("vertex-fixture-gemini-2.5-flash")
+                .unwrap()
+                .state
+                .runtime_identity
+                .clone()
+                .unwrap(),
+        );
+        let mut explicit = config.clone();
+        explicit.settings = serde_json::from_value(serde_json::json!({"project":"explicit-project", "region":"asia-east1", "access_token":"fixture-direct-token"})).unwrap();
+        let normalized = normalize_provider_construction(&explicit);
+        assert_eq!(normalized.config.settings["project_id"], "explicit-project");
+        assert_eq!(normalized.config.settings["location"], "asia-east1");
+        assert!(
+            !normalized.config.settings.contains_key("credentials_file"),
+            "direct tokens must not acquire an unused environment credential file"
+        );
+    }
+    {
+        let _env = EnvScope::new(&[("GOOGLE_CLOUD_PROJECT", "environment-project")]);
+        let mut explicit = config.clone();
+        explicit.project = Some("top-level-project".into());
+        explicit
+            .settings
+            .insert("access_token".into(), "fixture-direct-token".into());
+        assert_eq!(
+            normalize_provider_construction(&explicit).config.settings["project_id"],
+            "top-level-project"
+        );
+        explicit
+            .settings
+            .insert("project".into(), "settings-project".into());
+        assert_eq!(
+            normalize_provider_construction(&explicit).config.settings["project_id"],
+            "settings-project"
+        );
+    }
+    // The selected path remains the same; credentials held by the new provider change.
+    let _env = EnvScope::new(&[
+        ("GOOGLE_CLOUD_PROJECT", "fixture-project-b"),
+        ("GOOGLE_CLOUD_LOCATION", "europe-west1"),
+        ("GOOGLE_APPLICATION_CREDENTIALS", second.to_str().unwrap()),
+    ]);
+    std::fs::write(
+        &second,
+        contents.replace("fixture-refresh", "fixture-refresh-rotated"),
+    )
+    .unwrap();
+    let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .unwrap();
+    let rotated = router
+        .get_deployment("vertex-fixture-gemini-2.5-flash")
+        .unwrap()
+        .state
+        .runtime_identity
+        .clone()
+        .unwrap();
+    assert_ne!(identities.last().unwrap(), &rotated);
+
+    // Reconstructed replicas must agree even though parsed WIF headers use HashMap.
+    let wif = r#"{"type":"external_account","audience":"fixture-audience","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","token_url":"https://sts.googleapis.com/v1/token","credential_source":{"url":"https://fixture.invalid/token","headers":{"fixture-a":"a","fixture-b":"b"}}}"#;
+    let mut wif_identity = None;
+    for index in 0..6 {
+        let contents = if index % 2 == 0 {
+            wif.to_owned()
+        } else {
+            wif.replace(
+                "\"fixture-a\":\"a\",\"fixture-b\":\"b\"",
+                "\"fixture-b\":\"b\",\"fixture-a\":\"a\"",
+            )
+        };
+        std::fs::write(&second, contents).unwrap();
+        let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        let identity = router
+            .get_deployment("vertex-fixture-gemini-2.5-flash")
+            .unwrap()
+            .state
+            .runtime_identity
+            .clone()
+            .unwrap();
+        if let Some(previous) = &wif_identity {
+            assert_eq!(previous, &identity);
+        }
+        wif_identity = Some(identity);
+    }
+    // A selected file failure keeps the factory's read/parse error; higher-priority
+    // credentials never inspect an unused file.
+    let missing = directory.path().join("missing.json");
+    unsafe { std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &missing) };
+    let error = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, RouterError::DeploymentNotFound(message) if message.contains("failed to read credentials file"))
+    );
+    std::fs::write(&missing, "{invalid").unwrap();
+    let error = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, RouterError::DeploymentNotFound(message) if message.contains("invalid credentials file"))
+    );
+    std::fs::remove_file(&missing).unwrap();
+    for credentials in [
+        serde_json::json!({"access_token":"fixture-direct-token"}),
+        serde_json::json!({"credentials_json":contents}),
+    ] {
+        let mut explicit = config.clone();
+        explicit.settings = serde_json::from_value(credentials).unwrap();
+        assert!(Router::from_gateway_config(&[explicit], None).await.is_ok());
+    }
+    for pair in identities.windows(2) {
+        assert_ne!(pair[0], pair[1]);
     }
 }
 

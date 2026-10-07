@@ -91,6 +91,7 @@ impl Router {
                     capability,
                     &excluded_budget_deployments,
                     &mut tried_deployments,
+                    0,
                 )
                 .await
             {
@@ -220,6 +221,7 @@ impl Router {
         capability: Option<&ProviderCapability>,
         excluded_budget_deployments: &HashSet<String>,
         tried_deployments: &mut HashSet<String>,
+        estimated_tokens: u64,
     ) -> Result<DeploymentLease, RouterError> {
         let select = async |prefer_untried: bool| {
             let is_candidate = |deployment: &Deployment| {
@@ -228,11 +230,12 @@ impl Router {
             };
             match capability {
                 Some(capability) => {
-                    self.select_deployment_lease_for_capability_matching_in_snapshot(
+                    self.select_deployment_lease_for_capability_matching_with_estimate(
                         snapshot,
                         model_name,
                         capability,
                         is_candidate,
+                        estimated_tokens,
                     )
                     .await
                 }
@@ -274,6 +277,7 @@ impl Router {
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: &ProviderCapability,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<(T, DeploymentLease), ProviderError>
     where
@@ -294,6 +298,7 @@ impl Router {
                     Some(capability),
                     &excluded_budget_deployments,
                     &mut tried_deployments,
+                    estimated_tokens,
                 )
                 .await
             {
@@ -685,6 +690,7 @@ impl RuntimeHandle {
         &self,
         model_name: &str,
         capability: &ProviderCapability,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<(T, DeploymentLease), ProviderError>
     where
@@ -697,6 +703,7 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 capability,
+                estimated_tokens,
                 operation,
             )
             .await
