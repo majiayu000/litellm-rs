@@ -407,10 +407,8 @@ async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_re
                 // The reserved upper bound is never reported as an actual bill.
                 assert_eq!(ledger.cost, None);
                 assert_eq!(ledger.total_tokens, None);
-                assert_eq!(
-                    ledger.provider.as_deref(),
-                    generation_fault.then_some("github_copilot")
-                );
+                // Async reservation records the selected provider before discovery.
+                assert_eq!(ledger.provider.as_deref(), Some("github_copilot"));
                 upstream.abort();
                 let _ = upstream.await;
             }
