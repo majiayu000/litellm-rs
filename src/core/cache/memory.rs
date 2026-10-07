@@ -8,7 +8,7 @@
 
 use super::types::{AtomicCacheStats, CacheEntry, CacheKey, DualCacheConfig, EvictionPolicy};
 use dashmap::DashMap;
-use std::collections::{HashSet, VecDeque};
+use lru::LruCache;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -67,9 +67,10 @@ pub struct InMemoryCache<T> {
     /// Sharded eviction metadata. Shard count defaults to available CPU
     /// parallelism rounded to a bounded power of two.
     access_meta: Arc<Vec<DashMap<CacheKey, CacheAccessMeta>>>,
-    /// Per-shard bounded candidate queues for sampled eviction. Duplicates are
-    /// allowed; candidates are validated against `access_meta` and `cache`.
-    access_queue: Arc<Vec<Mutex<VecDeque<CacheKey>>>>,
+    /// Per-shard unique candidate indexes, with one slot per tracked key.
+    /// Hits only update atomics; inserts/removals maintain these indexes in O(1).
+    /// The LRU order is only a rotating sample order, not the eviction policy.
+    access_queue: Arc<Vec<Mutex<LruCache<CacheKey, ()>>>>,
     /// Monotonic logical clock for access ordering.
     access_clock: AtomicU64,
     /// Rotates the first shard inspected by sampled eviction.
@@ -97,9 +98,9 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
         let access_shards = default_access_shard_count();
         let access_meta: Arc<Vec<DashMap<CacheKey, CacheAccessMeta>>> =
             Arc::new((0..access_shards).map(|_| DashMap::new()).collect());
-        let access_queue: Arc<Vec<Mutex<VecDeque<CacheKey>>>> = Arc::new(
+        let access_queue: Arc<Vec<Mutex<LruCache<CacheKey, ()>>>> = Arc::new(
             (0..access_shards)
-                .map(|_| Mutex::new(VecDeque::new()))
+                .map(|_| Mutex::new(LruCache::unbounded()))
                 .collect(),
         );
 
@@ -312,23 +313,20 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
     /// Atomically delete `key` only while the live (non-expired) value matches `predicate`.
     ///
     /// Uses DashMap `remove_if` so a concurrent replacement under the same key is
-    /// not removed after a stale match decision. Access metadata is cleared only
-    /// when it still matches the pre-delete snapshot, so a replacement inserted
-    /// after `remove_if` keeps its eviction bookkeeping.
+    /// not removed after a stale match decision. Bookkeeping removal checks live
+    /// state while holding the candidate-index lock, so a replacement inserted
+    /// after `remove_if` keeps its eviction metadata and candidate slot.
     ///
     /// Returns the removed value when a matching entry was deleted.
     pub async fn delete_if<F>(&self, key: &CacheKey, predicate: F) -> Option<T>
     where
         F: Fn(&T) -> bool,
     {
-        let meta_snapshot = self.access_shard(key).get(key).map(|meta| meta.snapshot());
         let removed = self.cache.remove_if(key, |_k, entry| {
             !entry.is_expired() && predicate(&entry.value)
         });
         if let Some((_, removed)) = removed {
-            if let Some((last_access_tick, access_count)) = meta_snapshot {
-                self.remove_access_meta_if_unchanged(key, last_access_tick, access_count);
-            }
+            self.remove_access_meta(key);
             self.stats.record_deletion();
             self.stats.sub_total_size(removed.size_bytes);
             self.stats.set_entry_count(self.cache.len());
@@ -362,13 +360,18 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
     /// Clear all entries from the cache
     pub async fn clear(&self) {
         self.cache.clear();
-        for shard in self.access_meta.iter() {
-            shard.clear();
+        for (index, shard) in self.access_meta.iter().enumerate() {
+            let mut queue = lock_queue(&self.access_queue[index]);
+            queue.clear();
+            // A concurrent writer may already have installed a new value after
+            // cache.clear(). Preserve its metadata, or let its pending reset
+            // install both metadata and a candidate after this lock is released.
+            shard.retain(|key, _| self.cache.contains_key(key));
+            for meta in shard.iter() {
+                queue.put(meta.key().clone(), ());
+            }
         }
-        for queue in self.access_queue.iter() {
-            lock_queue(queue).clear();
-        }
-        self.access_clock.store(0, Ordering::Relaxed);
+        // Do not rewind the logical clock while concurrent writers can use it.
         self.eviction_cursor.store(0, Ordering::Relaxed);
         self.stats.reset();
         debug!("Cache cleared");
@@ -413,52 +416,42 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
         &self.access_meta[self.access_shard_index(key)]
     }
 
-    fn enqueue_eviction_key(&self, key: &CacheKey) {
-        let index = self.access_shard_index(key);
-        lock_queue(&self.access_queue[index]).push_back(key.clone());
-    }
-
     fn reset_access_meta_for_insert(&self, key: &CacheKey) {
+        let index = self.access_shard_index(key);
+        let mut queue = lock_queue(&self.access_queue[index]);
+        // The value may have been removed while this writer waited for the
+        // index. Never recreate bookkeeping for an already absent key.
+        if !self.cache.contains_key(key) {
+            return;
+        }
         let tick = self.next_access_tick();
-        let shard = self.access_shard(key);
-
+        let shard = &self.access_meta[index];
         if let Some(meta) = shard.get(key) {
             meta.reset_for_insert(tick);
         } else {
             shard.insert(key.clone(), CacheAccessMeta::new(tick));
         }
-        self.enqueue_eviction_key(key);
+        queue.put(key.clone(), ());
     }
 
     fn record_access(&self, key: &CacheKey) -> u64 {
         let tick = self.next_access_tick();
-        let shard = self.access_shard(key);
-
-        let count = if let Some(meta) = shard.get(key) {
-            meta.record_access(tick)
-        } else {
-            let meta = CacheAccessMeta::new(tick);
-            let count = meta.record_access(tick);
-            shard.insert(key.clone(), meta);
-            count
-        };
-        self.enqueue_eviction_key(key);
-        count
+        // A read can finish after its entry was deleted. Only an insertion may
+        // create metadata, so such a read cannot leave an orphan candidate.
+        self.access_shard(key)
+            .get(key)
+            .map_or(0, |meta| meta.record_access(tick))
     }
 
     fn remove_access_meta(&self, key: &CacheKey) {
-        self.access_shard(key).remove(key);
-    }
-
-    fn remove_access_meta_if_unchanged(
-        &self,
-        key: &CacheKey,
-        last_access_tick: u64,
-        access_count: u64,
-    ) {
-        self.access_shard(key).remove_if(key, |_key, meta| {
-            meta.snapshot() == (last_access_tick, access_count)
-        });
+        let index = self.access_shard_index(key);
+        let mut queue = lock_queue(&self.access_queue[index]);
+        // Serialize with insert bookkeeping, then validate current live state.
+        // A replacement keeps its slot; a later insertion will create its own.
+        if !self.cache.contains_key(key) {
+            self.access_meta[index].remove(key);
+            queue.pop(key);
+        }
     }
 
     fn eviction_candidates(&self) -> Vec<EvictionCandidate> {
@@ -470,7 +463,6 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
 
         let shard_count = self.access_meta.len();
         let start = self.eviction_cursor.fetch_add(1, Ordering::Relaxed) % shard_count;
-        let mut seen = HashSet::with_capacity(target);
 
         for offset in 0..shard_count {
             if candidates.len() >= target {
@@ -484,14 +476,9 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             }
             let shard = &self.access_meta[(start + offset) % shard_count];
 
-            let mut requeue = Vec::new();
             for key in sampled {
-                if !seen.insert(key.clone()) {
-                    requeue.push(key);
-                    continue;
-                }
-                if let Some(meta) = shard.get(&key) {
-                    let (last_access_tick, access_count) = meta.snapshot();
+                let snapshot = shard.get(&key).map(|meta| meta.snapshot());
+                if let Some((last_access_tick, access_count)) = snapshot {
                     if let Some(entry) = self.cache.get(&key) {
                         if candidates.len() < target {
                             candidates.push(EvictionCandidate {
@@ -502,16 +489,11 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
                                 remaining_ttl: entry.remaining_ttl(),
                             });
                         }
-                        requeue.push(key);
                     } else {
-                        shard.remove_if(&key, |_key, meta| {
-                            meta.snapshot() == (last_access_tick, access_count)
-                        });
+                        self.remove_access_meta(&key);
                     }
                 }
             }
-
-            self.requeue_eviction_keys(shard_index, requeue);
         }
 
         candidates
@@ -535,12 +517,11 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             }
 
             let shard = &self.access_meta[shard_index];
-            let mut requeue = Vec::new();
             let mut expired = None;
 
             for key in sampled {
-                if let Some(meta) = shard.get(&key) {
-                    let (last_access_tick, access_count) = meta.snapshot();
+                let snapshot = shard.get(&key).map(|meta| meta.snapshot());
+                if let Some((last_access_tick, access_count)) = snapshot {
                     if let Some(entry) = self.cache.get(&key) {
                         if entry.is_expired() && expired.is_none() {
                             expired = Some(EvictionCandidate {
@@ -551,16 +532,12 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
                                 remaining_ttl: entry.remaining_ttl(),
                             });
                         }
-                        requeue.push(key);
                     } else {
-                        shard.remove_if(&key, |_key, meta| {
-                            meta.snapshot() == (last_access_tick, access_count)
-                        });
+                        self.remove_access_meta(&key);
                     }
                 }
             }
 
-            self.requeue_eviction_keys(shard_index, requeue);
             if expired.is_some() {
                 return expired;
             }
@@ -574,27 +551,23 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             return Vec::new();
         }
 
-        let attempts = budget.saturating_mul(2).min(EVICTION_SAMPLE_SIZE);
-        let mut sampled = Vec::with_capacity(attempts);
         let mut queue = lock_queue(&self.access_queue[shard_index]);
+        let attempts = budget
+            .saturating_mul(2)
+            .min(EVICTION_SAMPLE_SIZE)
+            .min(queue.len());
+        let mut sampled = Vec::with_capacity(attempts);
         for _ in 0..attempts {
-            let Some(key) = queue.pop_front() else {
+            let Some((key, ())) = queue.peek_lru() else {
                 break;
             };
+            let key = key.clone();
+            // Rotate under the same lock without allocating another index node.
+            // A delete cannot interleave and resurrect a removed candidate.
+            queue.promote(&key);
             sampled.push(key);
         }
         sampled
-    }
-
-    fn requeue_eviction_keys(&self, shard_index: usize, keys: Vec<CacheKey>) {
-        if keys.is_empty() {
-            return;
-        }
-
-        let mut queue = lock_queue(&self.access_queue[shard_index]);
-        for key in keys {
-            queue.push_back(key);
-        }
     }
 
     /// Evict one entry based on the eviction policy
@@ -682,19 +655,11 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             self.stats.record_eviction();
             self.stats.set_entry_count(self.cache.len());
             trace!(key = %candidate.key, policy = policy, "Cache eviction");
-            self.remove_access_meta_if_unchanged(
-                &candidate.key,
-                candidate.last_access_tick,
-                candidate.access_count,
-            );
+            self.remove_access_meta(&candidate.key);
             return true;
         }
 
-        self.remove_access_meta_if_unchanged(
-            &candidate.key,
-            candidate.last_access_tick,
-            candidate.access_count,
-        );
+        self.remove_access_meta(&candidate.key);
         false
     }
 
@@ -708,13 +673,17 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
             }
         }
 
-        let count = expired_keys.len();
+        let mut count = 0;
         for key in expired_keys {
-            if let Some((_, removed)) = self.cache.remove(&key) {
+            if let Some((_, removed)) = self
+                .cache
+                .remove_if(&key, |_key, entry| entry.is_expired())
+            {
                 self.stats.sub_total_size(removed.size_bytes);
+                self.remove_access_meta(&key);
+                self.stats.record_eviction();
+                count += 1;
             }
-            self.remove_access_meta(&key);
-            self.stats.record_eviction();
         }
 
         if count > 0 {
@@ -732,7 +701,7 @@ fn default_access_shard_count() -> usize {
         .clamp(MIN_ACCESS_SHARDS, MAX_ACCESS_SHARDS)
 }
 
-fn lock_queue(queue: &Mutex<VecDeque<CacheKey>>) -> MutexGuard<'_, VecDeque<CacheKey>> {
+fn lock_queue(queue: &Mutex<LruCache<CacheKey, ()>>) -> MutexGuard<'_, LruCache<CacheKey, ()>> {
     queue
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
