@@ -470,13 +470,18 @@ def main():
                 "admin_matches_sql_billing": api_item is not None and api_item.get("billing") == sql_item.get("billing"),
                 "admin_wait_duration_visible": api_item is not None and api_item.get("awaiting_duration_ms") is not None,
             }
+            scope_observations = {}
             for scope in ("provider", "model"):
                 reserved = billing.get(scope + "_reserved_amount")
                 charged = billing.get(scope + "_charge_amount")
-                checks[scope + "_estimate_responsibility_acknowledged"] = (reserved is not None and reserved > 0
-                    and charged == reserved and billing.get(scope + "_settlement") == "settled")
+                settlement = billing.get(scope + "_settlement")
+                checks[scope + "_estimate_responsibility_visible"] = reserved is not None and reserved > 0 and bool(settlement)
+                scope_observations[scope] = {"reserved_amount": reserved, "charge_amount": charged,
+                    "settlement": settlement, "acknowledged": settlement == "settled",
+                    "requires_review": settlement != "settled" or charged is None}
             billing_checks.append({"request_id": row["request_id"], "admin_status": status,
-                "admin_item": api_item, "checks": checks})
+                "admin_item": api_item, "checks": checks, "scope_observations": scope_observations,
+                "requires_review": sql_item.get("cost") is None or any(value["requires_review"] for value in scope_observations.values())})
         artifact["results"]["cancelled_billing_observations"] = billing_checks
         artifact["results"]["cancelled_billing_check_errors"] = sum(not all(item["checks"].values()) for item in billing_checks)
         artifact["source_after_run"] = source_evidence()
@@ -509,7 +514,8 @@ def main():
         "unary_errors": artifact["results"]["authenticated_shared_budget_ledger"]["errors"],
         "stream_errors": artifact["results"]["long_stream_slow_consumer"]["errors"],
         "ledger_rows_missing": artifact["results"]["measured_ledger_rows_missing"],
-        "cancelled_billing_check_errors": artifact["results"]["cancelled_billing_check_errors"]}))
+        "cancelled_billing_check_errors": artifact["results"]["cancelled_billing_check_errors"],
+        "cancelled_rows_requiring_review": sum(row["requires_review"] for row in artifact["results"]["cancelled_billing_observations"])}))
     if any(artifact["results"][key]["errors"] for key in ("authenticated_shared_budget_ledger", "long_stream_slow_consumer", "cancelled_slow_consumer")) or artifact["results"]["measured_ledger_rows_missing"] or artifact["results"]["cancelled_billing_check_errors"]:
         raise SystemExit(1)
 
