@@ -675,9 +675,7 @@ impl<T: Clone + Send + Sync + 'static> InMemoryCache<T> {
 
         let mut count = 0;
         for key in expired_keys {
-            if let Some((_, removed)) = self
-                .cache
-                .remove_if(&key, |_key, entry| entry.is_expired())
+            if let Some((_, removed)) = self.cache.remove_if(&key, |_key, entry| entry.is_expired())
             {
                 self.stats.sub_total_size(removed.size_bytes);
                 self.remove_access_meta(&key);
