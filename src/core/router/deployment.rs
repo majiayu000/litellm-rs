@@ -248,6 +248,9 @@ pub struct DeploymentStateInner {
     /// Failed requests (lifetime)
     pub fail_requests: AtomicU64,
 
+    /// Successful requests this minute (for cooldown sample size).
+    pub successes_this_minute: AtomicU64,
+
     /// Failures this minute (for cooldown detection)
     pub fails_this_minute: AtomicU32,
 
@@ -285,6 +288,7 @@ impl DeploymentState {
                 total_requests: AtomicU64::new(0),
                 success_requests: AtomicU64::new(0),
                 fail_requests: AtomicU64::new(0),
+                successes_this_minute: AtomicU64::new(0),
                 fails_this_minute: AtomicU32::new(0),
                 cooldown_until: AtomicU64::new(0),
                 last_request_at: AtomicU64::new(0),
@@ -321,6 +325,7 @@ impl DeploymentState {
         MinuteCounters {
             tpm: self.tpm_current.load(Ordering::Relaxed),
             rpm: self.rpm_current.load(Ordering::Relaxed),
+            successes: self.successes_this_minute.load(Ordering::Relaxed),
             failures: self.fails_this_minute.load(Ordering::Relaxed),
         }
     }
@@ -353,6 +358,7 @@ impl DeploymentState {
     fn finish_minute_reset(&self, now: u64) {
         self.tpm_current.store(0, Ordering::Relaxed);
         self.rpm_current.store(0, Ordering::Relaxed);
+        self.successes_this_minute.store(0, Ordering::Relaxed);
         self.fails_this_minute.store(0, Ordering::Relaxed);
         self.minute_reset_at.store(now, Ordering::Release);
     }
@@ -446,6 +452,7 @@ fn minute_window_needs_roll(now: u64, last: u64) -> bool {
 pub(crate) struct MinuteCounters {
     pub(crate) tpm: u64,
     pub(crate) rpm: u64,
+    pub(crate) successes: u64,
     pub(crate) failures: u32,
 }
 
@@ -606,6 +613,9 @@ impl Deployment {
         self.state.with_current_minute(now, || {
             self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
             self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+            self.state
+                .successes_this_minute
+                .fetch_add(1, Ordering::Relaxed);
         });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
@@ -661,6 +671,7 @@ impl Deployment {
             MinuteCounters {
                 tpm: self.state.tpm_current.load(Ordering::Relaxed),
                 rpm: self.state.rpm_current.load(Ordering::Relaxed),
+                successes: self.state.successes_this_minute.load(Ordering::Relaxed),
                 failures: self.state.fails_this_minute.load(Ordering::Relaxed),
             }
         });

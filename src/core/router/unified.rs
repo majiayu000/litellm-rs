@@ -832,7 +832,8 @@ impl Router {
 
             CooldownReason::ConsecutiveFailures => {
                 let fails = minute.failures;
-                let successes_this_minute = minute.rpm;
+                // Billing RPM also includes interrupted streams and consumed failures.
+                let successes_this_minute = minute.successes;
                 let total_this_minute = successes_this_minute + fails as u64;
                 fails >= self.config.allowed_fails
                     && total_this_minute >= self.config.min_requests as u64

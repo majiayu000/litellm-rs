@@ -7,7 +7,7 @@ use litellm_rs::sdk::types::{ChatOptions, SdkChatRequest};
 use litellm_rs::{
     core::{
         providers::{ExternalProvider, Provider, ProviderError},
-        router::{Deployment, RuntimeBinding, UnifiedRouter},
+        router::{Deployment, RouterConfig, RuntimeBinding, UnifiedRouter},
         types::{
             chat::ChatRequest,
             context::RequestContext,
@@ -101,6 +101,13 @@ fn usage_chunk(created: i64) -> ChatChunk {
 fn fixture(
     events: Vec<Result<ChatChunk, ProviderError>>,
 ) -> (LLMClient, Arc<UnifiedRouter>, Arc<AtomicBool>) {
+    let (client, router, provider) = fixture_with_config(events, RouterConfig::default());
+    (client, router, provider.dropped.clone())
+}
+fn fixture_with_config(
+    events: Vec<Result<ChatChunk, ProviderError>>,
+    config: RouterConfig,
+) -> (LLMClient, Arc<UnifiedRouter>, Arc<CompletionProvider>) {
     let dropped = Arc::new(AtomicBool::new(false));
     let provider = Arc::new(CompletionProvider {
         models: vec![ModelInfo {
@@ -111,16 +118,16 @@ fn fixture(
         events: Mutex::new(Some(events)),
         dropped: dropped.clone(),
     });
-    let router = Arc::new(UnifiedRouter::default());
+    let router = Arc::new(UnifiedRouter::new(config));
     router.add_deployment(Deployment::new(
         "completion".into(),
-        Provider::External(provider),
+        Provider::External(provider.clone()),
         "wire-model".into(),
         "public-model".into(),
     ));
     let client =
         LLMClient::from_runtime(RuntimeBinding::new(router.clone()), "public-model").unwrap();
-    (client, router, dropped)
+    (client, router, provider)
 }
 fn request() -> Vec<Message> {
     vec![Message {
@@ -174,6 +181,124 @@ async fn exhausted_sdk_stream_releases_and_records_success_before_drop() {
     drop(output);
     assert_counts(&deployment, 1, 0, 12);
 }
+#[tokio::test]
+async fn partial_stream_failures_count_once_toward_local_breaker_min_requests() {
+    use litellm_rs::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
+    let input = ChatRequest::new("public-model")
+        .add_user_message("hello")
+        .estimate_input_tokens();
+    let estimate = u64::from(input)
+        + u64::from(
+            TokenCounter::new()
+                .estimate_output_tokens(
+                    None,
+                    input,
+                    &TokenizerIdentity::approximate("runtime", "public-model"),
+                )
+                .unwrap(),
+        );
+    for known_usage in [false, true] {
+        let prefix = if known_usage {
+            usage_chunk(1)
+        } else {
+            serde_json::from_value(serde_json::json!({
+                "id":"partial", "object":"chat.completion.chunk", "created":1,
+                "model":"wire-model", "choices":[{"index":0,"delta":{"content":"partial"}}]
+            }))
+            .unwrap()
+        };
+        let (client, router, provider) = fixture_with_config(
+            vec![],
+            RouterConfig {
+                allowed_fails: 1,
+                min_requests: 2,
+                cooldown_time_secs: 60,
+                ..Default::default()
+            },
+        );
+        for attempt in 1..=2 {
+            *provider.events.lock().unwrap() = Some(vec![
+                Ok(prefix.clone()),
+                Err(ProviderError::network(
+                    "sdk-completion-test",
+                    "stream failed",
+                )),
+            ]);
+            let mut output = client.chat_stream(request()).await.unwrap();
+            assert!(output.next().await.unwrap().is_ok());
+            assert!(output.next().await.unwrap().is_err());
+            let deployment = router.get_deployment("completion").unwrap();
+            assert_counts(
+                &deployment,
+                0,
+                attempt,
+                if known_usage {
+                    12 * attempt
+                } else {
+                    estimate * attempt
+                },
+            );
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                attempt
+            );
+            assert_eq!(
+                deployment.is_in_cooldown(),
+                attempt == 2,
+                "known_usage={known_usage}: one failed request must count once toward min_requests"
+            );
+            assert!(output.next().await.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_breaker_success_window_resets_with_billing_counters() {
+    for reset in ["none", "explicit", "lazy"] {
+        let (client, router, provider) = fixture_with_config(
+            vec![Ok(usage_chunk(1))],
+            RouterConfig {
+                allowed_fails: 1,
+                min_requests: 2,
+                cooldown_time_secs: 60,
+                ..Default::default()
+            },
+        );
+        let mut successful = client.chat_stream(request()).await.unwrap();
+        assert!(successful.next().await.unwrap().is_ok());
+        assert!(successful.next().await.is_none());
+        let deployment = router.get_deployment("completion").unwrap();
+        assert_counts(&deployment, 1, 0, 12);
+        // Rollover through a cloned handle must reset the shared window.
+        let state = deployment.state.clone();
+        match reset {
+            "explicit" => state.reset_minute(),
+            "lazy" => state.minute_reset_at.store(0, Ordering::Release),
+            _ => {}
+        }
+        *provider.events.lock().unwrap() = Some(vec![
+            Ok(usage_chunk(2)),
+            Err(ProviderError::network(
+                "sdk-completion-test",
+                "stream failed",
+            )),
+        ]);
+        let mut failed = client.chat_stream(request()).await.unwrap();
+        assert!(failed.next().await.unwrap().is_ok());
+        assert!(failed.next().await.unwrap().is_err());
+        assert_counts(&deployment, 1, 1, if reset == "none" { 24 } else { 12 });
+        assert_eq!(
+            state.rpm_current.load(Ordering::Relaxed),
+            if reset == "none" { 2 } else { 1 }
+        );
+        assert_eq!(
+            deployment.is_in_cooldown(),
+            reset == "none",
+            "reset={reset}: only a success in the current window counts toward min_requests"
+        );
+    }
+}
+
 #[tokio::test]
 async fn provider_error_retains_observed_usage_and_releases_before_error_is_returned() {
     let (client, router, dropped) = fixture(vec![
