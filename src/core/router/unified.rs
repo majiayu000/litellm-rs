@@ -12,6 +12,8 @@ use super::deployment::{Deployment, DeploymentId, LegacySelectorMetadata, curren
 use super::error::CooldownReason;
 use super::execution::infer_cooldown_reason;
 use super::fallback::{FallbackConfig, FallbackType};
+#[cfg(feature = "gateway")]
+use super::runtime_state::RuntimeStateRegistry;
 use crate::core::providers::Provider;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::model::ProviderCapability;
@@ -343,6 +345,8 @@ pub struct Router {
     pub(crate) admission: AdmissionBackend,
     /// Shared circuit-breaker backend (local atomics, or Redis when configured).
     pub(crate) circuit: CircuitBackend,
+    #[cfg(feature = "gateway")]
+    runtime_state_history: Mutex<RuntimeStateRegistry>,
 }
 
 impl Router {
@@ -361,6 +365,8 @@ impl Router {
             health_probe_wakeup: Arc::new(tokio::sync::Notify::new()),
             admission: AdmissionBackend::default(),
             circuit: CircuitBackend::default(),
+            #[cfg(feature = "gateway")]
+            runtime_state_history: Mutex::new(RuntimeStateRegistry::default()),
         }
     }
 
@@ -449,6 +455,43 @@ impl Router {
 
     pub(super) fn publish_current_snapshot(&self) {
         self.update_routing_snapshot(|_| ());
+    }
+
+    /// Reattach runtime state only after the complete candidate revision has
+    /// validated and any authoritative configuration commit has succeeded.
+    /// Fresh provider clients and selector metadata remain owned by the new
+    /// snapshot; matching resources share live atomics, never counter copies.
+    #[cfg(feature = "gateway")]
+    pub(crate) fn inherit_runtime_state(&self, previous: &Router) {
+        let mut registry = previous.runtime_state_history.lock().clone();
+        registry.prune_retired();
+        registry.remember(&previous.load_routing_snapshot());
+
+        // Old request pins can outlive this publication. Their probe supervisor
+        // must not keep running indefinitely alongside the new generation.
+        for (_, task) in previous.health_probe_tasks.lock().drain() {
+            task.abort();
+        }
+
+        self.update_routing_snapshot(|snapshot| {
+            for (id, slot) in &mut snapshot.deployments {
+                let Some(prior) = registry.find(id, &slot.state) else {
+                    continue;
+                };
+                let mut deployment = slot.as_ref().clone();
+                deployment.state = prior.for_snapshot_insertion_with_provider(
+                    deployment.state.provider_instance_identity(),
+                );
+                if !self.config.enable_pre_call_checks
+                    || deployment.config.health_check_policy.is_none()
+                {
+                    deployment.state.clear_disabled_probe_failure();
+                }
+                *slot = Arc::new(deployment);
+            }
+            registry.remember(snapshot);
+        });
+        *self.runtime_state_history.lock() = registry;
     }
 
     /// Add a deployment to the router
