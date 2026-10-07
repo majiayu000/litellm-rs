@@ -2372,13 +2372,13 @@ async fn native_unknown_usage_retains_admission_but_known_zero_does_not() {
                 tokio::time::timeout(Duration::from_secs(5), async {
                     loop {
                         let counts: Vec<Option<i64>> = redis::cmd("HMGET")
-                            .arg(&key).arg(&["p", "r", "t"])
+                            .arg(key).arg(&["p", "r", "t"])
                             .query_async(&mut conn).await.unwrap();
                         if counts[0] == Some(0) {
                             assert_eq!(counts[1], Some(1));
                             let tokens = counts[2].unwrap();
                             assert!(if retained { tokens > 700 && tokens < 1000 } else { tokens == 0 });
-                            let fields: Vec<String> = redis::cmd("HKEYS").arg(&key).query_async(&mut conn).await.unwrap();
+                            let fields: Vec<String> = redis::cmd("HKEYS").arg(key).query_async(&mut conn).await.unwrap();
                             assert!(!fields.iter().any(|field| field.starts_with("l:") || field.starts_with("p:")));
                             break;
                         }
