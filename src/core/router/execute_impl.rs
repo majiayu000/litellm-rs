@@ -19,6 +19,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 impl Router {
+    /// Preserve a completed provider failure before shared publication can wait.
+    /// Work cancelled before the circuit bridge accepts it has no Redis receipt.
+    async fn record_execution_failure(&self, deployment: &Deployment, reason: CooldownReason) {
+        self.record_local_failure(deployment, reason);
+        self.record_failure_circuit_for_deployment_async(deployment, reason)
+            .await;
+    }
+
     /// Execute a request for a single model with retry logic
     ///
     /// Attempts to execute the operation with retry on transient failures.
@@ -147,14 +155,12 @@ impl Router {
                     let model_used = selected_deployment.model.clone();
                     // The upstream outcome is known before the first settlement await.
                     // Cancellation may stop I/O, but must not erase local accounting.
-                    deployment_lease
-                        .deployment()
-                        .record_success(tokens_used.unwrap_or(0), latency_us);
                     if let Some(tokens) = tokens_used {
                         deployment_lease.preserve_admission_usage(tokens);
                     } else {
                         deployment_lease.preserve_admission_reservation(0);
                     }
+                    deployment_lease.record_success(tokens_used.unwrap_or(0), latency_us);
                     self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
                         .await;
                     if let Some(tokens) = tokens_used {
@@ -184,7 +190,7 @@ impl Router {
                         // Use ConsecutiveFailures so the deployment only enters
                         // cooldown after exceeding allowed_fails threshold,
                         // giving retries a chance to succeed.
-                        self.record_failure_with_reason_for_deployment_async(
+                        self.record_execution_failure(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
                         )
@@ -200,7 +206,7 @@ impl Router {
                         continue;
                     } else {
                         let cooldown_reason = infer_cooldown_reason(&err);
-                        self.record_failure_with_reason_for_deployment_async(
+                        self.record_execution_failure(
                             deployment_lease.deployment(),
                             cooldown_reason,
                         )
@@ -363,7 +369,7 @@ impl Router {
                         RetryContext::stream_pre_output(attempt, max_attempts),
                     );
                     if retry_decision.should_retry {
-                        self.record_failure_with_reason_for_deployment_async(
+                        self.record_execution_failure(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
                         )
@@ -380,11 +386,8 @@ impl Router {
                     }
 
                     let cooldown_reason = infer_cooldown_reason(&err);
-                    self.record_failure_with_reason_for_deployment_async(
-                        deployment_lease.deployment(),
-                        cooldown_reason,
-                    )
-                    .await;
+                    self.record_execution_failure(deployment_lease.deployment(), cooldown_reason)
+                        .await;
                     deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     return Err(err);
@@ -619,10 +622,8 @@ impl Router {
                 let model_used = selected_deployment.model.clone();
                 // The upstream outcome is known before the first settlement await.
                 // Cancellation may stop I/O, but must not erase local accounting.
-                deployment_lease
-                    .deployment()
-                    .record_success(tokens_used, latency_us);
                 deployment_lease.preserve_admission_usage(tokens_used);
+                deployment_lease.record_success(tokens_used, latency_us);
                 self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
                     .await;
                 deployment_lease.commit_admission_async(tokens_used).await;
@@ -639,11 +640,8 @@ impl Router {
             }
             Err(err) => {
                 let cooldown_reason = infer_cooldown_reason(&err);
-                self.record_failure_with_reason_for_deployment_async(
-                    deployment_lease.deployment(),
-                    cooldown_reason,
-                )
-                .await;
+                self.record_execution_failure(deployment_lease.deployment(), cooldown_reason)
+                    .await;
                 deployment_lease.cancel_admission_async().await;
                 drop(deployment_lease);
 

@@ -23,17 +23,20 @@ use super::runtime_state::GatewayRuntimeIdentity;
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "deployment/local_admission.rs"]
+mod local_admission;
 #[path = "deployment/probe_state.rs"]
 mod probe_state;
 #[path = "deployment/provider_instance.rs"]
 mod provider_instance;
+pub(crate) use local_admission::LocalAdmissionHold;
 use probe_state::ProbeLifecycle;
 pub(crate) use probe_state::publish_probe_group;
 pub(crate) use provider_instance::ProviderInstanceIdentity;
@@ -202,6 +205,7 @@ impl Default for DeploymentConfig {
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     minute_window_lock: Arc<RwLock<()>>,
+    local_admission: Arc<Mutex<local_admission::LocalTokenLedger>>,
     provider_instance_identity: ProviderInstanceIdentity,
     pub(super) runtime_identity: Option<GatewayRuntimeIdentity>,
     probe_health: Arc<AtomicU8>,
@@ -297,6 +301,7 @@ impl DeploymentState {
                 minute_reset_at: AtomicU64::new(now),
             }),
             minute_window_lock: Arc::new(RwLock::new(())),
+            local_admission: Arc::new(Mutex::new(local_admission::LocalTokenLedger::default())),
             provider_instance_identity,
             runtime_identity: None,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
@@ -322,6 +327,11 @@ impl DeploymentState {
     pub(crate) fn minute_counters(&self, now: u64) -> MinuteCounters {
         self.roll_minute_window(now);
         let _guard = self.minute_window_lock.read();
+        self.observed_minute_counters()
+    }
+
+    /// Read observed usage while the caller owns the current minute gate.
+    fn observed_minute_counters(&self) -> MinuteCounters {
         MinuteCounters {
             tpm: self.tpm_current.load(Ordering::Relaxed),
             rpm: self.rpm_current.load(Ordering::Relaxed),
@@ -356,6 +366,9 @@ impl DeploymentState {
     }
 
     fn finish_minute_reset(&self, now: u64) {
+        // The minute gate is already exclusive. Live reservations survive a
+        // reset; only completed unknown usage belongs to the elapsed window.
+        self.local_admission.lock().retained_unobserved = 0;
         self.tpm_current.store(0, Ordering::Relaxed);
         self.rpm_current.store(0, Ordering::Relaxed);
         self.successes_this_minute.store(0, Ordering::Relaxed);
@@ -400,6 +413,7 @@ impl DeploymentState {
         Self {
             inner: Arc::clone(&self.inner),
             minute_window_lock: Arc::clone(&self.minute_window_lock),
+            local_admission: Arc::clone(&self.local_admission),
             provider_instance_identity,
             runtime_identity: self.runtime_identity.clone(),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
@@ -607,15 +621,30 @@ impl Deployment {
     /// * `tokens` - Number of tokens consumed
     /// * `latency_us` - Request latency in microseconds
     pub fn record_success(&self, tokens: u64, latency_us: u64) {
+        self.record_success_with_admission(tokens, latency_us, None);
+    }
+
+    pub(crate) fn record_success_with_admission(
+        &self,
+        tokens: u64,
+        latency_us: u64,
+        admission: Option<&super::admission::AdmissionHold>,
+    ) {
         let now = current_timestamp();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
         self.state.with_current_minute(now, || {
-            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-            self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
-            self.state
-                .successes_this_minute
-                .fetch_add(1, Ordering::Relaxed);
+            let record = || {
+                self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+                self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+                self.state
+                    .successes_this_minute
+                    .fetch_add(1, Ordering::Relaxed);
+            };
+            match admission {
+                Some(hold) => hold.record_local_observation(tokens, record),
+                None => record(),
+            }
         });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
@@ -647,10 +676,25 @@ impl Deployment {
     }
 
     /// Retain known admission usage when a consumer interrupts a stream.
+    #[cfg(feature = "gateway")]
     pub(crate) fn record_interrupted_usage(&self, tokens: u64) {
+        self.record_interrupted_usage_with_admission(tokens, None);
+    }
+
+    pub(crate) fn record_interrupted_usage_with_admission(
+        &self,
+        tokens: u64,
+        admission: Option<&super::admission::AdmissionHold>,
+    ) {
         self.state.with_current_minute(current_timestamp(), || {
-            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-            self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+            let record = || {
+                self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+                self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+            };
+            match admission {
+                Some(hold) => hold.record_local_observation(tokens, record),
+                None => record(),
+            }
         });
     }
 
@@ -668,12 +712,7 @@ impl Deployment {
         self.state.fail_requests.fetch_add(1, Ordering::Relaxed);
         let counters = self.state.with_current_minute(now, || {
             self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
-            MinuteCounters {
-                tpm: self.state.tpm_current.load(Ordering::Relaxed),
-                rpm: self.state.rpm_current.load(Ordering::Relaxed),
-                successes: self.state.successes_this_minute.load(Ordering::Relaxed),
-                failures: self.state.fails_this_minute.load(Ordering::Relaxed),
-            }
+            self.state.observed_minute_counters()
         });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 

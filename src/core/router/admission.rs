@@ -4,7 +4,8 @@
 //! reserve/settle/cancel run as single-key Lua so replica counts cannot
 //! multiply limits. Redis errors fail closed.
 
-use super::deployment::Deployment;
+use super::deployment::{Deployment, LocalAdmissionHold};
+use std::sync::Arc;
 #[cfg(any(feature = "gateway", test))]
 use tracing::warn;
 
@@ -12,46 +13,63 @@ use tracing::warn;
 pub(crate) const DEFAULT_LEASE_TTL_MS: i64 = 600_000;
 
 #[derive(Clone, Debug)]
-pub(crate) struct AdmissionHold {
+pub(crate) enum AdmissionHold {
+    InProcess(Arc<LocalAdmissionHold>),
     #[cfg(feature = "gateway")]
-    inner: std::sync::Arc<AdmissionHoldInner>,
+    Redis(Arc<AdmissionHoldInner>),
 }
 
 impl AdmissionHold {
     /// Release concurrency while preserving the RPM/TPM reservation, raised
     /// to any observed token minimum when the final usage remains unknown.
     pub(crate) fn prepare_retention(&self, minimum_tokens: u64) {
-        #[cfg(feature = "gateway")]
-        {
-            *self.inner.completion.lock() =
-                Some(AdmissionCompletion::Retain(to_i64(minimum_tokens)));
+        match self {
+            Self::InProcess(hold) => hold.prepare_retention(minimum_tokens),
+            #[cfg(feature = "gateway")]
+            Self::Redis(inner) => {
+                *inner.completion.lock() =
+                    Some(AdmissionCompletion::Retain(to_i64(minimum_tokens)));
+            }
         }
-        #[cfg(not(feature = "gateway"))]
-        let _ = minimum_tokens;
     }
 
     /// Preserve a known cancellation before another accounting await.
     #[cfg(feature = "gateway")]
     pub(crate) fn prepare_cancellation(&self) {
-        *self.inner.completion.lock() = Some(AdmissionCompletion::Cancel);
+        match self {
+            Self::InProcess(hold) => hold.prepare_cancellation(),
+            Self::Redis(inner) => *inner.completion.lock() = Some(AdmissionCompletion::Cancel),
+        }
     }
 
     /// Preserve known usage before yielding it to a caller that may drop the
     /// stream. The lease's existing RAII cleanup owns the eventual Redis write.
     pub(crate) fn prepare_settlement(&self, actual_tokens: u64) {
-        #[cfg(feature = "gateway")]
-        {
-            *self.inner.completion.lock() =
-                Some(AdmissionCompletion::Settle(to_i64(actual_tokens)));
+        match self {
+            Self::InProcess(hold) => hold.prepare_settlement(),
+            #[cfg(feature = "gateway")]
+            Self::Redis(inner) => {
+                *inner.completion.lock() = Some(AdmissionCompletion::Settle(to_i64(actual_tokens)));
+            }
         }
         #[cfg(not(feature = "gateway"))]
         let _ = actual_tokens;
+    }
+
+    /// The caller owns the deployment's minute gate. Redis completion remains
+    /// asynchronous; local usage and reservation replacement are one operation.
+    pub(crate) fn record_local_observation<T>(&self, tokens: u64, record: impl FnOnce() -> T) -> T {
+        match self {
+            Self::InProcess(hold) => hold.record_observation(tokens, record),
+            #[cfg(feature = "gateway")]
+            Self::Redis(_) => record(),
+        }
     }
 }
 
 #[cfg(feature = "gateway")]
 #[derive(Debug)]
-struct AdmissionHoldInner {
+pub(crate) struct AdmissionHoldInner {
     pool: std::sync::Arc<crate::storage::redis::RedisPool>,
     lease_id: String,
     deployment_id: String,
@@ -77,15 +95,13 @@ impl AdmissionHold {
         deployment_id: String,
         cleanup_slot: tokio::sync::OwnedSemaphorePermit,
     ) -> Self {
-        Self {
-            inner: std::sync::Arc::new(AdmissionHoldInner {
-                pool,
-                lease_id,
-                deployment_id,
-                completion: parking_lot::Mutex::new(Some(AdmissionCompletion::Cancel)),
-                cleanup_slot: Some(cleanup_slot),
-            }),
-        }
+        Self::Redis(Arc::new(AdmissionHoldInner {
+            pool,
+            lease_id,
+            deployment_id,
+            completion: parking_lot::Mutex::new(Some(AdmissionCompletion::Cancel)),
+            cleanup_slot: Some(cleanup_slot),
+        }))
     }
 }
 
@@ -122,11 +138,9 @@ pub(crate) enum AdmissionBackend {
 
 pub(crate) enum AdmissionReserve {
     Skipped,
-    #[cfg(feature = "gateway")]
     Denied,
     #[cfg(any(feature = "gateway", test))]
     Unavailable,
-    #[cfg(feature = "gateway")]
     Granted(AdmissionHold),
 }
 
@@ -148,8 +162,6 @@ impl AdmissionBackend {
         deployment: &Deployment,
         estimated_tokens: u64,
     ) -> AdmissionReserve {
-        #[cfg(not(feature = "gateway"))]
-        let _ = (estimated_tokens,);
         let max_parallel = option_limit(deployment.config.max_parallel_requests.map(i64::from));
         let max_rpm = option_limit(deployment.config.rpm_limit.map(to_i64));
         let max_tpm = option_limit(deployment.config.tpm_limit.map(to_i64));
@@ -158,7 +170,18 @@ impl AdmissionBackend {
         }
 
         match self {
-            Self::InProcess => AdmissionReserve::Skipped,
+            Self::InProcess => match deployment.config.tpm_limit {
+                Some(limit) => match deployment
+                    .state
+                    .reserve_local_tokens(estimated_tokens.max(1), limit)
+                {
+                    Some(hold) => {
+                        AdmissionReserve::Granted(AdmissionHold::InProcess(Arc::new(hold)))
+                    }
+                    None => AdmissionReserve::Denied,
+                },
+                None => AdmissionReserve::Skipped,
+            },
             #[cfg(test)]
             Self::Unavailable => {
                 warn!(
@@ -230,7 +253,7 @@ impl AdmissionBackend {
     }
 
     pub(crate) async fn settle_async(&self, hold: &AdmissionHold, actual_tokens: u64) {
-        self.finish(hold, "settle", to_i64(actual_tokens)).await;
+        self.finish(hold, "settle", actual_tokens).await;
     }
 
     pub(crate) async fn cancel_async(&self, hold: &AdmissionHold) {
@@ -238,40 +261,45 @@ impl AdmissionBackend {
     }
 
     pub(crate) async fn retain_async(&self, hold: &AdmissionHold, minimum_tokens: u64) {
-        self.finish(hold, "retain", to_i64(minimum_tokens)).await;
+        self.finish(hold, "retain", minimum_tokens).await;
     }
 
-    async fn finish(&self, hold: &AdmissionHold, op: &'static str, actual_tpm: i64) {
-        #[cfg(not(feature = "gateway"))]
-        let _ = (hold, op, actual_tpm);
+    async fn finish(&self, hold: &AdmissionHold, op: &'static str, actual_tokens: u64) {
         match self {
-            Self::InProcess => {}
+            Self::InProcess => match hold {
+                AdmissionHold::InProcess(hold) => hold.finish(op, actual_tokens),
+                #[cfg(feature = "gateway")]
+                AdmissionHold::Redis(_) => {}
+            },
             #[cfg(test)]
             Self::Unavailable => {}
             #[cfg(feature = "gateway")]
             Self::Redis { pool, .. } => {
+                let AdmissionHold::Redis(inner) = hold else {
+                    return;
+                };
+                let actual_tpm = to_i64(actual_tokens);
                 let pool = std::sync::Arc::clone(pool);
-                let key =
-                    crate::storage::redis::RedisPool::admission_key(&hold.inner.deployment_id);
-                let hold = hold.clone();
-                let deployment_id = hold.inner.deployment_id.clone();
-                *hold.inner.completion.lock() = Some(match op {
+                let key = crate::storage::redis::RedisPool::admission_key(&inner.deployment_id);
+                let inner = Arc::clone(inner);
+                let deployment_id = inner.deployment_id.clone();
+                *inner.completion.lock() = Some(match op {
                     "settle" => AdmissionCompletion::Settle(actual_tpm),
                     "retain" => AdmissionCompletion::Retain(actual_tpm),
                     _ => AdmissionCompletion::Cancel,
                 });
                 let _ = run_redis(&deployment_id, op, async move {
                     let result = if op == "settle" {
-                        pool.admission_settle(&key, &hold.inner.lease_id, actual_tpm)
+                        pool.admission_settle(&key, &inner.lease_id, actual_tpm)
                             .await
                     } else if op == "retain" {
-                        pool.admission_retain(&key, &hold.inner.lease_id, actual_tpm)
+                        pool.admission_retain(&key, &inner.lease_id, actual_tpm)
                             .await
                     } else {
-                        pool.admission_cancel(&key, &hold.inner.lease_id).await
+                        pool.admission_cancel(&key, &inner.lease_id).await
                     };
                     if result.is_ok() {
-                        *hold.inner.completion.lock() = None;
+                        *inner.completion.lock() = None;
                     }
                     result
                 })
@@ -608,8 +636,11 @@ mod tests {
         let slots = admission_io_slots().acquire_many(64).await.unwrap();
         let mut settlement = Box::pin(backend.settle_async(&hold, 4));
         assert!(futures::poll!(settlement.as_mut()).is_pending());
+        let AdmissionHold::Redis(inner) = &hold else {
+            panic!("expected Redis admission hold");
+        };
         assert!(matches!(
-            *hold.inner.completion.lock(),
+            *inner.completion.lock(),
             Some(AdmissionCompletion::Settle(4))
         ));
         drop(settlement);

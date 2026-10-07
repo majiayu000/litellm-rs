@@ -63,7 +63,7 @@ impl RuntimeStreamCompletion {
     pub(crate) fn observe_output(&mut self) {
         self.output_observed = true;
         // A prior usage snapshot cannot settle output generated after it.
-        // Keep that observed count locally, but retain the shared reservation
+        // Keep that observed count locally, but retain the admission reservation
         // until another usage record covers the newly observed payload.
         self.usage_covers_output = false;
         if let Some(lease) = &self.lease {
@@ -82,15 +82,13 @@ impl RuntimeStreamCompletion {
     pub(crate) async fn finish_success(mut self) {
         let lease = self.lease.as_mut().expect("live stream completion");
         let tokens = self.usage.unwrap_or_default();
-        lease
-            .deployment()
-            .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
-        self.outcome_recorded = true;
         if self.usage_covers_output {
             lease.preserve_admission_usage(tokens);
         } else {
             lease.preserve_admission_reservation(self.usage.unwrap_or_default());
         }
+        lease.record_success(tokens, self.started_at.elapsed().as_micros() as u64);
+        self.outcome_recorded = true;
         self.router
             .record_success_circuit_for_deployment_async(lease.deployment())
             .await;
@@ -116,9 +114,9 @@ impl RuntimeStreamCompletion {
         self.terminal_failure = Some(reason);
         let lease = self.lease.as_mut().expect("live stream completion");
         if let Some(tokens) = self.usage {
-            lease.deployment().record_interrupted_usage(tokens);
+            lease.record_interrupted_usage(tokens);
         } else if self.output_observed {
-            lease.deployment().record_interrupted_usage(0);
+            lease.record_interrupted_usage(0);
         }
         self.router
             .record_failure_with_reason_for_deployment_async(lease.deployment(), reason)
@@ -177,11 +175,11 @@ impl Drop for RuntimeStreamCompletion {
             } else if let Some(tokens) = self.usage {
                 // Consumer cancellation or SDK conversion failure is neutral
                 // for provider health, but observed usage is still real.
-                lease.deployment().record_interrupted_usage(tokens);
+                lease.record_interrupted_usage(tokens);
             } else if self.output_observed {
-                // RPM is known; the retained distributed estimate is not an
+                // RPM is known; the retained admission estimate is not an
                 // observed token count and must not enter actual local TPM.
-                lease.deployment().record_interrupted_usage(0);
+                lease.record_interrupted_usage(0);
             }
         }
         // DeploymentLease releases local active requests. AdmissionHold has
