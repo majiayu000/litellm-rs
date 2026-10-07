@@ -100,6 +100,18 @@ async fn native_audio_environment_rotations_change_runtime_resource_identity() {
                     .is_ok()
             );
 
+            for blank_key in ["", " "] {
+                let mut blank = config.clone();
+                blank
+                    .settings
+                    .insert("api_key".to_string(), blank_key.into());
+                let result = Router::from_gateway_config(&[blank], None).await;
+                assert!(
+                    matches!(result, Err(RouterError::DeploymentNotFound(message)) if message.contains("API key is required")),
+                    "explicit blank settings must preserve the provider error"
+                );
+            }
+
             let mut null_endpoint = config.clone();
             null_endpoint
                 .settings
