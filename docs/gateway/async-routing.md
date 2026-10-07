@@ -116,8 +116,11 @@ namespace with different credentials merely because earlier normalized inputs
 matched. Vertex project normalization preserves the factory's existing
 precedence for an explicit top-level project and provider-specific settings.
 
-Accepted API-key usage writes outlive a cancelled request waiter. The key manager
+On Tokio, accepted API-key usage writes outlive a cancelled request waiter. The key manager
 owns at most 1,024 concurrent writes and retains the complete usage record,
 including pricing and unpriced fields. Admission at that bound is best effort;
 an overloaded writer returns an error, and process shutdown is not a durable
 delivery guarantee. Normal callers continue to await the database result.
+When no Tokio runtime is active, the public key manager directly awaits its
+repository under the same write limit, preserving executor-independent callers
+and their existing cancellation behavior.
