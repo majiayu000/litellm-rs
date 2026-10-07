@@ -129,3 +129,74 @@ async fn test_key_manager_and_auth_system_share_db_source_of_truth() {
     assert!(auth_result.success);
     assert_eq!(auth_result.context.api_key_id(), Some(key_id));
 }
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn cancelled_budget_join_preserves_accepted_database_key_usage() {
+    use sea_orm::ConnectionTrait;
+
+    let directory = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("key-usage.sqlite").display()
+    );
+    let mut config = crate::config::Config::default();
+    config.gateway.storage.database.enabled = true;
+    config.gateway.storage.database.auto_migrate = true;
+    config.gateway.storage.database.max_connections = 1;
+    config.gateway.storage.database.url = url.clone();
+    config.gateway.storage.redis.enabled = false;
+    let storage = Arc::new(StorageLayer::new(&config.gateway.storage).await.unwrap());
+    let manager = KeyManager::new(DatabaseKeyRepository::new(storage));
+    let (key_id, _) = manager
+        .generate_key(CreateKeyConfig {
+            name: "Cancelled database usage join".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let blocker = sea_orm::Database::connect(url).await.unwrap();
+    blocker
+        .execute_unprepared("PRAGMA journal_mode = DELETE")
+        .await
+        .unwrap();
+
+    // Cover both a trusted priced usage and the existing reserved/no-usage charge.
+    for (expected_requests, tokens, cost) in [(1, 100, 0.25), (2, 0, 0.50)] {
+        blocker.execute_unprepared("BEGIN EXCLUSIVE").await.unwrap();
+        let mut joined = Box::pin(async {
+            tokio::join!(
+                std::future::pending::<()>(),
+                manager.record_usage(key_id, tokens, cost)
+            )
+        });
+        assert!(futures::poll!(&mut joined).is_pending());
+        tokio::task::yield_now().await;
+        drop(joined);
+        blocker.execute_unprepared("COMMIT").await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let stats = manager.get_usage_stats(key_id).await.unwrap();
+                if stats.total_requests == expected_requests {
+                    assert_eq!(stats.total_tokens, 100);
+                    assert_eq!(
+                        stats.total_cost,
+                        if expected_requests == 1 { 0.25 } else { 0.75 }
+                    );
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    // The database repository's existing missing-key error is returned unchanged.
+    assert!(matches!(
+        manager.record_usage(Uuid::new_v4(), 1, 0.01).await,
+        Err(crate::utils::error::gateway_error::GatewayError::NotFound(message))
+            if message == "API key not found"
+    ));
+}

@@ -1,5 +1,5 @@
-use std::sync::{Mutex, MutexGuard};
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use crate::core::providers::factory::CONSTRUCTION_ENV_LOCK as ENV_LOCK;
+use std::sync::MutexGuard;
 #[rustfmt::skip]
 const ENVS: &[&str] = &[
     "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
@@ -10,6 +10,8 @@ const ENVS: &[&str] = &[
     "OVHCLOUD_API_KEY", "OVH_AI_ENDPOINTS_ACCESS_TOKEN",
     "DEEPGRAM_API_KEY", "DEEPGRAM_API_BASE",
     "ELEVENLABS_API_KEY", "ELEVENLABS_API_BASE",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "AWS_REGION", "AWS_DEFAULT_REGION",
 ];
 struct EnvScope {
     previous: Vec<(&'static str, Option<String>)>,
@@ -144,6 +146,97 @@ async fn native_audio_environment_rotations_change_runtime_resource_identity() {
         assert_ne!(
             identities[1], identities[2],
             "endpoint rotation must retire the prior resource"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bedrock_environment_rotations_change_runtime_resource_identity() {
+    use super::*;
+    let config = ProviderConfig {
+        name: "bedrock-fixture".to_string(),
+        provider_type: "bedrock".to_string(),
+        api_key: String::new(),
+        models: vec!["anthropic.claude-3-sonnet-20240229-v1:0".to_string()],
+        ..ProviderConfig::default()
+    };
+    let mut identities = Vec::new();
+    for (key, secret, token, region) in [
+        (
+            "AKIA-fixture-a",
+            "fixture-secret-a",
+            "fixture-session-a",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-a",
+            "fixture-session-a",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-b",
+            "fixture-session-a",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-b",
+            "fixture-session-b",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-b",
+            "fixture-session-b",
+            "us-west-2",
+        ),
+    ] {
+        let _env = EnvScope::new(&[
+            ("AWS_ACCESS_KEY_ID", key),
+            ("AWS_SECRET_ACCESS_KEY", secret),
+            ("AWS_SESSION_TOKEN", token),
+            ("AWS_DEFAULT_REGION", region),
+        ]);
+        let normalized = normalize_provider_construction(&config);
+        let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
+            &serde_json::json!(normalized.config.settings),
+        );
+        assert_eq!(resource.aws_access_key_id, key);
+        assert_eq!(resource.aws_secret_access_key, secret);
+        assert_eq!(resource.aws_session_token.as_deref(), Some(token));
+        assert_eq!(resource.aws_region, region);
+        let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        identities.push(
+            router
+                .get_deployment("bedrock-fixture-anthropic.claude-3-sonnet-20240229-v1:0")
+                .unwrap()
+                .state
+                .runtime_identity
+                .clone()
+                .unwrap(),
+        );
+        let mut explicit = config.clone();
+        explicit.settings = serde_json::from_value(serde_json::json!({"access_key":"explicit-fixture", "secret_key":"explicit-secret", "session_token":"explicit-session", "region":"eu-west-1"})).unwrap();
+        let normalized = normalize_provider_construction(&explicit);
+        let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
+            &serde_json::json!(normalized.config.settings),
+        );
+        assert_eq!(resource.aws_access_key_id, "explicit-fixture");
+        assert_eq!(resource.aws_secret_access_key, "explicit-secret");
+        assert_eq!(
+            resource.aws_session_token.as_deref(),
+            Some("explicit-session")
+        );
+        assert_eq!(resource.aws_region, "eu-west-1");
+    }
+    for pair in identities.windows(2) {
+        assert_ne!(
+            pair[0], pair[1],
+            "changed effective AWS resource must retire prior identity"
         );
     }
 }

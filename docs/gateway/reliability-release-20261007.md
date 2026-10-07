@@ -68,6 +68,11 @@ block; they are not the HTTP execution path.
 - API-key budgets remain process-local. This work does not establish shared or
   restart-persistent per-key balances; the performance profile exercises shared
   provider/model budgets.
+- API-key usage recording requires a Tokio runtime. Accepted database writes
+  survive request cancellation. Manager
+  clones share a 1,024-write bound; capacity/repository errors remain observable
+  best-effort usage-statistics failures, and runtime shutdown has no durable retry.
+  This does not change the captured ledger facts or invent missing supplier usage.
 - Rust callers constructing public `RequestLedgerFacts` or `RequestLedgerRecord`
   literals must provide `billing` (use `None` when no facts are captured).
 - Request-ledger billing metadata is an additive SQL migration. Supplier-verified

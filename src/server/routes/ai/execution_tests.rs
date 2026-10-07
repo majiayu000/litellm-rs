@@ -858,7 +858,9 @@ async fn cancellation_test_router() -> Option<(
         .await
         .unwrap(),
     );
-    let router = UnifiedRouter::default().with_admission_redis(pool.clone());
+    let router = UnifiedRouter::default()
+        .with_admission_redis(pool.clone())
+        .with_circuit_redis(pool.clone());
     let id = uuid::Uuid::new_v4().to_string();
     router.add_deployment(
         Deployment::new(
@@ -899,6 +901,10 @@ async fn cancelled_stream_completion_records_local_success_exactly_once() {
     let deployment = router.get_deployment(&id).unwrap();
     let slots = crate::core::router::admission::pause_admission_io().await;
     let mut completion = Box::pin(lease.complete_response(42, None));
+    tokio::select! {
+        () = completion.as_mut() => panic!("admission settlement must remain paused"),
+        () = wait_for_shared_success(&pool, &id) => {}
+    }
     assert!(futures::poll!(completion.as_mut()).is_pending());
     assert_one_completed_request(&deployment);
     drop(completion);
@@ -910,6 +916,7 @@ async fn cancelled_stream_completion_records_local_success_exactly_once() {
     drop(slots);
     assert_one_completed_request(&deployment);
     wait_for_actual_settlement(&pool, &id).await;
+    assert_shared_success_once(&pool, &id).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -940,10 +947,44 @@ async fn cancelled_gateway_unary_settlement_retains_local_success() {
         .await
         .unwrap()
         .unwrap();
+    wait_for_shared_success(&pool, &id).await;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     assert_one_completed_request(&router.get_deployment(&id).unwrap());
     wait_for_actual_settlement(&pool, &id).await;
+    assert_shared_success_once(&pool, &id).await;
+}
+
+async fn shared_success_counts(pool: &crate::storage::redis::RedisPool, id: &str) -> (i64, i64) {
+    let key = crate::storage::redis::RedisPool::circuit_key(id);
+    let mut conn = pool.open_live_connection().await.unwrap();
+    let counts: (Option<i64>, Option<i64>) = redis::cmd("HMGET")
+        .arg(&key)
+        .arg(&["tot", "r"])
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    (counts.0.unwrap_or(0), counts.1.unwrap_or(0))
+}
+
+async fn wait_for_shared_success(pool: &crate::storage::redis::RedisPool, id: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if shared_success_counts(pool, id).await == (1, 1) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shared circuit success must precede the paused admission settlement");
+}
+
+async fn assert_shared_success_once(pool: &crate::storage::redis::RedisPool, id: &str) {
+    assert_eq!(shared_success_counts(pool, id).await, (1, 1));
+    pool.delete(&crate::storage::redis::RedisPool::circuit_key(id))
+        .await
+        .unwrap();
 }
 
 async fn wait_for_actual_settlement(pool: &crate::storage::redis::RedisPool, id: &str) {
