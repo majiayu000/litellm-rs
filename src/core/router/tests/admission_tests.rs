@@ -26,11 +26,11 @@ async fn unavailable_backend_fails_closed_without_reservation() {
 mod redis {
     use super::*;
     use crate::config::models::storage::RedisConfig;
+    use crate::core::router::selection::DeploymentLease;
     use crate::core::types::model::ProviderCapability;
     use crate::storage::redis::RedisPool;
 
     #[tokio::test(flavor = "current_thread")]
-    #[allow(deprecated)]
     async fn legacy_id_selectors_release_shared_admission_before_returning() {
         let Some(pool) = live_redis_pool().await else {
             return;
@@ -42,10 +42,14 @@ mod redis {
             seed(&a, &id, Some(1), None, None).await;
             seed(&b, &id, Some(1), None, None).await;
             let selected = if capability {
-                a.select_deployment_for_capability("gpt-4", &ProviderCapability::ChatCompletion)
+                a.select_deployment_lease_for_capability(
+                    "gpt-4",
+                    &ProviderCapability::ChatCompletion,
+                )
             } else {
-                a.select_deployment("gpt-4")
+                a.select_deployment_lease("gpt-4")
             }
+            .map(DeploymentLease::into_deployment_id)
             .expect("legacy selector can reserve inside a current-thread runtime");
             assert_eq!(
                 a.get_deployment(&id)
@@ -65,10 +69,14 @@ mod redis {
                 0
             );
             let second = if capability {
-                b.select_deployment_for_capability("gpt-4", &ProviderCapability::ChatCompletion)
+                b.select_deployment_lease_for_capability(
+                    "gpt-4",
+                    &ProviderCapability::ChatCompletion,
+                )
             } else {
-                b.select_deployment("gpt-4")
+                b.select_deployment_lease("gpt-4")
             }
+            .map(DeploymentLease::into_deployment_id)
             .expect("legacy release must leave the shared parallel slot reusable immediately");
             b.release_deployment(&second);
             drop(

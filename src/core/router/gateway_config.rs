@@ -22,6 +22,7 @@ use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
+use crate::core::providers::base::BaseConfig;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::{self as provider_registry, ProviderDispatchKind};
 use crate::core::providers::{Provider, create_provider};
@@ -85,6 +86,22 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
         config.provider_type.trim()
     };
     let top_level = non_blank(&config.api_key).map(str::to_owned);
+    let native_audio_environment = match selector.parse::<ProviderType>() {
+        Ok(ProviderType::Deepgram) => Some(BaseConfig::from_env("deepgram")),
+        Ok(ProviderType::ElevenLabs) => Some(BaseConfig::from_env("elevenlabs")),
+        _ => None,
+    };
+    if let Some(environment) = &native_audio_environment
+        && config.base_url.is_none()
+        && config
+            .settings
+            .get("base_url")
+            .or_else(|| config.settings.get("api_base"))
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        normalized.base_url = environment.api_base.clone();
+    }
 
     let effective_credential = if let Some(definition) = catalog_definition(selector) {
         top_level.or_else(|| {
@@ -115,6 +132,9 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
                 .or_else(|| setting(config, "google_api_key"))
                 .or_else(|| setting(config, "gemini_api_key"))
                 .or_else(|| environment(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])),
+            Ok(ProviderType::Deepgram | ProviderType::ElevenLabs) => top_level
+                .or_else(|| setting(config, "api_key"))
+                .or_else(|| native_audio_environment.and_then(|environment| environment.api_key)),
             Ok(ProviderType::Bedrock) | Err(_) => None,
             Ok(_) => top_level.or_else(|| setting(config, "api_key")),
         }
