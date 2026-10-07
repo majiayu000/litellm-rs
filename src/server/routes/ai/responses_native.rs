@@ -682,12 +682,26 @@ pub(super) fn response_usage(value: &Value) -> Option<Usage> {
     if reasoning > output || cached.checked_add(written)? > input {
         return None;
     }
-    let mut normalized = crate::core::providers::shared::strict_usage(
-        &[input],
-        &[output],
-        Some((total, &[input, output])),
-        Some((cached, input)),
-    )?;
+    // Native usage requires all three explicit counts. A validated zero is a
+    // known settlement, unlike the generic parser's empty-usage placeholder.
+    let mut normalized = if input == 0 && output == 0 && total == 0 {
+        Usage {
+            prompt_tokens_details: Some(crate::core::types::responses::PromptTokensDetails {
+                cached_tokens: Some(0),
+                cache_read_tokens: Some(0),
+                cache_creation_tokens: None,
+                audio_tokens: None,
+            }),
+            ..Default::default()
+        }
+    } else {
+        crate::core::providers::shared::strict_usage(
+            &[input],
+            &[output],
+            Some((total, &[input, output])),
+            Some((cached, input)),
+        )?
+    };
     normalized
         .prompt_tokens_details
         .as_mut()?

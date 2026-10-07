@@ -52,7 +52,9 @@ async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResp
             let created = json!({"type":"response.created", "response":{"id":"resp_native","object":"response","status":"in_progress","output":[]}});
             let mut wire = format!("event: response.created\ndata: {created}\n\n");
             if data.output.lock().unwrap()["test_output_before_stall"] == true {
-                let delta = json!({"type":"response.output_text.delta","output_index":0,"delta":"generated"});
+                // Cross the default 256-character output inspection window
+                // before stalling so the enabled guard can release safe output.
+                let delta = json!({"type":"response.output_text.delta","output_index":0,"delta":"generated".repeat(32)});
                 wire.push_str(&format!(
                     "event: response.output_text.delta\ndata: {delta}\n\n"
                 ));
@@ -74,6 +76,10 @@ async fn upstream(data: web::Data<Upstream>, body: web::Json<Value>) -> HttpResp
         let delta = json!({"type":"response.output_text.delta","output_index":0,"delta":"你好","future_event_field":{"native":true}});
         if data.output.lock().unwrap()["test_pause_after_output"] == true {
             use futures::StreamExt;
+            // This stalled fixture must pass a real default guard inspection.
+            // Ordinary completed responses keep their original short delta.
+            let mut delta = delta;
+            delta["delta"] = json!("你好".repeat(130));
             let prefix = bytes::Bytes::from(format!(
                 "event: response.created\ndata: {created}\n\nevent: response.output_text.delta\ndata: {delta}\n\n"
             ));
@@ -557,6 +563,7 @@ async fn native_json_and_sse_preserve_tools_reasoning_and_extension_fields() {
 async fn native_stream_client_disconnect_preserves_tpm_and_rpm_admission() {
     use litellm_rs::core::router::DeploymentConfig;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     for quota in ["tpm", "rpm"] {
         let (state, upstream, upstream_handle) = fixture(StatusCode::OK, |config| {
@@ -590,11 +597,6 @@ async fn native_stream_client_disconnect_preserves_tpm_and_rpm_admission() {
         .run();
         let gateway_handle = gateway.handle();
         tokio::spawn(gateway);
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap();
-
         // These are real sockets and the production quota uses wall time.
         // Start away from the minute boundary rather than faking that clock.
         let second = SystemTime::now()
@@ -606,38 +608,41 @@ async fn native_stream_client_disconnect_preserves_tpm_and_rpm_admission() {
             tokio::time::sleep(Duration::from_secs(61 - second)).await;
         }
         let mut body = request(true);
-        if quota == "tpm" {
-            // One input/output estimate fits; two 700-token output bounds do not.
-            body["max_output_tokens"] = json!(700);
-        }
-        let mut response = client
-            .post(format!("http://{address}/v1/responses"))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        // Keep the safe output inside its requested bound in both quota cases.
+        // One TPM estimate fits; two 700-token output bounds do not.
+        body["max_output_tokens"] = json!(700);
+        let payload = serde_json::to_vec(&body).unwrap();
+        let mut connection = tokio::net::TcpStream::connect(address).await.unwrap();
+        let headers = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            payload.len()
+        );
+        connection.write_all(headers.as_bytes()).await.unwrap();
+        connection.write_all(&payload).await.unwrap();
         let mut wire = Vec::new();
         tokio::time::timeout(Duration::from_secs(5), async {
             while !String::from_utf8_lossy(&wire).contains("你好") {
-                let chunk = response
-                    .chunk()
-                    .await
-                    .unwrap()
-                    .expect("upstream stays open after its output delta");
-                wire.extend_from_slice(&chunk);
+                let mut chunk = [0_u8; 4096];
+                let read = connection.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0, "upstream stays open after its output delta");
+                wire.extend_from_slice(&chunk[..read]);
             }
         })
         .await
         .expect("the client must receive actual native output before disconnecting");
-        let wire = String::from_utf8(wire).unwrap();
+        let wire = String::from_utf8_lossy(&wire);
+        assert!(wire.starts_with("HTTP/1.1 200"), "{wire}");
         assert!(wire.contains("response.created"));
         assert!(wire.contains("response.output_text.delta"));
         assert!(!wire.contains("response.completed"));
         assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
         assert_eq!(upstream.seen.lock().unwrap().len(), 1);
-        drop(response);
-        drop(client);
+        // FIN is a valid HTTP half-close and Actix keeps a pending response
+        // alive. Reset this owned socket to exercise an actual lost client.
+        socket2::SockRef::from(&connection)
+            .set_linger(Some(Duration::ZERO))
+            .unwrap();
+        drop(connection);
 
         tokio::time::timeout(Duration::from_secs(5), async {
             while deployment.state.active_requests.load(Ordering::Relaxed) != 0 {
@@ -1085,7 +1090,12 @@ async fn native_storage_requires_owner_and_store_false_never_creates_a_handle() 
 async fn previous_response_reserves_retained_tokens_and_rejects_expired_handles() {
     use litellm_rs::core::budget::{ModelLimitConfig, ResetPeriod};
     use litellm_rs::core::types::context::RequestContext;
-    let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
+    let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
+        // Retained context must reach the monetary budget boundary, not fail
+        // this fixture's unrelated deployment TPM admission first.
+        config.gateway.providers[0].tpm = 1_000_000;
+    })
+    .await;
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state.clone()))
@@ -2335,7 +2345,30 @@ async fn native_unknown_usage_retains_admission_but_known_zero_does_not() {
                     .get_multiplexed_async_connection()
                     .await
                     .unwrap();
-                let key = format!("litellm-rs:admission:v1:{id}");
+                // The gateway binds admission to its captured resource identity.
+                // This fixture has a unique provider; inspect that exact namespace.
+                let mut cursor = 0_u64;
+                let mut keys = Vec::<String>::new();
+                loop {
+                    let (next, found): (u64, Vec<String>) = redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("MATCH")
+                        .arg(format!("litellm-rs:admission:v1:{id}:*"))
+                        .arg("COUNT")
+                        .arg(100)
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap();
+                    keys.extend(found);
+                    cursor = next;
+                    if cursor == 0 {
+                        break;
+                    }
+                }
+                keys.sort();
+                keys.dedup();
+                assert_eq!(keys.len(), 1, "one captured admission identity per fixture");
+                let key = &keys[0];
                 tokio::time::timeout(Duration::from_secs(5), async {
                     loop {
                         let counts: Vec<Option<i64>> = redis::cmd("HMGET")
