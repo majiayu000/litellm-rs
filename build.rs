@@ -21,7 +21,34 @@ fn main() {
     println!("cargo:rustc-env=RUST_VERSION={}", rust_version);
 
     // Set rerun conditions
-    println!("cargo:rerun-if-changed=.git/HEAD");
+    // Worktrees store `.git` as a file; watch Git's actual metadata paths.
+    if let Ok(head) = Command::new("git")
+        .args(["rev-parse", "--symbolic-full-name", "HEAD"])
+        .output()
+        && head.status.success()
+    {
+        let git_ref = String::from_utf8_lossy(&head.stdout);
+        if let Ok(paths) = Command::new("git")
+            .args([
+                "rev-parse",
+                "--git-path",
+                "HEAD",
+                "--git-path",
+                git_ref.trim(),
+                "--git-path",
+                "packed-refs",
+            ])
+            .output()
+            && paths.status.success()
+        {
+            for path in String::from_utf8_lossy(&paths.stdout).lines() {
+                // A missing watch path makes Cargo rerun this script every time.
+                if std::path::Path::new(path).exists() {
+                    println!("cargo:rerun-if-changed={path}");
+                }
+            }
+        }
+    }
     println!("cargo:rerun-if-changed=Cargo.toml");
 }
 
