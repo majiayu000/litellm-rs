@@ -105,6 +105,26 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
             .settings
             .insert("aws_region".into(), resource.aws_region.into());
     }
+    #[cfg(feature = "providers-extra")]
+    if matches!(selector.parse::<ProviderType>(), Ok(ProviderType::VertexAI)) {
+        // Match the factory's top-level project merge before applying its aliases.
+        let mut settings = config.settings.clone();
+        if let Some(project) = config.project.as_ref().filter(|value| !value.is_empty()) {
+            settings
+                .entry("project".into())
+                .or_insert_with(|| project.clone().into());
+        }
+        let resolved = crate::core::providers::factory::vertex_resource_config_from_factory(
+            &serde_json::json!(settings),
+        );
+        if let Some(settings) = resolved.as_object() {
+            normalized.settings.extend(
+                settings
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+    }
     let top_level = non_blank(&config.api_key).map(str::to_owned);
     let native_audio_environment = match selector.parse::<ProviderType>() {
         Ok(ProviderType::Deepgram) => Some(BaseConfig::from_env("deepgram")),
@@ -280,6 +300,13 @@ impl Router {
                     provider_name, e
                 ))
             })?;
+            #[cfg(feature = "providers-extra")]
+            let runtime_identity = match &provider {
+                Provider::VertexAI(vertex) => {
+                    runtime_identity.with_credential_digest(vertex.credential_resource_identity())
+                }
+                _ => runtime_identity,
+            };
             let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
 

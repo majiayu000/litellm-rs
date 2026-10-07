@@ -100,7 +100,7 @@ if op == 'reserve' then
   return {1, p, r, t}
 end
 
-if op == 'settle' or op == 'cancel' then
+if op == 'settle' or op == 'cancel' or op == 'retain' then
   local field = 'l:' .. lease_id
   local lease = redis.call('HGET', KEYS[1], field)
   if lease then
@@ -114,7 +114,7 @@ if op == 'settle' or op == 'cancel' then
       if op == 'cancel' then
         r = r - rpmInc
         t = t - tpmInc
-      else
+      elseif op == 'settle' then
         t = t - tpmInc + actual_tpm
       end
     end
@@ -277,6 +277,14 @@ impl RedisPool {
         lease_id: &str,
     ) -> Result<AdmissionState> {
         self.admission_finish("cancel", key, lease_id, 0).await
+    }
+
+    pub(crate) async fn admission_retain(
+        &self,
+        key: &str,
+        lease_id: &str,
+    ) -> Result<AdmissionState> {
+        self.admission_finish("retain", key, lease_id, 0).await
     }
 
     async fn admission_finish(

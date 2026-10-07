@@ -582,6 +582,73 @@ pub(super) fn build_bedrock_config_from_factory(
 }
 
 #[cfg(feature = "providers-extra")]
+pub(crate) fn vertex_resource_config_from_factory(config: &serde_json::Value) -> serde_json::Value {
+    let mut resolved = config.clone();
+    let project = config_str_any(
+        config,
+        &["project_id", "project", "gcp_project", "google_project_id"],
+    )
+    .map(str::to_owned)
+    .or_else(|| {
+        env_str_any(&[
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_PROJECT_ID",
+            "GCP_PROJECT",
+            "GCLOUD_PROJECT",
+        ])
+    });
+    let location = config_str_any(config, &["location", "region", "vertex_location"])
+        .map(str::to_owned)
+        .or_else(|| env_str_any(&["GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION"]));
+    // The factory only reads a credential file when no token or inline credentials win.
+    let file = if config_str_any(
+        config,
+        &[
+            "access_token",
+            "vertex_access_token",
+            "google_access_token",
+            "bearer_token",
+        ],
+    )
+    .is_none()
+        && config_str_any(
+            config,
+            &[
+                "credentials_json",
+                "vertex_ai_credentials",
+                "google_credentials_json",
+            ],
+        )
+        .is_none()
+    {
+        config_str_any(
+            config,
+            &[
+                "credentials_file",
+                "credential_file",
+                "google_application_credentials",
+            ],
+        )
+        .map(str::to_owned)
+        .or_else(|| env_str_any(&["GOOGLE_APPLICATION_CREDENTIALS"]))
+    } else {
+        None
+    };
+    if let Some(object) = resolved.as_object_mut() {
+        if let Some(project) = project {
+            object.insert("project_id".into(), project.into());
+        }
+        if let Some(location) = location {
+            object.insert("location".into(), location.into());
+        }
+        if let Some(file) = file {
+            object.insert("credentials_file".into(), file.into());
+        }
+    }
+    resolved
+}
+
+#[cfg(feature = "providers-extra")]
 pub(super) fn build_vertex_ai_config_from_factory(
     config: &serde_json::Value,
 ) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
@@ -592,34 +659,20 @@ pub(super) fn build_vertex_ai_config_from_factory(
         ));
     }
 
-    let project_id = config_str_any(
-        config,
-        &["project_id", "project", "gcp_project", "google_project_id"],
-    )
-    .map(str::to_string)
-    .or_else(|| {
-        env_str_any(&[
-            "GOOGLE_CLOUD_PROJECT",
-            "GOOGLE_PROJECT_ID",
-            "GCP_PROJECT",
-            "GCLOUD_PROJECT",
-        ])
-    })
-    .ok_or_else(|| {
-        ProviderError::configuration("vertex_ai", "project_id (or project) is required")
-    })?;
-
+    let resolved = vertex_resource_config_from_factory(config);
+    let config = &resolved;
+    let project_id = config_str(config, "project_id")
+        .ok_or_else(|| {
+            ProviderError::configuration("vertex_ai", "project_id (or project) is required")
+        })?
+        .to_owned();
     let mut vertex_config = vertex_ai::VertexAIProviderConfig {
         project_id,
         ..Default::default()
     };
     vertex_config.endpoint_access = config_endpoint_access(config, "vertex_ai")?;
-
-    if let Some(location) = config_str_any(config, &["location", "region", "vertex_location"])
-        .map(str::to_string)
-        .or_else(|| env_str_any(&["GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION"]))
-    {
-        vertex_config.location = location;
+    if let Some(location) = config_str(config, "location") {
+        vertex_config.location = location.to_owned();
     }
     if let Some(api_version) = config_str(config, "api_version") {
         vertex_config.api_version = api_version.to_string();
@@ -687,7 +740,6 @@ fn build_vertex_credentials_from_factory(
         ],
     )
     .map(str::to_string)
-    .or_else(|| env_str_any(&["GOOGLE_APPLICATION_CREDENTIALS"]))
     {
         let contents = fs::read_to_string(&credentials_file).map_err(|err| {
             ProviderError::configuration(

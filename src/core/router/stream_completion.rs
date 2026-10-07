@@ -4,6 +4,8 @@ use super::execution::infer_cooldown_reason;
 use super::selection::DeploymentLease;
 use super::{CooldownReason, RuntimeHandle, UnifiedRouter};
 use crate::core::providers::ProviderError;
+use crate::core::types::{chat::ChatRequest, responses::ChatChunk};
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 use std::{sync::Arc, time::Instant};
 
 pub(crate) struct RuntimeStreamCompletion {
@@ -11,11 +13,24 @@ pub(crate) struct RuntimeStreamCompletion {
     lease: Option<DeploymentLease>,
     started_at: Instant,
     usage: Option<u64>,
+    output_observed: bool,
     terminal_failure: Option<CooldownReason>,
     outcome_recorded: bool,
 }
 
 impl RuntimeHandle {
+    pub(crate) fn estimated_stream_tokens(
+        request: &ChatRequest,
+    ) -> crate::utils::error::gateway_error::Result<u64> {
+        let input = request.estimate_input_tokens();
+        let output = TokenCounter::new().estimate_output_tokens(
+            request.max_completion_tokens.or(request.max_tokens),
+            input,
+            &TokenizerIdentity::approximate("runtime", &request.model),
+        )?;
+        Ok(u64::from(input).saturating_add(u64::from(output)))
+    }
+
     pub(crate) fn stream_completion(
         &self,
         lease: DeploymentLease,
@@ -26,6 +41,7 @@ impl RuntimeHandle {
             lease: Some(lease),
             started_at,
             usage: None,
+            output_observed: false,
             terminal_failure: None,
             outcome_recorded: false,
         }
@@ -33,6 +49,24 @@ impl RuntimeHandle {
 }
 
 impl RuntimeStreamCompletion {
+    pub(crate) fn observe_chunk(&mut self, chunk: &ChatChunk) {
+        if chunk_has_output(chunk) {
+            self.observe_output();
+        }
+        if let Some(usage) = &chunk.usage {
+            self.observe_usage(u64::from(usage.total_tokens));
+        }
+    }
+
+    pub(crate) fn observe_output(&mut self) {
+        self.output_observed = true;
+        if self.usage.is_none()
+            && let Some(lease) = &self.lease
+        {
+            lease.preserve_admission_reservation();
+        }
+    }
+
     pub(crate) fn observe_usage(&mut self, tokens: u64) {
         self.usage = Some(tokens);
         if let Some(lease) = &self.lease {
@@ -47,11 +81,19 @@ impl RuntimeStreamCompletion {
             .deployment()
             .record_success(tokens, self.started_at.elapsed().as_micros() as u64);
         self.outcome_recorded = true;
-        lease.preserve_admission_usage(tokens);
+        if self.usage.is_some() {
+            lease.preserve_admission_usage(tokens);
+        } else {
+            lease.preserve_admission_reservation();
+        }
         self.router
             .record_success_circuit_for_deployment_async(lease.deployment())
             .await;
-        lease.commit_admission_async(tokens).await;
+        if self.usage.is_some() {
+            lease.commit_admission_async(tokens).await;
+        } else {
+            lease.retain_admission_async().await;
+        }
         // EOF releases the exact snapshot lease even if the caller retains
         // the exhausted Stream object indefinitely.
         self.lease.take();
@@ -68,6 +110,8 @@ impl RuntimeStreamCompletion {
         let lease = self.lease.as_mut().expect("live stream completion");
         if let Some(tokens) = self.usage {
             lease.deployment().record_partial_tokens(tokens);
+        } else if self.output_observed {
+            lease.deployment().record_interrupted_usage(0);
         }
         self.router
             .record_failure_with_reason_for_deployment_async(lease.deployment(), reason)
@@ -75,11 +119,37 @@ impl RuntimeStreamCompletion {
         self.outcome_recorded = true;
         if let Some(tokens) = self.usage {
             lease.commit_admission_async(tokens).await;
+        } else if self.output_observed {
+            lease.retain_admission_async().await;
         } else {
             lease.cancel_admission_async().await;
         }
         self.lease.take();
     }
+}
+
+fn chunk_has_output(chunk: &ChatChunk) -> bool {
+    let nonempty = |value: &Option<String>| value.as_ref().is_some_and(|value| !value.is_empty());
+    let function_output = |function: &crate::core::types::responses::FunctionCallDelta| {
+        nonempty(&function.name) || nonempty(&function.arguments)
+    };
+    chunk.choices.iter().any(|choice| {
+        let delta = &choice.delta;
+        nonempty(&delta.content)
+            || delta
+                .thinking_content()
+                .is_some_and(|value| !value.is_empty())
+            || delta.function_call.as_ref().is_some_and(function_output)
+            || delta.tool_calls.as_ref().is_some_and(|calls| {
+                calls
+                    .iter()
+                    .any(|call| call.function.as_ref().is_some_and(function_output))
+            })
+            || delta
+                .audio
+                .as_ref()
+                .is_some_and(|audio| nonempty(&audio.data) || nonempty(&audio.transcript))
+    })
 }
 
 impl Drop for RuntimeStreamCompletion {
@@ -97,6 +167,10 @@ impl Drop for RuntimeStreamCompletion {
                 // Consumer cancellation or SDK conversion failure is neutral
                 // for provider health, but observed usage is still real.
                 lease.deployment().record_interrupted_usage(tokens);
+            } else if self.output_observed {
+                // RPM is known; the retained distributed estimate is not an
+                // observed token count and must not enter actual local TPM.
+                lease.deployment().record_interrupted_usage(0);
             }
         }
         // DeploymentLease releases local active requests. AdmissionHold has

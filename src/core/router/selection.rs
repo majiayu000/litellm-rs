@@ -60,6 +60,18 @@ impl DeploymentLease {
         }
     }
 
+    pub(crate) fn preserve_admission_reservation(&self) {
+        if let Some(hold) = &self.hold {
+            hold.prepare_retention();
+        }
+    }
+
+    pub(crate) async fn retain_admission_async(&mut self) {
+        if let Some(hold) = self.hold.take() {
+            self.admission.retain_async(&hold).await;
+        }
+    }
+
     #[cfg(feature = "gateway")]
     pub(crate) fn clone_admission_hold(&self) -> Option<AdmissionHold> {
         self.hold.clone()
@@ -263,6 +275,27 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
+        self.select_deployment_lease_for_capability_matching_with_estimate(
+            snapshot,
+            model_name,
+            capability,
+            is_candidate,
+            0,
+        )
+        .await
+    }
+
+    pub(super) async fn select_deployment_lease_for_capability_matching_with_estimate<F>(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        capability: &ProviderCapability,
+        is_candidate: F,
+        estimated_tokens: u64,
+    ) -> Result<DeploymentLease, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+    {
         let resolved_name = snapshot.resolve_model_name(model_name);
         let candidates = snapshot
             .model_index
@@ -301,7 +334,7 @@ impl Router {
                     && is_candidate(deployment)
             },
             Some(no_matching_candidate_error),
-            0,
+            estimated_tokens,
         )
         .await
     }

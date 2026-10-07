@@ -85,6 +85,7 @@ impl LLMClient {
         core_request.stream_options = Some(StreamOptions {
             include_usage: Some(true),
         });
+        let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&core_request)?;
         let context = RequestContext::new();
         let handle = self.runtime_handle()?;
         let started_at = std::time::Instant::now();
@@ -92,6 +93,7 @@ impl LLMClient {
             .execute_stream_with_selected_deployment_capability_typed(
                 &model,
                 &ProviderCapability::ChatCompletionStream,
+                estimated_tokens,
                 move |deployment| {
                     let mut request = core_request.clone();
                     let context = context.clone();
@@ -113,9 +115,7 @@ impl LLMClient {
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Ok(chunk) => {
-                        if let Some(usage) = &chunk.usage {
-                            completion.observe_usage(u64::from(usage.total_tokens));
-                        }
+                        completion.observe_chunk(&chunk);
                         match core_chunk_to_sdk(chunk) {
                             Ok(chunk) => yield Ok(chunk),
                             Err(error) => {
