@@ -24,15 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integrate runtime SDK embeddings, lease expiry identity, strict SSE terminals,
   tool-result identity/deltas, credential authority, inactive teams, reload quota
   continuity and async Redis routing/accounting (#1458–#1465).
-- Keep HTTP budget waits asynchronous and bounded, retain billable reservations
-  after cancellation, and persist cancellation facts even when audit logging is
-  disabled. Realtime sessions retain unknown-cost responsibility across multiple
-  generations.
+- Keep HTTP budget waits asynchronous and bounded. Accepted accounting retains
+  responsibility after waiter cancellation, and terminal facts persist even when
+  audit logging is disabled. Realtime sessions retain unknown-cost responsibility
+  across multiple generations. Native pre-header circuit/admission cancellation
+  remains outside the post-response completion guarantee.
 - Retain conservative local/shared token quota when usage is missing or a later
   stream payload invalidates an earlier usage snapshot. Preserve known failure
   counters before cancellable Redis publication and request usage on legacy
   OpenAI streams. Bind Bedrock identity to constructed credentials and preserve
   Vertex project precedence and trustworthy terminal Anthropic usage.
+- Capture the credential resources used by provider construction, including
+  same-path Vertex file rotation. Preserve key usage calls on non-Tokio executors.
+- Reject malformed empty embedding responses before success accounting and retain
+  their known or unknown usage. Include Anthropic cache reads/writes in legacy
+  stream usage. Bound silent routing Redis operations and cleanup, invalidate the
+  failed connection generation, and avoid replaying uncertain Cluster writes.
 
 ### Breaking changes
 

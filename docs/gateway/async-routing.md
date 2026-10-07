@@ -28,8 +28,13 @@ execution. Gateway execution retains owned leases.
 Each admission/circuit bridge admits at most 64 I/O tasks. Additional callers wait
 for an async semaphore permit rather than occupying an HTTP worker or creating
 additional detached tasks. A launched operation retains its permit even if its
-caller is cancelled. This change does not add a new request deadline or change
-the configured Redis connection behavior.
+caller is cancelled. Its storage operation, including pool capacity, connection
+setup and reply, has a five-second deadline. The same bound covers admission Drop
+cleanup. Failed or timed-out connections are removed only if they are still the
+cached generation, and uncertain Cluster writes are not replayed. Timeout fails
+through the existing unavailable boundary; it does not establish a Redis receipt
+or durable token settlement. Bridge queue wait remains asynchronous backpressure;
+this does not introduce an overall request deadline.
 
 The admission task constructs a shared RAII hold before returning its result.
 If the request stops polling before receiving that result, the hold is still
@@ -116,8 +121,21 @@ namespace with different credentials merely because earlier normalized inputs
 matched. Vertex project normalization preserves the factory's existing
 precedence for an explicit top-level project and provider-specific settings.
 
-Accepted API-key usage writes outlive a cancelled request waiter. The key manager
+On Tokio, accepted API-key usage writes outlive a cancelled request waiter. The key manager
 owns at most 1,024 concurrent writes and retains the complete usage record,
 including pricing and unpriced fields. Admission at that bound is best effort;
 an overloaded writer returns an error, and process shutdown is not a durable
 delivery guarantee. Normal callers continue to await the database result.
+When no Tokio runtime is active, the public key manager directly awaits its
+repository under the same write limit, preserving executor-independent callers
+and their existing cancellation behavior.
+
+Runtime-backed embedding responses with required but empty data are malformed
+upstream responses. They participate in existing retry/fallback policy as a 502
+and remain a visible unavailable error when exhausted. A complete malformed
+response still counts one consumed request: reported usage, including zero,
+settles its actual tokens; missing usage retains the estimate without reporting
+it as actual. These facts are prepared before cancellable circuit publication.
+An ordinary provider error without a complete typed response keeps its existing
+error and admission contract; this distinction is not proof that no upstream
+HTTP request began.

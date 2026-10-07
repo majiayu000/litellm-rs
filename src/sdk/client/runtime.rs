@@ -61,7 +61,8 @@ impl LLMClient {
                         let response = deployment
                             .provider
                             .chat_completion(request, context)
-                            .await?;
+                            .await
+                            .map_err(|error| (error, None))?;
                         let tokens = response
                             .usage
                             .as_ref()

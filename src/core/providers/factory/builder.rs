@@ -554,7 +554,15 @@ pub(crate) fn bedrock_resource_config_from_factory(
 pub(super) fn build_bedrock_config_from_factory(
     config: &serde_json::Value,
 ) -> Result<bedrock::BedrockConfig, ProviderError> {
-    let mut bedrock_config = bedrock_resource_config_from_factory(config);
+    build_bedrock_config_from_factory_with_resource(config, None)
+}
+
+pub(super) fn build_bedrock_config_from_factory_with_resource(
+    config: &serde_json::Value,
+    resource: Option<bedrock::BedrockConfig>,
+) -> Result<bedrock::BedrockConfig, ProviderError> {
+    let mut bedrock_config =
+        resource.unwrap_or_else(|| bedrock_resource_config_from_factory(config));
     if bedrock_config.aws_access_key_id.is_empty() {
         return Err(ProviderError::configuration(
             "bedrock",
@@ -582,7 +590,7 @@ pub(super) fn build_bedrock_config_from_factory(
 }
 
 #[cfg(feature = "providers-extra")]
-pub(crate) fn vertex_resource_config_from_factory(config: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn vertex_resource_inputs_from_factory(config: &serde_json::Value) -> serde_json::Value {
     let mut resolved = config.clone();
     let project = config_str_any(
         config,
@@ -652,6 +660,14 @@ pub(crate) fn vertex_resource_config_from_factory(config: &serde_json::Value) ->
 pub(super) fn build_vertex_ai_config_from_factory(
     config: &serde_json::Value,
 ) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
+    build_vertex_ai_config_from_factory_with_resource(config, None)
+}
+
+#[cfg(feature = "providers-extra")]
+pub(super) fn build_vertex_ai_config_from_factory_with_resource(
+    config: &serde_json::Value,
+    resource: Option<Result<vertex_ai::VertexAIProviderConfig, ProviderError>>,
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
     if config_str(config, "api_key").is_some() {
         return Err(ProviderError::invalid_request(
             "vertex_ai",
@@ -659,21 +675,12 @@ pub(super) fn build_vertex_ai_config_from_factory(
         ));
     }
 
-    let resolved = vertex_resource_config_from_factory(config);
-    let config = &resolved;
-    let project_id = config_str(config, "project_id")
-        .ok_or_else(|| {
-            ProviderError::configuration("vertex_ai", "project_id (or project) is required")
-        })?
-        .to_owned();
-    let mut vertex_config = vertex_ai::VertexAIProviderConfig {
-        project_id,
-        ..Default::default()
+    let frozen = resource.is_some();
+    let mut vertex_config = match resource {
+        Some(resource) => resource?,
+        None => vertex_project_location_config_from_factory(config)?,
     };
     vertex_config.endpoint_access = config_endpoint_access(config, "vertex_ai")?;
-    if let Some(location) = config_str(config, "location") {
-        vertex_config.location = location.to_owned();
-    }
     if let Some(api_version) = config_str(config, "api_version") {
         vertex_config.api_version = api_version.to_string();
     }
@@ -692,11 +699,56 @@ pub(super) fn build_vertex_ai_config_from_factory(
     if let Some(enable_experimental) = config_bool(config, "enable_experimental") {
         vertex_config.enable_experimental = enable_experimental;
     }
-    vertex_config.credentials = build_vertex_credentials_from_factory(config)?;
-
+    if !frozen {
+        vertex_config.credentials = build_vertex_credentials_from_factory(config)?;
+    }
     vertex_config
         .validate()
         .map_err(|err| ProviderError::configuration("vertex_ai", err))?;
+    Ok(vertex_config)
+}
+
+#[cfg(feature = "providers-extra")]
+pub(crate) fn vertex_resource_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
+    let mut resource = vertex_project_location_config_from_factory(config)?;
+    resource.credentials = build_vertex_credentials_from_factory(config)?;
+    Ok(resource)
+}
+
+#[cfg(feature = "providers-extra")]
+fn vertex_project_location_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
+    let project_id = config_str_any(
+        config,
+        &["project_id", "project", "gcp_project", "google_project_id"],
+    )
+    .map(str::to_string)
+    .or_else(|| {
+        env_str_any(&[
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_PROJECT_ID",
+            "GCP_PROJECT",
+            "GCLOUD_PROJECT",
+        ])
+    })
+    .ok_or_else(|| {
+        ProviderError::configuration("vertex_ai", "project_id (or project) is required")
+    })?;
+
+    let mut vertex_config = vertex_ai::VertexAIProviderConfig {
+        project_id,
+        ..Default::default()
+    };
+
+    if let Some(location) = config_str_any(config, &["location", "region", "vertex_location"])
+        .map(str::to_string)
+        .or_else(|| env_str_any(&["GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION"]))
+    {
+        vertex_config.location = location;
+    }
     Ok(vertex_config)
 }
 
@@ -740,6 +792,7 @@ fn build_vertex_credentials_from_factory(
         ],
     )
     .map(str::to_string)
+    .or_else(|| env_str_any(&["GOOGLE_APPLICATION_CREDENTIALS"]))
     {
         let contents = fs::read_to_string(&credentials_file).map_err(|err| {
             ProviderError::configuration(

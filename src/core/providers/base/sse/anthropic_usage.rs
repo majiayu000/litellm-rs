@@ -4,7 +4,7 @@ use crate::core::providers::anthropic::client::build_usage_from_parts;
 use crate::core::types::responses::Usage;
 
 #[derive(Debug, Default)]
-pub(super) struct AnthropicUsageState {
+pub(crate) struct AnthropicUsageState {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
@@ -13,7 +13,7 @@ pub(super) struct AnthropicUsageState {
 }
 
 impl AnthropicUsageState {
-    pub(super) fn merge(&mut self, usage: &Value) {
+    pub(crate) fn merge(&mut self, usage: &Value) {
         if !usage.is_object() {
             self.invalid = true;
             return;
@@ -40,7 +40,7 @@ impl AnthropicUsageState {
         }
     }
 
-    pub(super) fn terminal_usage(&self, terminal: &Value) -> Option<Usage> {
+    pub(crate) fn terminal_usage(&self, terminal: &Value) -> Option<Usage> {
         // A start/intermediate output counter is not a terminal total. Missing
         // or malformed counters must retain admission, not become real zero.
         if self.invalid

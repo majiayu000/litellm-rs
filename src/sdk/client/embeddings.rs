@@ -5,7 +5,7 @@ use super::routing::{sdk_provider_has_legacy_adapter, unsupported_legacy_sdk_ada
 use crate::core::embedding::{
     EmbeddingOptions as CoreEmbeddingOptions, embedding as core_embedding,
 };
-use crate::core::providers::registry::LegacyAdapterSurface;
+use crate::core::providers::{ProviderError, registry::LegacyAdapterSurface};
 use crate::core::types::{
     context::RequestContext,
     embedding::{EmbeddingInput, EmbeddingRequest},
@@ -73,6 +73,7 @@ impl LLMClient {
         model: Option<&str>,
     ) -> Result<EmbeddingResponse> {
         let model = self.runtime_model(model.unwrap_or_default())?;
+        let expects_data = !matches!(&input, EmbeddingInput::Array(texts) if texts.is_empty());
         let estimated_tokens = u64::from(
             TokenCounter::new()
                 .count_embedding_tokens(
@@ -104,11 +105,22 @@ impl LLMClient {
                         let response = deployment
                             .provider
                             .create_embeddings(request, context)
-                            .await?;
+                            .await
+                            .map_err(|error| (error, None))?;
                         let tokens = response
                             .usage
                             .as_ref()
                             .map(|usage| u64::from(usage.total_tokens));
+                        if expects_data && response.data.is_empty() {
+                            return Err((
+                                ProviderError::api_error(
+                                    "embedding",
+                                    502,
+                                    "No embedding data in response",
+                                ),
+                                Some(tokens),
+                            ));
+                        }
                         Ok((response, tokens))
                     }
                 },

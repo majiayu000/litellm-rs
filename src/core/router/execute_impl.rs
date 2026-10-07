@@ -42,7 +42,12 @@ impl Router {
         let snapshot = self.load_routing_snapshot();
         self.execute_with_retry_inner(snapshot.as_ref(), model_name, None, 0, move |deployment| {
             let result = operation(deployment);
-            async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+            async move {
+                result
+                    .await
+                    .map(|(value, tokens)| (value, Some(tokens)))
+                    .map_err(|error| (error, None))
+            }
         })
         .await
         .map(
@@ -85,7 +90,9 @@ impl Router {
     ) -> Result<(T, DeploymentId, String, u32, u64), (ProviderError, u32)>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, Option<u64>), ProviderError>>,
+        Fut: std::future::Future<
+                Output = Result<(T, Option<u64>), (ProviderError, Option<Option<u64>>)>,
+            >,
     {
         let max_attempts = self.config.num_retries + 1;
         let mut attempt = 1;
@@ -171,10 +178,27 @@ impl Router {
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
-                Err(err) => {
+                Err((err, completed_usage)) => {
+                    // Outer None means no complete typed response is available;
+                    // Some(None) is a complete response with unknown usage, and
+                    // Some(Some(tokens)) carries actual usage, including zero.
+                    if let Some(tokens) = completed_usage {
+                        if let Some(tokens) = tokens {
+                            deployment_lease.preserve_admission_usage(tokens);
+                        } else {
+                            deployment_lease.preserve_admission_reservation(0);
+                        }
+                        deployment_lease.record_interrupted_usage(tokens.unwrap_or(0));
+                    }
                     if retryable_budget_scope(&err).is_some() {
                         excluded_budget_deployments.insert(deployment_id);
-                        deployment_lease.cancel_admission_async().await;
+                        match completed_usage {
+                            Some(Some(tokens)) => {
+                                deployment_lease.commit_admission_async(tokens).await
+                            }
+                            Some(None) => deployment_lease.retain_admission_async(0).await,
+                            None => deployment_lease.cancel_admission_async().await,
+                        }
                         drop(deployment_lease);
                         last_error = Some(err);
                         continue;
@@ -196,7 +220,13 @@ impl Router {
                         )
                         .await;
                         tried_deployments.insert(deployment_id);
-                        deployment_lease.cancel_admission_async().await;
+                        match completed_usage {
+                            Some(Some(tokens)) => {
+                                deployment_lease.commit_admission_async(tokens).await
+                            }
+                            Some(None) => deployment_lease.retain_admission_async(0).await,
+                            None => deployment_lease.cancel_admission_async().await,
+                        }
                         drop(deployment_lease);
                         last_error = Some(err);
                         attempt += 1;
@@ -211,7 +241,13 @@ impl Router {
                             cooldown_reason,
                         )
                         .await;
-                        deployment_lease.cancel_admission_async().await;
+                        match completed_usage {
+                            Some(Some(tokens)) => {
+                                deployment_lease.commit_admission_async(tokens).await
+                            }
+                            Some(None) => deployment_lease.retain_admission_async(0).await,
+                            None => deployment_lease.cancel_admission_async().await,
+                        }
                         drop(deployment_lease);
                         return Err((err, attempt));
                     }
@@ -423,7 +459,12 @@ impl Router {
             0,
             move |deployment| {
                 let result = operation(deployment);
-                async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+                async move {
+                    result
+                        .await
+                        .map(|(value, tokens)| (value, Some(tokens)))
+                        .map_err(|error| (error, None))
+                }
             },
         )
         .await
@@ -484,7 +525,12 @@ impl Router {
             0,
             move |deployment| {
                 let result = operation(deployment);
-                async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+                async move {
+                    result
+                        .await
+                        .map(|(value, tokens)| (value, Some(tokens)))
+                        .map_err(|error| (error, None))
+                }
             },
         )
         .await
@@ -501,7 +547,9 @@ impl Router {
     ) -> Result<ExecutionResult<T>, ProviderError>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, Option<u64>), ProviderError>>,
+        Fut: std::future::Future<
+                Output = Result<(T, Option<u64>), (ProviderError, Option<Option<u64>>)>,
+            >,
     {
         let start = std::time::Instant::now();
 
@@ -693,7 +741,12 @@ impl RuntimeHandle {
                 0,
                 move |deployment| {
                     let result = operation(deployment);
-                    async move { result.await.map(|(value, tokens)| (value, Some(tokens))) }
+                    async move {
+                        result
+                            .await
+                            .map(|(value, tokens)| (value, Some(tokens)))
+                            .map_err(|error| (error, None))
+                    }
                 },
             )
             .await
@@ -708,7 +761,9 @@ impl RuntimeHandle {
     ) -> Result<ExecutionResult<T>, ProviderError>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, Option<u64>), ProviderError>>,
+        Fut: std::future::Future<
+                Output = Result<(T, Option<u64>), (ProviderError, Option<Option<u64>>)>,
+            >,
     {
         self.binding
             .router

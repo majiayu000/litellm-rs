@@ -23,12 +23,12 @@ these exact heads and was produced without text conflicts:
 
 These original PRs were subsequently closed as superseded by the existing
 [audit combination #1470](https://github.com/majiayu000/litellm-rs/pull/1470),
-not marked merged. The accounting candidate #1471 builds on its validated head
-`d88fec44a166b2c566a5b62fb34ae29f0b9867d4` and subsequent reviewed corrections,
-retaining its lifecycle/SDK and cache follow-ups. Three settlement
-conflicts combine lifecycle usage observation/completion with captured billing
-facts; the scoped settlement futures remain heap-pinned for the default thread
-stack. Original commit ancestry is preserved. Acceptance of either previous
+not marked merged. The accounting and operational follow-up is
+[#1472](https://github.com/majiayu000/litellm-rs/pull/1472). The combination retains
+the lifecycle/SDK and cache follow-ups, the mainline Native Responses merge, and
+reviewed core corrections. Settlement combines lifecycle observation with
+captured billing facts; settlement futures remain heap-pinned for the default
+thread stack. Original commit ancestry is preserved. Acceptance of an earlier
 candidate alone is not acceptance of this new combination.
 
 The original review correctly identified synchronous budget Redis waits in main.
@@ -68,11 +68,15 @@ block; they are not the HTTP execution path.
 - API-key budgets remain process-local. This work does not establish shared or
   restart-persistent per-key balances; the performance profile exercises shared
   provider/model budgets.
-- API-key usage recording requires a Tokio runtime. Accepted database writes
-  survive request cancellation. Manager
-  clones share a 1,024-write bound; capacity/repository errors remain observable
-  best-effort usage-statistics failures, and runtime shutdown has no durable retry.
-  This does not change the captured ledger facts or invent missing supplier usage.
+- On Tokio, accepted API-key usage writes survive request cancellation. Other
+  executors directly await the repository with their existing cancellation
+  behavior. Manager clones share a 1,024-write bound; capacity/repository errors
+  remain observable best-effort usage-statistics failures, and runtime shutdown
+  has no durable retry. Captured ledger facts do not invent missing supplier usage.
+- Runtime-bound embedding responses with empty required data now take the existing
+  502 retry/fallback path and return an unavailable error if exhausted. Complete
+  malformed responses preserve known usage or unknown admission responsibility;
+  a real zero remains distinct from missing usage. Empty batch input remains valid.
 - Rust callers constructing public `RequestLedgerFacts` or `RequestLedgerRecord`
   literals must provide `billing` (use `None` when no facts are captured).
 - Request-ledger billing metadata is an additive SQL migration. Supplier-verified
@@ -108,12 +112,15 @@ Checks are recorded only after they finish. Original per-PR CI is evidence for
 those heads, not a substitute for combined-candidate CI. Deployment measurements
 state their exact binary/source/profile and synthetic-upstream boundary.
 
-Completed before freezing this source: all eight original heads have 15/15
-successful CI checks; remaining inline review threads have been inspected and
-resolved. The dashboard DOM suite passed 31/31 and the existing overhead-runner
-contract suite passed 14/14. These are not combined Rust acceptance claims.
-Final combined Rust/CI and deployment measurements are retained with the task
-evidence and reported in the candidate pull request.
+Historical checks: all eight original heads completed 15/15 CI checks. The
+dashboard DOM suite passed 31/31 and the existing overhead-runner contract suite
+passed 14/14. Combined source `a05f1dec9ed8ae60c8d8c048d06e2dc0e8c36df3`, tree
+`c990a6f90b7aa959c699b573e7952ec6c1d67855`, passed default and shipped-profile
+strict Clippy, default check and the full shipped suite (11,901 passed, zero
+failed, 48 ignored). It precedes the later credential, malformed-response,
+Anthropic-cache and routing-deadline corrections. These results do not validate
+that newer source. Final combined Rust/CI, native artifact and deployment results
+are retained with task evidence and reported in #1472 after they finish.
 
 Publication remains pending until candidate CI/reviews, immutable version selection,
 and the existing release artifact/installation checks complete. The actual published

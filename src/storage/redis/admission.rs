@@ -3,7 +3,10 @@
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+const ADMISSION_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 const ADMISSION_SCRIPT: &str = r#"
 local op = ARGV[1]
@@ -165,13 +168,13 @@ fn admission_script() -> &'static redis::Script {
 }
 
 fn admission_runtime_connections()
--> &'static tokio::sync::Mutex<HashMap<String, RedisLiveConnection>> {
-    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>> =
+-> &'static tokio::sync::Mutex<HashMap<String, Arc<RedisLiveConnection>>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<RedisLiveConnection>>>> =
         OnceLock::new();
     CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
+async fn connection_on_current_runtime(pool: &RedisPool) -> Result<Arc<RedisLiveConnection>> {
     let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
     {
         let cache = admission_runtime_connections().lock().await;
@@ -179,7 +182,11 @@ async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConn
             return Ok(conn.clone());
         }
     }
-    let conn = pool.open_live_connection().await?;
+    // Reuse the bounded, non-replaying transport for uncertain routing writes.
+    let conn = Arc::new(
+        pool.open_budget_connection(ADMISSION_OPERATION_TIMEOUT)
+            .await?,
+    );
     let mut cache = admission_runtime_connections().lock().await;
     Ok(cache.entry(cache_key).or_insert(conn).clone())
 }
@@ -228,29 +235,53 @@ impl RedisPool {
             ));
         }
 
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
-        let mut conn = connection_on_current_runtime(self).await?;
+        let mut connection = None;
+        let result =
+            tokio::time::timeout(ADMISSION_OPERATION_TIMEOUT, async {
+                let _permit =
+                    self.semaphore.clone().acquire_owned().await.map_err(|_| {
+                        GatewayError::Internal("Redis semaphore closed".to_string())
+                    })?;
+                let cached = connection_on_current_runtime(self).await?;
+                connection = Some(Arc::clone(&cached));
+                let mut conn = cached.as_ref().clone();
 
-        let values: Vec<i64> = admission_script()
-            .key(key)
-            .arg(args.op)
-            .arg(args.max_parallel)
-            .arg(args.max_rpm)
-            .arg(args.max_tpm)
-            .arg(args.rpm_inc)
-            .arg(args.tpm_inc)
-            .arg(args.lease_id)
-            .arg(args.ttl_ms)
-            .arg(args.actual_tpm)
-            .invoke_async(&mut conn)
+                let values: Vec<i64> = admission_script()
+                    .key(key)
+                    .arg(args.op)
+                    .arg(args.max_parallel)
+                    .arg(args.max_rpm)
+                    .arg(args.max_tpm)
+                    .arg(args.rpm_inc)
+                    .arg(args.tpm_inc)
+                    .arg(args.lease_id)
+                    .arg(args.ttl_ms)
+                    .arg(args.actual_tpm)
+                    .invoke_async(&mut conn)
+                    .await
+                    .map_err(GatewayError::from)?;
+                parse_admission_state(values)
+            })
             .await
-            .map_err(GatewayError::from)?;
-        parse_admission_state(values)
+            .unwrap_or_else(|_| {
+                Err(GatewayError::Unavailable(
+                    "Redis admission operation deadline exceeded".into(),
+                ))
+            });
+        if result.is_err()
+            && let Some(connection) = connection
+        {
+            let key = format!("{}|{}", self.config.url, self.config.cluster);
+            let mut cache = admission_runtime_connections().lock().await;
+            // A late failure from an old connection must preserve a replacement.
+            if cache
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                cache.remove(&key);
+            }
+        }
+        result
     }
 
     pub(crate) async fn admission_reserve(

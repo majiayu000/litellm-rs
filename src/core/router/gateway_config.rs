@@ -22,16 +22,24 @@ use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
+use crate::core::providers::Provider;
 use crate::core::providers::base::BaseConfig;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::{self as provider_registry, ProviderDispatchKind};
-use crate::core::providers::{Provider, create_provider};
 use std::collections::{HashMap, HashSet};
 
 /// Construction-only handoff. Raw credentials never enter a deployment or snapshot.
 struct NormalizedProviderConstruction {
     config: ProviderConfig,
     legacy_metadata: Option<LegacySelectorMetadata>,
+    bedrock_resource: Option<crate::core::providers::bedrock::BedrockConfig>,
+    #[cfg(feature = "providers-extra")]
+    vertex_resource: Option<
+        Result<
+            crate::core::providers::vertex_ai::VertexAIProviderConfig,
+            crate::core::providers::ProviderError,
+        >,
+    >,
 }
 
 fn non_blank(value: &str) -> Option<&str> {
@@ -85,43 +93,70 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
     } else {
         config.provider_type.trim()
     };
+    let mut bedrock_resource = None;
+    #[cfg(feature = "providers-extra")]
+    let mut vertex_resource = None;
     if matches!(selector.parse::<ProviderType>(), Ok(ProviderType::Bedrock)) {
         let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
             &serde_json::json!(config.settings),
         );
         normalized.settings.insert(
             "aws_access_key_id".into(),
-            resource.aws_access_key_id.into(),
+            resource.aws_access_key_id.clone().into(),
         );
         normalized.settings.insert(
             "aws_secret_access_key".into(),
-            resource.aws_secret_access_key.into(),
+            resource.aws_secret_access_key.clone().into(),
         );
         normalized.settings.insert(
             "aws_session_token".into(),
-            resource.aws_session_token.into(),
+            resource.aws_session_token.clone().into(),
         );
         normalized
             .settings
-            .insert("aws_region".into(), resource.aws_region.into());
+            .insert("aws_region".into(), resource.aws_region.clone().into());
+        bedrock_resource = Some(resource);
     }
     #[cfg(feature = "providers-extra")]
     if matches!(selector.parse::<ProviderType>(), Ok(ProviderType::VertexAI)) {
-        // Match the factory's top-level project merge before applying its aliases.
         let mut settings = config.settings.clone();
         if let Some(project) = config.project.as_ref().filter(|value| !value.is_empty()) {
             settings.insert("project".into(), project.clone().into());
         }
-        let resolved = crate::core::providers::factory::vertex_resource_config_from_factory(
+        let inputs = crate::core::providers::factory::vertex_resource_inputs_from_factory(
             &serde_json::json!(settings),
         );
-        if let Some(settings) = resolved.as_object() {
+        if let Some(settings) = inputs.as_object() {
             normalized.settings.extend(
                 settings
                     .iter()
                     .map(|(key, value)| (key.clone(), value.clone())),
             );
         }
+        let resource =
+            crate::core::providers::factory::vertex_resource_config_from_factory(&inputs);
+        if let Ok(resource) = &resource {
+            normalized
+                .settings
+                .insert("project_id".into(), resource.project_id.clone().into());
+            normalized
+                .settings
+                .insert("location".into(), resource.location.clone().into());
+            use crate::core::providers::vertex_ai::VertexCredentials;
+            let credentials = match &resource.credentials {
+                VertexCredentials::AccessToken(token) => serde_json::json!({"access_token": token}),
+                VertexCredentials::ServiceAccount(value) => serde_json::json!(value),
+                VertexCredentials::WorkloadIdentity(value) => serde_json::json!(value),
+                VertexCredentials::AuthorizedUser(value) => serde_json::json!(value),
+                VertexCredentials::ApplicationDefault => serde_json::Value::Null,
+            };
+            // Hash the same credential material consumed by the typed handoff.
+            // File contents, rather than just their mutable path, identify the resource.
+            normalized
+                .settings
+                .insert("credentials_json".into(), credentials);
+        }
+        vertex_resource = Some(resource);
     }
     let top_level = non_blank(&config.api_key).map(str::to_owned);
     let native_audio_environment = match selector.parse::<ProviderType>() {
@@ -217,6 +252,9 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
     NormalizedProviderConstruction {
         config: normalized,
         legacy_metadata,
+        bedrock_resource,
+        #[cfg(feature = "providers-extra")]
+        vertex_resource,
     }
 }
 
@@ -292,7 +330,14 @@ impl Router {
             let tags = normalized_config.tags.clone();
             let deployment_config = deployment_config_from_provider(&normalized_config)?;
             let runtime_identity = GatewayRuntimeIdentity::for_provider(&normalized_config);
-            let provider = create_provider(normalized_config).await.map_err(|e| {
+            let provider = crate::core::providers::factory::create_provider_with_resources(
+                normalized_config,
+                construction.bedrock_resource,
+                #[cfg(feature = "providers-extra")]
+                construction.vertex_resource,
+            )
+            .await
+            .map_err(|e| {
                 RouterError::DeploymentNotFound(format!(
                     "Failed to create provider {}: {}",
                     provider_name, e
