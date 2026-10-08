@@ -89,7 +89,9 @@ async fn test_redis_hash_get_missing_and_present_fields_with_live_pool() {
             .expect("an empty field is present"),
         Some(String::new())
     );
-    pool.delete(&key).await.expect("test hash should be removed");
+    pool.delete(&key)
+        .await
+        .expect("test hash should be removed");
 }
 
 #[tokio::test]
