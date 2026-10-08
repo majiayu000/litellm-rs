@@ -517,7 +517,6 @@ mod gateway {
     async fn exercise_databricks_workspace_reload(pool: Option<&Arc<RedisPool>>) {
         use crate::core::net::ProviderEndpointAccess;
         use crate::core::router::health_probe::tests::sequence_server;
-        use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
         use crate::core::types::context::RequestContext;
 
         // Real provider requests identify which workspace the enterprise
