@@ -52,6 +52,64 @@ async fn test_redis_set_get_roundtrip_with_live_pool() {
 }
 
 #[tokio::test]
+async fn test_redis_hash_get_missing_and_present_fields_with_live_pool() {
+    let Some(pool) = live_redis_pool().await else {
+        return;
+    };
+
+    let key = unique_test_key("hash-get");
+    assert_eq!(
+        pool.hash_get(&key, "missing")
+            .await
+            .expect("a missing hash should return None"),
+        None
+    );
+
+    pool.hash_set(&key, "present", "value")
+        .await
+        .expect("hash set should succeed");
+    pool.hash_set(&key, "empty", "")
+        .await
+        .expect("empty hash field should be stored");
+    assert_eq!(
+        pool.hash_get(&key, "missing")
+            .await
+            .expect("a missing field should return None"),
+        None
+    );
+    assert_eq!(
+        pool.hash_get(&key, "present")
+            .await
+            .expect("a present field should be returned"),
+        Some("value".to_string())
+    );
+    assert_eq!(
+        pool.hash_get(&key, "empty")
+            .await
+            .expect("an empty field is present"),
+        Some(String::new())
+    );
+    pool.delete(&key)
+        .await
+        .expect("test hash should be removed");
+}
+
+#[tokio::test]
+async fn test_redis_hash_get_preserves_wrong_type_error_with_live_pool() {
+    let Some(pool) = live_redis_pool().await else {
+        return;
+    };
+
+    let key = unique_test_key("hash-get-wrong-type");
+    pool.set(&key, "not-a-hash", Some(30))
+        .await
+        .expect("string key should be stored");
+    let result = pool.hash_get(&key, "field").await;
+    pool.delete(&key).await.expect("test key should be removed");
+    assert!(matches!(result, Err(GatewayError::Storage(_))));
+}
+
+#[tokio::test]
 async fn test_redis_delete_by_prefix_with_live_pool() {
     let Some(pool) = live_redis_pool().await else {
         return;
