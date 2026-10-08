@@ -514,6 +514,166 @@ mod gateway {
         exercise_reload("openai", None).await;
     }
 
+    async fn exercise_databricks_workspace_reload(pool: Option<&Arc<RedisPool>>) {
+        use crate::core::net::ProviderEndpointAccess;
+        use crate::core::router::health_probe::tests::sequence_server;
+        use crate::core::traits::provider::llm_provider::trait_definition::LLMProvider;
+        use crate::core::types::context::RequestContext;
+
+        // Real provider requests identify which workspace the enterprise
+        // factory selected. A local 400 response avoids retries or paid calls.
+        let (workspace_a, mut calls_a, task_a) = sequence_server(vec![400]).await;
+        let (workspace_b, mut calls_b, task_b) = sequence_server(vec![400, 400]).await;
+        let mut original_config = config();
+        original_config.name = format!("databricks-workspace-{}", uuid::Uuid::new_v4());
+        original_config.provider_type = "databricks".into();
+        original_config.models = vec!["deployment".into()];
+        original_config.base_url = Some("https://unused-fallback.invalid".into());
+        original_config.endpoint_access = ProviderEndpointAccess::PrivateNetwork;
+        original_config.settings = serde_json::from_value(json!({
+            "workspace_url": workspace_a.origin().ascii_serialization(),
+            "base_url": "https://unused-base.invalid",
+            "api_base": "https://unused-api.invalid"
+        }))
+        .unwrap();
+        let id = format!("{}-deployment", original_config.name);
+        let request = || {
+            serde_json::from_value(json!({
+                "model": "deployment",
+                "messages": [{"role": "user", "content": "workspace probe"}]
+            }))
+            .unwrap()
+        };
+        wait_for_window(pool).await;
+        let original = construct(&original_config, pool).await;
+        let old = original.get_deployment(&id).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            old.provider
+                .chat_completion(request(), RequestContext::default()),
+        )
+        .await
+        .unwrap()
+        .expect_err("local workspace A responds with 400");
+        calls_a.try_recv().expect("provider must reach workspace A");
+        let old_shared_id = old.shared_state_id();
+        let mut completed = select(&original, "deployment").await.unwrap();
+        completed.record_success(35, 1);
+        completed.commit_admission_async(35).await;
+        drop(completed);
+        original
+            .record_success_circuit_for_deployment_async(&old)
+            .await;
+        let mut held = select(&original, "deployment").await.unwrap();
+        original
+            .record_failure_with_reason_for_deployment_async(&old, CooldownReason::AuthError)
+            .await;
+        assert!(old.is_in_cooldown());
+        assert_eq!(old.state.active_requests.load(Acquire), 1);
+        if let Some(pool) = pool {
+            assert_eq!(shared_counts(pool, &old_shared_id).await, (1, 2, 75));
+        }
+
+        let mut rotated_config = original_config.clone();
+        rotated_config.settings.insert(
+            "workspace_url".into(),
+            json!(workspace_b.origin().ascii_serialization()),
+        );
+        let mut rotated = construct(&rotated_config, pool).await;
+        rotated.circuit = original.circuit.clone();
+        rotated.inherit_runtime_state(&original);
+        let fresh = rotated.get_deployment(&id).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            fresh
+                .provider
+                .chat_completion(request(), RequestContext::default()),
+        )
+        .await
+        .unwrap()
+        .expect_err("local workspace B responds with 400");
+        calls_b.try_recv().expect("provider must reach workspace B");
+        assert_ne!(fresh.state.runtime_identity, old.state.runtime_identity);
+        assert_ne!(fresh.shared_state_id(), old_shared_id);
+        assert!(!std::ptr::eq(
+            &fresh.state.tpm_current,
+            &old.state.tpm_current
+        ));
+        let minute = fresh.state.minute_counters(current_timestamp());
+        assert_eq!((minute.rpm, minute.tpm, minute.failures), (0, 0, 0));
+        assert_eq!(fresh.state.active_requests.load(Acquire), 0);
+        assert!(!fresh.is_in_cooldown());
+        let mut lease = select(&rotated, "deployment")
+            .await
+            .expect("workspace B must have independent capacity and circuit state");
+        lease.record_success(20, 1);
+        lease.commit_admission_async(20).await;
+        drop(lease);
+
+        // A changed generic base URL is ignored while workspace_url remains
+        // explicit. Preserve B's state instead of resetting its spent quota.
+        let mut shadowed_config = rotated_config;
+        shadowed_config.base_url = Some("https://changed-unused-fallback.invalid".into());
+        let mut shadowed = construct(&shadowed_config, pool).await;
+        shadowed.circuit = rotated.circuit.clone();
+        shadowed.inherit_runtime_state(&rotated);
+        let same = shadowed.get_deployment(&id).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            same.provider
+                .chat_completion(request(), RequestContext::default()),
+        )
+        .await
+        .unwrap()
+        .expect_err("the changed fallback still reaches local workspace B");
+        calls_b.try_recv().expect("shadowed base must still use B");
+        assert_eq!(same.state.runtime_identity, fresh.state.runtime_identity);
+        assert_eq!(same.shared_state_id(), fresh.shared_state_id());
+        assert!(std::ptr::eq(
+            &same.state.tpm_current,
+            &fresh.state.tpm_current
+        ));
+        let minute = same.state.minute_counters(current_timestamp());
+        assert_eq!((minute.rpm, minute.tpm), (1, 20));
+        assert_eq!(old.state.active_requests.load(Acquire), 1);
+        assert!(old.is_in_cooldown());
+        assert!(select(&original, "deployment").await.is_err());
+        held.cancel_admission_async().await;
+        drop(held);
+        assert_eq!(old.state.active_requests.load(Acquire), 0);
+        let minute = old.state.minute_counters(current_timestamp());
+        assert_eq!((minute.rpm, minute.tpm, minute.failures), (1, 35, 1));
+        if let Some(pool) = pool {
+            assert_eq!(shared_counts(pool, &old_shared_id).await, (0, 1, 35));
+            assert_eq!(
+                shared_counts(pool, &same.shared_state_id()).await,
+                (0, 1, 20)
+            );
+            for shared_id in [old_shared_id, same.shared_state_id()] {
+                pool.delete(&RedisPool::admission_key(&shared_id))
+                    .await
+                    .unwrap();
+                pool.delete(&RedisPool::circuit_key(&shared_id))
+                    .await
+                    .unwrap();
+            }
+        }
+        task_a.await.unwrap();
+        task_b.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn databricks_workspace_reload_isolates_local_state() {
+        exercise_databricks_workspace_reload(None).await;
+    }
+
+    #[tokio::test]
+    async fn databricks_workspace_reload_isolates_actual_redis_state() {
+        if let Some(pool) = live_redis_pool().await {
+            exercise_databricks_workspace_reload(Some(&pool)).await;
+        }
+    }
+
     async fn live_redis_pool() -> Option<Arc<RedisPool>> {
         let url = match std::env::var("REDIS_URL") {
             Ok(url) => url,
@@ -575,6 +735,66 @@ fn shadowed_factory_inputs_do_not_rotate_runtime_resource() {
             original,
             GatewayRuntimeIdentity::for_provider(&changed),
             "{key}"
+        );
+    }
+}
+
+#[test]
+fn databricks_workspace_alias_precedence_defines_resource_identity() {
+    let mut base = config();
+    base.provider_type = "databricks".into();
+    base.base_url = Some("https://fallback.example".into());
+    base.settings = serde_json::from_value(json!({
+        "workspace_url": "https://workspace-a.example",
+        "base_url": "https://shadowed-base.example",
+        "api_base": "https://shadowed-api.example"
+    }))
+    .unwrap();
+    let original = GatewayRuntimeIdentity::for_provider(&base);
+    let mut rotated = base.clone();
+    rotated
+        .settings
+        .insert("workspace_url".into(), json!("https://workspace-b.example"));
+    assert_ne!(
+        original,
+        GatewayRuntimeIdentity::for_provider(&rotated),
+        "the enterprise builder uses workspace_url before every generic endpoint alias"
+    );
+    for shadowed in ["top-level base_url", "base_url", "api_base"] {
+        let mut unchanged = base.clone();
+        if shadowed == "top-level base_url" {
+            unchanged.base_url = Some("https://unused-rotation.example".into());
+        } else {
+            unchanged
+                .settings
+                .insert(shadowed.into(), json!("https://unused-rotation.example"));
+        }
+        assert_eq!(
+            original,
+            GatewayRuntimeIdentity::for_provider(&unchanged),
+            "changing shadowed {shadowed} must preserve workspace quota"
+        );
+    }
+    for alias in [
+        "top-level base_url",
+        "base_url",
+        "api_base",
+        "workspace_url",
+    ] {
+        let mut equivalent = base.clone();
+        equivalent.base_url = None;
+        equivalent.settings.clear();
+        if alias == "top-level base_url" {
+            equivalent.base_url = Some("https://workspace-a.example".into());
+        } else {
+            equivalent
+                .settings
+                .insert(alias.into(), json!("https://workspace-a.example"));
+        }
+        assert_eq!(
+            original,
+            GatewayRuntimeIdentity::for_provider(&equivalent),
+            "equivalent {alias} must identify the same workspace"
         );
     }
 }

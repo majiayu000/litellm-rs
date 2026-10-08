@@ -112,6 +112,17 @@ impl GatewayRuntimeIdentity {
                 &config.settings,
                 endpoint_keys,
             );
+            if matches!(ProviderType::from(selector), ProviderType::Databricks) {
+                // The enterprise builder renames generic aliases with
+                // entry(...).or_insert(...), so an explicit workspace_url
+                // wins even over the top-level base_url. Hash that workspace
+                // before discarding the aliases it shadows.
+                endpoint = config
+                    .settings
+                    .get("workspace_url")
+                    .and_then(serde_json::Value::as_str)
+                    .or(endpoint);
+            }
             for key in endpoint_keys {
                 settings.remove(*key);
             }
