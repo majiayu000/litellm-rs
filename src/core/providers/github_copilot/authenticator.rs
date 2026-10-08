@@ -4,10 +4,13 @@
 //! Manages access tokens and API keys with automatic refresh.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
 use super::config::GitHubCopilotConfig;
@@ -63,7 +66,7 @@ struct AccessTokenResponse {
 }
 
 /// GitHub Copilot OAuth authenticator
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CopilotAuthenticator {
     /// Token directory path
     token_dir: PathBuf,
@@ -71,6 +74,19 @@ pub struct CopilotAuthenticator {
     access_token_path: PathBuf,
     /// API key file path
     api_key_path: PathBuf,
+    access_token: Arc<RwLock<Option<String>>>,
+    api_key: Arc<RwLock<Option<ApiKeyInfo>>>,
+    credential_files: Arc<RwLock<[Option<Vec<u8>>; 2]>>,
+    credential_identity: [u8; 32],
+}
+
+impl std::fmt::Debug for CopilotAuthenticator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CopilotAuthenticator")
+            .field("credentials", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl CopilotAuthenticator {
@@ -79,12 +95,66 @@ impl CopilotAuthenticator {
         let token_dir = PathBuf::from(config.get_token_dir());
         let access_token_path = token_dir.join(config.get_access_token_file());
         let api_key_path = token_dir.join(config.get_api_key_file());
+        // Capture the same file-backed authority used by this resource. External
+        // account rotation takes effect on reconstruction, not on an old lease.
+        let access_file = fs::read(&access_token_path).ok();
+        let api_key_file = fs::read(&api_key_path).ok();
+        let access_token = access_file
+            .as_ref()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        let api_key = api_key_file
+            .as_ref()
+            .and_then(|bytes| serde_json::from_slice::<ApiKeyInfo>(bytes).ok());
+        let mut identity = serde_json::json!({
+            "token_dir": token_dir,
+            "access_token_path": access_token_path,
+            "api_key_path": api_key_path,
+            "access_token": access_token,
+            "api_key": api_key,
+        });
+        identity.sort_all_objects();
+        let credential_identity = Sha256::digest(identity.to_string().as_bytes()).into();
 
         Self {
             token_dir,
             access_token_path,
             api_key_path,
+            access_token: Arc::new(RwLock::new(access_token)),
+            api_key: Arc::new(RwLock::new(api_key)),
+            credential_files: Arc::new(RwLock::new([access_file, api_key_file])),
+            credential_identity,
         }
+    }
+
+    pub(super) fn credential_resource_identity(&self) -> [u8; 32] {
+        self.credential_identity
+    }
+
+    fn persist_credential(&self, path: &Path, contents: &[u8]) -> std::io::Result<()> {
+        let mut files = self.credential_files.write();
+        let paths = [&self.access_token_path, &self.api_key_path];
+        for (captured_path, captured) in paths.iter().zip(files.iter()) {
+            let changed = match fs::read(captured_path) {
+                Ok(bytes) => captured.as_ref() != Some(&bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => captured.is_some(),
+                Err(error) => return Err(error),
+            };
+            if changed {
+                // Detected external rotation owns these files. Keep this resource's
+                // refresh in memory; this check is not an inter-process atomic write.
+                debug!("Copilot credential files changed; keeping refreshed credentials in memory");
+                return Ok(());
+            }
+        }
+        fs::write(path, contents)?;
+        for (captured_path, captured) in paths.iter().zip(files.iter_mut()) {
+            if captured_path.as_path() == path {
+                *captured = Some(contents.to_vec());
+            }
+        }
+        Ok(())
     }
 
     /// Ensure the token directory exists
@@ -102,12 +172,8 @@ impl CopilotAuthenticator {
 
     /// Get the access token, performing device flow authentication if needed
     pub async fn get_access_token(&self) -> Result<String, GitHubCopilotError> {
-        // Try to read from cache first
-        if let Ok(token) = fs::read_to_string(&self.access_token_path) {
-            let token = token.trim().to_string();
-            if !token.is_empty() {
-                return Ok(token);
-            }
+        if let Some(token) = self.access_token.read().clone() {
+            return Ok(token);
         }
 
         // Need to perform device flow authentication
@@ -120,7 +186,10 @@ impl CopilotAuthenticator {
                 Ok(token) => {
                     // Save to cache
                     self.ensure_token_dir()?;
-                    if let Err(e) = fs::write(&self.access_token_path, &token) {
+                    *self.access_token.write() = Some(token.clone());
+                    if let Err(e) =
+                        self.persist_credential(&self.access_token_path, token.as_bytes())
+                    {
                         warn!("Failed to cache access token: {}", e);
                     }
                     return Ok(token);
@@ -145,10 +214,7 @@ impl CopilotAuthenticator {
 
     /// Get the API key, refreshing if needed
     pub async fn get_api_key(&self) -> Result<String, GitHubCopilotError> {
-        // Try to read from cache first
-        if let Ok(content) = fs::read_to_string(&self.api_key_path)
-            && let Ok(api_key_info) = serde_json::from_str::<ApiKeyInfo>(&content)
-        {
+        if let Some(api_key_info) = self.api_key.read().clone() {
             // Check if not expired
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -167,12 +233,10 @@ impl CopilotAuthenticator {
 
     /// Get the API base URL from cached API key info
     pub fn get_api_base(&self) -> Option<String> {
-        if let Ok(content) = fs::read_to_string(&self.api_key_path)
-            && let Ok(api_key_info) = serde_json::from_str::<ApiKeyInfo>(&content)
-        {
-            return api_key_info.endpoints.api;
-        }
-        None
+        self.api_key
+            .read()
+            .as_ref()
+            .and_then(|info| info.endpoints.api.clone())
     }
 
     /// Refresh the API key using the access token
@@ -219,8 +283,9 @@ impl CopilotAuthenticator {
 
             // Save to cache
             self.ensure_token_dir()?;
+            *self.api_key.write() = Some(api_key_info.clone());
             if let Ok(json) = serde_json::to_string(&api_key_info)
-                && let Err(e) = fs::write(&self.api_key_path, json)
+                && let Err(e) = self.persist_credential(&self.api_key_path, json.as_bytes())
             {
                 warn!("Failed to cache API key: {}", e);
             }
@@ -393,6 +458,188 @@ impl CopilotAuthenticator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn captured_credentials_survive_file_rotation_and_clone() {
+        let directory = tempfile::tempdir().unwrap();
+        let access_path = directory.path().join("access-token");
+        let key_path = directory.path().join("api-key.json");
+        let write = |suffix: &str| {
+            fs::write(&access_path, format!("  fixture-access-{suffix}\n")).unwrap();
+            fs::write(
+                &key_path,
+                serde_json::json!({
+                    "token": format!("fixture-key-{suffix}"), "expires_at": u64::MAX,
+                    "endpoints": {"api": format!("https://{suffix}.fixture.invalid")}
+                })
+                .to_string(),
+            )
+            .unwrap();
+        };
+        write("a");
+        let config = GitHubCopilotConfig {
+            token_dir: Some(directory.path().to_str().unwrap().into()),
+            access_token_file: Some("access-token".into()),
+            api_key_file: Some("api-key.json".into()),
+            ..Default::default()
+        };
+        let original = CopilotAuthenticator::new(&config);
+        let replica = CopilotAuthenticator::new(&config);
+        let cloned = original.clone();
+        assert_eq!(
+            original.credential_resource_identity(),
+            replica.credential_resource_identity()
+        );
+        write("b");
+        for captured in [&original, &cloned] {
+            assert_eq!(
+                captured.get_access_token().await.unwrap(),
+                "fixture-access-a"
+            );
+            assert_eq!(captured.get_api_key().await.unwrap(), "fixture-key-a");
+            assert_eq!(
+                captured.get_api_base().as_deref(),
+                Some("https://a.fixture.invalid")
+            );
+        }
+        let replacement = CopilotAuthenticator::new(&config);
+        assert_ne!(
+            original.credential_resource_identity(),
+            replacement.credential_resource_identity()
+        );
+        assert_eq!(
+            replacement.get_access_token().await.unwrap(),
+            "fixture-access-b"
+        );
+        assert_eq!(replacement.get_api_key().await.unwrap(), "fixture-key-b");
+        // Normal refresh changes this resource's cache, not its construction identity.
+        let identity = original.credential_resource_identity();
+        original.api_key.write().as_mut().unwrap().token = "fixture-refreshed-key".into();
+        assert_eq!(cloned.get_api_key().await.unwrap(), "fixture-refreshed-key");
+        assert_eq!(original.credential_resource_identity(), identity);
+        assert!(!format!("{original:?}").contains("fixture-"));
+    }
+
+    #[tokio::test]
+    async fn captured_refresh_preserves_rotated_files_and_tracks_owned_writes() {
+        for rotation in ["none", "access", "api", "both"] {
+            let directory = tempfile::tempdir().unwrap();
+            let access_path = directory.path().join("access-token");
+            let key_path = directory.path().join("api-key.json");
+            let key = |suffix: &str| ApiKeyInfo {
+                token: format!("fixture-key-{suffix}"),
+                expires_at: u64::MAX,
+                endpoints: Endpoints {
+                    api: Some(format!("https://{suffix}.fixture.invalid")),
+                },
+            };
+            fs::write(&access_path, "fixture-access-a").unwrap();
+            fs::write(&key_path, serde_json::to_vec(&key("a")).unwrap()).unwrap();
+            let config = GitHubCopilotConfig {
+                token_dir: Some(directory.path().to_str().unwrap().into()),
+                access_token_file: Some("access-token".into()),
+                api_key_file: Some("api-key.json".into()),
+                ..Default::default()
+            };
+            let captured = CopilotAuthenticator::new(&config);
+            let cloned = captured.clone();
+            let identity = captured.credential_resource_identity();
+            if matches!(rotation, "access" | "both") {
+                fs::write(&access_path, "fixture-access-b").unwrap();
+            }
+            if matches!(rotation, "api" | "both") {
+                fs::write(&key_path, serde_json::to_vec(&key("b")).unwrap()).unwrap();
+            }
+            let access_before = fs::read(&access_path).unwrap();
+            let key_before = fs::read(&key_path).unwrap();
+            for suffix in ["refreshed-1", "refreshed-2"] {
+                let refreshed = key(suffix);
+                // Exercise the production refresh's persistence boundary after
+                // its directory check and construction-owned cache update.
+                captured.ensure_token_dir().unwrap();
+                *captured.api_key.write() = Some(refreshed.clone());
+                cloned
+                    .persist_credential(&key_path, &serde_json::to_vec(&refreshed).unwrap())
+                    .unwrap();
+                assert_eq!(cloned.get_access_token().await.unwrap(), "fixture-access-a");
+                assert_eq!(cloned.get_api_key().await.unwrap(), refreshed.token);
+                assert_eq!(cloned.get_api_base(), refreshed.endpoints.api);
+                assert_eq!(cloned.credential_resource_identity(), identity);
+                assert_eq!(fs::read(&access_path).unwrap(), access_before);
+                if rotation == "none" {
+                    assert_eq!(
+                        fs::read(&key_path).unwrap(),
+                        serde_json::to_vec(&refreshed).unwrap()
+                    );
+                } else {
+                    assert_eq!(fs::read(&key_path).unwrap(), key_before, "{rotation}");
+                }
+            }
+            let replacement = CopilotAuthenticator::new(&config);
+            assert_ne!(replacement.credential_resource_identity(), identity);
+            let expected_access = if matches!(rotation, "access" | "both") {
+                "fixture-access-b"
+            } else {
+                "fixture-access-a"
+            };
+            let expected_key = match rotation {
+                "none" => "fixture-key-refreshed-2",
+                "access" => "fixture-key-a",
+                _ => "fixture-key-b",
+            };
+            assert_eq!(
+                replacement.get_access_token().await.unwrap(),
+                expected_access
+            );
+            assert_eq!(replacement.get_api_key().await.unwrap(), expected_key);
+        }
+    }
+
+    #[test]
+    fn captured_absence_does_not_treat_read_errors_as_owned_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = GitHubCopilotConfig {
+            token_dir: Some(directory.path().to_str().unwrap().into()),
+            access_token_file: Some("access-token".into()),
+            api_key_file: Some("api-key.json".into()),
+            ..Default::default()
+        };
+        let captured = CopilotAuthenticator::new(&config);
+        captured
+            .persist_credential(&captured.api_key_path, b"fixture-initial")
+            .unwrap();
+        fs::create_dir(&captured.access_token_path).unwrap();
+        assert!(
+            captured
+                .persist_credential(&captured.api_key_path, b"fixture-replacement")
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&captured.api_key_path).unwrap(),
+            b"fixture-initial"
+        );
+    }
+
+    #[test]
+    fn absent_or_invalid_cache_preserves_lazy_authentication() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("access-token"), " \n").unwrap();
+        fs::write(
+            directory.path().join("api-key.json"),
+            "invalid fixture JSON",
+        )
+        .unwrap();
+        let config = GitHubCopilotConfig {
+            token_dir: Some(directory.path().to_str().unwrap().into()),
+            access_token_file: Some("access-token".into()),
+            api_key_file: Some("api-key.json".into()),
+            ..Default::default()
+        };
+        let auth = CopilotAuthenticator::new(&config);
+        assert!(auth.access_token.read().is_none());
+        assert!(auth.api_key.read().is_none());
+        assert!(auth.get_api_base().is_none());
+    }
 
     #[test]
     fn test_authenticator_creation() {

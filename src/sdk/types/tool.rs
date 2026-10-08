@@ -18,8 +18,10 @@ pub struct Function {
     /// Function name
     pub name: String,
     /// Function description
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Function parameter schema
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub parameters: serde_json::Value,
     /// Function parameters (used for calls)
     #[serde(skip_serializing_if = "Option::is_none")]

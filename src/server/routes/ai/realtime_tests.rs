@@ -1,9 +1,14 @@
 use super::*;
+use crate::core::models::team::{Team, TeamStatus};
+use crate::core::teams::TeamRepository;
 use crate::core::{
     budget::{ProviderLimitConfig, ResetPeriod},
     net::ProviderEndpointAccess,
 };
+use crate::storage::database::SeaOrmTeamRepository;
 use actix_web::{App, HttpServer, test};
+use sea_orm::ConnectionTrait;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -462,10 +467,35 @@ async fn budget_and_scope_rejections_never_reach_upstream() {
 }
 #[actix_web::test]
 async fn upstream_close_code_and_reason_are_preserved() {
+    upstream_policy_close(false).await;
+}
+
+#[actix_web::test]
+async fn upstream_policy_close_after_completed_response_records_one_transport_failure() {
+    upstream_policy_close(true).await;
+}
+
+async fn upstream_policy_close(complete_response: bool) {
     let (state, url, key, _, handles) = fixture().await;
     let mut client = client(&url, &key).await;
     next_json(&mut client).await;
     next_json(&mut client).await;
+    if complete_response {
+        client
+            .send(Message::Text(
+                json!({"type":"response.create"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        for event in [
+            "response.created",
+            "response.output_audio.delta",
+            "response.function_call_arguments.done",
+            "response.done",
+        ] {
+            assert_eq!(next_json(&mut client).await["type"], event);
+        }
+    }
     client
         .send(Message::Text(
             json!({"type":"conversation.item.delete","item_id":"close"})
@@ -474,7 +504,11 @@ async fn upstream_close_code_and_reason_are_preserved() {
         ))
         .await
         .unwrap();
-    let event = client.next().await.unwrap().unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(3), client.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let Message::Close(Some(close)) = event else {
         panic!("expected close")
     };
@@ -495,12 +529,48 @@ async fn upstream_close_code_and_reason_are_preserved() {
     })
     .await
     .unwrap();
+    let successful_responses = u64::from(complete_response);
+    assert_eq!(
+        deployment
+            .state
+            .fail_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        deployment
+            .state
+            .total_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses + 1
+    );
     assert_eq!(
         deployment
             .state
             .success_requests
             .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses
+    );
+    assert_eq!(
+        deployment
+            .state
+            .active_requests
+            .load(std::sync::atomic::Ordering::Relaxed),
         0
+    );
+    assert_eq!(
+        deployment
+            .state
+            .rpm_current
+            .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses
+    );
+    assert_eq!(
+        deployment
+            .state
+            .tpm_current
+            .load(std::sync::atomic::Ordering::Relaxed),
+        successful_responses * 60
     );
     drop(client);
     for handle in handles {
@@ -588,6 +658,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         bound,
         rates().max_output,
     )
+    .await
     .unwrap();
     assert!(
         Pending::reserve(
@@ -598,6 +669,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
             bound,
             rates().max_output
         )
+        .await
         .is_err()
     );
     pending
@@ -622,6 +694,7 @@ async fn key_budget_and_interruption_fallback_use_existing_reservations() {
         bound,
         rates().max_output,
     )
+    .await
     .unwrap();
     drop(pending);
     assert!((state.budget_manager.get_current_spend(&scope) - expected - bound).abs() < 1e-9);
@@ -1355,6 +1428,157 @@ async fn response_boundaries_reauthorize_current_keys() {
 }
 
 #[actix_web::test]
+async fn response_boundaries_reauthorize_api_key_teams() {
+    for team_only in [false, true] {
+        for change in [
+            "active",
+            "inactive",
+            "deleted",
+            "unavailable",
+            "inactive-after-response",
+            "deleted-after-response",
+        ] {
+            let (state, url, raw, calls, handles) = fixture().await;
+            let (mut key, _) = state
+                .auth
+                .api_key()
+                .verify_key(&raw)
+                .await
+                .unwrap()
+                .unwrap();
+            let repository = SeaOrmTeamRepository::new(state.storage.database.clone());
+            let mut team = repository
+                .create(Team::new("realtime-key-team".into(), None))
+                .await
+                .unwrap();
+            key.team_id = Some(team.id());
+            if team_only {
+                key.user_id = None;
+            }
+            state.storage.db().update_api_key(&key).await.unwrap();
+            state.budget_limits.providers.set_provider_limit(
+                "openai",
+                ProviderLimitConfig::new(1.0, ResetPeriod::Monthly),
+            );
+            let mut socket = client(&url, &raw).await;
+            next_json(&mut socket).await;
+            next_json(&mut socket).await;
+            let router = state.pin_runtime().unified_router.clone();
+            let deployment = router
+                .get_deployment(&router.get_deployments_for_model("gpt-realtime-mini")[0])
+                .unwrap();
+            let completed_before = u64::from(matches!(
+                change,
+                "active" | "inactive-after-response" | "deleted-after-response"
+            ));
+            if completed_before == 1 {
+                socket
+                    .send(Message::Text(
+                        json!({"type":"response.create"}).to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(next_json(&mut socket).await["type"], "response.created");
+                for _ in 0..3 {
+                    next_json(&mut socket).await;
+                }
+            }
+            let budget_before = state
+                .budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .unwrap();
+            assert_eq!(budget_before.request_count, completed_before);
+            assert_eq!(budget_before.current_spend > 0.0, completed_before == 1);
+            match change {
+                "active" => {}
+                "deleted" | "deleted-after-response" => repository.delete(team.id()).await.unwrap(),
+                "inactive" | "inactive-after-response" => {
+                    team.status = TeamStatus::Inactive;
+                    repository.update(team).await.unwrap();
+                }
+                "unavailable" => {
+                    state
+                        .storage
+                        .db()
+                        .connection()
+                        .execute_unprepared("UPDATE teams SET data = 'invalid-json'")
+                        .await
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            socket
+                .send(Message::Text(
+                    json!({"type":"response.create"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            let event = next_json(&mut socket).await;
+            if change == "active" {
+                assert_eq!(event["type"], "response.created");
+                for _ in 0..3 {
+                    next_json(&mut socket).await;
+                }
+            } else {
+                assert_eq!(event["type"], "error");
+                assert_eq!(
+                    event["error"]["type"],
+                    if change == "unavailable" {
+                        "server_error"
+                    } else {
+                        "authentication_error"
+                    },
+                    "team_only={team_only}, change={change}"
+                );
+            }
+            let completed = completed_before + u64::from(change == "active");
+            assert_eq!(
+                calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| event["type"] == "response.create")
+                    .count(),
+                completed as usize,
+                "team_only={team_only}, change={change}"
+            );
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                deployment.state.success_requests.load(Ordering::Relaxed),
+                completed
+            );
+            assert_eq!(
+                deployment.state.rpm_current.load(Ordering::Relaxed),
+                completed
+            );
+            assert_eq!(
+                deployment.state.tpm_current.load(Ordering::Relaxed),
+                completed * 60
+            );
+            let budget_after = state
+                .budget_limits
+                .providers
+                .get_provider_usage("openai")
+                .unwrap();
+            assert_eq!(budget_after.request_count, completed);
+            if change == "active" {
+                assert!(
+                    (budget_after.current_spend - budget_before.current_spend * 2.0).abs() < 1e-12
+                );
+            } else {
+                assert_eq!(budget_after.current_spend, budget_before.current_spend);
+            }
+            assert!(state.budget_limits.providers.reserved_spend.is_empty());
+            drop(socket);
+            for handle in handles {
+                handle.stop(false).await;
+            }
+        }
+    }
+}
+
+#[actix_web::test]
 async fn realtime_auth_middleware_returns_openai_error_envelopes() {
     assert_eq!(
         super::super::operation_for_path("/v1/realtime"),
@@ -1726,7 +1950,8 @@ async fn rejected_session_updates_do_not_change_the_response_cap() {
 
 #[actix_web::test]
 async fn completed_responses_survive_failed_budget_settlement() {
-    let (state, url, raw, _, handles) = fixture().await;
+    let (state, url, raw, _, handles) =
+        fixture_with_config(|config| config.gateway.storage.request_ledger.enabled = true).await;
     state.budget_limits.providers.set_provider_limit(
         "openai",
         ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
@@ -1789,6 +2014,36 @@ async fn completed_responses_survive_failed_budget_settlement() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+    // A later acknowledged generation must not erase the earlier failed
+    // budget operation in the one terminal WebSocket session row.
+    state
+        .budget_limits
+        .providers
+        .budgets
+        .get_mut("openai")
+        .unwrap()
+        .current_spend = 0.0;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    client.close(None).await.unwrap();
+    let row = terminal_realtime_ledger(&state).await;
+    let billing: crate::core::request_ledger::RequestBilling =
+        serde_json::from_value(row.billing.unwrap()).unwrap();
+    assert!((row.cost.unwrap() - cost * 2.0).abs() < 1e-12);
+    assert_eq!(billing.unknown_response_count, Some(0));
+    assert_eq!(billing.pending_response_count, Some(0));
+    assert_eq!(
+        billing.provider_settlement.as_deref(),
+        Some("settlement_unconfirmed")
+    );
+    assert!(billing.requires_budget_review(row.cost.unwrap()));
     drop(client);
     for handle in handles {
         handle.stop(false).await;
@@ -3260,6 +3515,153 @@ async fn admission_backend_failure_keeps_unavailable_classification() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+async fn terminal_realtime_ledger(
+    state: &AppState,
+) -> crate::storage::database::entities::request_ledger::Model {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let rows = state
+                .storage
+                .database
+                .list_request_ledger(
+                    &crate::storage::database::RequestLedgerListFilter::default(),
+                    10,
+                )
+                .await
+                .unwrap();
+            if let Some(row) = rows.into_iter().find(|row| row.endpoint == "/v1/realtime") {
+                return row;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("one terminal WebSocket session ledger row")
+}
+
+#[actix_web::test]
+async fn realtime_session_ledger_keeps_unknown_generation_before_known_generation() {
+    let (state, url, raw, _, handles) =
+        fixture_with_config(|config| config.gateway.storage.request_ledger.enabled = true).await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    for metadata in [json!({"usage":"absent"}), json!({})] {
+        client
+            .send(Message::Text(
+                json!({"type":"response.create","response":{"metadata":metadata}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            next_json(&mut client).await;
+        }
+    }
+    assert!(
+        state
+            .storage
+            .database
+            .list_request_ledger(
+                &crate::storage::database::RequestLedgerListFilter::default(),
+                10
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+        "101 upgrade does not terminate the session ledger"
+    );
+    client.close(None).await.unwrap();
+    let row = terminal_realtime_ledger(&state).await;
+    assert_eq!(row.cost, None);
+    assert_eq!(row.status_code, 101);
+    assert_eq!(row.provider.as_deref(), Some("openai"));
+    let billing: crate::core::request_ledger::RequestBilling =
+        serde_json::from_value(row.billing.unwrap()).unwrap();
+    let actual = rates()
+        .cost(&usage(), rates().max_output)
+        .unwrap()
+        .unwrap()
+        .0;
+    assert!((billing.known_cost_subtotal.unwrap() - actual).abs() < 1e-12);
+    assert_eq!(billing.unknown_response_count, Some(1));
+    assert_eq!(billing.pending_response_count, Some(0));
+    assert!(
+        (billing.provider_reserved_amount.unwrap() - rates().bound(rates().max_output) * 2.0).abs()
+            < 1e-12
+    );
+    assert!(
+        (billing.provider_charge_amount.unwrap() - (rates().bound(rates().max_output) + actual))
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(billing.provider_settlement.as_deref(), Some("settled"));
+    assert!(billing.model_reserved_amount.is_none());
+    assert!(billing.key_reserved_amount.is_none());
+    assert!(billing.unknown_reason.is_some());
+    for handle in handles {
+        handle.stop(false).await;
+    }
+}
+
+#[actix_web::test]
+async fn realtime_terminal_body_during_pending_generation_keeps_total_cost_unknown() {
+    let (state, url, raw, _, handles) =
+        fixture_with_config(|config| config.gateway.storage.request_ledger.enabled = true).await;
+    state.budget_limits.providers.set_provider_limit(
+        "openai",
+        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
+    );
+    let mut client = client(&url, &raw).await;
+    next_json(&mut client).await;
+    next_json(&mut client).await;
+    client
+        .send(Message::Text(
+            json!({"type":"response.create"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        next_json(&mut client).await;
+    }
+    client
+        .send(Message::Text(
+            json!({"type":"response.create","response":{"metadata":{"hold":true}}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut client).await["type"], "response.created");
+    client.close(None).await.unwrap();
+    let row = terminal_realtime_ledger(&state).await;
+    assert_eq!(
+        row.cost, None,
+        "known subtotal is not the total actual for a pending/unknown generation"
+    );
+    let billing: crate::core::request_ledger::RequestBilling =
+        serde_json::from_value(row.billing.unwrap()).unwrap();
+    let actual = rates()
+        .cost(&usage(), rates().max_output)
+        .unwrap()
+        .unwrap()
+        .0;
+    assert!((billing.known_cost_subtotal.unwrap() - actual).abs() < 1e-12);
+    assert!(
+        billing.pending_response_count.unwrap_or(0) + billing.unknown_response_count.unwrap_or(0)
+            >= 1
+    );
+    assert!(billing.unknown_reason.is_some());
     for handle in handles {
         handle.stop(false).await;
     }

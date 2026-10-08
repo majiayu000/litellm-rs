@@ -160,13 +160,14 @@ pub(super) async fn connect(
         .max_frame_size(max_size)
         .aggregate_continuations()
         .max_continuation_size(max_size);
+    let ledger_facts = crate::core::request_ledger::current_facts();
     actix_web::rt::spawn(async move {
         for event in initial {
             if session.text(event).await.is_err() {
                 return;
             }
         }
-        relay(
+        let work = relay(
             session,
             stream,
             upstream,
@@ -180,8 +181,11 @@ pub(super) async fn connect(
             query.model.clone(),
             wire_model,
             jwt_token,
-        )
-        .await;
+        );
+        match ledger_facts {
+            Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+            None => work.await,
+        }
     });
     Ok(response)
 }
@@ -563,7 +567,7 @@ async fn relay(
     let mut error_type = "server_error";
     let mut session_output_limit = rates.max_output;
     let mut pending_session_update: Option<(String, Value)> = None;
-    lease.cancel_response();
+    lease.cancel_response().await;
     let outcome: Result<(), String> = async {
         loop {
             tokio::select! {
@@ -606,9 +610,12 @@ async fn relay(
                                     error_type = "authentication_error";
                                     return Err("Realtime API key is no longer authorized".into());
                                 }
-                                if let Some(user_id) = key.user_id {
-                                    let owner = state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?;
-                                    if !owner.is_some_and(|owner| owner.is_active()) { error_type = "authentication_error"; return Err("Realtime API key owner is no longer authorized".into()); }
+                                let owner = if let Some(user_id) = key.user_id {
+                                    state.storage.db().find_user_by_id(user_id).await.map_err(|_| "Realtime key owner verification unavailable")?
+                                } else { None };
+                                if state.auth.api_key().principal_invalid_reason(&key, owner.as_ref()).await.map_err(|_| "Realtime key principal verification unavailable")?.is_some() {
+                                    error_type = "authentication_error";
+                                    return Err("Realtime API key principal is no longer authorized".into());
                                 }
                                 context::enforce_key_model_and_token_limits(&key, &public_model, if unbounded_output { None } else { value["response"]["max_output_tokens"].as_u64().and_then(|v| u32::try_from(v).ok()) }).map_err(|_| { error_type = "authentication_error"; "Realtime model or output policy denied" })?;
                                 output_limit = context::api_key_output_limit(&key).map_err(|_| "Invalid Realtime key policy")?.map_or(output_limit, |limit| limit.min(output_limit));
@@ -631,13 +638,13 @@ async fn relay(
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":"rate_limit_error","message":"Realtime request rate exceeded","retry_after":retry_after}}).to_string(), timeout).await?;
                                 continue;
                             }
-                            lease.refresh_realtime_deployment(current_runtime.unified_router.clone()).map_err(|error| error.redacted().to_string())?;
-                            if let Err(error) = lease.begin_response(1) {
+                            lease.refresh_realtime_deployment(current_runtime.unified_router.clone()).await.map_err(|error| error.redacted().to_string())?;
+                            if let Err(error) = lease.begin_response(1).await {
                                 let kind = if matches!(error, ProviderError::RateLimit { .. }) { "rate_limit_error" } else { "server_error" };
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.redacted().to_string()}}).to_string(), timeout).await?;
                                 continue;
                             }
-                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output) {
+                            match Pending::reserve(&state, &provider, &model, context.api_key_budget_id(), rates.bound(effective_output), effective_output).await {
                                 Ok(reservation) => {
                                     let event_id = value["event_id"].as_str().map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                                     value["event_id"] = json!(event_id);
@@ -646,7 +653,7 @@ async fn relay(
                                     // No trusted terminal usage may arrive; admission retains the reserved upper bound.
                                     tokens = rates.max_input as u64 + effective_output as u64;
                                 },
-                                Err(error) => { lease.cancel_response(); let kind = if matches!(error, ProviderError::QuotaExceeded { .. }) { "insufficient_quota" } else { "server_error" }; send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.to_string()}}).to_string(), timeout).await?; continue; }
+                                Err(error) => { lease.cancel_response().await; let kind = if matches!(error, ProviderError::QuotaExceeded { .. }) { "insufficient_quota" } else { "server_error" }; send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.to_string()}}).to_string(), timeout).await?; continue; }
                             }
                         }
                         if value["type"] == "session.update" {
@@ -675,7 +682,7 @@ async fn relay(
                         if value["type"] == "error" && value["error"]["type"] != "invalid_request_error"
                             && !(pending.is_some() && response_id.is_none()
                                 && response_event_id.as_deref() == value["error"]["event_id"].as_str()) {
-                            lease.record_provider_event_failure(&upstream_event_error(&value["error"]));
+                            lease.record_provider_event_failure(&upstream_event_error(&value["error"])).await;
                         }
                         if value["type"] == "error" && pending_session_update.as_ref().is_some_and(|(id, _)| Some(id.as_str()) == value["error"]["event_id"].as_str()) {
                             pending_session_update = None;
@@ -706,17 +713,24 @@ async fn relay(
                             match usage {
                                 Ok(usage) => {
                                     tokens = usage.map_or(tokens, |(_, tokens)| tokens);
-                                    if let Err(error) = reservation.settle(&state, context.api_key_id(), usage).await {
-                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
-                                    }
                                     let provider_failed = status == "failed"
                                         && value["response"]["status_details"]["error"]["type"] != "invalid_request_error";
-                                    if provider_failed {
-                                        lease.finish_interrupted(tokens, Some(&upstream_event_error(&value["response"]["status_details"]["error"])));
-                                    } else if matches!(status, "cancelled" | "incomplete" | "failed") {
-                                        lease.finish_interrupted(tokens, None);
+                                    let terminal_error = provider_failed.then(|| upstream_event_error(&value["response"]["status_details"]["error"]));
+                                    let settlement = reservation.settle(&state, context.api_key_id(), usage);
+                                    let settled = if status == "completed" {
+                                        lease.settle_terminal(tokens, None, settlement).await
                                     } else {
-                                        lease.complete_response(tokens, None);
+                                        lease.settle_interrupted(tokens, terminal_error.as_ref(), settlement).await
+                                    };
+                                    if let Err(error) = settled {
+                                        tracing::error!(%error, %provider, %model, key_id = ?context.api_key_id(), tokens, cost = ?usage.map(|(cost, _)| cost), "Realtime terminal response budget settlement failed");
+                                    }
+                                    if provider_failed {
+                                        lease.finish_interrupted(tokens, Some(&upstream_event_error(&value["response"]["status_details"]["error"]))).await;
+                                    } else if matches!(status, "cancelled" | "incomplete" | "failed") {
+                                        lease.finish_interrupted(tokens, None).await;
+                                    } else {
+                                        lease.complete_response(tokens, None).await;
                                     }
                                 }
                                 Err(error) => { failure = true; return Err(error); }
@@ -733,10 +747,10 @@ async fn relay(
                                 tracing::error!(%error, %provider, %model, "Realtime pre-creation error settlement failed");
                             }
                             if value["error"]["type"] == "invalid_request_error" {
-                                lease.finish_interrupted(0, None);
+                                lease.finish_interrupted(0, None).await;
                             } else {
 
-                                lease.finish_interrupted(0, Some(&upstream_event_error(&value["error"])));
+                                lease.finish_interrupted(0, Some(&upstream_event_error(&value["error"]))).await;
                             }
                             response_event_id = None;
                             tokens = 0;
@@ -781,11 +795,17 @@ async fn relay(
     }
     let error = ProviderError::network("openai", "Realtime transport failed");
     if tokens > 0 {
-        lease.finish_interrupted(tokens, failure.then_some(&error));
+        lease
+            .finish_interrupted(tokens, failure.then_some(&error))
+            .await;
     } else if failure {
-        lease.finish_failure_with_tokens(&error, 0);
+        // An idle socket has already finalized its generation lease. A new
+        // transport failure is a separate provider event, not a second attempt
+        // to complete that generation.
+        lease.record_provider_event_failure(&error).await;
+        lease.finish_neutral(0).await;
     } else {
-        lease.finish_neutral(0);
+        lease.finish_neutral(0).await;
     }
 }
 

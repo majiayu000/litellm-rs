@@ -2,7 +2,9 @@
 
 use super::LLMClient;
 use crate::core::router::RuntimeHandle;
-use crate::core::types::chat::{ChatMessage as CoreMessage, ChatRequest as CoreChatRequest};
+use crate::core::types::chat::{
+    ChatMessage as CoreMessage, ChatRequest as CoreChatRequest, StreamOptions,
+};
 use crate::core::types::context::RequestContext;
 use crate::core::types::model::ProviderCapability;
 use crate::core::types::responses::{
@@ -21,14 +23,14 @@ use futures::StreamExt;
 use std::pin::Pin;
 
 impl LLMClient {
-    fn runtime_handle(&self) -> Result<RuntimeHandle> {
+    pub(super) fn runtime_handle(&self) -> Result<RuntimeHandle> {
         self.runtime_binding
             .as_ref()
             .map(|binding| binding.bind())
             .ok_or_else(|| SDKError::ConfigError("canonical runtime is not configured".to_string()))
     }
 
-    fn runtime_model<'a>(&'a self, requested: &'a str) -> Result<&'a str> {
+    pub(super) fn runtime_model<'a>(&'a self, requested: &'a str) -> Result<&'a str> {
         if requested.is_empty() {
             self.runtime_default_model.as_deref().ok_or_else(|| {
                 SDKError::ConfigError(
@@ -43,12 +45,14 @@ impl LLMClient {
     pub(super) async fn chat_with_runtime(&self, request: SdkChatRequest) -> Result<ChatResponse> {
         let model = self.runtime_model(&request.model)?.to_string();
         let core_request = sdk_request_to_core(&model, request)?;
+        let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&core_request)?;
         let context = RequestContext::new();
         let execution = self
             .runtime_handle()?
             .execute_with_selected_deployment_capability_typed(
                 &model,
                 &ProviderCapability::ChatCompletion,
+                estimated_tokens,
                 move |deployment| {
                     let mut request = core_request.clone();
                     let context = context.clone();
@@ -57,12 +61,12 @@ impl LLMClient {
                         let response = deployment
                             .provider
                             .chat_completion(request, context)
-                            .await?;
+                            .await
+                            .map_err(|error| (error, None))?;
                         let tokens = response
                             .usage
                             .as_ref()
-                            .map(|usage| u64::from(usage.total_tokens))
-                            .unwrap_or_default();
+                            .map(|usage| u64::from(usage.total_tokens));
                         Ok((response, tokens))
                     }
                 },
@@ -75,24 +79,23 @@ impl LLMClient {
 
     pub(super) async fn chat_stream_with_runtime(
         &self,
-        messages: Vec<Message>,
+        mut request: SdkChatRequest,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
-        let model = self.runtime_model("")?.to_string();
-        let request = SdkChatRequest {
-            model: model.clone(),
-            messages,
-            options: crate::sdk::types::ChatOptions {
-                stream: true,
-                ..Default::default()
-            },
-        };
-        let core_request = sdk_request_to_core(&model, request)?;
+        let model = self.runtime_model(&request.model)?.to_string();
+        request.options.stream = true;
+        let mut core_request = sdk_request_to_core(&model, request)?;
+        core_request.stream_options = Some(StreamOptions {
+            include_usage: Some(true),
+        });
+        let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&core_request)?;
         let context = RequestContext::new();
         let handle = self.runtime_handle()?;
+        let started_at = std::time::Instant::now();
         let (stream, lease) = handle
             .execute_stream_with_selected_deployment_capability_typed(
                 &model,
                 &ProviderCapability::ChatCompletionStream,
+                estimated_tokens,
                 move |deployment| {
                     let mut request = core_request.clone();
                     let context = context.clone();
@@ -108,10 +111,36 @@ impl LLMClient {
             .await
             .map_err(SDKError::from)?;
 
-        Ok(Box::pin(stream.map(move |chunk| {
-            let _lease = &lease;
-            chunk.map_err(SDKError::from).and_then(core_chunk_to_sdk)
-        })))
+        let mut completion = handle.stream_completion(lease, started_at);
+        Ok(Box::pin(async_stream::stream! {
+            let mut stream = stream;
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(chunk) => {
+                        completion.observe_chunk(&chunk);
+                        match core_chunk_to_sdk(chunk) {
+                            Ok(chunk) => yield Ok(chunk),
+                            Err(error) => {
+                                // Conversion belongs to the SDK, not provider
+                                // health. Release the guard before exposing it.
+                                drop(stream);
+                                drop(completion);
+                                yield Err(error);
+                                return;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        drop(stream);
+                        completion.finish_failure(&error).await;
+                        yield Err(SDKError::from(error));
+                        return;
+                    }
+                }
+            }
+            drop(stream);
+            completion.finish_success().await;
+        }))
     }
 }
 
@@ -162,6 +191,9 @@ pub(super) fn sdk_request_to_core(model: &str, request: SdkChatRequest) -> Resul
         presence_penalty: request.options.presence_penalty,
         stop: request.options.stop,
         stream: request.options.stream,
+        stream_options: request.options.stream.then_some(StreamOptions {
+            include_usage: Some(true),
+        }),
         tools,
         tool_choice,
         ..Default::default()
@@ -203,12 +235,11 @@ fn core_chunk_to_sdk(chunk: CoreChatChunk) -> Result<ChatChunk> {
         .into_iter()
         .map(|choice| {
             if choice.delta.thinking.is_some()
-                || choice.delta.tool_calls.is_some()
                 || choice.delta.function_call.is_some()
                 || choice.delta.audio.is_some()
             {
                 return Err(SDKError::NotSupported(
-                    "SDK ChatChunk cannot represent canonical thinking, tool, function, or audio deltas"
+                    "SDK ChatChunk cannot represent canonical thinking, function, or audio deltas"
                         .to_string(),
                 ));
             }
@@ -217,7 +248,7 @@ fn core_chunk_to_sdk(chunk: CoreChatChunk) -> Result<ChatChunk> {
                 delta: MessageDelta {
                     role: choice.delta.role.map(transcode).transpose()?,
                     content: choice.delta.content,
-                    tool_calls: None,
+                    tool_calls: choice.delta.tool_calls,
                 },
                 finish_reason: choice.finish_reason.map(finish_reason_name),
             })
@@ -228,6 +259,7 @@ fn core_chunk_to_sdk(chunk: CoreChatChunk) -> Result<ChatChunk> {
         id: chunk.id,
         model: chunk.model,
         choices,
+        usage: chunk.usage,
     })
 }
 
@@ -251,18 +283,15 @@ fn sdk_message_to_core(message: Message) -> Result<CoreMessage> {
         content: message.content.map(transcode).transpose()?,
         name: message.name,
         tool_calls,
+        tool_call_id: message.tool_call_id,
         ..Default::default()
     })
 }
 
 fn core_message_to_sdk(message: CoreMessage) -> Result<Message> {
-    if message.thinking.is_some()
-        || message.audio.is_some()
-        || message.tool_call_id.is_some()
-        || message.function_call.is_some()
-    {
+    if message.thinking.is_some() || message.audio.is_some() || message.function_call.is_some() {
         return Err(SDKError::NotSupported(
-            "SDK Message cannot represent canonical thinking, audio, tool-result, or legacy function-call fields"
+            "SDK Message cannot represent canonical thinking, audio, or legacy function-call fields"
                 .to_string(),
         ));
     }
@@ -287,6 +316,7 @@ fn core_message_to_sdk(message: CoreMessage) -> Result<Message> {
         content: message.content.map(transcode).transpose()?,
         name: message.name,
         tool_calls,
+        tool_call_id: message.tool_call_id,
     })
 }
 

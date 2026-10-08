@@ -294,7 +294,9 @@ async fn proxy_image_multipart_endpoint(
                             )
                             .with_precomputed_api_key_budget_cost(Some(estimated_cost))
                             .reserve_call(
-                                |context| context.reserve_spend(estimated_cost).map(Some),
+                                async |context| {
+                                    context.reserve_spend(estimated_cost).await.map(Some)
+                                },
                                 || async move {
                                     let url = image_proxy_url(&provider_for_call, endpoint)
                                         .map_err(image_proxy_gateway_error_to_provider_error)?;

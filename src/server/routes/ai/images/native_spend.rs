@@ -19,15 +19,16 @@ pub(super) async fn reserve_call_settle_media_job<
     settle: Settle,
 ) -> Result<(T, u64), ProviderError>
 where
-    Reserve: FnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
+    Reserve: AsyncFnOnce(&BudgetContext) -> Result<Option<UnifiedBudgetReservation>, ProviderError>,
     Call: FnOnce() -> CallFuture,
     CallFuture: Future<Output = Result<T, ProviderError>>,
     Settle: FnOnce(BudgetReservations, BudgetContext) -> SettleFuture,
     SettleFuture: Future<Output = u64>,
 {
-    let (mut reservations, budget) = budgeted.reserve_for_call(reserve)?;
+    let (mut reservations, budget) = budgeted.reserve_for_call(reserve).await?;
     match call().await {
         Ok(value) => {
+            super::super::execution::completion::provider_succeeded();
             let tokens_used = settle(reservations, budget).await;
             Ok((value, tokens_used))
         }
@@ -36,7 +37,7 @@ where
             Err(error)
         }
         Err(error) => {
-            reservations.cancel();
+            reservations.cancel().await;
             Err(error)
         }
     }

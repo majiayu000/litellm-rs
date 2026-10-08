@@ -248,6 +248,7 @@ async fn runtime_handle_capability_filters_non_streaming_for_completion_and_sdk(
 
     let mut sdk_stream = sdk_facade
         .chat_stream(vec![SdkMessage {
+            tool_call_id: None,
             role: SdkRole::User,
             content: Some(SdkContent::Text("hello".to_string())),
             name: None,
@@ -356,6 +357,7 @@ async fn runtime_handle_capability_filters_non_chat_for_completion_and_sdk() {
         .expect("completion facade should succeed");
     let sdk_response = sdk_facade
         .chat(vec![SdkMessage {
+            tool_call_id: None,
             role: SdkRole::User,
             content: Some(SdkContent::Text("hello".to_string())),
             name: None,
@@ -380,6 +382,7 @@ async fn runtime_handle_capability_filters_non_chat_for_completion_and_sdk() {
     let sdk_error = LLMClient::from_runtime(empty_binding, "missing-model")
         .expect("SDK runtime facade should build")
         .chat(vec![SdkMessage {
+            tool_call_id: None,
             role: SdkRole::User,
             content: Some(SdkContent::Text("hello".to_string())),
             name: None,
@@ -504,7 +507,9 @@ fn unary_completion_source_has_no_legacy_execution_fallback() {
             "streaming completion must not contain legacy fallback: {forbidden}"
         );
     }
-    assert!(stream.contains("let _lease = &lease"));
+    // Lease ownership is verified through both public stream facades in
+    // tests/sdk_runtime_stream_completion.rs, including real Redis cleanup.
+    // Keep this source guard focused on preventing legacy execution fallbacks.
 
     let facade = include_str!("default_router/mod.rs");
     let start = facade

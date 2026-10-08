@@ -207,7 +207,7 @@ pub async fn audio_transcriptions(
                         ApiKeyBudgetPolicy::FromProviderReservation,
                     )
                     .reserve_call_settle(
-                        |budget| {
+                        async |budget| {
                             super::budgeting::reserve_audio_provider_budget_with_pricing(
                                 &reserve_request_pricing,
                                 &reserve_pricing_config,
@@ -220,6 +220,7 @@ pub async fn audio_transcriptions(
                                 }),
                                 &reserve_usage,
                             )
+                            .await
                         },
                         || provider.audio_transcription(request, context),
                         |response, reservations, budget| {

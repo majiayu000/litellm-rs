@@ -122,7 +122,7 @@ async fn create(
         &requested_model,
         &context,
     );
-    let (call, lease) = super::execution::execute_stream_with_selected_deployment_matching(
+    let (call, mut lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::ChatCompletion,
@@ -217,7 +217,7 @@ async fn create(
                             budgeted::ApiKeyBudgetPolicy::FromProviderReservation,
                         )
                         .reserve_call(
-                            |_| {
+                            async |_| {
                                 spend::reserve_pricing_usage_budget_with_request_pricing(
                                     &pricing,
                                     &state.config().gateway.pricing,
@@ -226,6 +226,7 @@ async fn create(
                                     &model,
                                     &estimated_usage,
                                 )
+                                .await
                             },
                             || {
                                 callback.begin_provider_execution_with_pricing(
@@ -276,7 +277,23 @@ async fn create(
         .as_ref()
         .ok()
         .and_then(|value| native_usage(value.get("usage")?, require_inference_geo));
-    settle(
+    let result = result.and_then(|value| {
+        if !valid_message_envelope(&value)
+            || usage.is_none()
+            || value
+                .get("stop_reason")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            Err(ProviderError::response_parsing("anthropic", "Invalid Messages response").into())
+        } else {
+            Ok(value)
+        }
+    });
+    let tokens_used = usage
+        .as_ref()
+        .map_or(0, |usage| u64::from(usage.normalized.total_tokens));
+    let settlement = settle(
         state,
         &context,
         &provider,
@@ -286,35 +303,39 @@ async fn create(
         reservation,
         key_reservation,
         crate::core::request_ledger::current_facts(),
-    )
-    .await;
+    );
+    match result.as_ref() {
+        Ok(_) => lease.settle_terminal(tokens_used, None, settlement).await,
+        Err(GatewayError::Provider(error)) => {
+            lease
+                .settle_terminal(tokens_used, Some(error), settlement)
+                .await
+        }
+        Err(_) => {
+            lease
+                .settle_interrupted(tokens_used, None, settlement)
+                .await
+        }
+    }
     let value = match result {
         Ok(value) => value,
         Err(error) => {
             callback.fail(error.to_string(), "provider_error");
             if let GatewayError::Provider(provider_error) = &error {
-                lease.finish_failure(provider_error);
+                lease
+                    .finish_failure_with_tokens(provider_error, tokens_used)
+                    .await;
             }
             return Err(error);
         }
     };
-    if !valid_message_envelope(&value)
-        || usage.is_none()
-        || value
-            .get("stop_reason")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        let error = ProviderError::response_parsing("anthropic", "Invalid Messages response");
-        callback.fail(error.to_string(), "provider_error");
-        lease.finish_failure(&error);
-        return Err(error.into());
-    }
-    lease.finish_success(
-        usage
-            .as_ref()
-            .map_or(0, |usage| u64::from(usage.normalized.total_tokens)),
-    );
+    lease
+        .finish_success(
+            usage
+                .as_ref()
+                .map_or(0, |usage| u64::from(usage.normalized.total_tokens)),
+        )
+        .await;
     let sink =
         GuardrailDecisionSink::from_state(state, Some(&model), Some(&provider), Some(&deployment));
     let value = guardrails::apply_native_messages(state.guardrails().as_ref(), value, true, &sink)
@@ -620,52 +641,71 @@ async fn settle(
     key_reservation: Option<BudgetReservation>,
     facts: Option<SharedRequestLedgerFacts>,
 ) {
-    let limits = state.budgeted.budget_limits();
-    let keys = state.budgeted.key_manager();
-    if usage.is_none() {
-        spend::capture_ledger_settlement(facts.as_ref(), provider, model, None, None);
-        // Preserve the budget upper bound without presenting it as an actual bill.
-        if let Some(reservation) = reservation {
-            let reserved = reservation.reserved_amount();
-            if let Err(error) = reservation.settle(reserved) {
-                tracing::error!(%provider, %model, ?error, "failed to retain unknown Messages budget");
+    let captured_facts = facts.clone();
+    let work = async move {
+        let limits = state.budgeted.budget_limits();
+        let keys = state.budgeted.key_manager();
+        if usage.is_none() {
+            spend::capture_ledger_settlement(facts.as_ref(), provider, model, None, None);
+            // Preserve the budget upper bound without presenting it as an actual bill.
+            if let Some(reservation) = key_reservation {
+                let reserved = reservation.reserved_amount();
+                spend::settle_api_key_budget_reservation(
+                    Some(reservation),
+                    reserved,
+                    "Messages usage unknown",
+                );
             }
+            super::execution::completion::observe_usage(0);
+            let budget_settlement = async {
+                if let Some(reservation) = reservation {
+                    let reserved = reservation.reserved_amount();
+                    if let Err(error) =
+                        super::execution::completion::settle_budget(reservation, reserved).await
+                    {
+                        tracing::error!(%provider, %model, ?error, "failed to retain unknown Messages budget");
+                    }
+                }
+            };
+            let usage_record = async {
+                if let Some(key_id) = context.api_key_id()
+                    && let Err(error) = keys
+                        .record_usage_record(
+                            key_id,
+                            crate::core::keys::UsageRecord::unpriced(
+                                0,
+                                0.0,
+                                "messages_usage_unknown",
+                            ),
+                        )
+                        .await
+                {
+                    tracing::error!(%key_id, %error, "failed to record unknown Messages usage");
+                }
+            };
+            tokio::join!(budget_settlement, usage_record);
+            return;
         }
-        if let Some(reservation) = key_reservation {
-            let reserved = reservation.reserved_amount();
-            spend::settle_api_key_budget_reservation(
-                Some(reservation),
-                reserved,
-                "Messages usage unknown",
-            );
-        }
-        if let Some(key_id) = context.api_key_id()
-            && let Err(error) = keys
-                .record_usage_record(
-                    key_id,
-                    crate::core::keys::UsageRecord::unpriced(0, 0.0, "messages_usage_unknown"),
-                )
-                .await
-        {
-            tracing::error!(%key_id, %error, "failed to record unknown Messages usage");
-        }
-        return;
+        let settlement = spend::usage_spend_settlement_with_request_pricing(
+            (&limits, &keys, context.api_key_id()),
+            (provider, model, usage.map(|u| &u.normalized)),
+            pricing,
+            reservation,
+            key_reservation,
+        )
+        .with_pricing_usage(usage.map(|u| u.pricing.clone()))
+        .with_ledger_facts(facts);
+        spend::record_completion_spend_with_reservation_with_policy(
+            &state.budgeted.pricing(),
+            &state.config().gateway.pricing,
+            settlement,
+        )
+        .await;
+    };
+    match captured_facts {
+        Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+        None => work.await,
     }
-    let settlement = spend::usage_spend_settlement_with_request_pricing(
-        (&limits, &keys, context.api_key_id()),
-        (provider, model, usage.map(|u| &u.normalized)),
-        pricing,
-        reservation,
-        key_reservation,
-    )
-    .with_pricing_usage(usage.map(|u| u.pricing.clone()))
-    .with_ledger_facts(facts);
-    spend::record_completion_spend_with_reservation_with_policy(
-        &state.budgeted.pricing(),
-        &state.config().gateway.pricing,
-        settlement,
-    )
-    .await;
 }
 
 async fn read_json(response: &mut reqwest::Response) -> Result<Value, GatewayError> {

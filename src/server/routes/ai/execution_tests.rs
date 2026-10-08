@@ -33,6 +33,69 @@ async fn build_test_router() -> UnifiedRouter {
     router
 }
 
+async fn large_pending_settlement(marker: &u8) {
+    let payload = [0_u8; 16 * 1024];
+    std::future::pending::<()>().await;
+    std::hint::black_box((payload, marker));
+}
+
+#[tokio::test]
+async fn settlement_wrappers_box_large_borrowing_futures_before_polling() {
+    let router = Arc::new(build_test_router().await);
+    let deployment = router.get_deployment("deployment-1").unwrap();
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        |_, _, _| async { Ok::<_, ProviderError>(()) },
+    )
+    .await
+    .unwrap();
+    let marker = 7_u8;
+    assert!(std::mem::size_of_val(&large_pending_settlement(&marker)) >= 16 * 1024);
+
+    let wait = lease.settle_terminal(42, None, large_pending_settlement(&marker));
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    let wait = lease.settle_interrupted(42, None, large_pending_settlement(&marker));
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    let wait = super::settle_stream_terminal(
+        Some(&mut lease),
+        42,
+        None,
+        large_pending_settlement(&marker),
+    );
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    let wait = super::settle_stream_terminal(None, 42, None, large_pending_settlement(&marker));
+    assert!(std::mem::size_of_val(&wait) < 1024);
+    drop(wait);
+    // Eager allocation must not eagerly create terminal accounting intent.
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 1);
+    drop(lease);
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn unary_scope_does_not_inline_a_large_operation_future() {
+    let router = UnifiedRouter::default();
+    let request = execute_with_selected_deployment(
+        &router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        |_, _, _| async {
+            let payload = [0_u8; 128 * 1024];
+            std::future::pending::<()>().await;
+            std::hint::black_box(payload);
+            Ok::<_, ProviderError>(((), 0))
+        },
+    );
+    assert!(std::mem::size_of_val(&request) < 128 * 1024);
+}
+
 async fn build_mixed_capability_router() -> UnifiedRouter {
     let router = UnifiedRouter::new(RouterConfig {
         routing_strategy: UnifiedRoutingStrategy::PriorityBased,
@@ -391,7 +454,7 @@ async fn test_execute_stream_holds_deployment_active_until_success() {
     assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
     drop(deployment);
 
-    lease.finish_success(42);
+    lease.finish_success(42).await;
 
     let deployment = router
         .get_deployment("deployment-1")
@@ -437,7 +500,7 @@ async fn test_execute_stream_records_stream_failure() {
     .expect("stream creation should succeed");
 
     let error = ProviderError::rate_limit("test", Some(1));
-    lease.finish_failure(&error);
+    lease.finish_failure(&error).await;
 
     let deployment = router
         .get_deployment("deployment-1")
@@ -484,7 +547,7 @@ async fn test_execute_stream_excludes_provider_budget_failures() {
         .get_deployment("primary-budget-exhausted")
         .expect("primary deployment should exist");
     assert_eq!(primary.state.fail_requests.load(Ordering::Relaxed), 0);
-    lease.finish_success(0);
+    lease.finish_success(0).await;
 }
 
 #[tokio::test]
@@ -579,7 +642,9 @@ async fn stream_finalization_transient_failure_gated_by_thresholds() {
 
     // A first mid-stream transient failure only counts toward the breaker
     // thresholds; it must not cool the deployment down on its own.
-    lease.finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"));
+    lease
+        .finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"))
+        .await;
 
     let deployment = router
         .get_deployment("deployment-1")
@@ -617,7 +682,9 @@ async fn stream_finalization_failures_trip_cooldown_after_allowed_fails() {
         )
         .await
         .expect("stream creation should succeed");
-        lease.finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"));
+        lease
+            .finish_failure(&ProviderError::timeout("openai", "mid-stream timeout"))
+            .await;
     }
 
     let deployment = router
@@ -662,7 +729,7 @@ async fn stream_finalization_fail_fast_errors_trip_immediate_cooldown() {
         )
         .await
         .expect("stream creation should succeed");
-        lease.finish_failure(&error);
+        lease.finish_failure(&error).await;
 
         let deployment = router
             .get_deployment("deployment-1")
@@ -762,11 +829,560 @@ async fn cancelled_realtime_admission_restores_shared_rpm() {
     .await
     .unwrap();
     // As on an idle Realtime socket, release the handshake before each generation.
-    lease.cancel_response();
+    lease.cancel_response().await;
     for _ in 0..3 {
-        lease.begin_response(1).unwrap();
+        lease.begin_response(1).await.unwrap();
         // A rejected budget never forwards the generation and must cancel RPM.
-        lease.cancel_response();
+        lease.cancel_response().await;
     }
     pool.delete(&RedisPool::admission_key(&id)).await.unwrap();
+}
+
+async fn cancellation_test_router() -> Option<(
+    Arc<UnifiedRouter>,
+    Arc<crate::storage::redis::RedisPool>,
+    String,
+)> {
+    cancellation_test_router_with_local_limit(None).await
+}
+
+async fn cancellation_test_router_with_local_limit(
+    local_tpm: Option<u64>,
+) -> Option<(
+    Arc<UnifiedRouter>,
+    Arc<crate::storage::redis::RedisPool>,
+    String,
+)> {
+    use crate::config::models::storage::RedisConfig;
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+        return None;
+    };
+    let pool = Arc::new(
+        crate::storage::redis::RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let router = UnifiedRouter::default().with_circuit_redis(pool.clone());
+    let router = if local_tpm.is_some() {
+        router
+    } else {
+        router.with_admission_redis(pool.clone())
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    router.add_deployment(
+        Deployment::new(
+            id.clone(),
+            Provider::OpenAI(OpenAIProvider::with_api_key("sk-test-key").await.unwrap()),
+            "gpt-4o-mini".into(),
+            "gpt-4".into(),
+        )
+        .with_config(DeploymentConfig {
+            max_parallel_requests: local_tpm.is_none().then_some(1),
+            tpm_limit: local_tpm,
+            ..Default::default()
+        }),
+    );
+    Some((Arc::new(router), pool, id))
+}
+
+fn assert_one_completed_request(deployment: &Deployment) {
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 42);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_http_observation_replaces_estimate_before_cancelled_circuit_wait() {
+    const CHILD: &str = "LITELLM_HTTP_LOCAL_OBSERVATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // The deliberate 64-slot pause belongs to this isolated test process.
+        let output = tokio::task::spawn_blocking(|| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "server::routes::ai::execution::tests::local_http_observation_replaces_estimate_before_cancelled_circuit_wait",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed; 0 failed"),
+            "isolated HTTP observation must pass once:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    for mode in [
+        "unary",
+        "success",
+        "failure",
+        #[cfg(feature = "websockets")]
+        "interrupted",
+    ] {
+        let Some((router, pool, id)) = cancellation_test_router_with_local_limit(Some(10)).await
+        else {
+            return;
+        };
+        let deployment = router.get_deployment(&id).unwrap();
+        let paused = Arc::new(Mutex::new(None));
+        let error = ProviderError::timeout("openai", "completed stream failure");
+        let mut stream = if mode == "unary" {
+            None
+        } else {
+            Some(
+                execute_stream_with_selected_deployment(
+                    router.clone(),
+                    "gpt-4",
+                    ProviderCapability::ChatCompletionStream,
+                    |_, _, _| async { Ok(()) },
+                )
+                .await
+                .unwrap()
+                .1,
+            )
+        };
+        if mode != "unary" {
+            *paused.lock().unwrap() = Some(crate::core::router::circuit::pause_circuit_io().await);
+        }
+        let pause_in_provider = paused.clone();
+        let mut completion = Box::pin(async {
+            if mode == "unary" {
+                execute_with_selected_deployment(
+                    &router,
+                    "gpt-4",
+                    ProviderCapability::ChatCompletion,
+                    move |_, _, _| {
+                        let paused = pause_in_provider.clone();
+                        async move {
+                            *paused.lock().unwrap() =
+                                Some(crate::core::router::circuit::pause_circuit_io().await);
+                            Ok(((), 6))
+                        }
+                    },
+                )
+                .await
+                .unwrap();
+            } else {
+                let lease = stream.as_mut().unwrap();
+                match mode {
+                    "success" => lease.complete_response(6, None).await,
+                    "failure" => lease.complete_response(6, Some(&error)).await,
+                    #[cfg(feature = "websockets")]
+                    "interrupted" => lease.finish_interrupted(6, Some(&error)).await,
+                    _ => unreachable!(),
+                }
+            }
+        });
+        let observed = async {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while deployment.state.tpm_current.load(Ordering::Relaxed) != 6 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("known tokens must be observed before the paused circuit wait");
+        };
+        tokio::select! {
+            () = completion.as_mut() => panic!("shared circuit I/O must remain paused"),
+            () = observed => {}
+        }
+        assert!(futures::poll!(completion.as_mut()).is_pending());
+        let expected_rpm = u64::from(mode != "failure");
+        let expected_success = u64::from(matches!(mode, "unary" | "success"));
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            expected_rpm
+        );
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            expected_success
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            1 - expected_success
+        );
+        // Probe the production local-admission boundary directly: selecting
+        // through the router would itself wait on the deliberately paused
+        // circuit bridge. Six observed tokens plus four must fit a limit of
+        // ten; the unreplaced one-token HTTP estimate would reject it.
+        let next = deployment
+            .state
+            .reserve_local_tokens(4, 10)
+            .expect("known usage must replace the owned estimate before yielding");
+        drop(next);
+        assert_eq!(shared_failure_counts(&pool, &id).await, (0, 0));
+        drop(completion);
+        if let Some(lease) = &mut stream {
+            match mode {
+                "success" => lease.complete_response(6, None).await,
+                "failure" => lease.complete_response(6, Some(&error)).await,
+                #[cfg(feature = "websockets")]
+                "interrupted" => lease.finish_interrupted(6, Some(&error)).await,
+                _ => unreachable!(),
+            }
+        }
+        drop(stream);
+        drop(paused.lock().unwrap().take());
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 6);
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            expected_rpm
+        );
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            expected_success
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            1 - expected_success
+        );
+        let next = router
+            .select_deployment_lease_with_tokens("gpt-4", 4)
+            .unwrap();
+        drop(next);
+        // Cancellation before a circuit slot is acquired publishes no ACK.
+        assert_eq!(shared_failure_counts(&pool, &id).await, (0, 0));
+        pool.delete(&crate::storage::redis::RedisPool::circuit_key(&id))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_http_terminal_cancellation_replaces_estimate_exactly_once() {
+    for mode in ["success", "failure", "interrupted_failure", "interrupted"] {
+        let Some((router, _, id)) = cancellation_test_router_with_local_limit(Some(10)).await
+        else {
+            return;
+        };
+        let (_, mut lease) = execute_stream_with_selected_deployment(
+            router.clone(),
+            "gpt-4",
+            ProviderCapability::ChatCompletionStream,
+            |_, _, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        let error = ProviderError::timeout("openai", "terminal cancellation");
+        let mut settlement = Box::pin(async {
+            match mode {
+                "success" => {
+                    lease
+                        .settle_terminal(6, None, std::future::pending::<()>())
+                        .await
+                }
+                "failure" => {
+                    lease
+                        .settle_terminal(6, Some(&error), std::future::pending::<()>())
+                        .await
+                }
+                "interrupted_failure" => {
+                    lease
+                        .settle_interrupted(6, Some(&error), std::future::pending::<()>())
+                        .await
+                }
+                "interrupted" => {
+                    lease
+                        .settle_interrupted(6, None, std::future::pending::<()>())
+                        .await
+                }
+                _ => unreachable!(),
+            }
+        });
+        assert!(futures::poll!(settlement.as_mut()).is_pending());
+        drop(settlement);
+        lease.complete_response(6, None).await;
+        drop(lease);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 6);
+        assert_eq!(
+            deployment.state.rpm_current.load(Ordering::Relaxed),
+            u64::from(mode != "failure")
+        );
+        assert_eq!(
+            deployment.state.total_requests.load(Ordering::Relaxed),
+            u64::from(mode != "interrupted")
+        );
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            u64::from(mode == "success")
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            u64::from(matches!(mode, "failure" | "interrupted_failure"))
+        );
+        let next = router
+            .select_deployment_lease_with_tokens("gpt-4", 4)
+            .unwrap();
+        drop(next);
+    }
+}
+
+#[cfg(feature = "websockets")]
+#[tokio::test(flavor = "current_thread")]
+async fn local_http_neutral_completion_replaces_estimate_exactly_once() {
+    let Some((router, _, id)) = cancellation_test_router_with_local_limit(Some(10)).await else {
+        return;
+    };
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        router.clone(),
+        "gpt-4",
+        ProviderCapability::ChatCompletionStream,
+        |_, _, _| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    lease.finish_neutral(6).await;
+    lease.finish_neutral(6).await;
+    drop(lease);
+    let deployment = router.get_deployment(&id).unwrap();
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 6);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 0);
+    let next = router
+        .select_deployment_lease_with_tokens("gpt-4", 4)
+        .unwrap();
+    drop(next);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_stream_completion_records_local_success_exactly_once() {
+    let Some((router, pool, id)) = cancellation_test_router().await else {
+        return;
+    };
+    let (_, mut lease) = execute_stream_with_selected_deployment(
+        router.clone(),
+        "gpt-4",
+        ProviderCapability::ChatCompletionStream,
+        |_, _, _| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let deployment = router.get_deployment(&id).unwrap();
+    let slots = crate::core::router::admission::pause_admission_io().await;
+    let mut completion = Box::pin(lease.complete_response(42, None));
+    tokio::select! {
+        () = completion.as_mut() => panic!("admission settlement must remain paused"),
+        () = wait_for_shared_success(&pool, &id) => {}
+    }
+    assert!(futures::poll!(completion.as_mut()).is_pending());
+    assert_one_completed_request(&deployment);
+    drop(completion);
+    // Retry after cancellation, then drop the lease: neither may count twice
+    // nor replace the queued actual-token settlement with cancellation.
+    lease.complete_response(42, None).await;
+    assert_one_completed_request(&deployment);
+    drop(lease);
+    drop(slots);
+    assert_one_completed_request(&deployment);
+    wait_for_actual_settlement(&pool, &id).await;
+    assert_shared_success_once(&pool, &id).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_gateway_unary_settlement_retains_local_success() {
+    let Some((router, pool, id)) = cancellation_test_router().await else {
+        return;
+    };
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let started = Arc::new(Mutex::new(Some(started)));
+    let worker = router.clone();
+    let task = tokio::spawn(async move {
+        execute_with_selected_deployment(
+            &worker,
+            "gpt-4",
+            ProviderCapability::ChatCompletion,
+            move |_, _, _| {
+                let started = started.clone();
+                async move {
+                    let slots = crate::core::router::admission::pause_admission_io().await;
+                    let _ = started.lock().unwrap().take().unwrap().send(());
+                    Ok((slots, 42))
+                }
+            },
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+        .await
+        .unwrap()
+        .unwrap();
+    wait_for_shared_success(&pool, &id).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_one_completed_request(&router.get_deployment(&id).unwrap());
+    wait_for_actual_settlement(&pool, &id).await;
+    assert_shared_success_once(&pool, &id).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_stream_failure_publishes_shared_failure_before_admission_cleanup() {
+    for tokens in [0, 42] {
+        let Some((router, pool, id)) = cancellation_test_router().await else {
+            return;
+        };
+        let (_, mut lease) = execute_stream_with_selected_deployment(
+            router.clone(),
+            "gpt-4",
+            ProviderCapability::ChatCompletionStream,
+            |_, _, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        let key = crate::storage::redis::RedisPool::admission_key(&id);
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let slots = crate::core::router::admission::pause_admission_io().await;
+        let error = ProviderError::timeout("openai", "mid-stream timeout");
+        let mut completion = Box::pin(lease.complete_response(tokens, Some(&error)));
+        let shared_failure = async {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if shared_failure_counts(&pool, &id).await == (1, 1) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("shared circuit failure must precede paused admission cleanup");
+        };
+        tokio::select! {
+            () = completion.as_mut() => panic!("admission cleanup must remain paused"),
+            () = shared_failure => {}
+        }
+        assert!(futures::poll!(completion.as_mut()).is_pending());
+        let parallel: i64 = redis::cmd("HGET")
+            .arg(&key)
+            .arg("p")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(parallel, 1, "admission liability remains held");
+        drop(completion);
+        // Retrying a finalized failure and dropping its lease must not replace
+        // the prepared settlement/cancellation or publish the failure twice.
+        lease.complete_response(tokens, Some(&error)).await;
+        drop(lease);
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+        assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), tokens);
+        drop(slots);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let state: (i64, i64, i64) = redis::cmd("HMGET")
+                    .arg(&key)
+                    .arg(&["p", "r", "t"])
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                let fields: Vec<String> = redis::cmd("HKEYS")
+                    .arg(&key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                if state == (0, 0, tokens as i64)
+                    && !fields.iter().any(|field| field.starts_with("l:"))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("prepared admission outcome must survive cancellation");
+        assert_eq!(shared_failure_counts(&pool, &id).await, (1, 1));
+        pool.delete(&key).await.unwrap();
+        pool.delete(&crate::storage::redis::RedisPool::circuit_key(&id))
+            .await
+            .unwrap();
+    }
+}
+
+async fn shared_failure_counts(pool: &crate::storage::redis::RedisPool, id: &str) -> (i64, i64) {
+    let key = crate::storage::redis::RedisPool::circuit_key(id);
+    let mut conn = pool.open_live_connection().await.unwrap();
+    let counts: (Option<i64>, Option<i64>) = redis::cmd("HMGET")
+        .arg(&key)
+        .arg(&["tot", "fail"])
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    (counts.0.unwrap_or(0), counts.1.unwrap_or(0))
+}
+
+async fn shared_success_counts(pool: &crate::storage::redis::RedisPool, id: &str) -> (i64, i64) {
+    let key = crate::storage::redis::RedisPool::circuit_key(id);
+    let mut conn = pool.open_live_connection().await.unwrap();
+    let counts: (Option<i64>, Option<i64>) = redis::cmd("HMGET")
+        .arg(&key)
+        .arg(&["tot", "r"])
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    (counts.0.unwrap_or(0), counts.1.unwrap_or(0))
+}
+
+async fn wait_for_shared_success(pool: &crate::storage::redis::RedisPool, id: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if shared_success_counts(pool, id).await == (1, 1) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shared circuit success must precede the paused admission settlement");
+}
+
+async fn assert_shared_success_once(pool: &crate::storage::redis::RedisPool, id: &str) {
+    assert_eq!(shared_success_counts(pool, id).await, (1, 1));
+    pool.delete(&crate::storage::redis::RedisPool::circuit_key(id))
+        .await
+        .unwrap();
+}
+
+async fn wait_for_actual_settlement(pool: &crate::storage::redis::RedisPool, id: &str) {
+    let key = crate::storage::redis::RedisPool::admission_key(id);
+    let mut conn = pool.open_live_connection().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let state: (i64, i64) = redis::cmd("HMGET")
+                .arg(&key)
+                .arg(&["p", "t"])
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            if state == (0, 42) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    pool.delete(&key).await.unwrap();
 }

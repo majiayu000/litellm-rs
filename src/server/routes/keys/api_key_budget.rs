@@ -38,14 +38,16 @@ pub(super) async fn validate_referenced_budget(
     {
         Ok(())
     } else {
-        Err(format!("API key budget '{budget_id}' is not configured"))
+        Err(format!(
+            "API key budget '{budget_id}' is not configured in this process; API-key budget definitions and counters are not restored from SQL or shared through Redis"
+        ))
     }
 }
 
 fn reject_unsupported_max_budget(max_budget: Option<f64>) -> Result<(), String> {
     if max_budget.is_some() {
         return Err(
-            "max_budget is not supported for persisted API keys; create a budget and pass budget_id"
+            "max_budget is not supported for persisted API keys; budget_id can reference an existing process-local budget, whose definition and counters are not persisted or shared across gateways"
                 .to_string(),
         );
     }

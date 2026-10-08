@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::{AppState, NativeCall, RequestContext, lifecycle, response_usage, settle};
-use crate::core::providers::{Provider, base::HttpMethod};
+use crate::core::providers::{Provider, ProviderError, base::HttpMethod};
 use crate::server::guardrails::{self, GuardrailDecisionSink};
 use crate::server::routes::ai::execution::StreamingDeploymentLease;
 use crate::utils::error::gateway_error::GatewayError;
@@ -17,7 +17,7 @@ pub(super) async fn response(
     state: AppState,
     context: RequestContext,
     mut call: NativeCall,
-    lease: StreamingDeploymentLease,
+    mut lease: StreamingDeploymentLease,
     value: Result<Value, GatewayError>,
     already_stored: bool,
     facts: Option<crate::core::request_ledger::SharedRequestLedgerFacts>,
@@ -53,24 +53,28 @@ pub(super) async fn response(
     let (initial, native_provider) = match prepared {
         Ok(value) => value,
         Err(error) => {
-            if durable_id.is_none() {
-                settle(
-                    &state,
-                    &context,
-                    &call.provider,
-                    &call.model,
-                    call.pricing,
-                    None,
-                    None,
-                    call.reservation,
-                    call.key_reservation,
-                    facts,
-                )
+            let settlement = async {
+                if durable_id.is_none() {
+                    settle(
+                        &state,
+                        &context,
+                        &call.provider,
+                        &call.model,
+                        call.pricing,
+                        None,
+                        None,
+                        call.reservation,
+                        call.key_reservation,
+                        facts,
+                    )
+                    .await;
+                }
+            };
+            lease
+                .settle_native_stream(None, false, None, settlement)
                 .await;
-            }
             call.callback.fail(error.to_string(), "background_error");
             // A local storage/guardrail failure is not an upstream health failure.
-            lease.finish_success(0);
             return Err(error);
         }
     };
@@ -102,35 +106,46 @@ pub(super) async fn response(
             ))
         });
         let usage = result.as_ref().ok().and_then(response_usage);
-        if let Some(id) = durable_id {
-            if let Err(error) =
-                super::super::responses_settlement::submit_usage(&state, &id, usage.as_ref()).await
-            {
-                tracing::error!(%error, "Response settlement remains pending for recovery");
+        let tokens_used = usage.as_ref().map(|usage| u64::from(usage.total_tokens));
+        let settlement = async {
+            if let Some(id) = durable_id {
+                if let Err(error) =
+                    super::super::responses_settlement::submit_usage(&state, &id, usage.as_ref())
+                        .await
+                {
+                    tracing::error!(%error, "Response settlement remains pending for recovery");
+                }
+            } else {
+                settle(
+                    &state,
+                    &context,
+                    &provider,
+                    &model,
+                    pricing,
+                    usage.as_ref(),
+                    usage
+                        .as_ref()
+                        .map(crate::core::pricing_service::PricingUsage::from),
+                    reservation,
+                    key_reservation,
+                    facts,
+                )
+                .await;
             }
-        } else {
-            settle(
-                &state,
-                &context,
-                &provider,
-                &model,
-                pricing,
-                usage.as_ref(),
-                usage
-                    .as_ref()
-                    .map(crate::core::pricing_service::PricingUsage::from),
-                reservation,
-                key_reservation,
-                facts,
-            )
+        };
+        // Polling/guardrail/storage failures stay neutral for upstream health.
+        let completed = result
+            .as_ref()
+            .is_ok_and(|value| value.get("status").and_then(Value::as_str) == Some("completed"));
+        let terminal_error = result
+            .as_ref()
+            .ok()
+            .filter(|value| value.get("status").and_then(Value::as_str) == Some("failed"))
+            .map(|_| ProviderError::api_error("responses", 502, "Upstream response failed"));
+        lease
+            .settle_native_stream(tokens_used, completed, terminal_error.as_ref(), settlement)
             .await;
-        }
         // GET/cancel/delete on another replica cannot cancel this settlement owner.
-        lease.finish_success(
-            usage
-                .as_ref()
-                .map_or(0, |usage| u64::from(usage.total_tokens)),
-        );
         match result {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("failed");

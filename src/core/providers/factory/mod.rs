@@ -29,6 +29,13 @@ mod resolver;
 mod voyage_builder;
 
 pub(crate) use super::openai::config::validate_private_official_openai_endpoint;
+pub(crate) use builder::bedrock_resource_config_from_factory;
+#[cfg(feature = "providers-extra")]
+pub(crate) use builder::{
+    vertex_resource_config_from_factory, vertex_resource_inputs_from_factory,
+};
+#[cfg(test)]
+pub(crate) static CONSTRUCTION_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub(crate) use endpoint_policy::{
     configured_endpoint_for_keys, endpoint_keys_for_selector, invalid_endpoint,
     selector_allows_implicit_private, selector_supports_endpoint_access,
@@ -70,6 +77,22 @@ fn catalog_definition_for_supported_selector(
 /// This is the main factory function for creating providers
 pub async fn create_provider(
     config: crate::config::models::provider::ProviderConfig,
+) -> Result<Provider, ProviderError> {
+    create_provider_with_resources(
+        config,
+        None,
+        #[cfg(feature = "providers-extra")]
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn create_provider_with_resources(
+    config: crate::config::models::provider::ProviderConfig,
+    bedrock_resource: Option<super::bedrock::BedrockConfig>,
+    #[cfg(feature = "providers-extra")] vertex_resource: Option<
+        Result<super::vertex_ai::VertexAIProviderConfig, ProviderError>,
+    >,
 ) -> Result<Provider, ProviderError> {
     use serde_json::Value;
 
@@ -267,7 +290,14 @@ pub async fn create_provider(
             .or_insert(Value::String(name));
     }
 
-    Provider::from_gateway_config_async(provider_type_enum, Value::Object(factory_config)).await
+    Provider::from_gateway_config_with_resources_async(
+        provider_type_enum,
+        Value::Object(factory_config),
+        bedrock_resource,
+        #[cfg(feature = "providers-extra")]
+        vertex_resource,
+    )
+    .await
 }
 
 #[cfg(test)]

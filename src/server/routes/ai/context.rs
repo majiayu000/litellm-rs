@@ -78,7 +78,7 @@ pub fn get_authenticated_api_key(req: &HttpRequest) -> Option<ApiKey> {
 /// - Admin roles (`SuperAdmin`, `Admin`) have full access to every operation.
 /// - API-usage operations are allowed for authenticated users and for legacy
 ///   API keys that carry no explicit operation permissions.
-/// - Management operations (`keys.list_all`, `users.manage`, `config.manage`,
+/// - Management operations (`keys.list_all`, `api_keys.*`, `users.manage`, `config.manage`,
 ///   `teams.manage`, `analytics.admin`) require an admin role.
 /// - API key `permissions` can grant admin-level access via `"*"` or `"system.admin"`,
 ///   grant a specific operation directly, or restrict the key to its listed
@@ -193,7 +193,14 @@ fn api_key_has_operation_permission(api_key: &ApiKey, operation: &str) -> bool {
 fn is_management_operation(operation: &str) -> bool {
     matches!(
         operation,
-        "keys.list_all" | "users.manage" | "config.manage" | "teams.manage" | "analytics.admin"
+        "keys.list_all"
+            | "api_keys.read"
+            | "api_keys.write"
+            | "api_keys.delete"
+            | "users.manage"
+            | "config.manage"
+            | "teams.manage"
+            | "analytics.admin"
     )
 }
 

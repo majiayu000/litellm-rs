@@ -3,7 +3,10 @@
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+const CIRCUIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CIRCUIT_SCRIPT: &str = r#"
 local op = ARGV[1]
@@ -122,6 +125,8 @@ end
 if op ~= 'observe' or opened > 0 then
   save(f, r, tot, fail, opened, consec, e, h, owner, own_until)
 end
+-- Refresh active history without changing cooldown or probe-owner deadlines.
+redis.call('EXPIRE', KEYS[1], math.max(600, opened - now + 1, own_until - now + 1))
 return {status, opened, f, consec, h, owned}
 "#;
 
@@ -161,14 +166,14 @@ fn circuit_script() -> &'static redis::Script {
     SCRIPT.get_or_init(|| redis::Script::new(CIRCUIT_SCRIPT))
 }
 
-fn circuit_runtime_connections() -> &'static parking_lot::Mutex<HashMap<String, RedisLiveConnection>>
-{
-    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, RedisLiveConnection>>> =
+fn circuit_runtime_connections()
+-> &'static parking_lot::Mutex<HashMap<String, Arc<RedisLiveConnection>>> {
+    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, Arc<RedisLiveConnection>>>> =
         OnceLock::new();
     CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
-async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
+async fn connection_on_current_runtime(pool: &RedisPool) -> Result<Arc<RedisLiveConnection>> {
     let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
     {
         let cache = circuit_runtime_connections().lock();
@@ -176,7 +181,11 @@ async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConn
             return Ok(conn.clone());
         }
     }
-    let conn = pool.open_live_connection().await?;
+    // Reuse the bounded, non-replaying transport for uncertain routing writes.
+    let conn = Arc::new(
+        pool.open_budget_connection(CIRCUIT_OPERATION_TIMEOUT)
+            .await?,
+    );
     let mut cache = circuit_runtime_connections().lock();
     Ok(cache.entry(cache_key).or_insert(conn).clone())
 }
@@ -214,29 +223,53 @@ impl RedisPool {
             ));
         }
 
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
-        let mut conn = connection_on_current_runtime(self).await?;
+        let mut connection = None;
+        let result =
+            tokio::time::timeout(CIRCUIT_OPERATION_TIMEOUT, async {
+                let _permit =
+                    self.semaphore.clone().acquire_owned().await.map_err(|_| {
+                        GatewayError::Internal("Redis semaphore closed".to_string())
+                    })?;
+                let cached = connection_on_current_runtime(self).await?;
+                connection = Some(Arc::clone(&cached));
+                let mut conn = cached.as_ref().clone();
 
-        let values: Vec<i64> = circuit_script()
-            .key(key)
-            .arg(args.op)
-            .arg(args.now_secs)
-            .arg(args.window_epoch)
-            .arg(args.token)
-            .arg(args.allowed_fails)
-            .arg(args.min_requests)
-            .arg(args.cooldown_secs)
-            .arg(args.success_threshold)
-            .arg(args.reason)
-            .invoke_async(&mut conn)
+                let values: Vec<i64> = circuit_script()
+                    .key(key)
+                    .arg(args.op)
+                    .arg(args.now_secs)
+                    .arg(args.window_epoch)
+                    .arg(args.token)
+                    .arg(args.allowed_fails)
+                    .arg(args.min_requests)
+                    .arg(args.cooldown_secs)
+                    .arg(args.success_threshold)
+                    .arg(args.reason)
+                    .invoke_async(&mut conn)
+                    .await
+                    .map_err(GatewayError::from)?;
+                parse_circuit_state(values)
+            })
             .await
-            .map_err(GatewayError::from)?;
-        parse_circuit_state(values)
+            .unwrap_or_else(|_| {
+                Err(GatewayError::Unavailable(
+                    "Redis circuit operation deadline exceeded".into(),
+                ))
+            });
+        if result.is_err()
+            && let Some(connection) = connection
+        {
+            let key = format!("{}|{}", self.config.url, self.config.cluster);
+            let mut cache = circuit_runtime_connections().lock();
+            // A late failure from an old connection must preserve a replacement.
+            if cache
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                cache.remove(&key);
+            }
+        }
+        result
     }
 }
 
@@ -266,6 +299,7 @@ mod tests {
             op: &str,
             now: i64,
             token: &str,
+            cooldown: i64,
         ) -> CircuitState {
             // This test owns a short-lived runtime; do not populate the
             // production bridge's process-lifetime connection cache.
@@ -278,7 +312,7 @@ mod tests {
                 .arg(token)
                 .arg(1)
                 .arg(1)
-                .arg(10)
+                .arg(cooldown)
                 .arg(2)
                 .arg(1)
                 .invoke_async(&mut conn)
@@ -287,39 +321,128 @@ mod tests {
             parse_circuit_state(values).unwrap()
         }
         assert!(
-            invoke(&pool, &key, "fail", 100, "a")
+            invoke(&pool, &key, "fail", 100, "a", 10)
                 .await
                 .blocks_selection()
         );
         assert!(
-            !invoke(&pool, &key, "observe", 110, "a")
+            !invoke(&pool, &key, "observe", 110, "a", 10)
                 .await
                 .blocks_selection()
         );
         assert!(
-            invoke(&pool, &key, "observe", 119, "b")
+            invoke(&pool, &key, "observe", 119, "b", 10)
                 .await
                 .blocks_selection()
         );
         assert!(
-            !invoke(&pool, &key, "observe", 120, "b")
+            !invoke(&pool, &key, "observe", 120, "b", 10)
                 .await
                 .blocks_selection()
         );
-        invoke(&pool, &key, "ok", 121, "a").await;
-        let first = invoke(&pool, &key, "ok", 122, "b").await;
+        invoke(&pool, &key, "ok", 121, "a", 10).await;
+        let first = invoke(&pool, &key, "ok", 122, "b", 10).await;
         assert_eq!(
             first.status, STATUS_HALF,
             "expired owner's late success must not close the circuit"
         );
         assert_eq!(first.consecutive_successes, 1);
         assert!(
-            invoke(&pool, &key, "observe", 122, "a")
+            invoke(&pool, &key, "observe", 122, "a", 10)
                 .await
                 .blocks_selection()
         );
-        assert_eq!(invoke(&pool, &key, "ok", 123, "b").await.status, 0);
+        assert_eq!(invoke(&pool, &key, "ok", 123, "b", 10).await.status, 0);
+        let mut conn = pool.open_live_connection().await.unwrap();
+        let history: (i64, i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["tot", "fail", "opened"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(history, (4, 1, 0));
+        redis::cmd("PEXPIRE")
+            .arg(&key)
+            .arg(60_000)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+        invoke(&pool, &key, "observe", 123, "a", 10).await;
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            (570..=600).contains(&ttl),
+            "closed observe must refresh idle lifetime: {ttl}"
+        );
+        let retained: (i64, i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["tot", "fail", "opened"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            retained, history,
+            "active observations must retain cumulative history"
+        );
         pool.delete(&key).await.unwrap();
+
+        let key = RedisPool::circuit_key(&uuid::Uuid::new_v4().to_string());
+        let opened = invoke(&pool, &key, "fail", 100, "a", 900).await;
+        assert_eq!(opened.opened_until, 1_000);
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            (871..=901).contains(&ttl),
+            "long cooldown must outlive idle TTL: {ttl}"
+        );
+        let observed = invoke(&pool, &key, "observe", 200, "b", 900).await;
+        assert_eq!(
+            observed.opened_until, 1_000,
+            "observing must not extend the open deadline"
+        );
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!((771..=801).contains(&ttl));
+        let probe = invoke(&pool, &key, "observe", 1_000, "a", 900).await;
+        assert_eq!(probe.status, STATUS_HALF);
+        assert!(probe.owned);
+        let ttl: i64 = redis::cmd("TTL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(
+            (871..=901).contains(&ttl),
+            "live probe owner must outlive idle TTL: {ttl}"
+        );
+        let foreign = invoke(&pool, &key, "observe", 1_001, "b", 900).await;
+        assert!(foreign.blocks_selection());
+        let deadlines: (i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["opened", "own_until"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(deadlines, (1_000, 1_900));
+        pool.delete(&key).await.unwrap();
+
+        // A closed observation of an unused namespace must not create a hash.
+        invoke(&pool, &key, "observe", 2_000, "a", 900).await;
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert!(!exists);
     }
 
     #[test]

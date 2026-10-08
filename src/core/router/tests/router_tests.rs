@@ -6,6 +6,7 @@ use crate::core::providers::Provider;
 use crate::core::providers::openai::OpenAIProvider;
 use crate::core::router::config::{RouterConfig, RoutingStrategy};
 use crate::core::router::deployment::{Deployment, HealthStatus};
+use crate::core::router::error::RouterError;
 use crate::core::router::unified::Router;
 use crate::core::router::{
     DefaultRuntimeBinding, RuntimeBinding, RuntimeRequestContext, RuntimeRequestOptions,
@@ -37,6 +38,74 @@ async fn test_router_creation() {
     let router = Router::default();
     assert_eq!(router.list_models().len(), 0);
     assert_eq!(router.list_deployments().len(), 0);
+}
+
+#[tokio::test]
+async fn synchronous_router_apis_work_inside_futures_executors() {
+    let router = Arc::new(Router::default());
+    router.add_deployment(create_test_deployment("nested-executor", "gpt-4").await);
+    let runtime = RuntimeBinding::new(router.clone()).bind();
+
+    let check = || {
+        assert!(matches!(
+            router.select_deployment_lease("missing"),
+            Err(RouterError::ModelNotFound(_))
+        ));
+        drop(router.select_deployment_lease("gpt-4").unwrap());
+
+        let predicate_calls = std::cell::Cell::new(0);
+        drop(
+            router
+                .select_deployment_lease_for_capability_matching(
+                    "gpt-4",
+                    &ProviderCapability::ChatCompletion,
+                    |deployment| {
+                        // The existing predicate need not be Send, and can
+                        // itself call a synchronous router query.
+                        predicate_calls.set(predicate_calls.get() + 1);
+                        router.deployment_is_selectable(deployment)
+                    },
+                )
+                .unwrap(),
+        );
+        assert!(predicate_calls.get() > 0);
+        drop(runtime.select_deployment_lease("gpt-4").unwrap());
+        drop(
+            runtime
+                .select_deployment_lease_for_capability_typed(
+                    "gpt-4",
+                    &ProviderCapability::ChatCompletion,
+                )
+                .unwrap(),
+        );
+
+        assert_eq!(
+            router.get_healthy_deployments("gpt-4"),
+            vec!["nested-executor"]
+        );
+        assert!(
+            router
+                .select_capability_deployment("gpt-4", &ProviderCapability::ChatCompletion)
+                .is_some()
+        );
+        let deployment = router.get_deployment("nested-executor").unwrap();
+        let successes = deployment.state.success_requests.load(Ordering::Relaxed);
+        let failures = deployment.state.fail_requests.load(Ordering::Relaxed);
+        router.record_success("nested-executor", 4, 1_000);
+        router.record_failure("nested-executor");
+        assert_eq!(
+            deployment.state.success_requests.load(Ordering::Relaxed),
+            successes + 1
+        );
+        assert_eq!(
+            deployment.state.fail_requests.load(Ordering::Relaxed),
+            failures + 1
+        );
+        assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    };
+
+    futures::executor::block_on(async { check() });
+    futures::executor::LocalPool::new().run_until(async { check() });
 }
 
 #[tokio::test]

@@ -42,7 +42,7 @@ pub fn build_routing_contexts<'id>(
                 weight: deployment.config.weight,
                 priority: deployment.config.priority,
                 active_requests: deployment.state.active_requests.load(Relaxed),
-                tpm_current: minute.tpm,
+                tpm_current: deployment.state.admission_tpm(now),
                 tpm_limit: deployment.config.tpm_limit,
                 rpm_current: minute.rpm,
                 rpm_limit: deployment.config.rpm_limit,

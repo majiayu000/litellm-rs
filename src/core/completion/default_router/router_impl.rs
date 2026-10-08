@@ -38,11 +38,13 @@ pub(super) async fn complete_with_runtime_handle(
     reject_provider_overrides(&options)?;
     let chat_messages = convert_messages_to_chat_messages(messages);
     let chat_request = convert_to_chat_completion_request(model, chat_messages, options)?;
+    let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&chat_request)?;
     let context = RequestContext::new();
     let execution = handle
         .execute_with_selected_deployment_capability_typed(
             model,
             &ProviderCapability::ChatCompletion,
+            estimated_tokens,
             move |deployment| {
                 let mut request = chat_request.clone();
                 let context = context.clone();
@@ -51,12 +53,12 @@ pub(super) async fn complete_with_runtime_handle(
                     let response = deployment
                         .provider
                         .chat_completion(request, context)
-                        .await?;
+                        .await
+                        .map_err(|error| (error, None))?;
                     let tokens = response
                         .usage
                         .as_ref()
-                        .map(|usage| u64::from(usage.total_tokens))
-                        .unwrap_or_default();
+                        .map(|usage| u64::from(usage.total_tokens));
                     Ok((response, tokens))
                 }
             },
@@ -77,11 +79,17 @@ pub(super) async fn complete_stream_with_runtime_handle(
     let chat_messages = convert_messages_to_chat_messages(messages);
     let mut chat_request = convert_to_chat_completion_request(model, chat_messages, options)?;
     chat_request.stream = true;
+    chat_request.stream_options = Some(crate::core::types::chat::StreamOptions {
+        include_usage: Some(true),
+    });
+    let estimated_tokens = RuntimeHandle::estimated_stream_tokens(&chat_request)?;
+    let started_at = std::time::Instant::now();
     let context = RequestContext::new();
     let (stream, lease) = handle
         .execute_stream_with_selected_deployment_capability_typed(
             model,
             &ProviderCapability::ChatCompletionStream,
+            estimated_tokens,
             move |deployment| {
                 let mut request = chat_request.clone();
                 let context = context.clone();
@@ -97,10 +105,26 @@ pub(super) async fn complete_stream_with_runtime_handle(
         .await
         .map_err(GatewayError::from)?;
 
-    Ok(Box::pin(stream.map(move |chunk| {
-        let _lease = &lease;
-        chunk.map_err(GatewayError::from)
-    })))
+    let mut completion = handle.stream_completion(lease, started_at);
+    Ok(Box::pin(async_stream::stream! {
+        let mut stream = stream;
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(chunk) => {
+                    completion.observe_chunk(&chunk);
+                    yield Ok(chunk);
+                }
+                Err(error) => {
+                    drop(stream);
+                    completion.finish_failure(&error).await;
+                    yield Err(GatewayError::from(error));
+                    return;
+                }
+            }
+        }
+        drop(stream);
+        completion.finish_success().await;
+    }))
 }
 
 #[async_trait]

@@ -16,20 +16,30 @@ use super::deployment::{
 use super::error::RouterError;
 use super::gateway_aliases::normalize_model_aliases;
 use super::gateway_identity::{GatewayIdentityAuthority, default_models, take_identity_mappings};
+use super::runtime_state::GatewayRuntimeIdentity;
 use super::unified::Router;
 use crate::config::Validate;
 use crate::config::models::gateway::GatewayConfig;
 use crate::config::models::provider::ProviderConfig;
 use crate::config::models::router::GatewayRouterConfig;
+use crate::core::providers::Provider;
+use crate::core::providers::base::BaseConfig;
 use crate::core::providers::provider_type::ProviderType;
 use crate::core::providers::registry::{self as provider_registry, ProviderDispatchKind};
-use crate::core::providers::{Provider, create_provider};
 use std::collections::{HashMap, HashSet};
 
 /// Construction-only handoff. Raw credentials never enter a deployment or snapshot.
 struct NormalizedProviderConstruction {
     config: ProviderConfig,
     legacy_metadata: Option<LegacySelectorMetadata>,
+    bedrock_resource: Option<crate::core::providers::bedrock::BedrockConfig>,
+    #[cfg(feature = "providers-extra")]
+    vertex_resource: Option<
+        Result<
+            crate::core::providers::vertex_ai::VertexAIProviderConfig,
+            crate::core::providers::ProviderError,
+        >,
+    >,
 }
 
 fn non_blank(value: &str) -> Option<&str> {
@@ -83,7 +93,88 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
     } else {
         config.provider_type.trim()
     };
+    let mut bedrock_resource = None;
+    #[cfg(feature = "providers-extra")]
+    let mut vertex_resource = None;
+    if matches!(selector.parse::<ProviderType>(), Ok(ProviderType::Bedrock)) {
+        let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
+            &serde_json::json!(config.settings),
+        );
+        normalized.settings.insert(
+            "aws_access_key_id".into(),
+            resource.aws_access_key_id.clone().into(),
+        );
+        normalized.settings.insert(
+            "aws_secret_access_key".into(),
+            resource.aws_secret_access_key.clone().into(),
+        );
+        normalized.settings.insert(
+            "aws_session_token".into(),
+            resource.aws_session_token.clone().into(),
+        );
+        normalized
+            .settings
+            .insert("aws_region".into(), resource.aws_region.clone().into());
+        bedrock_resource = Some(resource);
+    }
+    #[cfg(feature = "providers-extra")]
+    if matches!(selector.parse::<ProviderType>(), Ok(ProviderType::VertexAI)) {
+        let mut settings = config.settings.clone();
+        if let Some(project) = config.project.as_ref().filter(|value| !value.is_empty()) {
+            settings.insert("project".into(), project.clone().into());
+        }
+        let inputs = crate::core::providers::factory::vertex_resource_inputs_from_factory(
+            &serde_json::json!(settings),
+        );
+        if let Some(settings) = inputs.as_object() {
+            normalized.settings.extend(
+                settings
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+        let resource =
+            crate::core::providers::factory::vertex_resource_config_from_factory(&inputs);
+        if let Ok(resource) = &resource {
+            normalized
+                .settings
+                .insert("project_id".into(), resource.project_id.clone().into());
+            normalized
+                .settings
+                .insert("location".into(), resource.location.clone().into());
+            use crate::core::providers::vertex_ai::VertexCredentials;
+            let credentials = match &resource.credentials {
+                VertexCredentials::AccessToken(token) => serde_json::json!({"access_token": token}),
+                VertexCredentials::ServiceAccount(value) => serde_json::json!(value),
+                VertexCredentials::WorkloadIdentity(value) => serde_json::json!(value),
+                VertexCredentials::AuthorizedUser(value) => serde_json::json!(value),
+                VertexCredentials::ApplicationDefault => serde_json::Value::Null,
+            };
+            // Hash the same credential material consumed by the typed handoff.
+            // File contents, rather than just their mutable path, identify the resource.
+            normalized
+                .settings
+                .insert("credentials_json".into(), credentials);
+        }
+        vertex_resource = Some(resource);
+    }
     let top_level = non_blank(&config.api_key).map(str::to_owned);
+    let native_audio_environment = match selector.parse::<ProviderType>() {
+        Ok(ProviderType::Deepgram) => Some(BaseConfig::from_env("deepgram")),
+        Ok(ProviderType::ElevenLabs) => Some(BaseConfig::from_env("elevenlabs")),
+        _ => None,
+    };
+    if let Some(environment) = &native_audio_environment
+        && config.base_url.is_none()
+        && config
+            .settings
+            .get("base_url")
+            .or_else(|| config.settings.get("api_base"))
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        normalized.base_url = environment.api_base.clone();
+    }
 
     let effective_credential = if let Some(definition) = catalog_definition(selector) {
         top_level.or_else(|| {
@@ -114,6 +205,21 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
                 .or_else(|| setting(config, "google_api_key"))
                 .or_else(|| setting(config, "gemini_api_key"))
                 .or_else(|| environment(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])),
+            Ok(ProviderType::Deepgram | ProviderType::ElevenLabs) => top_level
+                .or_else(|| setting(config, "api_key"))
+                .or_else(|| {
+                    match config
+                        .settings
+                        .get("api_key")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        // Keep an explicit blank setting for the provider's existing error path.
+                        Some(_) => None,
+                        None => {
+                            native_audio_environment.and_then(|environment| environment.api_key)
+                        }
+                    }
+                }),
             Ok(ProviderType::Bedrock) | Err(_) => None,
             Ok(_) => top_level.or_else(|| setting(config, "api_key")),
         }
@@ -146,6 +252,9 @@ fn normalize_provider_construction(config: &ProviderConfig) -> NormalizedProvide
     NormalizedProviderConstruction {
         config: normalized,
         legacy_metadata,
+        bedrock_resource,
+        #[cfg(feature = "providers-extra")]
+        vertex_resource,
     }
 }
 
@@ -220,12 +329,32 @@ impl Router {
             let configured_models = normalized_config.models.clone();
             let tags = normalized_config.tags.clone();
             let deployment_config = deployment_config_from_provider(&normalized_config)?;
-            let provider = create_provider(normalized_config).await.map_err(|e| {
+            let runtime_identity = GatewayRuntimeIdentity::for_provider(&normalized_config);
+            let provider = crate::core::providers::factory::create_provider_with_resources(
+                normalized_config,
+                construction.bedrock_resource,
+                #[cfg(feature = "providers-extra")]
+                construction.vertex_resource,
+            )
+            .await
+            .map_err(|e| {
                 RouterError::DeploymentNotFound(format!(
                     "Failed to create provider {}: {}",
                     provider_name, e
                 ))
             })?;
+            let runtime_identity =
+                match &provider {
+                    Provider::Bedrock(bedrock) => runtime_identity
+                        .with_credential_digest(bedrock.credential_resource_identity()),
+                    #[cfg(feature = "providers-extra")]
+                    Provider::VertexAI(vertex) => runtime_identity
+                        .with_credential_digest(vertex.credential_resource_identity()),
+                    #[cfg(feature = "providers-extended")]
+                    Provider::GitHubCopilot(copilot) => runtime_identity
+                        .with_credential_digest(copilot.credential_resource_identity()),
+                    _ => runtime_identity,
+                };
             let provider_instance_identity = ProviderInstanceIdentity::new();
             let legacy_metadata = construction.legacy_metadata;
 
@@ -265,18 +394,16 @@ impl Router {
                         identity_mappings.get(&model),
                     )?;
                 }
-                staged.push((
-                    create_deployment_from_config(
-                        &deployment_id,
-                        deployment_provider,
-                        &model,
-                        deployment_config.clone(),
-                        tags.clone(),
-                        provider_instance_identity.clone(),
-                    ),
-                    legacy_metadata.clone(),
-                    provider_name.clone(),
-                ));
+                let mut deployment = create_deployment_from_config(
+                    &deployment_id,
+                    deployment_provider,
+                    &model,
+                    deployment_config.clone(),
+                    tags.clone(),
+                    provider_instance_identity.clone(),
+                );
+                deployment.state.runtime_identity = Some(runtime_identity.for_model(&model));
+                staged.push((deployment, legacy_metadata.clone(), provider_name.clone()));
             }
         }
 

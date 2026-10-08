@@ -514,21 +514,16 @@ pub(super) fn build_azure_config_from_factory(
     Ok(azure_config)
 }
 
-pub(super) fn build_bedrock_config_from_factory(
+pub(crate) fn bedrock_resource_config_from_factory(
     config: &serde_json::Value,
-) -> Result<bedrock::BedrockConfig, ProviderError> {
+) -> bedrock::BedrockConfig {
     let aws_access_key_id = config_str_any(
         config,
         &["aws_access_key_id", "aws_access_key", "access_key"],
     )
     .map(str::to_string)
     .or_else(|| env_str_any(&["AWS_ACCESS_KEY_ID"]))
-    .ok_or_else(|| {
-        ProviderError::configuration(
-            "bedrock",
-            "aws_access_key_id or AWS_ACCESS_KEY_ID is required",
-        )
-    })?;
+    .unwrap_or_default();
 
     let aws_secret_access_key = config_str_any(
         config,
@@ -536,12 +531,7 @@ pub(super) fn build_bedrock_config_from_factory(
     )
     .map(str::to_string)
     .or_else(|| env_str_any(&["AWS_SECRET_ACCESS_KEY"]))
-    .ok_or_else(|| {
-        ProviderError::configuration(
-            "bedrock",
-            "aws_secret_access_key or AWS_SECRET_ACCESS_KEY is required",
-        )
-    })?;
+    .unwrap_or_default();
 
     let aws_session_token = config_str_any(config, &["aws_session_token", "session_token"])
         .map(str::to_string)
@@ -552,13 +542,39 @@ pub(super) fn build_bedrock_config_from_factory(
         .or_else(|| env_str_any(&["AWS_REGION", "AWS_DEFAULT_REGION"]))
         .unwrap_or_else(|| "us-east-1".to_string());
 
-    let mut bedrock_config = bedrock::BedrockConfig {
+    bedrock::BedrockConfig {
         aws_access_key_id,
         aws_secret_access_key,
         aws_session_token,
         aws_region,
         ..Default::default()
-    };
+    }
+}
+
+pub(super) fn build_bedrock_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<bedrock::BedrockConfig, ProviderError> {
+    build_bedrock_config_from_factory_with_resource(config, None)
+}
+
+pub(super) fn build_bedrock_config_from_factory_with_resource(
+    config: &serde_json::Value,
+    resource: Option<bedrock::BedrockConfig>,
+) -> Result<bedrock::BedrockConfig, ProviderError> {
+    let mut bedrock_config =
+        resource.unwrap_or_else(|| bedrock_resource_config_from_factory(config));
+    if bedrock_config.aws_access_key_id.is_empty() {
+        return Err(ProviderError::configuration(
+            "bedrock",
+            "aws_access_key_id or AWS_ACCESS_KEY_ID is required",
+        ));
+    }
+    if bedrock_config.aws_secret_access_key.is_empty() {
+        return Err(ProviderError::configuration(
+            "bedrock",
+            "aws_secret_access_key or AWS_SECRET_ACCESS_KEY is required",
+        ));
+    }
     bedrock_config.endpoint_access = config_endpoint_access(config, "bedrock")?;
 
     if let Some(timeout) =
@@ -574,8 +590,83 @@ pub(super) fn build_bedrock_config_from_factory(
 }
 
 #[cfg(feature = "providers-extra")]
+pub(crate) fn vertex_resource_inputs_from_factory(config: &serde_json::Value) -> serde_json::Value {
+    let mut resolved = config.clone();
+    let project = config_str_any(
+        config,
+        &["project_id", "project", "gcp_project", "google_project_id"],
+    )
+    .map(str::to_owned)
+    .or_else(|| {
+        env_str_any(&[
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_PROJECT_ID",
+            "GCP_PROJECT",
+            "GCLOUD_PROJECT",
+        ])
+    });
+    let location = config_str_any(config, &["location", "region", "vertex_location"])
+        .map(str::to_owned)
+        .or_else(|| env_str_any(&["GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION"]));
+    // The factory only reads a credential file when no token or inline credentials win.
+    let file = if config_str_any(
+        config,
+        &[
+            "access_token",
+            "vertex_access_token",
+            "google_access_token",
+            "bearer_token",
+        ],
+    )
+    .is_none()
+        && config_str_any(
+            config,
+            &[
+                "credentials_json",
+                "vertex_ai_credentials",
+                "google_credentials_json",
+            ],
+        )
+        .is_none()
+    {
+        config_str_any(
+            config,
+            &[
+                "credentials_file",
+                "credential_file",
+                "google_application_credentials",
+            ],
+        )
+        .map(str::to_owned)
+        .or_else(|| env_str_any(&["GOOGLE_APPLICATION_CREDENTIALS"]))
+    } else {
+        None
+    };
+    if let Some(object) = resolved.as_object_mut() {
+        if let Some(project) = project {
+            object.insert("project_id".into(), project.into());
+        }
+        if let Some(location) = location {
+            object.insert("location".into(), location.into());
+        }
+        if let Some(file) = file {
+            object.insert("credentials_file".into(), file.into());
+        }
+    }
+    resolved
+}
+
+#[cfg(feature = "providers-extra")]
 pub(super) fn build_vertex_ai_config_from_factory(
     config: &serde_json::Value,
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
+    build_vertex_ai_config_from_factory_with_resource(config, None)
+}
+
+#[cfg(feature = "providers-extra")]
+pub(super) fn build_vertex_ai_config_from_factory_with_resource(
+    config: &serde_json::Value,
+    resource: Option<Result<vertex_ai::VertexAIProviderConfig, ProviderError>>,
 ) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
     if config_str(config, "api_key").is_some() {
         return Err(ProviderError::invalid_request(
@@ -584,6 +675,52 @@ pub(super) fn build_vertex_ai_config_from_factory(
         ));
     }
 
+    let frozen = resource.is_some();
+    let mut vertex_config = match resource {
+        Some(resource) => resource?,
+        None => vertex_project_location_config_from_factory(config)?,
+    };
+    vertex_config.endpoint_access = config_endpoint_access(config, "vertex_ai")?;
+    if let Some(api_version) = config_str(config, "api_version") {
+        vertex_config.api_version = api_version.to_string();
+    }
+    if let Some(api_base) = config_str(config, "base_url")
+        .or_else(|| config_str(config, "api_base"))
+        .or_else(|| config_str(config, "endpoint"))
+    {
+        vertex_config.api_base = Some(api_base.to_string());
+    }
+    if let Some(timeout) = config_u64(config, "timeout") {
+        vertex_config.timeout_seconds = timeout;
+    }
+    if let Some(max_retries) = config_u32(config, "max_retries") {
+        vertex_config.max_retries = max_retries;
+    }
+    if let Some(enable_experimental) = config_bool(config, "enable_experimental") {
+        vertex_config.enable_experimental = enable_experimental;
+    }
+    if !frozen {
+        vertex_config.credentials = build_vertex_credentials_from_factory(config)?;
+    }
+    vertex_config
+        .validate()
+        .map_err(|err| ProviderError::configuration("vertex_ai", err))?;
+    Ok(vertex_config)
+}
+
+#[cfg(feature = "providers-extra")]
+pub(crate) fn vertex_resource_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
+    let mut resource = vertex_project_location_config_from_factory(config)?;
+    resource.credentials = build_vertex_credentials_from_factory(config)?;
+    Ok(resource)
+}
+
+#[cfg(feature = "providers-extra")]
+fn vertex_project_location_config_from_factory(
+    config: &serde_json::Value,
+) -> Result<vertex_ai::VertexAIProviderConfig, ProviderError> {
     let project_id = config_str_any(
         config,
         &["project_id", "project", "gcp_project", "google_project_id"],
@@ -605,7 +742,6 @@ pub(super) fn build_vertex_ai_config_from_factory(
         project_id,
         ..Default::default()
     };
-    vertex_config.endpoint_access = config_endpoint_access(config, "vertex_ai")?;
 
     if let Some(location) = config_str_any(config, &["location", "region", "vertex_location"])
         .map(str::to_string)
@@ -613,29 +749,6 @@ pub(super) fn build_vertex_ai_config_from_factory(
     {
         vertex_config.location = location;
     }
-    if let Some(api_version) = config_str(config, "api_version") {
-        vertex_config.api_version = api_version.to_string();
-    }
-    if let Some(api_base) = config_str(config, "base_url")
-        .or_else(|| config_str(config, "api_base"))
-        .or_else(|| config_str(config, "endpoint"))
-    {
-        vertex_config.api_base = Some(api_base.to_string());
-    }
-    if let Some(timeout) = config_u64(config, "timeout") {
-        vertex_config.timeout_seconds = timeout;
-    }
-    if let Some(max_retries) = config_u32(config, "max_retries") {
-        vertex_config.max_retries = max_retries;
-    }
-    if let Some(enable_experimental) = config_bool(config, "enable_experimental") {
-        vertex_config.enable_experimental = enable_experimental;
-    }
-    vertex_config.credentials = build_vertex_credentials_from_factory(config)?;
-
-    vertex_config
-        .validate()
-        .map_err(|err| ProviderError::configuration("vertex_ai", err))?;
     Ok(vertex_config)
 }
 

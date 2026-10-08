@@ -21,6 +21,14 @@ use crate::utils::sync::AtomicValue;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[cfg(test)]
+#[path = "runtime_reload_tests.rs"]
+mod runtime_reload_tests;
+
+#[cfg(test)]
+#[path = "runtime_reload_profile.rs"]
+mod runtime_reload_profile;
+
 pub use super::runtime::RuntimeRevision;
 use super::runtime::{build_response_cache, build_runtime_revision};
 
@@ -274,12 +282,16 @@ impl AppState {
     }
 
     pub(super) fn publish_runtime(&self, revision: RuntimeRevision) {
+        let previous = self.runtime.load();
+        revision
+            .unified_router
+            .inherit_runtime_state(&previous.unified_router);
         // Stop cleanup tasks on the obsolete response cache before publishing.
         // DualCache also shuts down on Drop, but in-flight Arc pins can keep the
         // old revision alive; explicit shutdown avoids leaking barrier loops
         // across every configuration reload.
-        if let Some(previous) = self.runtime.load().response_cache.as_ref() {
-            previous.shutdown();
+        if let Some(cache) = previous.response_cache.as_ref() {
+            cache.shutdown();
         }
         let config = Arc::clone(&revision.config);
         self.runtime.store(revision);

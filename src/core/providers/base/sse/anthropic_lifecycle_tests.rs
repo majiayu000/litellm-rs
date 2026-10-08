@@ -233,10 +233,10 @@ async fn framed_parse_error_includes_active_lifecycle_context() {
 }
 
 #[tokio::test]
-async fn non_anthropic_default_finalizer_is_unchanged() {
+async fn completed_openai_stream_is_unaffected_by_anthropic_lifecycle() {
     let body = sse_event(serde_json::json!({
         "id":"chunk-1", "object":"chat.completion.chunk", "created":1,
-        "model":"gpt-test", "choices":[{"index":0,"delta":{"content":"ok"}}]
+        "model":"gpt-test", "choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]
     }));
     let source = stream::iter([Ok::<Bytes, reqwest::Error>(Bytes::from(body))]);
     let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("openai"));

@@ -6,7 +6,7 @@ use crate::core::models::user::types::{User, UserRole};
 use crate::core::types::context::{RequestContext, SharedRequestContext};
 use crate::server::middleware::extract_auth_method_with_api_key_header;
 use crate::server::routes::ApiResponse;
-use crate::server::routes::ai::check_permission;
+use crate::server::routes::ai::{api_key_has_admin_permission_checked, check_permission};
 use crate::server::state::AppState;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use tracing::error;
@@ -24,17 +24,32 @@ const MANAGEMENT_PERMISSIONS: &[&str] = &[
 
 fn permissions_grant_management_access(permissions: &KeyPermissions) -> bool {
     permissions.is_admin
-        || permissions
-            .custom_permissions
-            .iter()
-            .any(|permission| MANAGEMENT_PERMISSIONS.contains(&permission.as_str()))
+        || permissions.custom_permissions.iter().any(|permission| {
+            // Match the same single `api.` alias accepted by
+            // check_permission; an alias must not bypass grant checks.
+            let operation = permission.strip_prefix("api.").unwrap_or(permission);
+            MANAGEMENT_PERMISSIONS.contains(&operation)
+        })
 }
 
-fn auth_can_grant_management_access(auth: &AuthResult) -> bool {
+pub(super) fn auth_can_grant_management_access(auth: &AuthResult) -> bool {
     auth.user
         .as_ref()
         .map(|user| user.has_role(&UserRole::Admin))
         .unwrap_or(false)
+        && auth.api_key.as_ref().is_none_or(|key| {
+            // Ownership never restores global authority omitted from the
+            // presented automation credential. Sessions keep the owner rule.
+            api_key_has_admin_permission_checked(key).unwrap_or(false)
+        })
+}
+
+pub(super) fn management_key_grant_allowed(
+    auth: Option<&AuthResult>,
+    permissions: &KeyPermissions,
+) -> bool {
+    !permissions_grant_management_access(permissions)
+        || auth.map(auth_can_grant_management_access).unwrap_or(true)
 }
 
 pub(super) fn check_ownership(
@@ -61,6 +76,12 @@ pub(super) fn check_auth_result_ownership(
     key_user_id: Option<Uuid>,
     key_team_id: Option<Uuid>,
 ) -> bool {
+    if let Some(key) = auth.api_key.as_ref()
+        && !api_key_has_admin_permission_checked(key).unwrap_or(false)
+    {
+        return (key.user_id.is_some() && key.user_id == key_user_id)
+            || (key.team_id.is_some() && key.team_id == key_team_id);
+    }
     if let Some(ref user) = auth.user {
         check_ownership(user, key_user_id, key_team_id)
     } else {
@@ -107,7 +128,38 @@ fn verify_key_owned_by_caller(
 /// This is deliberately limited to the repository's existing read-management
 /// operation so missing keys do not become an existence oracle.
 pub(super) fn verify_unknown_key_access_allowed(auth: &AuthResult) -> bool {
-    check_permission(auth.user.as_ref(), auth.api_key.as_ref(), "keys.list_all")
+    // An API key must carry its own management grant, even when its owner is
+    // an administrator. Model-only restrictions must not inherit the role.
+    let user = auth.user.as_ref().filter(|_| auth.api_key.is_none());
+    check_permission(user, auth.api_key.as_ref(), "keys.list_all")
+}
+
+/// Key possession establishes identity, not permission to mint or mutate
+/// credentials. User/session callers retain the existing ownership checks;
+/// API-key callers additionally need an explicit grant on the presented key.
+pub(super) fn key_management_access_allowed(auth: &AuthResult, operation: &str) -> bool {
+    let Some(api_key) = auth.api_key.as_ref() else {
+        return auth.user.is_some();
+    };
+    check_permission(None, Some(api_key), operation)
+        || (operation == "api_keys.read" && check_permission(None, Some(api_key), "keys.list_all"))
+}
+
+pub(super) async fn authenticate_management_request(
+    req: &HttpRequest,
+    state: &web::Data<AppState>,
+    operation: &str,
+) -> Result<Option<AuthResult>, HttpResponse> {
+    let auth = authenticate_request(req, state).await?;
+    if let Some(auth) = auth.as_ref()
+        && !key_management_access_allowed(auth, operation)
+    {
+        let error_response = KeyErrorResponse::forbidden(format!(
+            "API key requires an explicit {operation} permission"
+        ));
+        return Err(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
+    }
+    Ok(auth)
 }
 
 /// Reconstruct the authentication result already established by
@@ -194,14 +246,39 @@ pub(super) fn resolve_create_key_scope(
         .map(permissions_grant_management_access)
         .unwrap_or(false);
 
-    if let Some(ref user) = auth.user {
-        let is_admin = user.has_role(&UserRole::Admin);
-        if is_admin {
-            return Ok((requested_user_id, requested_team_id));
-        }
-
+    if let Some(key) = auth.api_key.as_ref()
+        && !api_key_has_admin_permission_checked(key).unwrap_or(false)
+    {
         if requests_management_key {
+            return Err(if auth.user.is_none() {
+                "Team-scoped API keys cannot create API keys with management permissions"
+            } else {
+                "Only admin can create API keys with management permissions"
+            });
+        }
+        let scope = if requested_user_id.is_none() && requested_team_id.is_none() {
+            (key.user_id, key.team_id)
+        } else {
+            (requested_user_id, requested_team_id)
+        };
+        return match scope {
+            (Some(user_id), None) if Some(user_id) == key.user_id => Ok(scope),
+            (None, Some(team_id)) if Some(team_id) == key.team_id => Ok(scope),
+            (Some(user_id), Some(team_id))
+                if Some(user_id) == key.user_id && Some(team_id) == key.team_id =>
+            {
+                Ok(scope)
+            }
+            _ => Err("Not authorized to create API key for this scope"),
+        };
+    }
+
+    if let Some(ref user) = auth.user {
+        if requests_management_key && !auth_can_grant_management_access(auth) {
             return Err("Only admin can create API keys with management permissions");
+        }
+        if user.has_role(&UserRole::Admin) {
+            return Ok((requested_user_id, requested_team_id));
         }
 
         match (requested_user_id, requested_team_id) {
@@ -238,11 +315,7 @@ pub(super) fn validate_update_key_permissions(
         return Ok(());
     };
 
-    if !permissions_grant_management_access(permissions) {
-        return Ok(());
-    }
-
-    if auth.map(auth_can_grant_management_access).unwrap_or(true) {
+    if management_key_grant_allowed(auth, permissions) {
         return Ok(());
     }
 

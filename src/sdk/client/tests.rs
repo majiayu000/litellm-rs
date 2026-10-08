@@ -3,6 +3,7 @@
 #[cfg(test)]
 use super::llm_client::LLMClient;
 use super::types::{LoadBalancer, LoadBalancingStrategy, ProviderStats};
+use crate::core::providers::base::sse::AnthropicUsageState;
 use crate::sdk::config::{ConfigBuilder, ProviderType, SdkProviderConfig};
 use crate::sdk::errors::SDKError;
 use crate::sdk::types::{
@@ -25,6 +26,89 @@ fn test_provider_config(id: &str, provider_type: ProviderType, model: &str) -> S
         rate_limit_rpm: Some(1000),
         rate_limit_tpm: Some(10000),
         settings: HashMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn legacy_openai_stream_requests_and_preserves_terminal_usage() {
+    use futures::StreamExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for reported in [Some(5_u32), Some(0), None] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let (body_start, length) = loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0, "complete request headers are required");
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                    assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .expect("JSON request has a content length");
+                    break (end + 4, length);
+                }
+            };
+            while bytes.len() < body_start + length {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0, "complete request body is required");
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            let request: serde_json::Value =
+                serde_json::from_slice(&bytes[body_start..body_start + length]).unwrap();
+            let content = serde_json::json!({
+                "id":"legacy-stream", "model":"gpt-4o-mini", "choices":[{
+                    "index":0, "delta":{"content":"ready"}, "finish_reason":null
+                }]
+            });
+            let mut response_body = format!("data: {content}\n\n");
+            // Model the provider contract: no usage event is sent unless it
+            // was requested. An absent upstream count must still remain None.
+            if request["stream_options"]["include_usage"] == true
+                && let Some(tokens) = reported
+            {
+                let usage = serde_json::json!({
+                    "id":"legacy-stream", "model":"gpt-4o-mini", "choices":[],
+                    "usage":{"prompt_tokens":tokens,"completion_tokens":0,"total_tokens":tokens}
+                });
+                response_body.push_str(&format!("data: {usage}\n\n"));
+            }
+            response_body.push_str("data: [DONE]\n\n");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        let mut provider = test_provider_config("legacy", ProviderType::OpenAI, "gpt-4o-mini");
+        provider.base_url = Some(format!("http://{address}"));
+        let client = LLMClient::new(ConfigBuilder::new().add_provider(provider).build()).unwrap();
+        let mut stream = client.chat_stream(vec![]).await.unwrap();
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first.choices[0].delta.content.as_deref(), Some("ready"));
+        assert!(first.usage.is_none());
+        if let Some(tokens) = reported {
+            let terminal = stream.next().await.unwrap().unwrap();
+            assert!(terminal.choices.is_empty());
+            assert_eq!(terminal.usage.unwrap().total_tokens, tokens);
+        }
+        assert!(stream.next().await.is_none());
+        let request = server.await.unwrap();
+        assert_eq!(request["model"], "gpt-4o-mini");
+        assert_eq!(request["stream"], true);
+        assert_eq!(request["stream_options"]["include_usage"], true);
     }
 }
 
@@ -459,6 +543,7 @@ async fn test_execute_chat_request_anthropic_plain_url_image_returns_invalid_req
     let request = SdkChatRequest {
         model: String::new(),
         messages: vec![Message {
+            tool_call_id: None,
             role: Role::User,
             content: Some(Content::Multimodal(vec![ContentPart::Image {
                 image_url: ImageUrl {
@@ -496,6 +581,7 @@ async fn test_execute_chat_request_anthropic_malformed_data_uri_returns_invalid_
     let request = SdkChatRequest {
         model: String::new(),
         messages: vec![Message {
+            tool_call_id: None,
             role: Role::User,
             content: Some(Content::Multimodal(vec![ContentPart::Image {
                 image_url: ImageUrl {
@@ -671,7 +757,12 @@ fn test_parse_anthropic_sse_record_delta() {
 
     let data =
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
-    let result = parse_anthropic_sse_record("content_block_delta", data, None);
+    let result = parse_anthropic_sse_record(
+        "content_block_delta",
+        data,
+        None,
+        &mut AnthropicUsageState::default(),
+    );
     assert!(result.is_some());
     let chunk = result.unwrap().unwrap();
     assert_eq!(chunk.choices[0].delta.content, Some("Hello".to_string()));
@@ -681,7 +772,12 @@ fn test_parse_anthropic_sse_record_delta() {
 fn test_parse_anthropic_sse_record_stop() {
     use super::completions::parse_anthropic_sse_record;
 
-    let result = parse_anthropic_sse_record("message_stop", r#"{"type":"message_stop"}"#, None);
+    let result = parse_anthropic_sse_record(
+        "message_stop",
+        r#"{"type":"message_stop"}"#,
+        None,
+        &mut AnthropicUsageState::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -689,11 +785,48 @@ fn test_parse_anthropic_sse_record_stop() {
 fn test_parse_anthropic_sse_record_message_delta_end_turn_maps_to_stop() {
     use super::completions::parse_anthropic_sse_record;
 
-    let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}"#;
-    let chunk = parse_anthropic_sse_record("message_delta", data, None)
+    let mut usage_state = AnthropicUsageState::default();
+    assert!(
+        parse_anthropic_sse_record(
+            "message_start",
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":4,"cache_read_input_tokens":6,"output_tokens":0}}}"#,
+            None,
+            &mut usage_state,
+        )
+        .is_none()
+    );
+    let text = parse_anthropic_sse_record(
+        "content_block_delta",
+        r#"{"delta":{"type":"text_delta","text":"Hello"}}"#,
+        None,
+        &mut usage_state,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(text.choices[0].delta.content.as_deref(), Some("Hello"));
+    assert!(text.usage.is_none());
+    let intermediate = parse_anthropic_sse_record(
+        "message_delta",
+        r#"{"delta":{"stop_reason":null},"usage":{"output_tokens":1,"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}"#,
+        None,
+        &mut usage_state,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(intermediate.usage.is_none());
+    let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}"#;
+    let chunk = parse_anthropic_sse_record("message_delta", data, None, &mut usage_state)
         .unwrap()
         .unwrap();
     assert_eq!(chunk.choices[0].finish_reason, Some("stop".to_string()));
+    let usage = chunk.usage.unwrap();
+    assert_eq!(usage.prompt_tokens, 20);
+    assert_eq!(usage.completion_tokens, 3);
+    assert_eq!(usage.total_tokens, 23);
+    let details = usage.prompt_tokens_details.unwrap();
+    assert_eq!(details.cache_creation_tokens, Some(4));
+    assert_eq!(details.cache_read_tokens, Some(6));
+    assert_eq!(details.cached_tokens, Some(6));
 }
 
 #[test]
@@ -701,10 +834,16 @@ fn test_parse_anthropic_sse_record_message_delta_max_tokens_maps_to_length() {
     use super::completions::parse_anthropic_sse_record;
 
     let data = r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":100}}"#;
-    let chunk = parse_anthropic_sse_record("message_delta", data, None)
-        .unwrap()
-        .unwrap();
+    let chunk = parse_anthropic_sse_record(
+        "message_delta",
+        data,
+        None,
+        &mut AnthropicUsageState::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(chunk.choices[0].finish_reason, Some("length".to_string()));
+    assert!(chunk.usage.is_none());
 }
 
 #[test]
@@ -712,13 +851,84 @@ fn test_parse_anthropic_sse_record_message_delta_tool_use_maps_to_tool_calls() {
     use super::completions::parse_anthropic_sse_record;
 
     let data = r#"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}"#;
-    let chunk = parse_anthropic_sse_record("message_delta", data, None)
-        .unwrap()
-        .unwrap();
+    let chunk = parse_anthropic_sse_record(
+        "message_delta",
+        data,
+        None,
+        &mut AnthropicUsageState::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         chunk.choices[0].finish_reason,
         Some("tool_calls".to_string())
     );
+}
+
+#[test]
+fn legacy_openai_sse_preserves_partial_tool_arguments_and_usage() {
+    let line = r#"data: {"id":"tools","model":"gpt-4","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"Paris"}}]}}]}"#;
+    let chunk = super::completions::parse_openai_sse_line(line)
+        .unwrap()
+        .unwrap();
+    let delta = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(delta.index, 1);
+    assert!(delta.id.is_none());
+    let function = delta.function.as_ref().unwrap();
+    assert!(function.name.is_none());
+    assert_eq!(function.arguments.as_deref(), Some("Paris"));
+
+    let line = r#"data: {"id":"tools","model":"gpt-4","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":8,"total_tokens":12}}"#;
+    let chunk = super::completions::parse_openai_sse_line(line)
+        .unwrap()
+        .unwrap();
+    assert!(chunk.choices.is_empty());
+    assert_eq!(chunk.usage.unwrap().total_tokens, 12);
+}
+
+#[test]
+fn legacy_anthropic_tool_delta_keeps_its_block_index_and_identity() {
+    let chunk = super::completions::parse_anthropic_sse_record(
+        "content_block_delta",
+        r#"{"index":2,"delta":{"type":"input_json_delta","partial_json":"Paris"}}"#,
+        Some(("call-weather", "weather")),
+        &mut AnthropicUsageState::default(),
+    )
+    .unwrap()
+    .unwrap();
+    let delta = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(delta.index, 2);
+    assert_eq!(delta.id.as_deref(), Some("call-weather"));
+    assert_eq!(
+        delta.function.as_ref().unwrap().name.as_deref(),
+        Some("weather")
+    );
+    assert_eq!(
+        delta.function.as_ref().unwrap().arguments.as_deref(),
+        Some("Paris")
+    );
+}
+
+#[tokio::test]
+async fn legacy_stream_with_options_fails_explicitly_before_transport() {
+    let client = LLMClient::new(
+        ConfigBuilder::new()
+            .add_provider(test_provider_config(
+                "openai",
+                ProviderType::OpenAI,
+                "gpt-4",
+            ))
+            .build(),
+    )
+    .unwrap();
+    let result = client
+        .chat_stream_with_options(SdkChatRequest {
+            model: "gpt-4".into(),
+            messages: Vec::new(),
+            options: ChatOptions::default(),
+        })
+        .await;
+    assert!(matches!(result, Err(SDKError::NotSupported(_))));
 }
 
 #[test]
@@ -729,9 +939,171 @@ fn test_parse_anthropic_sse_record_ignored_events() {
         "message_start",
         r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-3"}}"#,
         None,
+        &mut AnthropicUsageState::default(),
     );
     assert!(result.is_none());
 
-    let result = parse_anthropic_sse_record("ping", r#"{}"#, None);
+    let result =
+        parse_anthropic_sse_record("ping", r#"{}"#, None, &mut AnthropicUsageState::default());
     assert!(result.is_none());
+    let result = parse_anthropic_sse_record(
+        "message_start",
+        "{malformed",
+        None,
+        &mut AnthropicUsageState::default(),
+    );
+    assert!(result.is_none());
+}
+
+#[test]
+fn legacy_anthropic_usage_stays_unknown_without_complete_trusted_counts() {
+    use super::completions::parse_anthropic_sse_record;
+
+    for (start, terminal) in [
+        (
+            r#"{"message":{}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":4}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":-1}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":4294967295}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":10,"output_tokens":2}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"cache_read_input_tokens":6}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":null}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":4294967294,"cache_creation_input_tokens":2}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}"#,
+        ),
+    ] {
+        let mut usage_state = AnthropicUsageState::default();
+        assert!(
+            parse_anthropic_sse_record("message_start", start, None, &mut usage_state).is_none()
+        );
+        let chunk = parse_anthropic_sse_record("message_delta", terminal, None, &mut usage_state)
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("stop"));
+        assert!(chunk.usage.is_none(), "start={start}, terminal={terminal}");
+    }
+
+    for (start, terminal, cache_reported) in [
+        (
+            r#"{"message":{"usage":{"input_tokens":0}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}"#,
+            false,
+        ),
+        (
+            r#"{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}}"#,
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#,
+            true,
+        ),
+    ] {
+        let mut usage_state = AnthropicUsageState::default();
+        assert!(
+            parse_anthropic_sse_record("message_start", start, None, &mut usage_state).is_none()
+        );
+        let usage = parse_anthropic_sse_record("message_delta", terminal, None, &mut usage_state)
+            .unwrap()
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+        if cache_reported {
+            let details = usage.prompt_tokens_details.unwrap();
+            assert_eq!(details.cache_creation_tokens, Some(0));
+            assert_eq!(details.cache_read_tokens, Some(0));
+            assert_eq!(details.cached_tokens, Some(0));
+        } else {
+            assert!(usage.prompt_tokens_details.is_none());
+        }
+    }
+}
+
+#[test]
+fn legacy_anthropic_usage_resets_cache_and_invalid_state_for_next_message() {
+    use super::completions::parse_anthropic_sse_record;
+
+    for invalid_intermediate in [false, true] {
+        let mut usage_state = AnthropicUsageState::default();
+        assert!(
+            parse_anthropic_sse_record(
+                "message_start",
+                r#"{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":4,"cache_read_input_tokens":6}}}"#,
+                None,
+                &mut usage_state,
+            )
+            .is_none()
+        );
+        let intermediate_usage = if invalid_intermediate {
+            r#"{"usage":{"cache_read_input_tokens":-1}}"#
+        } else {
+            r#"{"usage":{"cache_read_input_tokens":6,"output_tokens":1}}"#
+        };
+        let intermediate =
+            parse_anthropic_sse_record("message_delta", intermediate_usage, None, &mut usage_state)
+                .unwrap()
+                .unwrap();
+        assert!(intermediate.usage.is_none());
+        let terminal = parse_anthropic_sse_record(
+            "message_delta",
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"cache_read_input_tokens":6,"output_tokens":3}}"#,
+            None,
+            &mut usage_state,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(terminal.choices[0].finish_reason.as_deref(), Some("stop"));
+        if invalid_intermediate {
+            assert!(
+                terminal.usage.is_none(),
+                "invalid usage must remain unknown"
+            );
+        } else {
+            assert_eq!(terminal.usage.unwrap().total_tokens, 23);
+        }
+
+        assert!(
+            parse_anthropic_sse_record(
+                "message_start",
+                r#"{"message":{"usage":{"input_tokens":4}}}"#,
+                None,
+                &mut usage_state,
+            )
+            .is_none()
+        );
+        let next = parse_anthropic_sse_record(
+            "message_delta",
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+            None,
+            &mut usage_state,
+        )
+        .unwrap()
+        .unwrap()
+        .usage
+        .expect("new message resets previous invalid/cache state");
+        assert_eq!(next.prompt_tokens, 4);
+        assert_eq!(next.completion_tokens, 1);
+        assert_eq!(next.total_tokens, 5);
+        assert!(next.prompt_tokens_details.is_none());
+    }
 }

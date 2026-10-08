@@ -1,8 +1,9 @@
 //! HTTP request handlers for API key management
 
 use super::access::{
-    auth_result_from_request_extensions, authenticate_request, check_auth_result_ownership,
-    check_ownership, filter_and_paginate_keys, invalidate_api_key_auth_cache, is_auth_enabled,
+    auth_can_grant_management_access, auth_result_from_request_extensions,
+    authenticate_management_request, check_auth_result_ownership, filter_and_paginate_keys,
+    invalidate_api_key_auth_cache, is_auth_enabled, management_key_grant_allowed,
     resolve_create_key_scope, validate_create_key_rate_limits, validate_update_key_permissions,
     validate_update_key_rate_limits, verify_key_access_allowed, verify_unknown_key_access_allowed,
 };
@@ -13,7 +14,6 @@ use super::types::{
 };
 use crate::core::keys::KeyManager;
 use crate::core::keys::{CreateKeyConfig, KeyStatus, UpdateKeyConfig};
-use crate::core::models::user::types::UserRole;
 use crate::server::routes::ApiResponse;
 use crate::server::state::AppState;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
@@ -29,7 +29,7 @@ pub async fn create_key(
     info!("Creating new API key: {}", request.name);
 
     let (resolved_user_id, resolved_team_id) = if is_auth_enabled(&state) {
-        let auth = match authenticate_request(&req, &state).await {
+        let auth = match authenticate_management_request(&req, &state, "api_keys.write").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -128,7 +128,7 @@ pub async fn list_keys(
 
     if is_auth_enabled(&state) {
         // All listing operations require authentication.
-        let auth = match authenticate_request(&req, &state).await {
+        let auth = match authenticate_management_request(&req, &state, "api_keys.read").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -142,11 +142,7 @@ pub async fn list_keys(
         if let Some(requested_user_id) = query.user_id {
             // Users can list their own keys; admins can list any user's keys.
             // Team-only API keys (user == None) cannot list by user_id.
-            let allowed = auth
-                .user
-                .as_ref()
-                .map(|u| check_ownership(u, Some(requested_user_id), None))
-                .unwrap_or(false);
+            let allowed = check_auth_result_ownership(&auth, Some(requested_user_id), None);
             if !allowed {
                 warn!(
                     "Caller attempted to list keys for user {} without permission",
@@ -161,13 +157,7 @@ pub async fn list_keys(
         } else if let Some(team_id) = query.team_id {
             // Listing keys for a specific team.
             // Managers belonging to that team and team-only API keys for that team are allowed.
-            let allowed = match &auth.user {
-                Some(user) => {
-                    user.has_role(&UserRole::Admin)
-                        || (user.has_role(&UserRole::Manager) && user.team_ids.contains(&team_id))
-                }
-                None => auth.context.team_id() == Some(team_id),
-            };
+            let allowed = check_auth_result_ownership(&auth, None, Some(team_id));
             if !allowed {
                 warn!(
                     "Caller attempted to list keys for team {} without permission",
@@ -181,11 +171,7 @@ pub async fn list_keys(
             }
         } else {
             // Listing all keys (no filter) requires admin privileges.
-            let is_admin = auth
-                .user
-                .as_ref()
-                .map(|u| u.has_role(&UserRole::Admin))
-                .unwrap_or(false);
+            let is_admin = auth_can_grant_management_access(&auth);
             if !is_admin {
                 warn!("Non-admin caller attempted to list all keys");
                 let error_response =
@@ -258,7 +244,7 @@ pub async fn get_key(
     // unauthenticated callers (they should not be able to distinguish 404 from
     // 401 via this endpoint).
     let auth_opt = if is_auth_enabled(&state) {
-        match authenticate_request(&req, &state).await {
+        match authenticate_management_request(&req, &state, "api_keys.read").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -320,7 +306,7 @@ pub async fn update_key(
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
     let auth_opt = if is_auth_enabled(&state) {
-        match authenticate_request(&req, &state).await {
+        match authenticate_management_request(&req, &state, "api_keys.write").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -431,7 +417,7 @@ pub async fn revoke_key(
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
     let auth_opt = if is_auth_enabled(&state) {
-        match authenticate_request(&req, &state).await {
+        match authenticate_management_request(&req, &state, "api_keys.delete").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -517,7 +503,7 @@ pub async fn rotate_key(
     // Authenticate BEFORE fetching the key so unauthenticated callers cannot
     // probe key existence by observing the difference between 404 and 401/403.
     let auth_opt = if is_auth_enabled(&state) {
-        match authenticate_request(&req, &state).await {
+        match authenticate_management_request(&req, &state, "api_keys.write").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -557,6 +543,15 @@ pub async fn rotate_key(
             key_id, existing_key.user_id, existing_key.team_id
         );
         let error_response = KeyErrorResponse::forbidden("Not authorized to access this key");
+        return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
+    }
+
+    // Rotation discloses a newly minted secret with the target's existing
+    // authority, so it uses the same grant ceiling as create/update.
+    if !management_key_grant_allowed(auth_opt.as_ref(), &existing_key.permissions) {
+        let error_response = KeyErrorResponse::forbidden(
+            "Only admin can rotate API keys with management permissions",
+        );
         return Ok(HttpResponse::Forbidden().json(ApiResponse::<()>::error(error_response.error)));
     }
 
@@ -619,7 +614,7 @@ pub async fn get_key_usage(
     // Authenticate before fetching the key to avoid leaking key existence to
     // unauthenticated callers.
     let auth_opt = if is_auth_enabled(&state) {
-        match authenticate_request(&req, &state).await {
+        match authenticate_management_request(&req, &state, "api_keys.read").await {
             Err(resp) => return Ok(resp),
             Ok(None) => {
                 let error_response =
@@ -753,3 +748,7 @@ fn get_key_manager(state: &web::Data<AppState>) -> KeyManager {
 #[cfg(test)]
 #[path = "handlers_tests.rs"]
 mod handler_tests;
+
+#[cfg(test)]
+#[path = "management_tests.rs"]
+mod management_tests;

@@ -2,9 +2,11 @@
 
 use super::admin::require_admin;
 use super::errors;
+use crate::core::request_ledger::{RequestBilling, RequestReconciliation};
 use crate::server::state::AppState;
 use crate::storage::database::RequestLedgerListFilter;
 use crate::storage::database::entities::request_ledger;
+use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -52,6 +54,9 @@ struct RequestLedgerItem {
     completion_tokens: Option<i64>,
     total_tokens: Option<i64>,
     cost: Option<f64>,
+    billing: Option<RequestBilling>,
+    reconciliation: Option<RequestReconciliation>,
+    awaiting_duration_ms: Option<i64>,
     user_id: Option<String>,
     api_key_id: Option<String>,
     team_id: Option<String>,
@@ -85,8 +90,61 @@ pub(super) fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/admin/request-ledger")
             .route("", web::get().to(list_request_ledger))
-            .route("/", web::get().to(list_request_ledger)),
+            .route("/", web::get().to(list_request_ledger))
+            .route(
+                "/{request_id}/reconciliation",
+                web::post().to(reconcile_request),
+            ),
     );
+}
+
+#[derive(Deserialize)]
+struct ReconciliationInput {
+    verified_actual_cost: f64,
+    evidence_reference: String,
+}
+
+async fn reconcile_request(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    request_id: web::Path<String>,
+    input: web::Json<ReconciliationInput>,
+) -> actix_web::Result<HttpResponse> {
+    if let Some(forbidden) = require_admin(&req, &state, "reconcile request ledger", ADMIN_ERROR) {
+        return Ok(forbidden);
+    }
+    if !input.verified_actual_cost.is_finite() || input.verified_actual_cost < 0.0 {
+        return Ok(errors::validation_error(
+            "verified_actual_cost must be finite and nonnegative",
+        ));
+    }
+    let evidence = input.evidence_reference.trim();
+    if evidence.is_empty() || evidence.len() > 512 {
+        return Ok(errors::validation_error(
+            "evidence_reference must contain 1 to 512 bytes",
+        ));
+    }
+    let reconciliation = state
+        .storage
+        .database
+        .reconcile_request_ledger(
+            &request_id,
+            input.verified_actual_cost,
+            evidence.to_string(),
+        )
+        .await
+        .map_err(|error| match error {
+            GatewayError::Conflict(message) => actix_web::error::ErrorConflict(message),
+            other => actix_web::error::ErrorInternalServerError(other.to_string()),
+        })?;
+    match reconciliation {
+        Some(value) => {
+            Ok(HttpResponse::Ok()
+                .json(serde_json::json!({"success": true, "reconciliation": value})))
+        }
+        None => Ok(HttpResponse::NotFound()
+            .json(serde_json::json!({"error": "request ledger row not found"}))),
+    }
 }
 
 async fn list_page(
@@ -114,7 +172,11 @@ async fn list_page(
 
     Ok(HttpResponse::Ok().json(RequestLedgerPage {
         success: true,
-        items: rows.into_iter().map(item_from_row).collect(),
+        items: rows
+            .into_iter()
+            .map(item_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| actix_web::error::ErrorInternalServerError(error.to_string()))?,
         next_cursor,
         has_more,
     }))
@@ -212,8 +274,33 @@ fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, String), String> {
     Ok((finished_at, payload.i))
 }
 
-fn item_from_row(row: request_ledger::Model) -> RequestLedgerItem {
-    RequestLedgerItem {
+fn item_from_row(row: request_ledger::Model) -> Result<RequestLedgerItem, GatewayError> {
+    let billing = row
+        .billing
+        .map(serde_json::from_value::<RequestBilling>)
+        .transpose()
+        .map_err(|error| GatewayError::Storage(format!("invalid request billing: {error}")))?;
+    let mut reconciliation = row
+        .reconciliation
+        .map(serde_json::from_value::<RequestReconciliation>)
+        .transpose()
+        .map_err(|error| {
+            GatewayError::Storage(format!("invalid request reconciliation: {error}"))
+        })?;
+    if let Some(reconciliation) = reconciliation.as_mut() {
+        reconciliation.budget_review_required = billing.as_ref().is_none_or(|billing| {
+            billing.requires_budget_review(reconciliation.verified_actual_cost)
+        });
+    }
+    let awaiting_duration_ms = if reconciliation.is_none() {
+        billing
+            .as_ref()
+            .and_then(|billing| billing.awaiting_since)
+            .map(|since| (Utc::now() - since).num_milliseconds().max(0))
+    } else {
+        None
+    };
+    Ok(RequestLedgerItem {
         request_id: row.request_id,
         started_at: row.started_at.with_timezone(&Utc),
         finished_at: row.finished_at.with_timezone(&Utc),
@@ -229,10 +316,13 @@ fn item_from_row(row: request_ledger::Model) -> RequestLedgerItem {
         completion_tokens: row.completion_tokens,
         total_tokens: row.total_tokens,
         cost: row.cost,
+        billing,
+        reconciliation,
+        awaiting_duration_ms,
         user_id: row.user_id,
         api_key_id: row.api_key_id,
         team_id: row.team_id,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -331,6 +421,7 @@ mod tests {
             completion_tokens: Some(6),
             total_tokens: Some(10),
             cost: Some(0.02),
+            billing: None,
             user_id: None,
             api_key_id: Some("key-id".to_string()),
             team_id: Some("team-id".to_string()),
@@ -366,6 +457,9 @@ mod tests {
             completion_tokens: Some(1),
             total_tokens: Some(2),
             cost: Some(0.01),
+            billing: None,
+            reconciliation: None,
+            awaiting_duration_ms: None,
             user_id: None,
             api_key_id: Some("key-id".to_string()),
             team_id: None,
@@ -525,5 +619,72 @@ mod tests {
         assert_eq!(filtered_body["items"][0]["request_id"], "req-c");
         assert!(filtered_body["items"][0].get("body").is_none());
         assert!(filtered_body["items"][0].get("authorization").is_none());
+    }
+    #[actix_web::test]
+    async fn reconciliation_requires_admin_and_preserves_unknown_charge() {
+        let state = test_state(base_test_config(true)).await;
+        let mut row = record("unknown", Utc::now());
+        row.cost = None;
+        row.billing = Some(RequestBilling {
+            provider_reserved_amount: Some(1.0),
+            provider_charge_amount: Some(1.0),
+            provider_settlement: Some("settled".into()),
+            unknown_reason: Some("stream_cancelled_before_usage".into()),
+            awaiting_since: Some(Utc::now() - Duration::seconds(30)),
+            ..Default::default()
+        });
+        state
+            .storage
+            .database
+            .store_request_ledger(&row, 30)
+            .await
+            .unwrap();
+        let unauthorized = admin_app(state.clone(), Some(make_test_user(UserRole::User))).await;
+        let resp = actix_test::call_service(&unauthorized, actix_test::TestRequest::post()
+            .uri("/admin/request-ledger/unknown/reconciliation")
+            .set_json(serde_json::json!({"verified_actual_cost": 0.2, "evidence_reference": "invoice-line-42"})).to_request()).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let admin = admin_app(state, Some(make_test_user(UserRole::Admin))).await;
+        let resp = actix_test::call_service(
+            &admin,
+            actix_test::TestRequest::get()
+                .uri("/admin/request-ledger?request_id=unknown")
+                .to_request(),
+        )
+        .await;
+        let page: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert!(page["items"][0]["awaiting_duration_ms"].as_i64().unwrap() >= 30_000);
+        for (id, amount, evidence, status) in [
+            ("missing", 0.2, "invoice-line-42", StatusCode::NOT_FOUND),
+            ("unknown", -0.2, "invoice-line-42", StatusCode::BAD_REQUEST),
+            ("unknown", 0.2, "", StatusCode::BAD_REQUEST),
+            ("unknown", 0.2, "invoice-line-42", StatusCode::OK),
+            ("unknown", 0.2, "invoice-line-42", StatusCode::OK),
+            ("unknown", 0.3, "invoice-line-43", StatusCode::CONFLICT),
+        ] {
+            let resp = actix_test::call_service(&admin, actix_test::TestRequest::post()
+                .uri(&format!("/admin/request-ledger/{id}/reconciliation"))
+                .set_json(serde_json::json!({"verified_actual_cost": amount, "evidence_reference": evidence})).to_request()).await;
+            assert_eq!(resp.status(), status);
+        }
+        let resp = actix_test::call_service(
+            &admin,
+            actix_test::TestRequest::get()
+                .uri("/admin/request-ledger?request_id=unknown")
+                .to_request(),
+        )
+        .await;
+        let page: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert!(page["items"][0]["cost"].is_null());
+        assert_eq!(page["items"][0]["billing"]["provider_charge_amount"], 1.0);
+        assert_eq!(
+            page["items"][0]["reconciliation"]["verified_actual_cost"],
+            0.2
+        );
+        assert_eq!(
+            page["items"][0]["reconciliation"]["budget_review_required"],
+            true
+        );
+        assert!(page["items"][0]["awaiting_duration_ms"].is_null());
     }
 }

@@ -71,6 +71,9 @@ pub struct ChatChunk {
     pub model: String,
     /// Choice list
     pub choices: Vec<ChunkChoice>,
+    /// Usage reported by the provider, including usage-only final chunks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::core::types::responses::Usage>,
 }
 
 /// Streaming choice

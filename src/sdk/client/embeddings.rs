@@ -5,18 +5,30 @@ use super::routing::{sdk_provider_has_legacy_adapter, unsupported_legacy_sdk_ada
 use crate::core::embedding::{
     EmbeddingOptions as CoreEmbeddingOptions, embedding as core_embedding,
 };
-use crate::core::providers::registry::LegacyAdapterSurface;
+use crate::core::providers::{ProviderError, registry::LegacyAdapterSurface};
+use crate::core::types::{
+    context::RequestContext,
+    embedding::{EmbeddingInput, EmbeddingRequest},
+    model::ProviderCapability,
+    responses::EmbeddingResponse,
+};
 use crate::sdk::config::{ProviderType, SdkProviderConfig};
 use crate::sdk::errors::*;
+use crate::utils::ai::counter::token_counter::{TokenCounter, TokenizerIdentity};
 use crate::utils::net::ClientUtils;
 
 impl LLMClient {
     /// Generate embeddings for a single text via the core embedding path.
     pub async fn embedding(&self, text: &str, model: Option<&str>) -> Result<Vec<f32>> {
-        let (resolved_model, options) = self.prepare_embedding_request(model)?;
-        let response = core_embedding(&resolved_model, text, Some(options))
-            .await
-            .map_err(SDKError::from)?;
+        let response = if self.runtime_binding.is_some() {
+            self.embedding_with_runtime(EmbeddingInput::Text(text.to_string()), model)
+                .await?
+        } else {
+            let (resolved_model, options) = self.prepare_embedding_request(model)?;
+            core_embedding(&resolved_model, text, Some(options))
+                .await
+                .map_err(SDKError::from)?
+        };
 
         response
             .data
@@ -32,10 +44,15 @@ impl LLMClient {
         texts: &[String],
         model: Option<&str>,
     ) -> Result<Vec<Vec<f32>>> {
-        let (resolved_model, options) = self.prepare_embedding_request(model)?;
-        let response = core_embedding(&resolved_model, texts.to_vec(), Some(options))
-            .await
-            .map_err(SDKError::from)?;
+        let response = if self.runtime_binding.is_some() {
+            self.embedding_with_runtime(EmbeddingInput::Array(texts.to_vec()), model)
+                .await?
+        } else {
+            let (resolved_model, options) = self.prepare_embedding_request(model)?;
+            core_embedding(&resolved_model, texts.to_vec(), Some(options))
+                .await
+                .map_err(SDKError::from)?
+        };
 
         let mut embeddings: Vec<(u32, Vec<f32>)> = response
             .data
@@ -48,6 +65,83 @@ impl LLMClient {
             .into_iter()
             .map(|(_, embedding)| embedding)
             .collect())
+    }
+
+    async fn embedding_with_runtime(
+        &self,
+        input: EmbeddingInput,
+        model: Option<&str>,
+    ) -> Result<EmbeddingResponse> {
+        let model = self.runtime_model(model.unwrap_or_default())?;
+        let expected_count = match &input {
+            EmbeddingInput::Text(_) => 1,
+            EmbeddingInput::Array(texts) => texts.len(),
+        };
+        let estimated_tokens = u64::from(
+            TokenCounter::new()
+                .count_embedding_tokens(
+                    &TokenizerIdentity::approximate("runtime", model),
+                    &input.to_vec(),
+                )?
+                .input_tokens,
+        );
+        let context = RequestContext::new();
+        let execution = self
+            .runtime_handle()?
+            .execute_with_selected_deployment_capability_typed(
+                model,
+                &ProviderCapability::Embeddings,
+                estimated_tokens,
+                move |deployment| {
+                    let input = input.clone();
+                    let context = context.clone();
+                    async move {
+                        let request = EmbeddingRequest {
+                            model: deployment.model.clone(),
+                            input,
+                            user: None,
+                            encoding_format: None,
+                            dimensions: None,
+                            task_type: None,
+                            truncation: None,
+                        };
+                        let response = deployment
+                            .provider
+                            .create_embeddings(request, context)
+                            .await
+                            .map_err(|error| (error, None))?;
+                        let tokens = response
+                            .usage
+                            .as_ref()
+                            .map(|usage| u64::from(usage.total_tokens));
+                        let mut indices: Vec<_> =
+                            response.data.iter().map(|item| item.index).collect();
+                        indices.sort_unstable();
+                        if indices.len() != expected_count
+                            || indices.iter().enumerate().any(|(expected, &actual)| {
+                                u32::try_from(expected).ok() != Some(actual)
+                            })
+                        {
+                            return Err((
+                                ProviderError::api_error(
+                                    "embedding",
+                                    502,
+                                    if response.data.is_empty() {
+                                        "No embedding data in response"
+                                    } else {
+                                        "Embedding data count or indices do not match input"
+                                    },
+                                ),
+                                Some(tokens),
+                            ));
+                        }
+                        Ok((response, tokens))
+                    }
+                },
+            )
+            .await
+            .map_err(SDKError::from)?;
+        Ok(execution.result)
     }
 
     pub(crate) fn prepare_embedding_request(

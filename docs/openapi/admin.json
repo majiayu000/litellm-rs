@@ -319,6 +319,39 @@
         }
       }
     },
+    "/admin/request-ledger/{request_id}/reconciliation": {
+      "post": {
+        "operationId": "reconcileAdminRequestLedger",
+        "summary": "Record supplier-verified cost and evidence for a ledger request",
+        "description": "Requires Admin role. Saves evidence without changing budget counters. Identical submissions are idempotent; conflicting verification returns 409.",
+        "tags": ["Ledger"],
+        "parameters": [{ "name": "request_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type": "object",
+            "required": ["verified_actual_cost", "evidence_reference"],
+            "properties": {
+              "verified_actual_cost": { "type": "number", "minimum": 0 },
+              "evidence_reference": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Invoice or receipt reference; never credentials or request/response contents." }
+            }
+          } } }
+        },
+        "responses": {
+          "200": { "description": "Supplier verification recorded; budget counters were not adjusted", "content": { "application/json": { "schema": {
+            "type": "object", "required": ["success", "reconciliation"], "properties": {
+              "success": { "type": "boolean", "const": true },
+              "reconciliation": { "$ref": "#/components/schemas/RequestReconciliation" }
+            }
+          } } } },
+          "400": { "$ref": "#/components/responses/AdminError" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Ledger request ID not found" },
+          "409": { "description": "Conflicting supplier verification; existing evidence preserved" },
+          "default": { "$ref": "#/components/responses/AdminError" }
+        }
+      }
+    },
     "/admin/routing/revision": {
       "get": {
         "operationId": "getRuntimeRevision",
@@ -1637,19 +1670,59 @@
           "finished_at": { "type": "string", "format": "date-time" },
           "method": { "type": "string" },
           "endpoint": { "type": "string" },
-          "model": { "type": "string" },
-          "provider": { "type": "string" },
-          "deployment": { "type": "string" },
+          "model": { "type": ["string", "null"] },
+          "provider": { "type": ["string", "null"] },
+          "deployment": { "type": ["string", "null"] },
           "status_code": { "type": "integer" },
           "terminal_status": { "type": "string" },
           "latency_ms": { "type": "integer" },
-          "prompt_tokens": { "type": "integer" },
-          "completion_tokens": { "type": "integer" },
-          "total_tokens": { "type": "integer" },
-          "cost": { "type": "number" },
-          "user_id": { "type": "string" },
-          "api_key_id": { "type": "string" },
-          "team_id": { "type": "string" }
+          "prompt_tokens": { "type": ["integer", "null"] },
+          "completion_tokens": { "type": ["integer", "null"] },
+          "total_tokens": { "type": ["integer", "null"] },
+          "cost": { "type": ["number", "null"], "description": "Known gateway price from trusted usage; never a reserved estimate." },
+          "billing": { "oneOf": [{ "$ref": "#/components/schemas/RequestBilling" }, { "type": "null" }] },
+          "reconciliation": { "oneOf": [{ "$ref": "#/components/schemas/RequestReconciliation" }, { "type": "null" }] },
+          "awaiting_duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+          "user_id": { "type": ["string", "null"] },
+          "api_key_id": { "type": ["string", "null"] },
+          "team_id": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "RequestBilling": {
+        "type": "object",
+        "description": "Separate tracked budget scopes enforce one request; do not add reserved or charged amounts. Null means not recorded. A combined failed settlement is unconfirmed for both scopes.",
+        "properties": {
+          "provider_reserved_amount": { "type": ["number", "null"] },
+          "model_reserved_amount": { "type": ["number", "null"] },
+          "key_reserved_amount": { "type": ["number", "null"] },
+          "provider_lease_id": { "type": ["string", "null"] },
+          "model_lease_id": { "type": ["string", "null"] },
+          "reserved_at": { "type": ["string", "null"], "format": "date-time" },
+          "unknown_reason": { "type": ["string", "null"] },
+          "awaiting_since": { "type": ["string", "null"], "format": "date-time" },
+          "charge_basis": { "type": ["string", "null"] },
+          "provider_charge_amount": { "type": ["number", "null"] },
+          "model_charge_amount": { "type": ["number", "null"] },
+          "key_charge_amount": { "type": ["number", "null"] },
+          "provider_settlement": { "type": ["string", "null"] },
+          "model_settlement": { "type": ["string", "null"] },
+          "key_settlement": { "type": ["string", "null"] },
+          "settlement_updated_at": { "type": ["string", "null"], "format": "date-time" },
+          "known_cost_subtotal": { "type": ["number", "null"], "description": "Realtime session sum of trusted known costs; not a total actual while any response is unknown or pending." },
+          "unknown_response_count": { "type": ["integer", "null"], "minimum": 0 },
+          "pending_response_count": { "type": ["integer", "null"], "minimum": 0 }
+        },
+        "additionalProperties": false
+      },
+      "RequestReconciliation": {
+        "type": "object",
+        "required": ["verified_actual_cost", "evidence_reference", "verified_at", "budget_review_required"],
+        "properties": {
+          "verified_actual_cost": { "type": "number", "minimum": 0 },
+          "evidence_reference": { "type": "string" },
+          "verified_at": { "type": "string", "format": "date-time" },
+          "budget_review_required": { "type": "boolean", "description": "Budget acknowledgement or charge differs; counters have not been adjusted." }
         },
         "additionalProperties": false
       },
@@ -1982,6 +2055,7 @@
       },
       "CreateKeyRequest": {
         "type": "object",
+        "description": "API-key budget definitions and counters are process-local. The persisted key binding does not provide restart recovery or cross-gateway accounting. max_budget is unsupported and rejected.",
         "required": ["name"],
         "properties": {
           "name": { "type": "string" },
@@ -1998,6 +2072,7 @@
       },
       "UpdateKeyRequest": {
         "type": "object",
+        "description": "budget_id references a budget already configured in this process; null removes the binding. Budget definitions and counters are not restored from SQL or shared through Redis. max_budget is unsupported and rejected.",
         "properties": {
           "name": { "type": "string" },
           "description": { "type": ["string", "null"] },

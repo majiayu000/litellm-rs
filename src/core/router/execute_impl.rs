@@ -19,6 +19,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 impl Router {
+    /// Preserve a completed provider failure before shared publication can wait.
+    /// Work cancelled before the circuit bridge accepts it has no Redis receipt.
+    async fn record_execution_failure(&self, deployment: &Deployment, reason: CooldownReason) {
+        self.record_local_failure(deployment, reason);
+        self.record_failure_circuit_for_deployment_async(deployment, reason)
+            .await;
+    }
+
     /// Execute a request for a single model with retry logic
     ///
     /// Attempts to execute the operation with retry on transient failures.
@@ -32,13 +40,21 @@ impl Router {
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
         let snapshot = self.load_routing_snapshot();
-        self.execute_with_retry_inner(snapshot.as_ref(), model_name, None, operation)
-            .await
-            .map(
-                |(value, deployment_id, _model_used, attempts, latency_us)| {
-                    (value, deployment_id, attempts, latency_us)
-                },
-            )
+        self.execute_with_retry_inner(snapshot.as_ref(), model_name, None, 0, move |deployment| {
+            let result = operation(deployment);
+            async move {
+                result
+                    .await
+                    .map(|(value, tokens)| (value, Some(tokens)))
+                    .map_err(|error| (error, None))
+            }
+        })
+        .await
+        .map(
+            |(value, deployment_id, _model_used, attempts, latency_us)| {
+                (value, deployment_id, attempts, latency_us)
+            },
+        )
     }
 
     /// Execute a request for a single model with retry logic.
@@ -69,11 +85,14 @@ impl Router {
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: Option<&ProviderCapability>,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<(T, DeploymentId, String, u32, u64), (ProviderError, u32)>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+        Fut: std::future::Future<
+                Output = Result<(T, Option<u64>), (ProviderError, Option<Option<u64>>)>,
+            >,
     {
         let max_attempts = self.config.num_retries + 1;
         let mut attempt = 1;
@@ -84,13 +103,17 @@ impl Router {
         while attempt <= max_attempts {
             let start = std::time::Instant::now();
 
-            let mut deployment_lease = match self.select_retry_candidate(
-                snapshot,
-                model_name,
-                capability,
-                &excluded_budget_deployments,
-                &mut tried_deployments,
-            ) {
+            let mut deployment_lease = match self
+                .select_retry_candidate(
+                    snapshot,
+                    model_name,
+                    capability,
+                    &excluded_budget_deployments,
+                    &mut tried_deployments,
+                    estimated_tokens,
+                )
+                .await
+            {
                 Ok(lease) => lease,
                 Err(router_err) => {
                     if matches!(
@@ -137,18 +160,45 @@ impl Router {
             match result {
                 Ok((value, tokens_used)) => {
                     let model_used = selected_deployment.model.clone();
-                    self.record_success_for_deployment(
-                        deployment_lease.deployment(),
-                        tokens_used,
-                        latency_us,
-                    );
-                    deployment_lease.commit_admission(tokens_used);
+                    // The upstream outcome is known before the first settlement await.
+                    // Cancellation may stop I/O, but must not erase local accounting.
+                    if let Some(tokens) = tokens_used {
+                        deployment_lease.preserve_admission_usage(tokens);
+                    } else {
+                        deployment_lease.preserve_admission_reservation(0);
+                    }
+                    deployment_lease.record_success(tokens_used.unwrap_or(0), latency_us);
+                    self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
+                        .await;
+                    if let Some(tokens) = tokens_used {
+                        deployment_lease.commit_admission_async(tokens).await;
+                    } else {
+                        deployment_lease.retain_admission_async(0).await;
+                    }
                     drop(deployment_lease);
                     return Ok((value, deployment_id, model_used, attempt, latency_us));
                 }
-                Err(err) => {
+                Err((err, completed_usage)) => {
+                    // Outer None means no complete typed response is available;
+                    // Some(None) is a complete response with unknown usage, and
+                    // Some(Some(tokens)) carries actual usage, including zero.
+                    if let Some(tokens) = completed_usage {
+                        if let Some(tokens) = tokens {
+                            deployment_lease.preserve_admission_usage(tokens);
+                        } else {
+                            deployment_lease.preserve_admission_reservation(0);
+                        }
+                        deployment_lease.record_interrupted_usage(tokens.unwrap_or(0));
+                    }
                     if retryable_budget_scope(&err).is_some() {
                         excluded_budget_deployments.insert(deployment_id);
+                        match completed_usage {
+                            Some(Some(tokens)) => {
+                                deployment_lease.commit_admission_async(tokens).await
+                            }
+                            Some(None) => deployment_lease.retain_admission_async(0).await,
+                            None => deployment_lease.cancel_admission_async().await,
+                        }
                         drop(deployment_lease);
                         last_error = Some(err);
                         continue;
@@ -164,11 +214,19 @@ impl Router {
                         // Use ConsecutiveFailures so the deployment only enters
                         // cooldown after exceeding allowed_fails threshold,
                         // giving retries a chance to succeed.
-                        self.record_failure_with_reason_for_deployment(
+                        self.record_execution_failure(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
-                        );
+                        )
+                        .await;
                         tried_deployments.insert(deployment_id);
+                        match completed_usage {
+                            Some(Some(tokens)) => {
+                                deployment_lease.commit_admission_async(tokens).await
+                            }
+                            Some(None) => deployment_lease.retain_admission_async(0).await,
+                            None => deployment_lease.cancel_admission_async().await,
+                        }
                         drop(deployment_lease);
                         last_error = Some(err);
                         attempt += 1;
@@ -178,10 +236,18 @@ impl Router {
                         continue;
                     } else {
                         let cooldown_reason = infer_cooldown_reason(&err);
-                        self.record_failure_with_reason_for_deployment(
+                        self.record_execution_failure(
                             deployment_lease.deployment(),
                             cooldown_reason,
-                        );
+                        )
+                        .await;
+                        match completed_usage {
+                            Some(Some(tokens)) => {
+                                deployment_lease.commit_admission_async(tokens).await
+                            }
+                            Some(None) => deployment_lease.retain_admission_async(0).await,
+                            None => deployment_lease.cancel_admission_async().await,
+                        }
                         drop(deployment_lease);
                         return Err((err, attempt));
                     }
@@ -202,36 +268,43 @@ impl Router {
         ))
     }
 
-    fn select_retry_candidate(
+    async fn select_retry_candidate(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: Option<&ProviderCapability>,
         excluded_budget_deployments: &HashSet<String>,
         tried_deployments: &mut HashSet<String>,
+        estimated_tokens: u64,
     ) -> Result<DeploymentLease, RouterError> {
-        let select = |prefer_untried: bool| {
+        let select = async |prefer_untried: bool| {
             let is_candidate = |deployment: &Deployment| {
                 !excluded_budget_deployments.contains(deployment.id.as_str())
                     && (!prefer_untried || !tried_deployments.contains(deployment.id.as_str()))
             };
             match capability {
-                Some(capability) => self
-                    .select_deployment_lease_for_capability_matching_in_snapshot(
+                Some(capability) => {
+                    self.select_deployment_lease_for_capability_matching_with_estimate(
                         snapshot,
                         model_name,
                         capability,
                         is_candidate,
-                    ),
-                None => self.select_deployment_lease_matching_in_snapshot(
-                    snapshot,
-                    model_name,
-                    is_candidate,
-                ),
+                        estimated_tokens,
+                    )
+                    .await
+                }
+                None => {
+                    self.select_deployment_lease_matching_in_snapshot(
+                        snapshot,
+                        model_name,
+                        is_candidate,
+                    )
+                    .await
+                }
             }
         };
 
-        match select(true) {
+        match select(true).await {
             Ok(lease) => Ok(lease),
             Err(err)
                 if !tried_deployments.is_empty()
@@ -241,7 +314,7 @@ impl Router {
                             | RouterError::NoAvailableDeployment(_)
                     ) =>
             {
-                match select(false) {
+                match select(false).await {
                     Ok(lease) => {
                         tried_deployments.clear();
                         Ok(lease)
@@ -258,6 +331,7 @@ impl Router {
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: &ProviderCapability,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<(T, DeploymentLease), ProviderError>
     where
@@ -271,13 +345,17 @@ impl Router {
         let mut tried_deployments = HashSet::new();
 
         while attempt <= max_attempts {
-            let deployment_lease = match self.select_retry_candidate(
-                snapshot,
-                model_name,
-                Some(capability),
-                &excluded_budget_deployments,
-                &mut tried_deployments,
-            ) {
+            let mut deployment_lease = match self
+                .select_retry_candidate(
+                    snapshot,
+                    model_name,
+                    Some(capability),
+                    &excluded_budget_deployments,
+                    &mut tried_deployments,
+                    estimated_tokens,
+                )
+                .await
+            {
                 Ok(lease) => lease,
                 Err(router_err) => {
                     if matches!(
@@ -314,6 +392,7 @@ impl Router {
                 Err(err) => {
                     if retryable_budget_scope(&err).is_some() {
                         excluded_budget_deployments.insert(deployment_id);
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         last_operation_error = Some(err);
                         continue;
@@ -326,11 +405,13 @@ impl Router {
                         RetryContext::stream_pre_output(attempt, max_attempts),
                     );
                     if retry_decision.should_retry {
-                        self.record_failure_with_reason_for_deployment(
+                        self.record_execution_failure(
                             deployment_lease.deployment(),
                             CooldownReason::ConsecutiveFailures,
-                        );
+                        )
+                        .await;
                         tried_deployments.insert(deployment_id);
+                        deployment_lease.cancel_admission_async().await;
                         drop(deployment_lease);
                         last_operation_error = Some(err);
                         attempt += 1;
@@ -341,10 +422,9 @@ impl Router {
                     }
 
                     let cooldown_reason = infer_cooldown_reason(&err);
-                    self.record_failure_with_reason_for_deployment(
-                        deployment_lease.deployment(),
-                        cooldown_reason,
-                    );
+                    self.record_execution_failure(deployment_lease.deployment(), cooldown_reason)
+                        .await;
+                    deployment_lease.cancel_admission_async().await;
                     drop(deployment_lease);
                     return Err(err);
                 }
@@ -372,13 +452,27 @@ impl Router {
         Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     {
         let snapshot = self.load_routing_snapshot();
-        self.execute_with_retry_inner(snapshot.as_ref(), model_name, Some(capability), operation)
-            .await
-            .map(
-                |(value, deployment_id, _model_used, attempts, latency_us)| {
-                    (value, deployment_id, attempts, latency_us)
-                },
-            )
+        self.execute_with_retry_inner(
+            snapshot.as_ref(),
+            model_name,
+            Some(capability),
+            0,
+            move |deployment| {
+                let result = operation(deployment);
+                async move {
+                    result
+                        .await
+                        .map(|(value, tokens)| (value, Some(tokens)))
+                        .map_err(|error| (error, None))
+                }
+            },
+        )
+        .await
+        .map(
+            |(value, deployment_id, _model_used, attempts, latency_us)| {
+                (value, deployment_id, attempts, latency_us)
+            },
+        )
     }
 
     /// Execute a request for a single model with retry logic, constrained to
@@ -428,7 +522,16 @@ impl Router {
             snapshot.as_ref(),
             model_name,
             None,
-            operation,
+            0,
+            move |deployment| {
+                let result = operation(deployment);
+                async move {
+                    result
+                        .await
+                        .map(|(value, tokens)| (value, Some(tokens)))
+                        .map_err(|error| (error, None))
+                }
+            },
         )
         .await
         .map_err(|error| provider_error_to_router_error(error, model_name))
@@ -439,11 +542,14 @@ impl Router {
         snapshot: &RoutingSnapshot,
         model_name: &str,
         capability: Option<&ProviderCapability>,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<ExecutionResult<T>, ProviderError>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+        Fut: std::future::Future<
+                Output = Result<(T, Option<u64>), (ProviderError, Option<Option<u64>>)>,
+            >,
     {
         let start = std::time::Instant::now();
 
@@ -480,7 +586,13 @@ impl Router {
             }
 
             match self
-                .execute_with_retry_inner(snapshot, model, capability, operation.clone())
+                .execute_with_retry_inner(
+                    snapshot,
+                    model,
+                    capability,
+                    estimated_tokens,
+                    operation.clone(),
+                )
                 .await
             {
                 Ok((result, deployment_id, model_used, attempts, _latency_us)) => {
@@ -545,7 +657,7 @@ impl Router {
     {
         let start = std::time::Instant::now();
 
-        let mut deployment_lease = self.select_deployment_lease(model_name)?;
+        let mut deployment_lease = self.select_deployment_lease_async(model_name).await?;
         let selected_deployment = deployment_lease.clone_deployment();
         let deployment_id = selected_deployment.id.clone();
 
@@ -556,12 +668,13 @@ impl Router {
         match result {
             Ok((value, tokens_used)) => {
                 let model_used = selected_deployment.model.clone();
-                self.record_success_for_deployment(
-                    deployment_lease.deployment(),
-                    tokens_used,
-                    latency_us,
-                );
-                deployment_lease.commit_admission(tokens_used);
+                // The upstream outcome is known before the first settlement await.
+                // Cancellation may stop I/O, but must not erase local accounting.
+                deployment_lease.preserve_admission_usage(tokens_used);
+                deployment_lease.record_success(tokens_used, latency_us);
+                self.record_success_circuit_for_deployment_async(deployment_lease.deployment())
+                    .await;
+                deployment_lease.commit_admission_async(tokens_used).await;
                 drop(deployment_lease);
 
                 Ok(build_execution_result(
@@ -575,10 +688,9 @@ impl Router {
             }
             Err(err) => {
                 let cooldown_reason = infer_cooldown_reason(&err);
-                self.record_failure_with_reason_for_deployment(
-                    deployment_lease.deployment(),
-                    cooldown_reason,
-                );
+                self.record_execution_failure(deployment_lease.deployment(), cooldown_reason)
+                    .await;
+                deployment_lease.cancel_admission_async().await;
                 drop(deployment_lease);
 
                 Err(provider_error_to_router_error(err, model_name))
@@ -626,7 +738,16 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 None,
-                operation,
+                0,
+                move |deployment| {
+                    let result = operation(deployment);
+                    async move {
+                        result
+                            .await
+                            .map(|(value, tokens)| (value, Some(tokens)))
+                            .map_err(|error| (error, None))
+                    }
+                },
             )
             .await
     }
@@ -635,11 +756,14 @@ impl RuntimeHandle {
         &self,
         model_name: &str,
         capability: &ProviderCapability,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<ExecutionResult<T>, ProviderError>
     where
         F: Fn(Arc<Deployment>) -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+        Fut: std::future::Future<
+                Output = Result<(T, Option<u64>), (ProviderError, Option<Option<u64>>)>,
+            >,
     {
         self.binding
             .router
@@ -647,6 +771,7 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 Some(capability),
+                estimated_tokens,
                 operation,
             )
             .await
@@ -656,6 +781,7 @@ impl RuntimeHandle {
         &self,
         model_name: &str,
         capability: &ProviderCapability,
+        estimated_tokens: u64,
         operation: F,
     ) -> Result<(T, DeploymentLease), ProviderError>
     where
@@ -668,6 +794,7 @@ impl RuntimeHandle {
                 self.snapshot.as_ref(),
                 model_name,
                 capability,
+                estimated_tokens,
                 operation,
             )
             .await

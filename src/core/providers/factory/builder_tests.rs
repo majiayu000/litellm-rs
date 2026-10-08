@@ -1,5 +1,6 @@
 //! Tests for provider-specific config builders
 
+use super::CONSTRUCTION_ENV_LOCK as ENV_LOCK;
 use super::builder::*;
 #[cfg(feature = "providers-extended")]
 use super::cohere_builder::build_cohere_config_from_factory;
@@ -7,9 +8,6 @@ use super::cohere_builder::build_cohere_config_from_factory;
 use super::gemini_builder::build_gemini_config_from_factory;
 use super::{Provider, ProviderType, create_provider};
 use crate::core::net::ProviderEndpointAccess;
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
 const BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION: [&str; 5] = [
     "AWS_ACCESS_KEY_ID",
@@ -796,4 +794,89 @@ fn test_build_bedrock_config_skips_empty_config_session_token() {
         bedrock_config.aws_session_token.as_deref(),
         Some("env-session-token")
     );
+}
+
+#[test]
+fn frozen_bedrock_absence_does_not_read_later_environment() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&BEDROCK_ENV_KEYS_WITH_DEFAULT_REGION);
+    let config = serde_json::json!({"aws_access_key_id":"fixture-access", "aws_secret_access_key":"fixture-secret"});
+    let resource = bedrock_resource_config_from_factory(&config);
+    unsafe {
+        std::env::set_var("AWS_SESSION_TOKEN", "later-fixture-token");
+    }
+    let frozen = build_bedrock_config_from_factory_with_resource(&config, Some(resource)).unwrap();
+    assert!(frozen.aws_session_token.is_none());
+    assert_eq!(
+        build_bedrock_config_from_factory(&config)
+            .unwrap()
+            .aws_session_token
+            .as_deref(),
+        Some("later-fixture-token")
+    );
+}
+
+#[cfg(feature = "providers-extra")]
+#[test]
+fn frozen_vertex_factory_consumes_project_location_and_credential_snapshot() {
+    let input = serde_json::json!({"project_id":"fixture-project-a", "location":"us-east1", "access_token":"fixture-token-a"});
+    let resource = vertex_resource_config_from_factory(&input).unwrap();
+    let changed = serde_json::json!({"project_id":"fixture-project-b", "location":"us-west1", "access_token":"fixture-token-b"});
+    let frozen =
+        build_vertex_ai_config_from_factory_with_resource(&changed, Some(Ok(resource))).unwrap();
+    assert_eq!(frozen.project_id, "fixture-project-a");
+    assert_eq!(frozen.location, "us-east1");
+    assert!(
+        matches!(frozen.credentials, crate::core::providers::vertex_ai::VertexCredentials::AccessToken(token) if token == "fixture-token-a")
+    );
+    let direct = build_vertex_ai_config_from_factory(&changed).unwrap();
+    assert_eq!(direct.project_id, "fixture-project-b");
+    assert_eq!(direct.location, "us-west1");
+}
+
+#[cfg(feature = "providers-extra")]
+#[test]
+fn frozen_vertex_preserves_blank_type_fallbacks_and_configuration_errors() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _snapshot = EnvSnapshot::clear(&[
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_PROJECT_ID",
+        "GCP_PROJECT",
+        "GCLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "VERTEX_AI_LOCATION",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ]);
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_PROJECT", "fixture-project");
+        std::env::set_var("GOOGLE_CLOUD_LOCATION", "us-west1");
+    }
+    for config in [
+        serde_json::json!({"project_id":" ","location":" ","access_token":"fixture-token"}),
+        serde_json::json!({"project_id":42,"location":42,"access_token":"fixture-token"}),
+    ] {
+        let frozen = build_vertex_ai_config_from_factory_with_resource(
+            &config,
+            Some(vertex_resource_config_from_factory(&config)),
+        )
+        .unwrap();
+        let direct = build_vertex_ai_config_from_factory(&config).unwrap();
+        assert_eq!(
+            (frozen.project_id, frozen.location),
+            (direct.project_id, direct.location)
+        );
+    }
+    for config in [
+        serde_json::json!({"credentials_json":"not-json"}),
+        serde_json::json!({"credentials_file":"/fixture/nonexistent-vertex-credential.json"}),
+        serde_json::json!({"api_key":"unsupported-static-key","credentials_json":"not-json"}),
+    ] {
+        let direct = build_vertex_ai_config_from_factory(&config).unwrap_err();
+        let frozen = build_vertex_ai_config_from_factory_with_resource(
+            &config,
+            Some(vertex_resource_config_from_factory(&config)),
+        )
+        .unwrap_err();
+        assert_eq!(frozen.to_string(), direct.to_string());
+    }
 }

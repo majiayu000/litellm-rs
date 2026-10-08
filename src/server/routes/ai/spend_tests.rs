@@ -103,6 +103,7 @@ async fn reserved_completion_settles_actual_spend_and_refunds_estimate() {
     );
     let keys = KeyManager::new(InMemoryKeyRepository::new());
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .unwrap()
         .unwrap();
 
@@ -160,6 +161,7 @@ async fn reserved_completion_records_actual_when_usage_exceeds_estimate() {
     );
     let keys = KeyManager::new(InMemoryKeyRepository::new());
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(1))
+        .await
         .unwrap()
         .unwrap();
 
@@ -189,8 +191,8 @@ async fn reserved_completion_records_actual_when_usage_exceeds_estimate() {
     );
 }
 
-#[test]
-fn chat_reservation_without_max_tokens_uses_conservative_output_bound() {
+#[tokio::test]
+async fn chat_reservation_without_max_tokens_uses_conservative_output_bound() {
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
         "openai",
@@ -208,6 +210,7 @@ fn chat_reservation_without_max_tokens_uses_conservative_output_bound() {
 
     let request = chat_request("gpt-4o", messages.clone());
     let reservation = reserve_chat_completion_budget(&budget, "openai", "gpt-4o", &request)
+        .await
         .unwrap()
         .unwrap();
     let reserved = reservation.reserved_amount();
@@ -216,8 +219,8 @@ fn chat_reservation_without_max_tokens_uses_conservative_output_bound() {
     reservation.cancel();
 }
 
-#[test]
-fn chat_reservation_without_max_tokens_uses_catalog_output_limit() {
+#[tokio::test]
+async fn chat_reservation_without_max_tokens_uses_catalog_output_limit() {
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
         "openai",
@@ -231,6 +234,7 @@ fn chat_reservation_without_max_tokens_uses_catalog_output_limit() {
 
     let request = chat_request("gpt-4o", messages.clone());
     let reservation = reserve_chat_completion_budget(&budget, "openai", "gpt-4o", &request)
+        .await
         .unwrap()
         .unwrap();
     let reserved = reservation.reserved_amount();
@@ -239,8 +243,8 @@ fn chat_reservation_without_max_tokens_uses_catalog_output_limit() {
     reservation.cancel();
 }
 
-#[test]
-fn chat_reservation_with_explicit_max_tokens_reserves_requested_output() {
+#[tokio::test]
+async fn chat_reservation_with_explicit_max_tokens_reserves_requested_output() {
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
         "openai",
@@ -255,6 +259,7 @@ fn chat_reservation_with_explicit_max_tokens_reserves_requested_output() {
     let mut request = chat_request("gpt-4o", messages.clone());
     request.max_tokens = Some(100);
     let reservation = reserve_chat_completion_budget(&budget, "openai", "gpt-4o", &request)
+        .await
         .unwrap()
         .unwrap();
     let reserved = reservation.reserved_amount();
@@ -263,8 +268,8 @@ fn chat_reservation_with_explicit_max_tokens_reserves_requested_output() {
     reservation.cancel();
 }
 
-#[test]
-fn chat_reservation_includes_legacy_functions() {
+#[tokio::test]
+async fn chat_reservation_includes_legacy_functions() {
     let without_functions = UnifiedBudgetLimits::new();
     without_functions.providers.set_provider_limit(
         "openai",
@@ -302,10 +307,12 @@ fn chat_reservation_includes_legacy_functions() {
     function_request.max_tokens = Some(100);
     let baseline =
         reserve_chat_completion_budget(&without_functions, "openai", "gpt-4o", &baseline_request)
+            .await
             .unwrap()
             .unwrap();
     let function_reserved =
         reserve_chat_completion_budget(&with_functions, "openai", "gpt-4o", &function_request)
+            .await
             .unwrap()
             .unwrap();
 
@@ -314,8 +321,8 @@ fn chat_reservation_includes_legacy_functions() {
     function_reserved.cancel();
 }
 
-#[test]
-fn chat_reservation_includes_response_format_schema() {
+#[tokio::test]
+async fn chat_reservation_includes_response_format_schema() {
     let without_schema = UnifiedBudgetLimits::new();
     without_schema.providers.set_provider_limit(
         "openai",
@@ -359,10 +366,12 @@ fn chat_reservation_includes_response_format_schema() {
     schema_request.max_tokens = Some(100);
     let baseline =
         reserve_chat_completion_budget(&without_schema, "openai", "gpt-4o", &baseline_request)
+            .await
             .unwrap()
             .unwrap();
     let schema_reserved =
         reserve_chat_completion_budget(&with_schema, "openai", "gpt-4o", &schema_request)
+            .await
             .unwrap()
             .unwrap();
 
@@ -371,8 +380,8 @@ fn chat_reservation_includes_response_format_schema() {
     schema_reserved.cancel();
 }
 
-#[test]
-fn chat_reservation_multiplies_output_budget_by_choice_count() {
+#[tokio::test]
+async fn chat_reservation_multiplies_output_budget_by_choice_count() {
     let single_budget = UnifiedBudgetLimits::new();
     single_budget.providers.set_provider_limit(
         "openai",
@@ -392,9 +401,11 @@ fn chat_reservation_multiplies_output_budget_by_choice_count() {
     multi_request.n = Some(3);
     let single =
         reserve_chat_completion_budget(&single_budget, "openai", "gpt-4o", &single_request)
+            .await
             .unwrap()
             .unwrap();
     let multi = reserve_chat_completion_budget(&multi_budget, "openai", "gpt-4o", &multi_request)
+        .await
         .unwrap()
         .unwrap();
 
@@ -485,8 +496,8 @@ fn catalog_output_limit_matches_zhipu_provider_alias() {
     assert_eq!(catalog_max_output_tokens("zhipuai", "glm-4"), Some(4096));
 }
 
-#[test]
-fn gemini_max_completion_tokens_only_uses_catalog_output_bound() {
+#[tokio::test]
+async fn gemini_max_completion_tokens_only_uses_catalog_output_bound() {
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
         "gemini",
@@ -503,6 +514,7 @@ fn gemini_max_completion_tokens_only_uses_catalog_output_bound() {
     request.max_completion_tokens = Some(10);
     let reservation =
         reserve_chat_completion_budget(&budget, "gemini", "gemini-3.1-flash-lite", &request)
+            .await
             .unwrap()
             .unwrap();
 
@@ -510,8 +522,8 @@ fn gemini_max_completion_tokens_only_uses_catalog_output_bound() {
     reservation.cancel();
 }
 
-#[test]
-fn cohere_max_completion_tokens_reserves_provider_effective_output() {
+#[tokio::test]
+async fn cohere_max_completion_tokens_reserves_provider_effective_output() {
     let budget = UnifiedBudgetLimits::new();
     let messages = vec![user_message("hello")];
     let prompt_tokens = approximate_prompt_tokens("cohere", "command-r-plus", &messages);
@@ -530,6 +542,7 @@ fn cohere_max_completion_tokens_reserves_provider_effective_output() {
     let mut request = chat_request("command-r-plus", messages);
     request.max_completion_tokens = Some(10);
     let reservation = reserve_chat_completion_budget(&budget, "cohere", "command-r-plus", &request)
+        .await
         .unwrap()
         .unwrap();
 
@@ -593,6 +606,7 @@ async fn reservation_settlement_after_reset_records_actual_spend() {
     );
     let keys = KeyManager::new(InMemoryKeyRepository::new());
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .unwrap()
         .unwrap();
     assert!(budget.providers.reset_provider_budget("openai"));
@@ -639,6 +653,7 @@ async fn stream_disconnect_without_usage_settles_reserved_budget() {
     );
     let keys = KeyManager::new(InMemoryKeyRepository::new());
     let reservation = reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
+        .await
         .unwrap()
         .unwrap();
     let reserved = reservation.reserved_amount();
@@ -696,13 +711,19 @@ fn concurrent_completion_reservations_allow_one_last_budget_winner() {
             let winners = Arc::clone(&winners);
             let reservations = Arc::clone(&reservations);
             thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
                 barrier.wait();
-                if let Ok(Some(reservation)) =
-                    reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100))
-                {
-                    winners.fetch_add(1, Ordering::SeqCst);
-                    reservations.lock().unwrap().push(reservation);
-                }
+                runtime.block_on(async {
+                    if let Ok(Some(reservation)) =
+                        reserve_completion_budget(&budget, "openai", "gpt-4o", 0, Some(100)).await
+                    {
+                        winners.fetch_add(1, Ordering::SeqCst);
+                        reservations.lock().unwrap().push(reservation);
+                    }
+                });
             })
         })
         .collect();

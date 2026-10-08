@@ -3,7 +3,10 @@
 use super::pool::{RedisLiveConnection, RedisPool};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+const ADMISSION_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 const ADMISSION_SCRIPT: &str = r#"
 local op = ARGV[1]
@@ -19,6 +22,9 @@ local tpm_inc = tonumber(ARGV[6]) or 0
 local lease_id = ARGV[7]
 local ttl = tonumber(ARGV[8]) or 1
 local actual_tpm = tonumber(ARGV[9]) or 0
+local finishing = op == 'settle' or op == 'cancel' or op == 'retain'
+-- Settled quota remains relevant until this Redis minute ends.
+local keep_until = (epoch + 1) * 60000
 
 local function nums()
   local p = tonumber(redis.call('HGET', KEYS[1], 'p') or '0') or 0
@@ -33,6 +39,7 @@ local function save(p, r, t, e)
   if r < 0 then r = 0 end
   if t < 0 then t = 0 end
   redis.call('HSET', KEYS[1], 'p', p, 'r', r, 't', t, 'e', e)
+  redis.call('PEXPIREAT', KEYS[1], keep_until)
 end
 
 local function reclaim()
@@ -63,14 +70,19 @@ local function reclaim()
           end
         end
         redis.call('HDEL', KEYS[1], fields[i])
-      elseif window_changed then
-        -- Carry outstanding TPM, but charge RPM only in the arrival window.
-        rpmInc = 0
-        t = t + tpmInc
-        redis.call(
-          'HSET', KEYS[1], fields[i],
-          tostring(pInc) .. ':' .. tostring(rpmInc) .. ':' .. tostring(tpmInc) .. ':' .. tostring(e) .. ':' .. tostring(expiry)
-        )
+      else
+        if not finishing or fields[i] ~= 'l:' .. lease_id then
+          keep_until = math.max(keep_until, expiry)
+        end
+        if window_changed then
+          -- Carry outstanding TPM, but charge RPM only in the arrival window.
+          rpmInc = 0
+          t = t + tpmInc
+          redis.call(
+            'HSET', KEYS[1], fields[i],
+            tostring(pInc) .. ':' .. tostring(rpmInc) .. ':' .. tostring(tpmInc) .. ':' .. tostring(e) .. ':' .. tostring(expiry)
+          )
+        end
       end
     end
   end
@@ -90,6 +102,7 @@ if op == 'reserve' then
   r = r + rpm_inc
   t = t + tpm_inc
   if ttl < 1 then ttl = 1 end
+  keep_until = math.max(keep_until, now + ttl)
   save(p, r, t, e)
   redis.call(
     'HSET',
@@ -100,7 +113,7 @@ if op == 'reserve' then
   return {1, p, r, t}
 end
 
-if op == 'settle' or op == 'cancel' then
+if finishing then
   local field = 'l:' .. lease_id
   local lease = redis.call('HGET', KEYS[1], field)
   if lease then
@@ -114,8 +127,11 @@ if op == 'settle' or op == 'cancel' then
       if op == 'cancel' then
         r = r - rpmInc
         t = t - tpmInc
-      else
+      elseif op == 'settle' then
         t = t - tpmInc + actual_tpm
+      elseif op == 'retain' then
+        -- A partial usage snapshot can exceed the original estimate.
+        t = t - tpmInc + math.max(tpmInc, actual_tpm)
       end
     end
     redis.call('HDEL', KEYS[1], field)
@@ -152,13 +168,13 @@ fn admission_script() -> &'static redis::Script {
 }
 
 fn admission_runtime_connections()
--> &'static tokio::sync::Mutex<HashMap<String, RedisLiveConnection>> {
-    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, RedisLiveConnection>>> =
+-> &'static tokio::sync::Mutex<HashMap<String, Arc<RedisLiveConnection>>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<RedisLiveConnection>>>> =
         OnceLock::new();
     CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConnection> {
+async fn connection_on_current_runtime(pool: &RedisPool) -> Result<Arc<RedisLiveConnection>> {
     let cache_key = format!("{}|{}", pool.config.url, pool.config.cluster);
     {
         let cache = admission_runtime_connections().lock().await;
@@ -166,7 +182,11 @@ async fn connection_on_current_runtime(pool: &RedisPool) -> Result<RedisLiveConn
             return Ok(conn.clone());
         }
     }
-    let conn = pool.open_live_connection().await?;
+    // Reuse the bounded, non-replaying transport for uncertain routing writes.
+    let conn = Arc::new(
+        pool.open_budget_connection(ADMISSION_OPERATION_TIMEOUT)
+            .await?,
+    );
     let mut cache = admission_runtime_connections().lock().await;
     Ok(cache.entry(cache_key).or_insert(conn).clone())
 }
@@ -215,29 +235,53 @@ impl RedisPool {
             ));
         }
 
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| GatewayError::Internal("Redis semaphore closed".to_string()))?;
-        let mut conn = connection_on_current_runtime(self).await?;
+        let mut connection = None;
+        let result =
+            tokio::time::timeout(ADMISSION_OPERATION_TIMEOUT, async {
+                let _permit =
+                    self.semaphore.clone().acquire_owned().await.map_err(|_| {
+                        GatewayError::Internal("Redis semaphore closed".to_string())
+                    })?;
+                let cached = connection_on_current_runtime(self).await?;
+                connection = Some(Arc::clone(&cached));
+                let mut conn = cached.as_ref().clone();
 
-        let values: Vec<i64> = admission_script()
-            .key(key)
-            .arg(args.op)
-            .arg(args.max_parallel)
-            .arg(args.max_rpm)
-            .arg(args.max_tpm)
-            .arg(args.rpm_inc)
-            .arg(args.tpm_inc)
-            .arg(args.lease_id)
-            .arg(args.ttl_ms)
-            .arg(args.actual_tpm)
-            .invoke_async(&mut conn)
+                let values: Vec<i64> = admission_script()
+                    .key(key)
+                    .arg(args.op)
+                    .arg(args.max_parallel)
+                    .arg(args.max_rpm)
+                    .arg(args.max_tpm)
+                    .arg(args.rpm_inc)
+                    .arg(args.tpm_inc)
+                    .arg(args.lease_id)
+                    .arg(args.ttl_ms)
+                    .arg(args.actual_tpm)
+                    .invoke_async(&mut conn)
+                    .await
+                    .map_err(GatewayError::from)?;
+                parse_admission_state(values)
+            })
             .await
-            .map_err(GatewayError::from)?;
-        parse_admission_state(values)
+            .unwrap_or_else(|_| {
+                Err(GatewayError::Unavailable(
+                    "Redis admission operation deadline exceeded".into(),
+                ))
+            });
+        if result.is_err()
+            && let Some(connection) = connection
+        {
+            let key = format!("{}|{}", self.config.url, self.config.cluster);
+            let mut cache = admission_runtime_connections().lock().await;
+            // A late failure from an old connection must preserve a replacement.
+            if cache
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                cache.remove(&key);
+            }
+        }
+        result
     }
 
     pub(crate) async fn admission_reserve(
@@ -277,6 +321,16 @@ impl RedisPool {
         lease_id: &str,
     ) -> Result<AdmissionState> {
         self.admission_finish("cancel", key, lease_id, 0).await
+    }
+
+    pub(crate) async fn admission_retain(
+        &self,
+        key: &str,
+        lease_id: &str,
+        minimum_tpm: i64,
+    ) -> Result<AdmissionState> {
+        self.admission_finish("retain", key, lease_id, minimum_tpm)
+            .await
     }
 
     async fn admission_finish(
@@ -354,6 +408,59 @@ mod tests {
     async fn redis_time(conn: &mut RedisLiveConnection) -> (i64, i64) {
         let (seconds, micros): (i64, i64) = redis::cmd("TIME").query_async(conn).await.unwrap();
         (seconds * 1_000 + micros / 1_000, seconds / 60)
+    }
+
+    #[tokio::test]
+    async fn retain_preserves_known_usage_floor_and_other_live_lease() {
+        let Some(mut conn) = live_connection().await else {
+            return;
+        };
+        let key = RedisPool::admission_key(&uuid::Uuid::new_v4().to_string());
+        for (lease, estimate, ttl_ms) in [("long", 2, 1_200_000), ("short", 70, 600_000)] {
+            let values = admission_script()
+                .key(&key)
+                .arg("reserve")
+                .arg(2)
+                .arg(10)
+                .arg(100)
+                .arg(1)
+                .arg(estimate)
+                .arg(lease)
+                .arg(ttl_ms)
+                .arg(0)
+                .invoke_async(&mut conn)
+                .await
+                .unwrap();
+            assert!(parse_admission_state(values).unwrap().allowed);
+        }
+        let long_lease: String = redis::cmd("HGET")
+            .arg(&key)
+            .arg("l:long")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let deadline: i64 = long_lease.rsplit(':').next().unwrap().parse().unwrap();
+        // A known 100-token prefix exceeds its 70-token estimate. Repeating
+        // completion with a different floor must not charge either lease again.
+        for minimum in [100, 1_000] {
+            let state = invoke_script(&mut conn, &key, "retain", "short", minimum, 10).await;
+            assert_eq!((state.parallel, state.rpm, state.tpm), (1, 2, 102));
+            let expires_at: i64 = redis::cmd("PEXPIRETIME")
+                .arg(&key)
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(expires_at, deadline, "the other live lease stays protected");
+        }
+        let state = invoke_script(&mut conn, &key, "retain", "long", 0, 10).await;
+        assert_eq!((state.parallel, state.rpm, state.tpm), (0, 2, 102));
+        let state = invoke_script(&mut conn, &key, "retain", "long", 1_000, 10).await;
+        assert_eq!((state.parallel, state.rpm, state.tpm), (0, 2, 102));
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
     }
 
     // Age stored accounting instead of waiting for a real minute boundary.
@@ -470,6 +577,19 @@ mod tests {
             (cancelled.parallel, cancelled.rpm, cancelled.tpm),
             (0, 0, 4)
         );
+        let (epoch, tokens): (i64, i64) = redis::cmd("HMGET")
+            .arg(&key)
+            .arg(&["e", "t"])
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(tokens, 4, "terminal cleanup must retain settled quota");
+        assert_eq!(expires_at, (epoch + 1) * 60_000);
         redis::cmd("DEL")
             .arg(&key)
             .query_async::<i64>(&mut conn)
@@ -502,6 +622,55 @@ mod tests {
         );
         let expiry: i64 = lease.rsplit(':').next().unwrap().parse().unwrap();
         assert!((before + 600_000..=after + 600_000).contains(&expiry));
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            expires_at, expiry,
+            "new lease must extend the hash lifetime"
+        );
+
+        assert!(
+            invoke_script(&mut conn, &key, "reserve", "other", 0, 2)
+                .await
+                .allowed
+        );
+        // Give the original lease a longer deadline without waiting for expiry.
+        let longer_expiry = expiry + 300_000;
+        let (prefix, _) = lease.rsplit_once(':').unwrap();
+        redis::cmd("HSET")
+            .arg(&key)
+            .arg("l:lease")
+            .arg(format!("{prefix}:{longer_expiry}"))
+            .query_async::<i64>(&mut conn)
+            .await
+            .unwrap();
+        let finished = invoke_script(&mut conn, &key, "settle", "other", 0, 2).await;
+        assert_eq!(finished.parallel, 1);
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            expires_at, longer_expiry,
+            "other live leases must survive cleanup"
+        );
+        invoke_script(&mut conn, &key, "cancel", "lease", 0, 2).await;
+        let epoch: i64 = redis::cmd("HGET")
+            .arg(&key)
+            .arg("e")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let expires_at: i64 = redis::cmd("PEXPIRETIME")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(expires_at, (epoch + 1) * 60_000);
         redis::cmd("DEL")
             .arg(&key)
             .query_async::<i64>(&mut conn)

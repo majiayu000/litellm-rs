@@ -36,6 +36,20 @@ pub struct BedrockClient {
 }
 
 impl BedrockClient {
+    /// Bind identity to the static credentials held by this exact client.
+    pub(super) fn credential_resource_identity(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let credentials = self.auth.credentials();
+        let mut value = serde_json::json!({
+            "access_key_id": credentials.access_key_id,
+            "secret_access_key": credentials.secret_access_key,
+            "session_token": credentials.session_token,
+            "region": credentials.region,
+        });
+        value.sort_all_objects();
+        Sha256::digest(value.to_string().as_bytes()).into()
+    }
+
     /// Create a new Bedrock client
     pub fn new(config: BedrockConfig) -> Result<Self, ProviderError> {
         // Validate region

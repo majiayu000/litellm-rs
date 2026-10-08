@@ -19,20 +19,24 @@
 //! - Zero-copy: Deployments are accessed by reference, never cloned
 //! - Cache-friendly: Hot path fields grouped together
 
+use super::runtime_state::GatewayRuntimeIdentity;
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::Provider;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "deployment/local_admission.rs"]
+mod local_admission;
 #[path = "deployment/probe_state.rs"]
 mod probe_state;
 #[path = "deployment/provider_instance.rs"]
 mod provider_instance;
+pub(crate) use local_admission::LocalAdmissionHold;
 use probe_state::ProbeLifecycle;
 pub(crate) use probe_state::publish_probe_group;
 pub(crate) use provider_instance::ProviderInstanceIdentity;
@@ -201,7 +205,9 @@ impl Default for DeploymentConfig {
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     minute_window_lock: Arc<RwLock<()>>,
+    local_admission: Arc<Mutex<local_admission::LocalTokenLedger>>,
     provider_instance_identity: ProviderInstanceIdentity,
+    pub(super) runtime_identity: Option<GatewayRuntimeIdentity>,
     probe_health: Arc<AtomicU8>,
     probe_last_checked_at_millis: Arc<AtomicU64>,
     probe_lifecycle: Arc<ProbeLifecycle>,
@@ -246,6 +252,9 @@ pub struct DeploymentStateInner {
     /// Failed requests (lifetime)
     pub fail_requests: AtomicU64,
 
+    /// Successful requests this minute (for cooldown sample size).
+    pub successes_this_minute: AtomicU64,
+
     /// Failures this minute (for cooldown detection)
     pub fails_this_minute: AtomicU32,
 
@@ -283,6 +292,7 @@ impl DeploymentState {
                 total_requests: AtomicU64::new(0),
                 success_requests: AtomicU64::new(0),
                 fail_requests: AtomicU64::new(0),
+                successes_this_minute: AtomicU64::new(0),
                 fails_this_minute: AtomicU32::new(0),
                 cooldown_until: AtomicU64::new(0),
                 last_request_at: AtomicU64::new(0),
@@ -291,7 +301,9 @@ impl DeploymentState {
                 minute_reset_at: AtomicU64::new(now),
             }),
             minute_window_lock: Arc::new(RwLock::new(())),
+            local_admission: Arc::new(Mutex::new(local_admission::LocalTokenLedger::default())),
             provider_instance_identity,
+            runtime_identity: None,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
             probe_lifecycle: Arc::new(ProbeLifecycle::new()),
@@ -315,9 +327,15 @@ impl DeploymentState {
     pub(crate) fn minute_counters(&self, now: u64) -> MinuteCounters {
         self.roll_minute_window(now);
         let _guard = self.minute_window_lock.read();
+        self.observed_minute_counters()
+    }
+
+    /// Read observed usage while the caller owns the current minute gate.
+    fn observed_minute_counters(&self) -> MinuteCounters {
         MinuteCounters {
             tpm: self.tpm_current.load(Ordering::Relaxed),
             rpm: self.rpm_current.load(Ordering::Relaxed),
+            successes: self.successes_this_minute.load(Ordering::Relaxed),
             failures: self.fails_this_minute.load(Ordering::Relaxed),
         }
     }
@@ -348,8 +366,12 @@ impl DeploymentState {
     }
 
     fn finish_minute_reset(&self, now: u64) {
+        // The minute gate is already exclusive. Live reservations survive a
+        // reset; only completed unknown usage belongs to the elapsed window.
+        self.local_admission.lock().retained_unobserved = 0;
         self.tpm_current.store(0, Ordering::Relaxed);
         self.rpm_current.store(0, Ordering::Relaxed);
+        self.successes_this_minute.store(0, Ordering::Relaxed);
         self.fails_this_minute.store(0, Ordering::Relaxed);
         self.minute_reset_at.store(now, Ordering::Release);
     }
@@ -391,7 +413,9 @@ impl DeploymentState {
         Self {
             inner: Arc::clone(&self.inner),
             minute_window_lock: Arc::clone(&self.minute_window_lock),
+            local_admission: Arc::clone(&self.local_admission),
             provider_instance_identity,
+            runtime_identity: self.runtime_identity.clone(),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
             probe_last_checked_at_millis: Arc::new(AtomicU64::new(0)),
             probe_lifecycle: Arc::clone(&self.probe_lifecycle),
@@ -401,6 +425,28 @@ impl DeploymentState {
 
     pub(crate) fn provider_instance_identity(&self) -> ProviderInstanceIdentity {
         self.provider_instance_identity.clone()
+    }
+
+    /// A registry entry owns one state handle, shared across registry copies.
+    /// Any other handle can admit or finish requests, including an idle pin of
+    /// a retired routing snapshot, so its resource state must remain reachable.
+    #[cfg(feature = "gateway")]
+    pub(super) fn has_other_runtime_handles(&self) -> bool {
+        Arc::strong_count(&self.inner) > 1
+    }
+
+    /// Explicitly disabling probes removes probe-owned failure evidence while
+    /// preserving request failures, cooldown and resource occupancy.
+    #[cfg(feature = "gateway")]
+    pub(super) fn clear_disabled_probe_failure(&self) {
+        if self.probe_unhealthy.swap(false, Ordering::AcqRel) {
+            let _ = self.health.compare_exchange(
+                HealthStatus::Unhealthy as u8,
+                HealthStatus::Healthy as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
     }
 }
 
@@ -420,6 +466,7 @@ fn minute_window_needs_roll(now: u64, last: u64) -> bool {
 pub(crate) struct MinuteCounters {
     pub(crate) tpm: u64,
     pub(crate) rpm: u64,
+    pub(crate) successes: u64,
     pub(crate) failures: u32,
 }
 
@@ -574,12 +621,30 @@ impl Deployment {
     /// * `tokens` - Number of tokens consumed
     /// * `latency_us` - Request latency in microseconds
     pub fn record_success(&self, tokens: u64, latency_us: u64) {
+        self.record_success_with_admission(tokens, latency_us, None);
+    }
+
+    pub(crate) fn record_success_with_admission(
+        &self,
+        tokens: u64,
+        latency_us: u64,
+        admission: Option<&super::admission::AdmissionHold>,
+    ) {
         let now = current_timestamp();
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
         self.state.with_current_minute(now, || {
-            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-            self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+            let record = || {
+                self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+                self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+                self.state
+                    .successes_this_minute
+                    .fetch_add(1, Ordering::Relaxed);
+            };
+            match admission {
+                Some(hold) => hold.record_local_observation(tokens, record),
+                None => record(),
+            }
         });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 
@@ -604,18 +669,37 @@ impl Deployment {
 
     /// Retain billable tokens completed before a streaming request failed.
     #[cfg(feature = "gateway")]
-    pub(crate) fn record_partial_tokens(&self, tokens: u64) {
+    pub(crate) fn record_partial_tokens_with_admission(
+        &self,
+        tokens: u64,
+        admission: Option<&super::admission::AdmissionHold>,
+    ) {
         self.state.with_current_minute(current_timestamp(), || {
-            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+            let record = || {
+                self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+            };
+            match admission {
+                Some(hold) => hold.record_local_observation(tokens, record),
+                None => record(),
+            }
         });
     }
 
-    /// Retain conservative admission usage when Realtime ends without terminal usage.
-    #[cfg(feature = "websockets")]
-    pub(crate) fn record_interrupted_usage(&self, tokens: u64) {
+    /// Retain known admission usage when a consumer interrupts a stream.
+    pub(crate) fn record_interrupted_usage_with_admission(
+        &self,
+        tokens: u64,
+        admission: Option<&super::admission::AdmissionHold>,
+    ) {
         self.state.with_current_minute(current_timestamp(), || {
-            self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
-            self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+            let record = || {
+                self.state.tpm_current.fetch_add(tokens, Ordering::Relaxed);
+                self.state.rpm_current.fetch_add(1, Ordering::Relaxed);
+            };
+            match admission {
+                Some(hold) => hold.record_local_observation(tokens, record),
+                None => record(),
+            }
         });
     }
 
@@ -633,11 +717,7 @@ impl Deployment {
         self.state.fail_requests.fetch_add(1, Ordering::Relaxed);
         let counters = self.state.with_current_minute(now, || {
             self.state.fails_this_minute.fetch_add(1, Ordering::Relaxed);
-            MinuteCounters {
-                tpm: self.state.tpm_current.load(Ordering::Relaxed),
-                rpm: self.state.rpm_current.load(Ordering::Relaxed),
-                failures: self.state.fails_this_minute.load(Ordering::Relaxed),
-            }
+            self.state.observed_minute_counters()
         });
         self.state.last_request_at.store(now, Ordering::Relaxed);
 

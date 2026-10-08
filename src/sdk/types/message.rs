@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::ToolCall;
+use super::{ToolCall, ToolCallDelta};
 
 /// Message role
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +79,22 @@ pub struct Message {
     pub name: Option<String>,
     /// Tool calls
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// ID of the assistant tool call answered by a tool-role message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    /// Build a tool result associated with a preceding assistant tool call.
+    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: Some(Content::Text(content.into())),
+            name: None,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
 }
 
 /// Delta message
@@ -88,6 +104,7 @@ pub struct MessageDelta {
     pub role: Option<Role>,
     /// Message content
     pub content: Option<String>,
-    /// Tool calls
-    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Partial tool calls, correlated by index within each choice.
+    /// IDs and function names normally appear only in the first delta.
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
 }

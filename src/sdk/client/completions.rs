@@ -6,6 +6,7 @@ use super::provider_payloads::{
     convert_messages_to_anthropic,
 };
 use super::routing::{sdk_provider_has_legacy_adapter, unsupported_legacy_sdk_adapter_error};
+use crate::core::providers::base::sse::AnthropicUsageState;
 use crate::core::providers::registry::LegacyAdapterSurface;
 use crate::sdk::{errors::*, types::*};
 use futures::StreamExt;
@@ -89,11 +90,34 @@ impl LLMClient {
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
         if self.runtime_binding.is_some() {
-            return self.chat_stream_with_runtime(messages).await;
+            return self
+                .chat_stream_with_options(SdkChatRequest {
+                    model: String::new(),
+                    messages,
+                    options: ChatOptions::default(),
+                })
+                .await;
         }
 
         let provider = self.select_provider_for_stream(&messages).await?;
         self.execute_stream_request(&provider.id, messages).await
+    }
+
+    /// Stream a request with model, tool definitions, and sampling options.
+    ///
+    /// Requires a client created with [`Self::from_runtime`]. The runtime owns
+    /// capability selection and execution; legacy clients can use [`Self::chat_stream`].
+    /// This method enables streaming regardless of `request.options.stream`.
+    pub async fn chat_stream_with_options(
+        &self,
+        request: SdkChatRequest,
+    ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
+        if self.runtime_binding.is_none() {
+            return Err(SDKError::NotSupported(
+                "chat_stream_with_options requires LLMClient::from_runtime".to_string(),
+            ));
+        }
+        self.chat_stream_with_runtime(request).await
     }
 
     /// Execute chat request with a specific provider
@@ -164,11 +188,17 @@ impl LLMClient {
         provider: &crate::sdk::config::SdkProviderConfig,
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<ChatChunk>> + Send>>> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": provider.models.first().unwrap_or(&"gpt-4".to_string()),
             "messages": messages,
             "stream": true,
         });
+        if matches!(
+            &provider.provider_type,
+            crate::sdk::config::ProviderType::OpenAI
+        ) {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
 
         let default_url = "https://api.openai.com".to_string();
         let base_url = provider.base_url.as_ref().unwrap_or(&default_url);
@@ -344,11 +374,29 @@ impl LLMClient {
                 VecDeque::<Result<ChatChunk>>::new(),
                 false,
                 Option::<(String, String)>::None,
+                AnthropicUsageState::default(),
             ),
-            |(mut byte_stream, mut buffer, mut pending, mut done, mut current_tool)| async move {
+            |(
+                mut byte_stream,
+                mut buffer,
+                mut pending,
+                mut done,
+                mut current_tool,
+                mut usage_state,
+            )| async move {
                 loop {
                     if let Some(item) = pending.pop_front() {
-                        return Some((item, (byte_stream, buffer, pending, done, current_tool)));
+                        return Some((
+                            item,
+                            (
+                                byte_stream,
+                                buffer,
+                                pending,
+                                done,
+                                current_tool,
+                                usage_state,
+                            ),
+                        ));
                     }
 
                     if done {
@@ -400,7 +448,12 @@ impl LLMClient {
                                         let tool_ref = current_tool
                                             .as_ref()
                                             .map(|(id, name)| (id.as_str(), name.as_str()));
-                                        match parse_anthropic_sse_record(&event, &data, tool_ref) {
+                                        match parse_anthropic_sse_record(
+                                            &event,
+                                            &data,
+                                            tool_ref,
+                                            &mut usage_state,
+                                        ) {
                                             Some(Ok(chunk)) => pending.push_back(Ok(chunk)),
                                             Some(Err(e)) => {
                                                 done = true;
@@ -428,7 +481,14 @@ impl LLMClient {
                         Some(Err(e)) => {
                             return Some((
                                 Err(SDKError::NetworkError(e.to_string())),
-                                (byte_stream, buffer, pending, true, current_tool),
+                                (
+                                    byte_stream,
+                                    buffer,
+                                    pending,
+                                    true,
+                                    current_tool,
+                                    usage_state,
+                                ),
                             ));
                         }
                         None => {
@@ -562,12 +622,24 @@ pub(crate) fn parse_openai_sse_line(line: &str) -> Option<Result<ChatChunk>> {
 ///
 /// `current_tool` carries `(tool_id, tool_name)` captured from the preceding
 /// `content_block_start` event so `input_json_delta` chunks include the tool identity.
+/// `usage_state` retains trusted cumulative input and cache counts until the terminal delta.
 pub(crate) fn parse_anthropic_sse_record(
     event: &str,
     data: &str,
     current_tool: Option<(&str, &str)>,
+    usage_state: &mut AnthropicUsageState,
 ) -> Option<Result<ChatChunk>> {
     match event {
+        "message_start" => {
+            // This lifecycle event remains invisible; absent or invalid usage stays unknown.
+            *usage_state = AnthropicUsageState::default();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+                && let Some(usage) = v.pointer("/message/usage")
+            {
+                usage_state.merge(usage);
+            }
+            None
+        }
         "error" => {
             let msg = serde_json::from_str::<serde_json::Value>(data)
                 .ok()
@@ -598,7 +670,14 @@ pub(crate) fn parse_anthropic_sse_record(
                 .and_then(|d| d.get("stop_reason"))
                 .and_then(|r| r.as_str())
                 .map(|s| normalize_anthropic_stop_reason(s).to_string());
+            let usage = v.get("usage").and_then(|usage| {
+                usage_state.merge(usage);
+                stop_reason
+                    .as_ref()
+                    .and_then(|_| usage_state.terminal_usage(usage))
+            });
             Some(Ok(ChatChunk {
+                usage,
                 id: String::new(),
                 model: String::new(),
                 choices: vec![ChunkChoice {
@@ -635,6 +714,7 @@ pub(crate) fn parse_anthropic_sse_record(
                         .and_then(|t| t.as_str())
                         .unwrap_or("");
                     Some(Ok(ChatChunk {
+                        usage: None,
                         id: String::new(),
                         model: String::new(),
                         choices: vec![ChunkChoice {
@@ -656,6 +736,7 @@ pub(crate) fn parse_anthropic_sse_record(
                         .unwrap_or("");
                     let (tool_id, tool_name) = current_tool.unwrap_or(("", ""));
                     Some(Ok(ChatChunk {
+                        usage: None,
                         id: String::new(),
                         model: String::new(),
                         choices: vec![ChunkChoice {
@@ -663,15 +744,19 @@ pub(crate) fn parse_anthropic_sse_record(
                             delta: MessageDelta {
                                 role: None,
                                 content: None,
-                                tool_calls: Some(vec![crate::sdk::types::ToolCall {
-                                    id: tool_id.to_string(),
-                                    tool_type: "function".to_string(),
-                                    function: crate::sdk::types::Function {
-                                        name: tool_name.to_string(),
-                                        description: None,
-                                        parameters: serde_json::Value::Null,
+                                tool_calls: Some(vec![ToolCallDelta {
+                                    index: v
+                                        .get("index")
+                                        .and_then(|value| value.as_u64())
+                                        .and_then(|index| u32::try_from(index).ok())
+                                        .unwrap_or_default(),
+                                    id: (!tool_id.is_empty()).then(|| tool_id.to_string()),
+                                    tool_type: Some("function".to_string()),
+                                    function: Some(FunctionCallDelta {
+                                        name: (!tool_name.is_empty())
+                                            .then(|| tool_name.to_string()),
                                         arguments: Some(partial_json.to_string()),
-                                    },
+                                    }),
                                 }]),
                             },
                             finish_reason: None,
@@ -711,6 +796,7 @@ mod tests {
         SdkChatRequest {
             model: model.to_string(),
             messages: vec![Message {
+                tool_call_id: None,
                 role: Role::User,
                 content: Some(Content::Text("hello".to_string())),
                 name: None,

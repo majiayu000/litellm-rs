@@ -182,14 +182,40 @@ where
         Box::pin(scope_facts(Arc::clone(&facts), async move {
             let cancellation_request_id = request_id.clone();
             let cancellation_principal = Arc::clone(&principal);
+            let cancellation_ledger = ledger.clone().filter(|_| persist_ledger);
+            let cancellation_facts = Arc::clone(&facts);
+            let cancellation_method = method.clone();
+            let cancellation_path = path.clone();
             let terminal_permit = logger
                 .start_request(start_event, move || {
+                    let principal = Self::recorded_principal(&cancellation_principal);
+                    if let Some(runtime) = cancellation_ledger {
+                        let record = ledger_record(
+                            &cancellation_request_id,
+                            &cancellation_method,
+                            &cancellation_path,
+                            started_at,
+                            start_time,
+                            0,
+                            "cancelled",
+                            &principal,
+                            &snapshot_facts(&cancellation_facts),
+                        );
+                        actix_web::rt::spawn(async move {
+                            let _ = persist_with_policy(
+                                runtime.writer.as_ref(),
+                                record,
+                                runtime.write_failure,
+                            )
+                            .await;
+                        });
+                    }
                     Self::with_principal(
                         AuditEvent::request_failed(
                             cancellation_request_id,
                             "request future cancelled",
                         ),
-                        &Self::recorded_principal(&cancellation_principal),
+                        &principal,
                     )
                 })
                 .map_err(audit_service_unavailable)?;
@@ -366,6 +392,9 @@ impl<S> AuditMiddlewareService<S> {
             if let Some(runtime) = ledger {
                 let terminal_status = match outcome {
                     AuditBodyOutcome::Completed => "completed",
+                    AuditBodyOutcome::Failed("stream body dropped before completion") => {
+                        "cancelled"
+                    }
                     AuditBodyOutcome::Failed(_) => "failed",
                 };
                 let record = ledger_record(
@@ -449,6 +478,17 @@ fn ledger_record(
     principal: &AuditPrincipal,
     facts: &RequestLedgerFacts,
 ) -> RequestLedgerRecord {
+    let mut billing = facts.billing.clone();
+    if terminal_status == "cancelled"
+        && facts.cost.is_none()
+        && let Some(billing) = billing.as_mut()
+        && matches!(
+            billing.unknown_reason.as_deref(),
+            Some("awaiting_provider_usage" | "provider_usage_missing")
+        )
+    {
+        billing.unknown_reason = Some("stream_cancelled_before_usage".into());
+    }
     RequestLedgerRecord {
         request_id: request_id.to_string(),
         started_at,
@@ -465,6 +505,7 @@ fn ledger_record(
         completion_tokens: facts.completion_tokens,
         total_tokens: facts.total_tokens,
         cost: facts.cost,
+        billing,
         user_id: principal.user_id.clone(),
         api_key_id: principal.api_key_id.clone(),
         team_id: principal.team_id.clone(),
@@ -970,5 +1011,61 @@ mod tests {
         let rows = writer.rows.lock().expect("ledger lock");
         assert_eq!(rows[0].endpoint, "/v1/chat/completions");
         assert!(rows[0].terminal_status == "completed" || rows[0].terminal_status == "failed");
+    }
+    #[actix_web::test]
+    async fn request_ledger_captures_cancelled_future_with_pending_budget() {
+        let writer = Arc::new(MemoryLedgerWriter {
+            rows: std::sync::Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let runtime = Arc::new(RequestLedgerRuntime {
+            writer: writer.clone(),
+            write_failure:
+                crate::config::models::request_ledger::RequestLedgerWriteFailure::Continue,
+        });
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(
+                    AuditMiddleware::new(Arc::new(AuditLogger::disabled()))
+                        .with_request_ledger(runtime),
+                )
+                .route(
+                    "/slow",
+                    web::get().to(|| async {
+                        crate::core::request_ledger::update_billing(None, |billing| {
+                            billing.provider_reserved_amount = Some(1.0);
+                            billing.provider_settlement = Some("settlement_pending".into());
+                        });
+                        std::future::pending::<HttpResponse>().await
+                    }),
+                ),
+        )
+        .await;
+        let future = app.call(actix_test::TestRequest::get().uri("/slow").to_request());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), future)
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while writer.rows.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let rows = writer.rows.lock().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].terminal_status, "cancelled");
+        assert_eq!(rows[0].cost, None);
+        assert_eq!(
+            rows[0]
+                .billing
+                .as_ref()
+                .unwrap()
+                .provider_settlement
+                .as_deref(),
+            Some("settlement_pending")
+        );
     }
 }

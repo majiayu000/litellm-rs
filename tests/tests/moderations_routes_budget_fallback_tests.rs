@@ -12,24 +12,37 @@ async fn moderation_route_rejects_exhausted_provider_budget_before_upstream() {
         .budget_limits
         .providers
         .record_provider_spend("mock-openai-compatible", 2.0);
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+    let app = within(
+        "initialize test app",
+        &mock.base_url,
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        ),
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/moderations")
-            .set_json(json!({ "input": "hello" }))
-            .to_request(),
+    let resp = within(
+        "request dispatch",
+        &mock.base_url,
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "hello" }))
+                .to_request(),
+        ),
     )
     .await;
 
     assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
-    let body: Value = test::read_body_json(resp).await;
+    let body: Value = within(
+        "read response body",
+        &mock.base_url,
+        test::read_body_json(resp),
+    )
+    .await;
     assert_eq!(body["error"]["type"], "insufficient_quota");
     assert!(
         body["error"]["message"]
@@ -74,22 +87,30 @@ async fn moderation_route_uses_router_budget_fallback_provider() {
         "fallback-moderation-provider",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+    let app = within(
+        "initialize test app",
+        &format!("{}, {}", exhausted.base_url, fallback.base_url),
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        ),
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/moderations")
-            .set_json(json!({
-                "model": "omni-moderation-latest",
-                "input": "moderate this text"
-            }))
-            .to_request(),
+    let resp = within(
+        "request dispatch",
+        &format!("{}, {}", exhausted.base_url, fallback.base_url),
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({
+                    "model": "omni-moderation-latest",
+                    "input": "moderate this text"
+                }))
+                .to_request(),
+        ),
     )
     .await;
 
@@ -117,19 +138,27 @@ async fn native_openai_moderation_route_uses_default_model_with_empty_config_mod
         Vec::new(),
     )])
     .await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+    let app = within(
+        "initialize test app",
+        &mock.base_url,
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        ),
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/moderations")
-            .set_json(json!({ "input": "moderate this text" }))
-            .to_request(),
+    let resp = within(
+        "request dispatch",
+        &mock.base_url,
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "moderate this text" }))
+                .to_request(),
+        ),
     )
     .await;
 
@@ -152,19 +181,27 @@ async fn openai_compatible_named_openai_uses_provider_name_wildcard_fallback() {
         Vec::new(),
     )])
     .await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+    let app = within(
+        "initialize test app",
+        &mock.base_url,
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        ),
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/moderations")
-            .set_json(json!({ "input": "moderate this text" }))
-            .to_request(),
+    let resp = within(
+        "request dispatch",
+        &mock.base_url,
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "moderate this text" }))
+                .to_request(),
+        ),
     )
     .await;
 
@@ -206,19 +243,27 @@ async fn moderation_route_uses_wildcard_provider_name_fallback() {
         "wildcard-moderation-secondary",
         ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+    let app = within(
+        "initialize test app",
+        &format!("{}, {}", exhausted.base_url, fallback.base_url),
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        ),
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/moderations")
-            .set_json(json!({ "input": "moderate this text" }))
-            .to_request(),
+    let resp = within(
+        "request dispatch",
+        &format!("{}, {}", exhausted.base_url, fallback.base_url),
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "moderate this text" }))
+                .to_request(),
+        ),
     )
     .await;
 
@@ -248,24 +293,37 @@ async fn moderation_route_rejects_exhausted_default_model_budget_before_upstream
         .budget_limits
         .models
         .record_model_spend("omni-moderation-latest", 2.0);
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure(litellm_rs::server::routes::ai::configure_routes),
+    let app = within(
+        "initialize test app",
+        &mock.base_url,
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        ),
     )
     .await;
 
-    let resp = test::call_service(
-        &app,
-        test::TestRequest::post()
-            .uri("/v1/moderations")
-            .set_json(json!({ "input": "hello" }))
-            .to_request(),
+    let resp = within(
+        "request dispatch",
+        &mock.base_url,
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/moderations")
+                .set_json(json!({ "input": "hello" }))
+                .to_request(),
+        ),
     )
     .await;
 
     assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
-    let body: Value = test::read_body_json(resp).await;
+    let body: Value = within(
+        "read response body",
+        &mock.base_url,
+        test::read_body_json(resp),
+    )
+    .await;
     assert_eq!(body["error"]["type"], "insufficient_quota");
     assert!(
         body["error"]["message"]

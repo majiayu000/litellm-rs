@@ -50,8 +50,8 @@ fn dev_gateway_config() -> GatewayConfig {
     serde_yml::from_str(&content).expect("dev gateway example should match the schema")
 }
 
-#[test]
-fn dev_example_unpriced_vllm_model_uses_explicit_zero_fallback() {
+#[tokio::test]
+async fn dev_example_unpriced_vllm_model_uses_explicit_zero_fallback() {
     let gateway = dev_gateway_config();
     let provider = gateway
         .providers
@@ -78,6 +78,7 @@ fn dev_example_unpriced_vllm_model_uses_explicit_zero_fallback() {
         1000,
         Some(500),
     )
+    .await
     .expect("allow_unpriced should not return model_not_priced");
 
     assert!(
@@ -86,8 +87,8 @@ fn dev_example_unpriced_vllm_model_uses_explicit_zero_fallback() {
     );
 }
 
-#[test]
-fn dev_example_known_model_uses_embedded_price_instead_of_zero_fallback() {
+#[tokio::test]
+async fn dev_example_known_model_uses_embedded_price_instead_of_zero_fallback() {
     let gateway = dev_gateway_config();
     let pricing =
         PricingService::with_embedded_default().expect("embedded pricing should load offline");
@@ -102,6 +103,7 @@ fn dev_example_known_model_uses_embedded_price_instead_of_zero_fallback() {
         1000,
         Some(500),
     )
+    .await
     .expect("known embedded model should be priced")
     .expect("known embedded price must create a non-zero reservation");
 
@@ -109,8 +111,8 @@ fn dev_example_known_model_uses_embedded_price_instead_of_zero_fallback() {
     reservation.cancel();
 }
 
-#[test]
-fn reserve_completion_budget_uses_runtime_pricing_service() {
+#[tokio::test]
+async fn reserve_completion_budget_uses_runtime_pricing_service() {
     let pricing = runtime_test_pricing_service("runtime_provider");
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -129,7 +131,9 @@ fn reserve_completion_budget_uses_runtime_pricing_service() {
         "runtime-only-priced-model",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(Some(reservation)) => reservation,
         Ok(None) => panic!("priced runtime model should create a budget reservation"),
         Err(error) => panic!("runtime pricing reservation should succeed: {error}"),
@@ -146,8 +150,8 @@ fn reserve_completion_budget_uses_runtime_pricing_service() {
     reservation.cancel();
 }
 
-#[test]
-fn reserve_completion_budget_prices_xai_openai_like_prefix() {
+#[tokio::test]
+async fn reserve_completion_budget_prices_xai_openai_like_prefix() {
     let pricing = default_spend_pricing_service();
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -166,7 +170,9 @@ fn reserve_completion_budget_prices_xai_openai_like_prefix() {
         "xai/grok-4.3",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(Some(reservation)) => reservation,
         Ok(None) => panic!("priced xAI OpenAI-like model should create a budget reservation"),
         Err(error) => panic!("xAI OpenAI-like budget reservation should succeed: {error}"),
@@ -184,8 +190,8 @@ fn reserve_completion_budget_prices_xai_openai_like_prefix() {
 }
 
 #[cfg(feature = "providers-extended")]
-#[test]
-fn reserve_completion_budget_prices_amazon_nova_short_alias() {
+#[tokio::test]
+async fn reserve_completion_budget_prices_amazon_nova_short_alias() {
     let pricing = default_spend_pricing_service();
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -204,7 +210,9 @@ fn reserve_completion_budget_prices_amazon_nova_short_alias() {
         "nova-2-lite",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(Some(reservation)) => reservation,
         Ok(None) => panic!("priced Amazon Nova short alias should create a budget reservation"),
         Err(error) => panic!("Amazon Nova short alias reservation should succeed: {error}"),
@@ -282,6 +290,7 @@ async fn google_providers_reserve_and_settle_from_runtime_pricing() {
                 1_000,
                 Some(500),
             )
+            .await
             .is_err(),
             "provider: {provider}"
         );
@@ -293,6 +302,7 @@ async fn google_providers_reserve_and_settle_from_runtime_pricing() {
             1_000,
             Some(500),
         )
+        .await
         .expect("Google model reservation should use runtime pricing")
         .expect("non-zero runtime price should reserve budget");
         assert!((reservation.reserved_amount() - 0.025).abs() < f64::EPSILON);
@@ -428,8 +438,8 @@ async fn record_completion_spend_prices_xai_openai_like_prefix() {
     );
 }
 
-#[test]
-fn reserve_completion_budget_rejects_missing_pricing_when_budget_requires_cost() {
+#[tokio::test]
+async fn reserve_completion_budget_rejects_missing_pricing_when_budget_requires_cost() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -444,7 +454,9 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_requires_cost()
         "missing-priced-model",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(_) => panic!("budgeted requests without pricing should fail closed"),
         Err(error) => error,
     };
@@ -460,8 +472,8 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_requires_cost()
     );
 }
 
-#[test]
-fn reserve_completion_budget_rejects_missing_pricing_when_limits_are_disabled() {
+#[tokio::test]
+async fn reserve_completion_budget_rejects_missing_pricing_when_limits_are_disabled() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
     let mut provider_config = ProviderLimitConfig::new(1000.0, ResetPeriod::Monthly);
@@ -482,7 +494,9 @@ fn reserve_completion_budget_rejects_missing_pricing_when_limits_are_disabled() 
         "missing-priced-model",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(_) => panic!("unpriced requests should fail closed by default"),
         Err(error) => error,
     };
@@ -490,8 +504,8 @@ fn reserve_completion_budget_rejects_missing_pricing_when_limits_are_disabled() 
     assert!(super::is_model_not_priced_error(&error));
 }
 
-#[test]
-fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disabled() {
+#[tokio::test]
+async fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disabled() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -507,7 +521,9 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disable
         "missing-priced-model",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(_) => panic!("unpriced requests should fail closed by default"),
         Err(error) => error,
     };
@@ -515,8 +531,8 @@ fn reserve_completion_budget_rejects_missing_pricing_when_budget_manager_disable
     assert!(super::is_model_not_priced_error(&error));
 }
 
-#[test]
-fn reserve_completion_budget_reject_records_unpriced_metric() {
+#[tokio::test]
+async fn reserve_completion_budget_reject_records_unpriced_metric() {
     crate::server::middleware::reset_unpriced_metrics_for_tests();
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
@@ -528,7 +544,9 @@ fn reserve_completion_budget_reject_records_unpriced_metric() {
         "tenant-private-model-831",
         1000,
         Some(500),
-    ) {
+    )
+    .await
+    {
         Ok(_) => panic!("unpriced requests should fail closed by default"),
         Err(error) => error,
     };
@@ -541,8 +559,8 @@ fn reserve_completion_budget_reject_records_unpriced_metric() {
     assert!(!rendered.contains("tenant-private-model-831"));
 }
 
-#[test]
-fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
+#[tokio::test]
+async fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
     let pricing = PricingService::new(None);
     let budget = UnifiedBudgetLimits::new();
     budget.providers.set_provider_limit(
@@ -562,6 +580,7 @@ fn reserve_completion_budget_allow_unpriced_uses_fallback_per_1k_units() {
         1000,
         Some(500),
     )
+    .await
     .expect("allow_unpriced should use fallback")
     .expect("non-zero fallback should reserve");
 

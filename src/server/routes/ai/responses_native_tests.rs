@@ -12,6 +12,39 @@ fn native_usage_checks_totals_and_details_without_double_counting_reasoning() {
         usage.completion_tokens_details.unwrap().reasoning_tokens,
         Some(2)
     );
+    let zero = json!({"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}});
+    let usage = response_usage(&zero).expect("explicit zero usage is known");
+    assert_eq!(
+        (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens
+        ),
+        (0, 0, 0)
+    );
+    let details = usage.prompt_tokens_details.unwrap();
+    assert_eq!(details.cached_tokens, Some(0));
+    assert_eq!(details.cache_creation_tokens, Some(0));
+    assert_eq!(
+        usage.completion_tokens_details.unwrap().reasoning_tokens,
+        Some(0)
+    );
+    for field in ["input_tokens", "output_tokens", "total_tokens"] {
+        let mut missing = zero.clone();
+        missing["usage"].as_object_mut().unwrap().remove(field);
+        assert!(
+            response_usage(&missing).is_none(),
+            "missing {field} is unknown"
+        );
+    }
+    for invalid in [
+        json!({"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":1}}),
+        json!({"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cached_tokens":1}}}),
+        json!({"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cache_write_tokens":1}}}),
+        json!({"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"output_tokens_details":{"reasoning_tokens":1}}}),
+    ] {
+        assert!(response_usage(&invalid).is_none(), "{invalid}");
+    }
     for (path, value) in [
         ("/usage/total_tokens", json!(14)),
         ("/usage/input_tokens", json!(-1)),

@@ -38,6 +38,10 @@ pub struct Model {
     pub total_tokens: Option<i64>,
     /// Settled cost when priced.
     pub cost: Option<f64>,
+    /// Budget accounting facts.
+    pub billing: Option<Json>,
+    /// Separately updated supplier verification, preserved on terminal upsert.
+    pub reconciliation: Option<Json>,
     /// Authenticated user id.
     pub user_id: Option<String>,
     /// API key id (never the raw secret).

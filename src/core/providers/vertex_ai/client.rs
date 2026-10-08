@@ -53,6 +53,15 @@ pub struct VertexAIProvider {
 }
 
 impl VertexAIProvider {
+    /// Identity binds the parsed credentials held by this exact provider.
+    /// File contents are not read again and no raw credentials leave construction.
+    pub(crate) fn credential_resource_identity(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut value = serde_json::json!(&self.config.credentials);
+        value.sort_all_objects();
+        Sha256::digest(value.to_string().as_bytes()).into()
+    }
+
     /// Create a new Vertex AI provider
     pub async fn new(config: VertexAIProviderConfig) -> Result<Self, VertexAIError> {
         config

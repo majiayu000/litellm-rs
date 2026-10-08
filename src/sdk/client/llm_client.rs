@@ -216,6 +216,7 @@ impl LLMClient {
         let simple_request = SdkChatRequest {
             model: String::new(),
             messages: vec![Message {
+                tool_call_id: None,
                 role: Role::User,
                 content: Some(Content::Text("Hi".to_string())),
                 name: None,

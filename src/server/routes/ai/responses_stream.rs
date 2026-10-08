@@ -133,7 +133,7 @@ pub(crate) async fn handle_streaming_response(
                         ApiKeyBudgetPolicy::FromProviderReservation,
                     )
                     .reserve_call(
-                        |budget| {
+                        async |budget| {
                             spend::reserve_chat_completion_budget_with_request_pricing(
                                 &reserve_request_pricing,
                                 &reserve_pricing_config,
@@ -142,6 +142,7 @@ pub(crate) async fn handle_streaming_response(
                                 budget.model(),
                                 request_for_budget,
                             )
+                            .await
                         },
                         || {
                             callback.begin_provider_execution_with_pricing(
@@ -233,7 +234,7 @@ pub(crate) async fn handle_streaming_response(
                             if let Some(lease) = lease.take() {
                                 let provider_error =
                                     ProviderError::serialization("router", message.clone());
-                                lease.finish_failure(&provider_error);
+                                lease.finish_failure(&provider_error).await;
                             }
                             callback.fail(message, "serialization_error");
                         }
@@ -283,7 +284,7 @@ pub(crate) async fn handle_streaming_response(
                                 if let Some(lease) = lease.take() {
                                     let provider_error =
                                         ProviderError::serialization("router", message.clone());
-                                    lease.finish_failure(&provider_error);
+                                    lease.finish_failure(&provider_error).await;
                                 }
                                 callback.fail(message, "serialization_error");
                             }
@@ -351,7 +352,7 @@ pub(crate) async fn handle_streaming_response(
                                         "router",
                                         format!("stream idle timeout after {idle_timeout}s"),
                                     );
-                                    lease.finish_failure(&error);
+                                    lease.finish_failure(&error).await;
                                 }
                                 callback.fail(
                                     format!("stream idle timeout after {idle_timeout}s"),
@@ -591,7 +592,7 @@ pub(crate) async fn handle_streaming_response(
                             let (et, ec) = classify(&e);
                             let _ = tx.send(sse_error(&e.to_string(), et, ec)).await;
                             if let Some(lease) = lease.take() {
-                                lease.finish_failure(&e);
+                                lease.finish_failure(&e).await;
                             }
                             callback.fail(e.to_string(), "provider_error");
                             settle_if_chargeable!();
@@ -741,16 +742,24 @@ pub(crate) async fn handle_streaming_response(
                             "storage_error",
                         ))
                         .await;
-                    settlement
-                        .record_completion(budget_usage.as_ref(), saw_upstream_output)
-                        .await;
+                    crate::server::routes::ai::execution::settle_stream_terminal(
+                        lease.as_mut(),
+                        budget_usage
+                            .as_ref()
+                            .map_or(u64::from(total), |usage| u64::from(usage.total_tokens)),
+                        None,
+                        settlement.record_completion(budget_usage.as_ref(), saw_upstream_output),
+                    )
+                    .await;
                     callback.fail("Response storage failed", "storage_error");
                     if let Some(lease) = lease.take() {
-                        lease.finish_success(
-                            budget_usage
-                                .as_ref()
-                                .map_or(u64::from(total), |usage| u64::from(usage.total_tokens)),
-                        );
+                        lease
+                            .finish_success(
+                                budget_usage.as_ref().map_or(u64::from(total), |usage| {
+                                    u64::from(usage.total_tokens)
+                                }),
+                            )
+                            .await;
                     }
                     return;
                 }
@@ -773,16 +782,22 @@ pub(crate) async fn handle_streaming_response(
                     return_after_disconnect!();
                 }
 
-                settlement
-                    .record_completion(budget_usage.as_ref(), saw_upstream_output)
-                    .await;
+                crate::server::routes::ai::execution::settle_stream_terminal(
+                    lease.as_mut(),
+                    budget_usage
+                        .as_ref()
+                        .map_or(u64::from(total), |usage| u64::from(usage.total_tokens)),
+                    None,
+                    settlement.record_completion(budget_usage.as_ref(), saw_upstream_output),
+                )
+                .await;
                 callback.complete_usage(budget_usage.as_ref(), "success");
                 if let Some(lease) = lease.take() {
                     let tokens_used = budget_usage
                         .as_ref()
                         .map(|u| u.total_tokens)
                         .unwrap_or(total);
-                    lease.finish_success(u64::from(tokens_used));
+                    lease.finish_success(u64::from(tokens_used)).await;
                 }
             });
 

@@ -1,18 +1,641 @@
+use crate::core::providers::create_provider;
+use crate::core::providers::factory::CONSTRUCTION_ENV_LOCK as ENV_LOCK;
+use std::sync::MutexGuard;
+#[rustfmt::skip]
+const ENVS: &[&str] = &[
+    "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
+    "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
+    "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
+    "BASETEN_API_KEY", "HEROKU_API_KEY", "INFERENCE_KEY", "EMBEDDING_KEY",
+    "OVHCLOUD_API_KEY", "OVH_AI_ENDPOINTS_ACCESS_TOKEN",
+    "DEEPGRAM_API_KEY", "DEEPGRAM_API_BASE",
+    "ELEVENLABS_API_KEY", "ELEVENLABS_API_BASE",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "AWS_REGION", "AWS_DEFAULT_REGION",
+    "GOOGLE_CLOUD_PROJECT", "GOOGLE_PROJECT_ID", "GCP_PROJECT", "GCLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS",
+    "GITHUB_COPILOT_TOKEN_DIR", "GITHUB_COPILOT_ACCESS_TOKEN_FILE", "GITHUB_COPILOT_API_KEY_FILE",
+];
+struct EnvScope {
+    previous: Vec<(&'static str, Option<String>)>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl EnvScope {
+    fn new(values: &[(&str, &str)]) -> Self {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let previous = ENVS
+            .iter()
+            .map(|key| (*key, std::env::var(key).ok()))
+            .collect();
+        for key in ENVS {
+            unsafe { std::env::remove_var(key) };
+        }
+        for &(key, value) in values {
+            unsafe { std::env::set_var(key, value) };
+        }
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.previous.drain(..).rev() {
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "providers-extended", feature = "gateway"))]
+#[tokio::test]
+async fn copilot_captured_credentials_isolate_reloaded_runtime_state() {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let write = |directory: &std::path::Path, access: &str, key: &str| {
+        std::fs::write(directory.join("access-token"), access).unwrap();
+        std::fs::write(
+            directory.join("api-key.json"),
+            serde_json::json!({
+                "token": key, "expires_at": u64::MAX,
+                "endpoints": {"api": "https://copilot.fixture.invalid"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    write(first.path(), "fixture-access-a", "fixture-key-a");
+    write(second.path(), "fixture-access-a", "fixture-key-a");
+    let config = ProviderConfig {
+        name: "copilot-fixture".into(),
+        provider_type: "github_copilot".into(),
+        models: vec!["gpt-4o".into()],
+        ..Default::default()
+    };
+    let _env = EnvScope::new(&[
+        ("GITHUB_COPILOT_TOKEN_DIR", first.path().to_str().unwrap()),
+        ("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+        ("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
+    ]);
+    let original = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .unwrap();
+    let id = "copilot-fixture-gpt-4o";
+    let original_deployment = original.get_deployment(id).unwrap();
+    original_deployment.record_success(3, 1);
+    let replica = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .unwrap();
+    replica.inherit_runtime_state(&original);
+    assert_eq!(
+        replica
+            .get_deployment(id)
+            .unwrap()
+            .state
+            .total_requests
+            .load(Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        replica.get_deployment(id).unwrap().state.runtime_identity,
+        original_deployment.state.runtime_identity
+    );
+
+    // A changed effective path isolates even equal captured tokens; same-path
+    // access/API token changes also isolate the reconstructed resource.
+    for variant in [
+        "directory",
+        "access-file",
+        "key-file",
+        "access-content",
+        "key-content",
+    ] {
+        unsafe {
+            std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", first.path());
+        }
+        unsafe {
+            std::env::set_var("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token");
+        }
+        unsafe {
+            std::env::set_var("GITHUB_COPILOT_API_KEY_FILE", "api-key.json");
+        }
+        write(first.path(), "fixture-access-a", "fixture-key-a");
+        match variant {
+            "directory" => unsafe {
+                std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", second.path());
+            },
+            "access-file" => {
+                std::fs::copy(
+                    first.path().join("access-token"),
+                    first.path().join("alternate-access"),
+                )
+                .unwrap();
+                unsafe {
+                    std::env::set_var("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "alternate-access");
+                }
+            }
+            "key-file" => {
+                std::fs::copy(
+                    first.path().join("api-key.json"),
+                    first.path().join("alternate-key.json"),
+                )
+                .unwrap();
+                unsafe {
+                    std::env::set_var("GITHUB_COPILOT_API_KEY_FILE", "alternate-key.json");
+                }
+            }
+            "access-content" => write(first.path(), "fixture-access-b", "fixture-key-a"),
+            "key-content" => write(first.path(), "fixture-access-a", "fixture-key-b"),
+            _ => unreachable!(),
+        }
+        let replacement = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        replacement.inherit_runtime_state(&original);
+        let replaced = replacement.get_deployment(id).unwrap();
+        assert_ne!(
+            replaced.state.runtime_identity, original_deployment.state.runtime_identity,
+            "{variant}"
+        );
+        assert_eq!(
+            replaced.state.total_requests.load(Ordering::Relaxed),
+            0,
+            "{variant}"
+        );
+        assert_eq!(
+            original_deployment
+                .state
+                .total_requests
+                .load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    // Existing explicit settings override environment fallbacks, including
+    // file names. Changing unused environment credentials must preserve state.
+    write(first.path(), "fixture-access-a", "fixture-key-a");
+    let mut explicit = config.clone();
+    explicit.settings = serde_json::from_value(serde_json::json!({
+        "token_dir": first.path().to_str().unwrap(),
+        "access_token_file": "access-token", "api_key_file": "api-key.json"
+    }))
+    .unwrap();
+    let before = Router::from_gateway_config(std::slice::from_ref(&explicit), None)
+        .await
+        .unwrap();
+    before.get_deployment(id).unwrap().record_success(3, 1);
+    unsafe {
+        std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", second.path());
+    }
+    unsafe {
+        std::env::set_var("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "unused-access");
+    }
+    unsafe {
+        std::env::set_var("GITHUB_COPILOT_API_KEY_FILE", "unused-api-key");
+    }
+    let after = Router::from_gateway_config(std::slice::from_ref(&explicit), None)
+        .await
+        .unwrap();
+    after.inherit_runtime_state(&before);
+    assert_eq!(
+        after.get_deployment(id).unwrap().state.runtime_identity,
+        before.get_deployment(id).unwrap().state.runtime_identity
+    );
+    assert_eq!(
+        after
+            .get_deployment(id)
+            .unwrap()
+            .state
+            .total_requests
+            .load(Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn native_audio_environment_rotations_change_runtime_resource_identity() {
+    use super::*;
+
+    for (selector, key_env, base_env, base) in [
+        (
+            "deepgram",
+            "DEEPGRAM_API_KEY",
+            "DEEPGRAM_API_BASE",
+            "https://api.deepgram.com",
+        ),
+        (
+            "elevenlabs",
+            "ELEVENLABS_API_KEY",
+            "ELEVENLABS_API_BASE",
+            "https://api.elevenlabs.io",
+        ),
+    ] {
+        let config = ProviderConfig {
+            name: selector.to_string(),
+            provider_type: selector.to_string(),
+            api_key: String::new(),
+            models: vec!["fixture-model".to_string()],
+            ..ProviderConfig::default()
+        };
+        let mut identities = Vec::new();
+        for (key, suffix) in [
+            ("audio-fixture-key-a", "a"),
+            ("audio-fixture-key-b", "a"),
+            ("audio-fixture-key-b", "b"),
+        ] {
+            let endpoint = format!("{base}/fixture-{suffix}");
+            let _env = EnvScope::new(&[(key_env, key), (base_env, &endpoint)]);
+            let normalized = normalize_provider_construction(&config);
+            assert_eq!(normalized.config.api_key, key);
+            assert_eq!(
+                normalized.config.base_url.as_deref(),
+                Some(endpoint.as_str())
+            );
+            let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+                .await
+                .unwrap();
+            let deployment = router
+                .get_deployment(&format!("{selector}-fixture-model"))
+                .unwrap();
+            identities.push(deployment.state.runtime_identity.clone().unwrap());
+            assert!(
+                router
+                    .load_routing_snapshot()
+                    .resolve_legacy_credential("fixture-model", key)
+                    .is_ok()
+            );
+
+            for blank_key in ["", " "] {
+                let mut blank = config.clone();
+                blank
+                    .settings
+                    .insert("api_key".to_string(), blank_key.into());
+                let result = Router::from_gateway_config(&[blank], None).await;
+                assert!(
+                    matches!(result, Err(RouterError::DeploymentNotFound(message)) if message.contains("API key is required")),
+                    "explicit blank settings must preserve the provider error"
+                );
+            }
+
+            let mut null_endpoint = config.clone();
+            null_endpoint
+                .settings
+                .insert("base_url".to_string(), serde_json::Value::Null);
+            assert_eq!(
+                normalize_provider_construction(&null_endpoint)
+                    .config
+                    .base_url
+                    .as_deref(),
+                Some(endpoint.as_str())
+            );
+
+            let mut explicit = config.clone();
+            explicit.api_key = "explicit-audio-fixture".to_string();
+            explicit
+                .settings
+                .insert("api_base".to_string(), format!("{base}/explicit").into());
+            let normalized = normalize_provider_construction(&explicit);
+            assert_eq!(normalized.config.api_key, explicit.api_key);
+            assert!(normalized.config.base_url.is_none());
+            assert_eq!(
+                normalized.config.settings["api_base"],
+                explicit.settings["api_base"]
+            );
+        }
+        assert_ne!(
+            identities[0], identities[1],
+            "credential rotation must retire the prior resource"
+        );
+        assert_ne!(
+            identities[1], identities[2],
+            "endpoint rotation must retire the prior resource"
+        );
+    }
+}
+
+#[cfg(feature = "providers-extra")]
+#[tokio::test]
+async fn vertex_environment_rotations_change_runtime_resource_identity() {
+    use super::*;
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("fixture-a.json");
+    let second = directory.path().join("fixture-b.json");
+    let contents = r#"{"type":"authorized_user","client_id":"fixture-client","client_secret":"fixture-secret","refresh_token":"fixture-refresh"}"#;
+    std::fs::write(&first, contents).unwrap();
+    std::fs::write(&second, contents).unwrap();
+    let config = ProviderConfig {
+        name: "vertex-fixture".to_string(),
+        provider_type: "vertex_ai".to_string(),
+        models: vec!["gemini-2.5-flash".to_string()],
+        ..ProviderConfig::default()
+    };
+    let mut identities = Vec::new();
+    for (project, location, file) in [
+        ("fixture-project-a", "us-central1", &first),
+        ("fixture-project-b", "us-central1", &first),
+        ("fixture-project-b", "europe-west1", &first),
+        ("fixture-project-b", "europe-west1", &second),
+    ] {
+        let file = file.to_str().unwrap();
+        let _env = EnvScope::new(&[
+            ("GOOGLE_CLOUD_PROJECT", project),
+            ("GOOGLE_CLOUD_LOCATION", location),
+            ("GOOGLE_APPLICATION_CREDENTIALS", file),
+        ]);
+        let normalized = normalize_provider_construction(&config);
+        assert_eq!(normalized.config.settings["project_id"], project);
+        assert_eq!(normalized.config.settings["location"], location);
+        assert_eq!(normalized.config.settings["credentials_file"], file);
+        let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        identities.push(
+            router
+                .get_deployment("vertex-fixture-gemini-2.5-flash")
+                .unwrap()
+                .state
+                .runtime_identity
+                .clone()
+                .unwrap(),
+        );
+        let mut explicit = config.clone();
+        explicit.settings = serde_json::from_value(serde_json::json!({"project":"explicit-project", "region":"asia-east1", "access_token":"fixture-direct-token"})).unwrap();
+        let normalized = normalize_provider_construction(&explicit);
+        assert_eq!(normalized.config.settings["project_id"], "explicit-project");
+        assert_eq!(normalized.config.settings["location"], "asia-east1");
+        assert!(
+            !normalized.config.settings.contains_key("credentials_file"),
+            "direct tokens must not acquire an unused environment credential file"
+        );
+    }
+    {
+        let _env = EnvScope::new(&[("GOOGLE_CLOUD_PROJECT", "environment-project")]);
+        let mut explicit = config.clone();
+        explicit.project = Some("top-level-project".into());
+        explicit
+            .settings
+            .insert("access_token".into(), "fixture-direct-token".into());
+        assert_eq!(
+            normalize_provider_construction(&explicit).config.settings["project_id"],
+            "top-level-project"
+        );
+        explicit
+            .settings
+            .insert("project".into(), "settings-project".into());
+        // The direct factory inserts top-level project before merging settings
+        // with entry.or_insert. Compare its effective input with normalization.
+        let direct = crate::core::providers::factory::vertex_resource_config_from_factory(
+            &serde_json::json!({"project": "top-level-project", "access_token": "fixture-direct-token"}),
+        ).unwrap();
+        assert_eq!(
+            normalize_provider_construction(&explicit).config.settings["project_id"],
+            direct.project_id
+        );
+        assert_eq!(direct.project_id, "top-level-project");
+        // The explicit canonical key precedes project in the factory resolver.
+        explicit
+            .settings
+            .insert("project_id".into(), "canonical-project".into());
+        let direct = crate::core::providers::factory::vertex_resource_config_from_factory(
+            &serde_json::json!({"project_id": "canonical-project", "project": "top-level-project", "access_token": "fixture-direct-token"}),
+        ).unwrap();
+        assert_eq!(
+            normalize_provider_construction(&explicit).config.settings["project_id"],
+            direct.project_id
+        );
+        assert_eq!(direct.project_id, "canonical-project");
+    }
+    // The selected path remains the same; credentials held by the new provider change.
+    let _env = EnvScope::new(&[
+        ("GOOGLE_CLOUD_PROJECT", "fixture-project-b"),
+        ("GOOGLE_CLOUD_LOCATION", "europe-west1"),
+        ("GOOGLE_APPLICATION_CREDENTIALS", second.to_str().unwrap()),
+    ]);
+    std::fs::write(
+        &second,
+        contents.replace("fixture-refresh", "fixture-refresh-rotated"),
+    )
+    .unwrap();
+    let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .unwrap();
+    let rotated = router
+        .get_deployment("vertex-fixture-gemini-2.5-flash")
+        .unwrap()
+        .state
+        .runtime_identity
+        .clone()
+        .unwrap();
+    assert_ne!(identities.last().unwrap(), &rotated);
+
+    // Reconstructed replicas must agree even though parsed WIF headers use HashMap.
+    let wif = r#"{"type":"external_account","audience":"fixture-audience","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","token_url":"https://sts.googleapis.com/v1/token","credential_source":{"url":"https://fixture.invalid/token","headers":{"fixture-a":"a","fixture-b":"b"}}}"#;
+    let mut wif_identity = None;
+    for index in 0..6 {
+        let contents = if index % 2 == 0 {
+            wif.to_owned()
+        } else {
+            wif.replace(
+                "\"fixture-a\":\"a\",\"fixture-b\":\"b\"",
+                "\"fixture-b\":\"b\",\"fixture-a\":\"a\"",
+            )
+        };
+        std::fs::write(&second, contents).unwrap();
+        let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        let identity = router
+            .get_deployment("vertex-fixture-gemini-2.5-flash")
+            .unwrap()
+            .state
+            .runtime_identity
+            .clone()
+            .unwrap();
+        if let Some(previous) = &wif_identity {
+            assert_eq!(previous, &identity);
+        }
+        wif_identity = Some(identity);
+    }
+    // A selected file failure keeps the factory's read/parse error; higher-priority
+    // credentials never inspect an unused file.
+    let missing = directory.path().join("missing.json");
+    unsafe { std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &missing) };
+    let error = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, RouterError::DeploymentNotFound(message) if message.contains("failed to read credentials file"))
+    );
+    std::fs::write(&missing, "{invalid").unwrap();
+    let error = Router::from_gateway_config(std::slice::from_ref(&config), None)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, RouterError::DeploymentNotFound(message) if message.contains("invalid credentials file"))
+    );
+    std::fs::remove_file(&missing).unwrap();
+    for credentials in [
+        serde_json::json!({"access_token":"fixture-direct-token"}),
+        serde_json::json!({"credentials_json":contents}),
+    ] {
+        let mut explicit = config.clone();
+        explicit.settings = serde_json::from_value(credentials).unwrap();
+        assert!(Router::from_gateway_config(&[explicit], None).await.is_ok());
+    }
+    for pair in identities.windows(2) {
+        assert_ne!(pair[0], pair[1]);
+    }
+}
+
+#[tokio::test]
+async fn bedrock_environment_rotations_change_runtime_resource_identity() {
+    use super::*;
+    let config = ProviderConfig {
+        name: "bedrock-fixture".to_string(),
+        provider_type: "bedrock".to_string(),
+        api_key: String::new(),
+        models: vec!["anthropic.claude-3-sonnet-20240229-v1:0".to_string()],
+        ..ProviderConfig::default()
+    };
+    let mut identities = Vec::new();
+    for (key, secret, token, region) in [
+        (
+            "AKIA-fixture-a",
+            "fixture-secret-a",
+            "fixture-session-a",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-a",
+            "fixture-session-a",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-b",
+            "fixture-session-a",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-b",
+            "fixture-session-b",
+            "us-east-1",
+        ),
+        (
+            "AKIA-fixture-b",
+            "fixture-secret-b",
+            "fixture-session-b",
+            "us-west-2",
+        ),
+    ] {
+        let _env = EnvScope::new(&[
+            ("AWS_ACCESS_KEY_ID", key),
+            ("AWS_SECRET_ACCESS_KEY", secret),
+            ("AWS_SESSION_TOKEN", token),
+            ("AWS_DEFAULT_REGION", region),
+        ]);
+        let normalized = normalize_provider_construction(&config);
+        let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
+            &serde_json::json!(normalized.config.settings),
+        );
+        assert_eq!(resource.aws_access_key_id, key);
+        assert_eq!(resource.aws_secret_access_key, secret);
+        assert_eq!(resource.aws_session_token.as_deref(), Some(token));
+        assert_eq!(resource.aws_region, region);
+        let router = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        identities.push(
+            router
+                .get_deployment("bedrock-fixture-anthropic.claude-3-sonnet-20240229-v1:0")
+                .unwrap()
+                .state
+                .runtime_identity
+                .clone()
+                .unwrap(),
+        );
+        let mut explicit = config.clone();
+        explicit.settings = serde_json::from_value(serde_json::json!({"access_key":"explicit-fixture", "secret_key":"explicit-secret", "session_token":"explicit-session", "region":"eu-west-1"})).unwrap();
+        let normalized = normalize_provider_construction(&explicit);
+        let resource = crate::core::providers::factory::bedrock_resource_config_from_factory(
+            &serde_json::json!(normalized.config.settings),
+        );
+        assert_eq!(resource.aws_access_key_id, "explicit-fixture");
+        assert_eq!(resource.aws_secret_access_key, "explicit-secret");
+        assert_eq!(
+            resource.aws_session_token.as_deref(),
+            Some("explicit-session")
+        );
+        assert_eq!(resource.aws_region, "eu-west-1");
+    }
+    for pair in identities.windows(2) {
+        assert_ne!(
+            pair[0], pair[1],
+            "changed effective AWS resource must retire prior identity"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bedrock_identity_binds_credentials_read_after_normalization() {
+    use super::*;
+    let _env = EnvScope::new(&[
+        ("AWS_ACCESS_KEY_ID", "AKIA-fixture-key"),
+        ("AWS_SECRET_ACCESS_KEY", "fixture-secret"),
+    ]);
+    let config = ProviderConfig {
+        name: "bedrock-fixture".into(),
+        provider_type: "bedrock".into(),
+        ..ProviderConfig::default()
+    };
+    let normalized = normalize_provider_construction(&config).config;
+    assert!(normalized.settings["aws_session_token"].is_null());
+    let base_identity = GatewayRuntimeIdentity::for_provider(&normalized);
+    let Provider::Bedrock(first) = create_provider(normalized.clone()).await.unwrap() else {
+        panic!("expected Bedrock provider");
+    };
+    let first_digest = first.credential_resource_identity();
+
+    // The public factory's existing fallback can observe a token appearing
+    // after normalization. Identity must bind what this provider actually uses.
+    unsafe { std::env::set_var("AWS_SESSION_TOKEN", "late-fixture-session") };
+    let Provider::Bedrock(second) = create_provider(normalized.clone()).await.unwrap() else {
+        panic!("expected Bedrock provider");
+    };
+    let second_digest = second.credential_resource_identity();
+    assert_eq!(first_digest, first.credential_resource_identity());
+    assert_ne!(
+        base_identity.with_credential_digest(first_digest),
+        base_identity.with_credential_digest(second_digest),
+        "same normalized config must not mask different constructed credentials"
+    );
+
+    // The digest is stable once constructed, even if the environment changes again.
+    unsafe { std::env::remove_var("AWS_SESSION_TOKEN") };
+    assert_eq!(second_digest, second.credential_resource_identity());
+    let Provider::Bedrock(third) = create_provider(normalized).await.unwrap() else {
+        panic!("expected Bedrock provider");
+    };
+    assert_eq!(first_digest, third.credential_resource_identity());
+}
+
 #[cfg(feature = "providers-extended")]
 mod matrix {
     use super::super::*;
+    use super::{ENV_LOCK, ENVS, EnvScope};
     use crate::core::providers::unified_provider::ProviderError;
-    use std::sync::{Mutex, MutexGuard};
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    #[rustfmt::skip]
-    const ENVS: &[&str] = &[
-        "MIMO_API_KEY", "XIAOMI_API_KEY", "CLOUDFLARE_API_TOKEN",
-        "REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "FAL_AI_API_KEY",
-        "COHERE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "GITHUB_TOKEN", "AI21_API_KEY", "HF_TOKEN",
-        "BASETEN_API_KEY", "HEROKU_API_KEY", "INFERENCE_KEY", "EMBEDDING_KEY",
-        "OVHCLOUD_API_KEY", "OVH_AI_ENDPOINTS_ACCESS_TOKEN",
-    ];
     const GEM_TOP: &str = "gem-top-test-api-key-12345678901234567890";
     const GEM_SETTINGS: &str = "gem-settings-test-api-key-12345678901234567890";
     const GEM_GOOGLE: &str = "gem-google-test-api-key-12345678901234567890";
@@ -23,42 +646,6 @@ mod matrix {
         assert!(GEM_TOP.len() >= 20 && GEM_SETTINGS.len() >= 20 && GEM_GOOGLE.len() >= 20);
     const _: () =
         assert!(GEM_SETTING.len() >= 20 && GEM_ENV.len() >= 20 && GEM_GOOGLE_ENV.len() >= 20);
-
-    struct EnvScope {
-        previous: Vec<(&'static str, Option<String>)>,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl EnvScope {
-        fn new(values: &[(&str, &str)]) -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-            let previous = ENVS
-                .iter()
-                .map(|key| (*key, std::env::var(key).ok()))
-                .collect();
-            for key in ENVS {
-                unsafe { std::env::remove_var(key) };
-            }
-            for &(key, value) in values {
-                unsafe { std::env::set_var(key, value) };
-            }
-            Self {
-                previous,
-                _lock: lock,
-            }
-        }
-    }
-
-    impl Drop for EnvScope {
-        fn drop(&mut self) {
-            for (key, value) in self.previous.drain(..).rev() {
-                match value {
-                    Some(value) => unsafe { std::env::set_var(key, value) },
-                    None => unsafe { std::env::remove_var(key) },
-                }
-            }
-        }
-    }
 
     struct Case {
         name: &'static str,
@@ -80,10 +667,12 @@ mod matrix {
     }
 
     async fn run(case: &Case) {
-        let before = ENVS
-            .iter()
-            .map(|key| (*key, std::env::var(key).ok()))
-            .collect::<Vec<_>>();
+        let before = {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+            ENVS.iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect::<Vec<_>>()
+        };
         {
             let _env = EnvScope::new(case.env);
             let mut config = provider(case.name, case.top);
@@ -136,12 +725,13 @@ mod matrix {
                 }
             }
         }
-        assert_eq!(
-            before,
+        let after = {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
             ENVS.iter()
                 .map(|key| (*key, std::env::var(key).ok()))
                 .collect::<Vec<_>>()
-        );
+        };
+        assert_eq!(before, after);
     }
 
     #[tokio::test]
@@ -284,7 +874,10 @@ fn credential_resolver_and_construction_source_guards() {
         gateway,
         "pub(super) async fn from_gateway_config_with_identity(",
     );
-    assert_eq!(canonical.matches("create_provider(").count(), 1);
+    assert_eq!(
+        canonical.matches("create_provider_with_resources(").count(),
+        1
+    );
 
     let construction_entry_points = [
         function(gateway, "pub async fn from_gateway_config("),
@@ -299,7 +892,9 @@ fn credential_resolver_and_construction_source_guards() {
     assert_eq!(
         construction_entry_points
             .iter()
-            .map(|entry_point| entry_point.matches("create_provider(").count())
+            .map(|entry_point| entry_point
+                .matches("create_provider_with_resources(")
+                .count())
             .sum::<usize>(),
         1
     );
@@ -1030,4 +1625,90 @@ async fn model_less_azure_ai_compatible_route_keeps_dynamic_chat() {
             );
         }
     }
+}
+
+#[test]
+fn bedrock_absent_session_token_is_frozen_before_factory_handoff() {
+    use super::*;
+    let _env = EnvScope::new(&[
+        ("AWS_ACCESS_KEY_ID", "fixture-access"),
+        ("AWS_SECRET_ACCESS_KEY", "fixture-secret"),
+    ]);
+    let config = ProviderConfig {
+        name: "bedrock".into(),
+        provider_type: "bedrock".into(),
+        ..Default::default()
+    };
+    let normalized = normalize_provider_construction(&config);
+    let identity = GatewayRuntimeIdentity::for_provider(&normalized.config);
+    unsafe { std::env::set_var("AWS_SESSION_TOKEN", "later-fixture-token") };
+    assert!(
+        normalized
+            .bedrock_resource
+            .unwrap()
+            .aws_session_token
+            .is_none()
+    );
+    assert_eq!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalized.config)
+    );
+    assert_ne!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalize_provider_construction(&config).config)
+    );
+}
+
+#[cfg(feature = "providers-extra")]
+#[test]
+fn vertex_effective_environment_and_file_contents_are_frozen_for_identity() {
+    use super::*;
+    use crate::core::providers::vertex_ai::VertexCredentials;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("credentials.json");
+    let credentials = |secret: &str| {
+        serde_json::json!({"type":"authorized_user", "client_id":"fixture-client", "client_secret":secret, "refresh_token":"fixture-refresh"}).to_string()
+    };
+    std::fs::write(&path, credentials("fixture-secret-a")).unwrap();
+    let _env = EnvScope::new(&[
+        ("GOOGLE_CLOUD_PROJECT", "fixture-project-a"),
+        ("GOOGLE_CLOUD_LOCATION", "us-east1"),
+        ("GOOGLE_APPLICATION_CREDENTIALS", path.to_str().unwrap()),
+    ]);
+    let config = ProviderConfig {
+        name: "vertex_ai".into(),
+        provider_type: "vertex_ai".into(),
+        ..Default::default()
+    };
+    let normalized = normalize_provider_construction(&config);
+    let identity = GatewayRuntimeIdentity::for_provider(&normalized.config);
+    std::fs::write(&path, credentials("fixture-secret-b")).unwrap();
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_PROJECT", "fixture-project-b");
+        std::env::set_var("GOOGLE_CLOUD_LOCATION", "us-west1");
+    }
+    let resource = normalized.vertex_resource.unwrap().unwrap();
+    assert_eq!(resource.project_id, "fixture-project-a");
+    assert_eq!(resource.location, "us-east1");
+    let VertexCredentials::AuthorizedUser(value) = resource.credentials else {
+        panic!("expected file credential")
+    };
+    assert_eq!(value.client_secret, "fixture-secret-a");
+    assert_eq!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalized.config)
+    );
+    assert_ne!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalize_provider_construction(&config).config)
+    );
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_PROJECT", "fixture-project-a");
+        std::env::set_var("GOOGLE_CLOUD_LOCATION", "us-east1");
+    }
+    assert_ne!(
+        identity,
+        GatewayRuntimeIdentity::for_provider(&normalize_provider_construction(&config).config),
+        "same credential path with changed contents must rotate identity"
+    );
 }

@@ -43,7 +43,7 @@ fn test_create_key_config_from_request() {
     assert!(config.description.is_some());
 }
 
-fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
+pub(super) fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
     use crate::core::models::Metadata;
     use crate::core::models::UsageStats;
     use crate::core::models::user::preferences::UserPreferences;
@@ -111,7 +111,7 @@ fn make_api_key(id: Uuid, user_id: Option<Uuid>, team_id: Option<Uuid>) -> ApiKe
     }
 }
 
-async fn auth_enabled_test_state() -> web::Data<AppState> {
+pub(super) async fn auth_enabled_test_state() -> web::Data<AppState> {
     let mut config = crate::config::Config::default();
     config
         .gateway
@@ -358,6 +358,27 @@ fn test_resolve_create_key_scope_admin_can_create_management_key() {
     let request = create_request_with_permissions(Some(KeyPermissions::admin()));
 
     assert!(resolve_create_key_scope(&auth, &request).is_ok());
+}
+
+#[test]
+fn management_permission_aliases_cannot_bypass_admin_grant_checks() {
+    let auth = make_user_auth(make_user(UserRole::User, vec![]));
+    for permission in ["api.keys.list_all", "api.users.manage", "api.config.manage"] {
+        let permissions = KeyPermissions {
+            custom_permissions: vec![permission.to_string()],
+            ..Default::default()
+        };
+        let create = create_request_with_permissions(Some(permissions.clone()));
+        assert!(
+            resolve_create_key_scope(&auth, &create).is_err(),
+            "{permission}"
+        );
+        let update = update_request_with_permissions(Some(permissions));
+        assert!(
+            validate_update_key_permissions(Some(&auth), &update).is_err(),
+            "{permission}"
+        );
+    }
 }
 
 #[test]
@@ -650,8 +671,8 @@ fn test_verify_key_access_preserves_api_key_team_when_user_is_loaded() {
 
     assert!(verify_key_access_allowed(&auth, &target));
     assert!(
-        !check_auth_result_ownership(&auth, target.user_id, target.team_id),
-        "general key routes must retain user-first ownership semantics"
+        check_auth_result_ownership(&auth, target.user_id, target.team_id),
+        "management routes must honor the presented key's explicit team scope"
     );
 }
 

@@ -140,7 +140,7 @@ async fn handle_rerank_with_state(
                                     SettlementMode::Metered,
                                 )
                                 .reserve_call_settle(
-                                    |budget| {
+                                    async |budget| {
                                         super::spend::reserve_pricing_usage_budget_with_request_pricing(
                                             &reserve_pricing,
                                             &reserve_pricing_config,
@@ -148,7 +148,7 @@ async fn handle_rerank_with_state(
                                             budget.provider(),
                                             budget.model(),
                                             &reserve_usage,
-                                        )
+                                        ).await
                                     },
                                     || async move {
                                         let response = voyage
@@ -204,7 +204,7 @@ async fn handle_rerank_with_state(
                             .for_selected(budget_provider, served_model.to_string())
                             .with_settlement_mode(SettlementMode::AvailabilityOnly)
                             .reserve_call_settle(
-                                |_budget| Ok(None),
+                                async |_budget| Ok(None),
                                 || async move {
                                     runtime
                                         .rerank(request)

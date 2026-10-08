@@ -279,6 +279,24 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     pricing_config: &GatewayPricingConfig,
     settlement: UsageSpendSettlement<'_>,
 ) {
+    let facts = settlement.ledger_facts.clone();
+    // Keep the scoped settlement future out of the streaming producer's stack.
+    let work = Box::pin(record_completion_spend_inner(
+        pricing_service,
+        pricing_config,
+        settlement,
+    ));
+    match facts {
+        Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+        None => work.await,
+    }
+}
+
+async fn record_completion_spend_inner(
+    pricing_service: &PricingService,
+    pricing_config: &GatewayPricingConfig,
+    settlement: UsageSpendSettlement<'_>,
+) {
     let UsageSpendSettlement {
         budget_limits,
         key_manager,
@@ -311,6 +329,7 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
     };
 
     let total_tokens = u64::from(usage.total_tokens);
+    super::execution::completion::observe_usage(total_tokens);
     let usage_tokens = pricing_usage.unwrap_or_else(|| PricingUsage::from(usage));
 
     let priced = match request_pricing.as_ref() {
@@ -355,23 +374,30 @@ pub(super) async fn record_completion_spend_with_reservation_with_policy(
         Some(cost),
     );
 
-    if let Some(reservation) = budget_reservation {
-        if let Err(error) = reservation.settle(cost) {
-            tracing::error!(
-                "failed to settle reserved budget for '{provider}'/'{model}': {error:?}; \
-                 spend not recorded because reservation settlement failed"
-            );
-        }
-    } else {
-        budget_limits.record_spend(provider, model, cost);
-    }
     settle_api_key_budget_reservation(key_budget_reservation, cost, &format!("{provider}/{model}"));
-
-    if let Some(key_id) = api_key_id
-        && let Err(e) = key_manager.record_usage(key_id, total_tokens, cost).await
-    {
-        tracing::error!("failed to record usage for key {key_id}: {e}");
-    }
+    let budget_settlement = async {
+        if let Some(reservation) = budget_reservation {
+            if let Err(error) =
+                crate::server::routes::ai::execution::completion::settle_budget(reservation, cost)
+                    .await
+            {
+                tracing::error!(
+                    "failed to settle reserved budget for '{provider}'/'{model}': {error:?}; \
+                 spend not recorded because reservation settlement failed"
+                );
+            }
+        } else {
+            budget_limits.record_spend(provider, model, cost);
+        }
+    };
+    let usage_record = async {
+        if let Some(key_id) = api_key_id
+            && let Err(e) = key_manager.record_usage(key_id, total_tokens, cost).await
+        {
+            tracing::error!("failed to record usage for key {key_id}: {e}");
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
 pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
@@ -383,6 +409,19 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
+    crate::core::request_ledger::update_billing(None, |billing| {
+        billing.charge_basis = Some("reserved_estimate".into());
+        billing.unknown_reason = Some(
+            if context.contains("disconnected") {
+                "stream_cancelled_before_usage"
+            } else {
+                "provider_usage_missing"
+            }
+            .into(),
+        );
+        billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
+    });
+    super::execution::completion::observe_usage(0);
     let provider_reserved = budget_reservation
         .as_ref()
         .map(UnifiedBudgetReservation::reserved_amount);
@@ -405,28 +444,37 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
             "trusted provider usage unavailable; settling reserved spend fallback"
         );
     }
-    if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
-        && let Err(error) = reservation.settle(reserved)
-    {
-        tracing::error!(
-            "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"
-        );
-    }
     if let Some(reservation) = key_budget_reservation {
         settle_api_key_budget_reservation(Some(reservation), recorded_cost.unwrap_or(0.0), context);
     }
-    let Some(recorded_cost) = recorded_cost else {
-        tracing::error!(
-            "{context} for provider '{provider}' model '{model}'; \
-             no positive reserved spend was available, so key usage was not recorded"
-        );
-        return;
+    let budget_settlement = async {
+        if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)
+            && let Err(error) = crate::server::routes::ai::execution::completion::settle_budget(
+                reservation,
+                reserved,
+            )
+            .await
+        {
+            tracing::error!(
+                "failed to settle reserved budget without usage for '{provider}'/'{model}': {error:?}"
+            );
+        }
     };
-    if let Some(key_id) = api_key_id
-        && let Err(error) = key_manager.record_usage(key_id, 0, recorded_cost).await
-    {
-        tracing::error!("failed to record reserved usage for key {key_id}: {error}");
-    }
+    let usage_record = async {
+        let Some(recorded_cost) = recorded_cost else {
+            tracing::error!(
+                "{context} for provider '{provider}' model '{model}'; \
+             no positive reserved spend was available, so key usage was not recorded"
+            );
+            return;
+        };
+        if let Some(key_id) = api_key_id
+            && let Err(error) = key_manager.record_usage(key_id, 0, recorded_cost).await
+        {
+            tracing::error!("failed to record reserved usage for key {key_id}: {error}");
+        }
+    };
+    tokio::join!(budget_settlement, usage_record);
 }
 
 #[cfg(test)]
@@ -505,7 +553,7 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
     }
 
     capture_ledger_settlement(ledger_facts.as_ref(), provider, model, None, None);
-    record_reserved_spend_without_usage(
+    let work = Box::pin(record_reserved_spend_without_usage(
         key_manager,
         api_key_id,
         provider,
@@ -513,8 +561,11 @@ pub(super) async fn record_stream_disconnect_spend_with_reservation_with_policy(
         budget_reservation,
         key_budget_reservation,
         "client disconnected before provider returned usage",
-    )
-    .await;
+    ));
+    match ledger_facts {
+        Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+        None => work.await,
+    }
 }
 
 pub(super) struct StreamSpendSettlement<'a> {
@@ -637,3 +688,7 @@ mod no_usage_tests;
 #[cfg(test)]
 #[path = "spend_runtime_pricing_tests.rs"]
 mod runtime_pricing_tests;
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "spend_cancellation_tests.rs"]
+mod cancellation_tests;

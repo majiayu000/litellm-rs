@@ -6,6 +6,7 @@ use super::types::{ApiKeyVerification, CreateApiKeyRequest};
 use crate::core::models::user::types::User;
 use crate::core::models::{ApiKey, Metadata, UsageStats};
 use crate::storage::StorageLayer;
+use crate::storage::database::SeaOrmTeamRepository;
 use crate::utils::auth::crypto::keys::{extract_api_key_prefix, generate_api_key, hash_api_key};
 use crate::utils::error::gateway_error::{GatewayError, Result};
 use chrono::Utc;
@@ -86,6 +87,8 @@ const LAST_USED_THROTTLE: Duration = Duration::from_secs(5 * 60);
 
 const MISSING_OWNER_REASON: &str = "Associated user was not found";
 const INACTIVE_OWNER_REASON: &str = "Associated user is inactive";
+const MISSING_TEAM_REASON: &str = "Associated team was not found";
+const INACTIVE_TEAM_REASON: &str = "Associated team is inactive";
 
 /// Build the Redis cache key for an API key hash.
 fn api_key_cache_key(key_hash: &str) -> String {
@@ -204,6 +207,29 @@ impl ApiKeyHandler {
         self.storage.db().find_api_key_by_hash(key_hash).await
     }
 
+    /// A key remains valid only while all of its associated principals do.
+    /// Team lifecycle state comes from the same repository as team management;
+    /// no cached key or handler-local state can outlive a committed team change.
+    pub(crate) async fn principal_invalid_reason(
+        &self,
+        api_key: &ApiKey,
+        user: Option<&User>,
+    ) -> Result<Option<&'static str>> {
+        if let Some(reason) = api_key_owner_invalid_reason(api_key, user) {
+            return Ok(Some(reason));
+        }
+        let Some(team_id) = api_key.team_id else {
+            return Ok(None);
+        };
+        let repository = SeaOrmTeamRepository::new(self.storage.database.clone());
+        Ok(match repository.get_for_authentication(team_id).await? {
+            None => Some(MISSING_TEAM_REASON),
+            Some(team) if team.id() != team_id => Some(MISSING_TEAM_REASON),
+            Some(team) if !team.is_active() => Some(INACTIVE_TEAM_REASON),
+            Some(_) => None,
+        })
+    }
+
     /// Invalidate the Redis cache entry for the given key hash.
     pub(super) async fn invalidate_api_key_cache(&self, key_hash: &str) {
         let cache_key = api_key_cache_key(key_hash);
@@ -251,8 +277,12 @@ impl ApiKeyHandler {
             None
         };
 
-        if api_key_owner_invalid_reason(&api_key, user.as_ref()).is_some() {
-            debug!("API key owner is invalid");
+        if self
+            .principal_invalid_reason(&api_key, user.as_ref())
+            .await?
+            .is_some()
+        {
+            debug!("API key principal is invalid");
             return Ok(None);
         }
 
@@ -321,7 +351,10 @@ impl ApiKeyHandler {
             None
         };
 
-        if let Some(reason) = api_key_owner_invalid_reason(&api_key, user.as_ref()) {
+        if let Some(reason) = self
+            .principal_invalid_reason(&api_key, user.as_ref())
+            .await?
+        {
             return Ok(ApiKeyVerification {
                 api_key,
                 user,
@@ -365,6 +398,10 @@ impl ApiKeyHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "creation_team_tests.rs"]
+mod team_tests;
 
 fn api_key_owner_invalid_reason(api_key: &ApiKey, user: Option<&User>) -> Option<&'static str> {
     api_key.user_id?;

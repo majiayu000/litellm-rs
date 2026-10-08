@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::models::request_ledger::RequestLedgerWriteFailure;
 
@@ -13,6 +13,89 @@ tokio::task_local! {
 
 /// Shared mutable facts attached to one in-flight request.
 pub type SharedRequestLedgerFacts = Arc<Mutex<RequestLedgerFacts>>;
+
+/// Accounting facts, distinct from a supplier-verified invoice amount.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RequestBilling {
+    /// Independent scopes enforcing the same request. Never sum these holds.
+    pub provider_reserved_amount: Option<f64>,
+    pub model_reserved_amount: Option<f64>,
+    /// Existing Redis lease identities for operational inspection (not secrets).
+    pub provider_lease_id: Option<String>,
+    pub model_lease_id: Option<String>,
+    /// Independent API key budget hold for the same request.
+    pub key_reserved_amount: Option<f64>,
+    pub reserved_at: Option<DateTime<Utc>>,
+    /// Why the supplier's actual charge is not yet known.
+    pub unknown_reason: Option<String>,
+    pub awaiting_since: Option<DateTime<Utc>>,
+    /// `gateway_pricing`, `reserved_estimate`, or `fallback_pricing`.
+    pub charge_basis: Option<String>,
+    pub provider_charge_amount: Option<f64>,
+    pub model_charge_amount: Option<f64>,
+    pub key_charge_amount: Option<f64>,
+    /// Only acknowledged operations are marked `settled`.
+    pub provider_settlement: Option<String>,
+    pub model_settlement: Option<String>,
+    pub key_settlement: Option<String>,
+    pub settlement_updated_at: Option<DateTime<Utc>>,
+    /// Realtime session subtotal, never a complete actual when a response is unknown/pending.
+    pub known_cost_subtotal: Option<f64>,
+    pub unknown_response_count: Option<u64>,
+    pub pending_response_count: Option<u64>,
+}
+
+impl RequestBilling {
+    /// Verify both independent budget scopes without adding their charges.
+    pub fn requires_budget_review(&self, actual_cost: f64) -> bool {
+        [
+            (
+                self.provider_reserved_amount,
+                self.provider_charge_amount,
+                &self.provider_settlement,
+            ),
+            (
+                self.model_reserved_amount,
+                self.model_charge_amount,
+                &self.model_settlement,
+            ),
+            (
+                self.key_reserved_amount,
+                self.key_charge_amount,
+                &self.key_settlement,
+            ),
+        ]
+        .into_iter()
+        .any(|(reserved, charged, status)| {
+            reserved.is_some()
+                && (status.as_deref() != Some("settled") || charged != Some(actual_cost))
+        })
+    }
+}
+
+/// An administrator's supplier verification; does not alter budget counters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RequestReconciliation {
+    pub verified_actual_cost: f64,
+    /// A receipt/invoice reference, never credentials or response contents.
+    pub evidence_reference: String,
+    pub verified_at: DateTime<Utc>,
+    pub budget_review_required: bool,
+}
+
+/// Update an explicitly captured handle, or the current HTTP task's facts.
+pub fn update_billing(
+    facts: Option<&SharedRequestLedgerFacts>,
+    update: impl FnOnce(&mut RequestBilling),
+) {
+    let handle = facts.cloned().or_else(current_facts);
+    if let Some(handle) = handle {
+        let mut facts = handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        update(facts.billing.get_or_insert_with(RequestBilling::default));
+    }
+}
 
 /// Selected routing and settlement metadata. Never holds bodies or secrets.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -31,6 +114,8 @@ pub struct RequestLedgerFacts {
     pub total_tokens: Option<i64>,
     /// Settled cost in the gateway pricing currency.
     pub cost: Option<f64>,
+    /// Budget responsibility and pending supplier reconciliation.
+    pub billing: Option<RequestBilling>,
 }
 
 impl RequestLedgerFacts {
@@ -58,8 +143,25 @@ impl RequestLedgerFacts {
         if total_tokens.is_some() {
             self.total_tokens = total_tokens;
         }
+        let billing = self.billing.get_or_insert_with(RequestBilling::default);
         if cost.is_some() {
             self.cost = cost;
+            billing.charge_basis = Some("gateway_pricing".into());
+            billing.unknown_reason = None;
+            billing.awaiting_since = None;
+        } else if billing.charge_basis.as_deref() != Some("fallback_pricing") {
+            billing.charge_basis = Some("reserved_estimate".into());
+            billing.unknown_reason = Some(
+                if prompt_tokens.is_some() {
+                    "pricing_unavailable"
+                } else {
+                    "provider_usage_missing"
+                }
+                .into(),
+            );
+        }
+        if cost.is_none() {
+            billing.awaiting_since.get_or_insert_with(Utc::now);
         }
     }
 }
@@ -98,6 +200,8 @@ pub struct RequestLedgerRecord {
     pub total_tokens: Option<i64>,
     /// Settled cost when priced.
     pub cost: Option<f64>,
+    /// Budget responsibility and pending supplier reconciliation.
+    pub billing: Option<RequestBilling>,
     /// Authenticated user id.
     pub user_id: Option<String>,
     /// API key id (never the raw secret).
@@ -251,6 +355,7 @@ mod tests {
             completion_tokens: Some(5),
             total_tokens: Some(8),
             cost: Some(0.01),
+            billing: None,
             user_id: None,
             api_key_id: Some("key-1".to_string()),
             team_id: None,
