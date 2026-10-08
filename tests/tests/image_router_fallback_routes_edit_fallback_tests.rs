@@ -944,31 +944,19 @@ async fn ambiguous_stability_image_submissions_settle_all_budgets() {
 #[cfg(feature = "providers-extended")]
 #[tokio::test]
 async fn definite_connect_failures_cancel_native_image_budgets() {
-    let bfl_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("BFL address should bind");
-    let bfl_address = bfl_listener.local_addr().expect("BFL address should exist");
-    drop(bfl_listener);
-    let stability_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("Stability address should bind");
-    let stability_address = stability_listener
-        .local_addr()
-        .expect("Stability address should exist");
-    drop(stability_listener);
-
+    // Port 0 fails to connect without freeing an address a parallel mock could reuse.
     let state = build_route_policy_test_state_with_pricing(
         vec![
             image_provider(
                 "bfl-primary",
                 "black_forest_labs",
-                &format!("http://{bfl_address}"),
+                "http://127.0.0.1:0",
                 vec!["flux-pro-1.1".to_string()],
             ),
             image_provider(
                 "stability-primary",
                 "stability",
-                &format!("http://{stability_address}"),
+                "http://127.0.0.1:0",
                 vec!["inpaint".to_string()],
             ),
         ],
