@@ -96,6 +96,9 @@ pub async fn audio_speech(
         &state.unified_router(),
         &requested_model,
         ProviderCapability::TextToSpeech,
+        super::super::execution::estimate::usage(&super::budgeting::speech_usage(
+            &speech_request.input,
+        )),
         move |provider, selected_model, _deployment_id| {
             let mut request = speech_request.clone();
             let context = context_for_execution.clone();
@@ -152,7 +155,7 @@ pub async fn audio_speech(
                             let (budget_reservation, key_budget_reservation) =
                                 reservations.into_parts();
                             async move {
-                                let tokens_used = u64::from(settle_usage.total_tokens);
+                                super::super::execution::completion::observe_unknown_usage();
                                 super::budgeting::record_audio_spend(
                                     &settle_request_pricing,
                                     &settle_pricing_config,
@@ -167,7 +170,7 @@ pub async fn audio_speech(
                                     key_budget_reservation,
                                 )
                                 .await;
-                                (response, tokens_used)
+                                (response, 0)
                             }
                         },
                     )

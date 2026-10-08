@@ -87,6 +87,7 @@ async fn stream_budget_completion(case: Case, interrupted: bool, tokens: u32) {
             router.clone(),
             "joint-stream",
             ProviderCapability::ChatCompletionStream,
+            0,
             move |_, _, _| {
                 let call = BudgetedCall::new(
                     limits.clone(),
@@ -332,6 +333,7 @@ async fn cancelled_terminal_wait_finalizes_a_lease_retained_by_its_caller() {
         router.clone(),
         "retained-stream",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_, _, _| async { Ok(()) },
     )
     .await

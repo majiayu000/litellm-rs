@@ -102,20 +102,28 @@ pub(super) async fn run_unary<T, F, Fut>(
     router: &UnifiedRouter,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     operation: F,
 ) -> Result<T, GatewayError>
 where
     F: Fn(Provider, String, String) -> Fut + Clone,
     Fut: Future<Output = Result<(T, u64), ProviderError>>,
 {
-    execution::execute_with_selected_deployment(router, requested_model, capability, operation)
-        .await
+    execution::execute_with_selected_deployment(
+        router,
+        requested_model,
+        capability,
+        estimated_tokens,
+        operation,
+    )
+    .await
 }
 
 pub(super) async fn run_stream<T, F, Fut>(
     router: Arc<UnifiedRouter>,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
 where
@@ -126,6 +134,7 @@ where
         router,
         requested_model,
         capability,
+        estimated_tokens,
         operation,
     )
     .await

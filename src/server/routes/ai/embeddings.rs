@@ -2,6 +2,7 @@
 
 use crate::core::models::openai::{EmbeddingRequest, EmbeddingResponse};
 use crate::core::pricing_service::PricingUsage;
+use crate::core::router::deployment::Deployment;
 use crate::core::types::{
     context::RequestContext, embedding::EmbeddingInput,
     embedding::EmbeddingRequest as CoreEmbeddingRequest, model::ProviderCapability,
@@ -9,11 +10,14 @@ use crate::core::types::{
 use crate::server::state::AppState;
 use crate::utils::error::gateway_error::GatewayError;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::info;
 
-use super::budgeted::{ApiKeyBudgetPolicy, run_unary};
+use super::budgeted::ApiKeyBudgetPolicy;
 use super::callbacks::CallbackLifecycle;
 use super::context::handle_ai_request;
+use super::execution::execute_with_selected_deployment_matching_with_estimator;
 
 enum EmbeddingAttemptResponse {
     Cached(EmbeddingResponse),
@@ -22,6 +26,62 @@ enum EmbeddingAttemptResponse {
         String,
         String,
     ),
+}
+
+struct CachedEmbeddingResponse {
+    deployment: Arc<Deployment>,
+    response: EmbeddingResponse,
+}
+
+/// Freeze each eligible deployment's cache lookup before token admission. A
+/// replacement routing generation must not reuse another instance's cache
+/// decision when deciding whether provider execution can reserve fewer tokens.
+async fn lookup_cached_embedding_candidates(
+    router: &crate::core::router::UnifiedRouter,
+    cache: Option<&crate::core::cache::LLMCache>,
+    request: &EmbeddingRequest,
+    context: &RequestContext,
+) -> HashMap<String, CachedEmbeddingResponse> {
+    let mut cached = HashMap::new();
+    let Some(cache) = cache else {
+        return cached;
+    };
+    let snapshot = router.load_routing_snapshot();
+    let resolved_model = snapshot.resolve_model_name(&request.model);
+    for deployment in snapshot
+        .model_index
+        .get(&resolved_model)
+        .into_iter()
+        .flatten()
+        .filter_map(|id| snapshot.deployments.get(id))
+    {
+        if deployment.model_name != resolved_model
+            || !deployment
+                .provider
+                .supports_capability_for_model(&deployment.model, &ProviderCapability::Embeddings)
+        {
+            continue;
+        }
+        let mut cache_request = request.clone();
+        cache_request.model = deployment.model.clone();
+        if let Some(response) = super::response_cache::lookup_embedding(
+            Some(cache),
+            &cache_request,
+            context,
+            &deployment.id,
+        )
+        .await
+        {
+            cached.insert(
+                deployment.id.clone(),
+                CachedEmbeddingResponse {
+                    deployment: Arc::clone(deployment),
+                    response,
+                },
+            );
+        }
+    }
+    cached
 }
 
 fn parse_embedding_input(input: &serde_json::Value) -> Result<EmbeddingInput, GatewayError> {
@@ -115,10 +175,9 @@ async fn handle_embedding_internal(
         return Err(GatewayError::validation("Model is required"));
     }
     validate_embedding_encoding_format(request.encoding_format.as_deref())?;
-    let response_cache = state.response_cache();
-    let cache_for_execution = response_cache.clone();
+    let runtime = state.pin_runtime();
+    let response_cache = runtime.response_cache.clone();
     let mut request_for_cache = request.clone();
-    let cache_request_for_execution = request.clone();
 
     let requested_model = request.model.clone();
     let core_request = CoreEmbeddingRequest {
@@ -132,6 +191,13 @@ async fn handle_embedding_internal(
     };
 
     let requested_model = core_request.model.clone();
+    let estimated_tokens = u64::from(super::spend::estimate_embedding_input_tokens(
+        &crate::utils::ai::counter::token_counter::TokenizerIdentity::approximate(
+            "gateway",
+            &requested_model,
+        ),
+        &core_request.input,
+    )?);
     let callback = CallbackLifecycle::new_embedding(
         &state.callbacks,
         state.budgeted.pricing(),
@@ -145,15 +211,45 @@ async fn handle_embedding_internal(
     let budgeted = state.budgeted.clone();
     let key_manager = budgeted.key_manager();
     let pricing_service = budgeted.pricing();
-    let pricing_config = state.config().gateway.pricing.clone();
+    let pricing_config = runtime.config.gateway.pricing.clone();
     let callback_for_execution = callback.clone();
-    let router = state.unified_router();
+    let router = Arc::clone(&runtime.unified_router);
     let router_for_execution = router.clone();
-    let core_response = match run_unary(
+    let cached_responses = Arc::new(
+        lookup_cached_embedding_candidates(
+            &router,
+            response_cache.as_deref(),
+            &request_for_cache,
+            &context,
+        )
+        .await,
+    );
+    let cached_for_estimate = Arc::clone(&cached_responses);
+    let core_response = match execute_with_selected_deployment_matching_with_estimator(
         &router,
         &requested_model,
         ProviderCapability::Embeddings,
-        move |provider, selected_model, deployment_id| {
+        move |deployment| {
+            if cached_for_estimate
+                .get(&deployment.id)
+                .is_some_and(|cached| std::ptr::eq(cached.deployment.as_ref(), deployment))
+            {
+                // Preserve existing RPM, parallel, and minimum-token admission
+                // for replay, without reserving provider tokens it cannot use.
+                0
+            } else {
+                estimated_tokens
+            }
+        },
+        |_| true,
+        move |deployment: Arc<Deployment>| {
+            let provider = deployment.provider.clone();
+            let selected_model = deployment.model.clone();
+            let deployment_id = deployment.id.clone();
+            let cached_response = cached_responses
+                .get(&deployment_id)
+                .filter(|cached| Arc::ptr_eq(&cached.deployment, &deployment))
+                .map(|cached| cached.response.clone());
             let router = router_for_execution.clone();
             let core_request = core_request.clone();
             let context = context_for_execution.clone();
@@ -162,9 +258,6 @@ async fn handle_embedding_internal(
             let pricing_service = pricing_service.clone();
             let pricing_config = pricing_config.clone();
             let callback = callback_for_execution.clone();
-            let cache = cache_for_execution.clone();
-            let mut cache_request = cache_request_for_execution.clone();
-            cache_request.model = selected_model.clone();
             async move {
                 let budget_provider = router
                     .configured_provider_name(&deployment_id)
@@ -175,9 +268,7 @@ async fn handle_embedding_internal(
                     &selected_model,
                     ProviderCapability::Embeddings,
                 )?;
-                if let Some(cached) = super::response_cache::lookup_embedding(
-                    cache.as_deref(), &cache_request, &context, &deployment_id,
-                ).await {
+                if let Some(cached) = cached_response {
                     super::response_cache::ensure_embedding_cache_pricing_for_attempt(
                         &request_pricing,
                         &core_request.input,
@@ -232,6 +323,10 @@ async fn handle_embedding_internal(
                                     .as_ref()
                                     .map(|usage| u64::from(usage.total_tokens))
                                     .unwrap_or_default();
+                                match response.usage.as_ref() {
+                                    Some(usage) => super::execution::completion::observe_usage(u64::from(usage.total_tokens)),
+                                    None => super::execution::completion::observe_unknown_usage(),
+                                }
                                 if let Some(usage) = response.usage.as_ref() {
                                     let usage = PricingUsage::from(usage);
                                     super::spend::record_pricing_usage_spend_with_request_pricing(

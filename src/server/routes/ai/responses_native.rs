@@ -202,21 +202,8 @@ async fn create_native(
     )
     .await?;
     let model = state.unified_router().resolve_model_name(&requested_model);
-    let projected = budget_request(&body, &model);
-    let estimated_prompt_tokens = spend::try_estimate_chat_prompt_tokens(
-        &crate::utils::ai::counter::token_counter::TokenizerIdentity::approximate(
-            "responses",
-            &model,
-        ),
-        &projected.messages,
-        None,
-        None,
-        None,
-        None,
-    )?;
-    let estimated_tokens = u64::from(estimated_prompt_tokens)
-        .saturating_add(u64::from(retained_prompt_tokens))
-        .saturating_add(u64::from(projected.max_tokens.unwrap_or(0)));
+    let estimated_tokens =
+        super::execution::estimate::chat(&budget_request(&body, &model), retained_prompt_tokens)?;
     let callback = super::callbacks::CallbackLifecycle::new(
         &state.callbacks,
         state.budgeted.pricing(),
@@ -227,6 +214,7 @@ async fn create_native(
         state.unified_router(),
         &model,
         ProviderCapability::Responses,
+        estimated_tokens,
         |deployment| {
             (!(compact || file_search_calls.is_some()) || matches!(&deployment.provider, crate::core::providers::Provider::OpenAI(_)))
                 && previous.as_ref().is_none_or(|(record, _)| {
@@ -235,7 +223,6 @@ async fn create_native(
             })
         },
         crate::core::router::retry_policy::RequestIdempotency::NonIdempotent,
-        estimated_tokens,
         {
             let context = context.clone();
             let callback = callback.clone();
@@ -503,25 +490,30 @@ async fn create_native(
             })
             .map(|_| ProviderError::api_error("responses", 502, "Upstream response failed"))
     });
-    lease
-        .settle_native_stream(
-            tokens_used,
-            true,
-            terminal_error.as_ref(),
-            settle(
-                state,
-                &context,
-                &provider,
-                &model,
-                pricing,
-                usage.as_ref(),
-                pricing_usage.clone(),
-                reservation,
-                key_reservation,
-                crate::core::request_ledger::current_facts(),
-            ),
-        )
-        .await;
+    let settlement = settle(
+        state,
+        &context,
+        &provider,
+        &model,
+        pricing,
+        usage.as_ref(),
+        pricing_usage.clone(),
+        reservation,
+        key_reservation,
+        crate::core::request_ledger::current_facts(),
+    );
+    if let Some(error) = terminal_error.as_ref() {
+        lease
+            .settle_terminal(tokens_used.unwrap_or(0), Some(error), settlement)
+            .await;
+        lease
+            .complete_response(tokens_used.unwrap_or(0), Some(error))
+            .await;
+    } else {
+        lease
+            .settle_native_stream(tokens_used, true, None, settlement)
+            .await;
+    }
     let value = match value {
         Ok(value) => value,
         Err(error) => {

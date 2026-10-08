@@ -67,6 +67,7 @@ async fn test_unary_temporary_full_pool_exhaustion_preserves_last_budget_error()
         router.as_ref(),
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let router = router.clone();
             let attempts = attempts.clone();
@@ -110,6 +111,7 @@ async fn test_stream_temporary_full_pool_exhaustion_preserves_last_budget_error(
         router.clone(),
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let router = router.clone();
             let attempts = attempts.clone();
@@ -158,6 +160,7 @@ async fn test_unary_newer_soft_error_supersedes_older_hard_exclusion_error() {
         router.as_ref(),
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let router = router.clone();
             let attempts = attempts.clone();
@@ -211,6 +214,7 @@ async fn test_stream_newer_soft_error_supersedes_older_hard_exclusion_error() {
         router.clone(),
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let router = router.clone();
             let attempts = attempts.clone();

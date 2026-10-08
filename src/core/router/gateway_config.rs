@@ -4,6 +4,10 @@
 #[path = "gateway_config_tests.rs"]
 mod gateway_config_tests;
 
+#[cfg(all(test, feature = "providers-extended"))]
+#[path = "gateway_copilot_tests.rs"]
+mod gateway_copilot_tests;
+
 #[cfg(test)]
 #[path = "gateway_alias_tests.rs"]
 mod gateway_alias_tests;
@@ -548,6 +552,70 @@ mod tests {
     assert_not_impl_any!(
         NormalizedProviderConstruction: std::fmt::Debug, std::fmt::Display, serde::Serialize
     );
+
+    #[cfg(feature = "providers-extended")]
+    #[tokio::test]
+    async fn copilot_api_only_reload_retains_live_resource_state() {
+        use crate::core::router::runtime_state::RuntimeStateRegistry;
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("api-key.json");
+        let write = |token: &str| {
+            std::fs::write(
+                &path,
+                serde_json::json!({"token":token,"expires_at":4102444800_u64}).to_string(),
+            )
+            .unwrap();
+        };
+        write("fixture-api-only-a");
+        let config = ProviderConfig {
+            name: "api-only".into(),
+            provider_type: "github_copilot".into(),
+            models: vec!["gpt-4o".into()],
+            settings: HashMap::from([
+                (
+                    "token_dir".into(),
+                    directory.path().display().to_string().into(),
+                ),
+                ("access_token_file".into(), "absent-access".into()),
+                ("api_key_file".into(), "api-key.json".into()),
+            ]),
+            ..Default::default()
+        };
+        let first = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        let live = first.select_deployment_lease_async("gpt-4o").await.unwrap();
+        let id = "api-only-gpt-4o";
+        let deployment = first.get_deployment(id).unwrap();
+        deployment.record_success(15, 1);
+        deployment.enter_cooldown(300);
+        let mut registry = RuntimeStateRegistry::default();
+        registry.remember(&first.load_routing_snapshot());
+        let same = Router::from_gateway_config(std::slice::from_ref(&config), None)
+            .await
+            .unwrap();
+        let same_deployment = same.get_deployment(id).unwrap();
+        assert_eq!(
+            deployment.state.runtime_identity,
+            same_deployment.state.runtime_identity
+        );
+        let retained = registry
+            .find(id, &same_deployment.state)
+            .expect("same API-only account retains its resource state");
+        assert_eq!(retained.active_requests.load(Ordering::Relaxed), 1);
+        assert_eq!(retained.tpm_current.load(Ordering::Relaxed), 15);
+        assert!(retained.cooldown_until.load(Ordering::Relaxed) > 0);
+        write("fixture-api-only-b");
+        let changed = Router::from_gateway_config(&[config], None).await.unwrap();
+        let changed_deployment = changed.get_deployment(id).unwrap();
+        assert_ne!(
+            deployment.state.runtime_identity,
+            changed_deployment.state.runtime_identity
+        );
+        assert!(registry.find(id, &changed_deployment.state).is_none());
+        drop(live);
+    }
 
     fn credential_test_provider(name: &str, api_key: &str) -> ProviderConfig {
         ProviderConfig {

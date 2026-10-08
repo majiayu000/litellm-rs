@@ -70,12 +70,72 @@ pub(super) fn convert_messages_to_anthropic(
                 }));
             }
             Role::Assistant => {
+                let mut content = convert_content_to_anthropic(message.content.as_ref())?;
+                if let Some(calls) = message
+                    .tool_calls
+                    .as_ref()
+                    .filter(|calls| !calls.is_empty())
+                {
+                    let mut blocks = match content {
+                        serde_json::Value::Array(blocks) => blocks,
+                        serde_json::Value::String(text) if !text.is_empty() => {
+                            vec![serde_json::json!({"type": "text", "text": text})]
+                        }
+                        _ => Vec::new(),
+                    };
+                    for call in calls {
+                        if !call.tool_type.eq_ignore_ascii_case("function")
+                            || call.id.trim().is_empty()
+                            || call.function.name.trim().is_empty()
+                        {
+                            return Err(SDKError::InvalidRequest(
+                                "Anthropic tool calls require a function type, ID and name".into(),
+                            ));
+                        }
+                        let input: serde_json::Value = call
+                            .function
+                            .arguments
+                            .as_deref()
+                            .and_then(|arguments| serde_json::from_str(arguments).ok())
+                            .filter(serde_json::Value::is_object)
+                            .ok_or_else(|| {
+                                SDKError::InvalidRequest(
+                                    "Anthropic tool call arguments must be a JSON object".into(),
+                                )
+                            })?;
+                        blocks.push(serde_json::json!({
+                            "type": "tool_use",
+                            "id": call.id,
+                            "name": call.function.name,
+                            "input": input
+                        }));
+                    }
+                    content = serde_json::Value::Array(blocks);
+                }
                 anthropic_messages.push(serde_json::json!({
                     "role": "assistant",
-                    "content": convert_content_to_anthropic(message.content.as_ref())?
+                    "content": content
                 }));
             }
-            _ => {}
+            Role::Tool => {
+                let id = message
+                    .tool_call_id
+                    .as_deref()
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| {
+                        SDKError::InvalidRequest(
+                            "Anthropic tool results require a nonempty tool_call_id".into(),
+                        )
+                    })?;
+                anthropic_messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": id,
+                        "content": convert_content_to_anthropic(message.content.as_ref())?
+                    }]
+                }));
+            }
         }
     }
 
@@ -179,14 +239,66 @@ pub(super) fn convert_anthropic_response(
         .unwrap_or("chatcmpl-anthropic")
         .to_string();
 
-    // Thinking/redacted-thinking blocks may precede or separate text blocks.
-    let content = anthropic_response
+    // Keep tool identities and arguments so the returned assistant message can
+    // be replayed alongside the caller's corresponding tool results.
+    let mut content = String::new();
+    let mut tool_calls = Vec::new();
+    for block in anthropic_response
         .get("content")
         .and_then(|value| value.as_array())
         .into_iter()
         .flatten()
-        .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
-        .collect::<String>();
+    {
+        if block.get("type").and_then(|value| value.as_str()) == Some("tool_use") {
+            let id = block
+                .get("id")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    SDKError::ParseError("Anthropic tool_use requires a nonempty id".to_string())
+                })?;
+            let name = block
+                .get("name")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    SDKError::ParseError("Anthropic tool_use requires a nonempty name".to_string())
+                })?;
+            let input = block
+                .get("input")
+                .filter(|value| value.is_object())
+                .ok_or_else(|| {
+                    SDKError::ParseError(
+                        "Anthropic tool_use input must be a JSON object".to_string(),
+                    )
+                })?;
+            tool_calls.push(ToolCall {
+                id: id.to_string(),
+                tool_type: "function".to_string(),
+                function: Function {
+                    name: name.to_string(),
+                    description: None,
+                    parameters: serde_json::Value::Null,
+                    arguments: Some(serde_json::to_string(input)?),
+                },
+            });
+        } else if let Some(text) = block.get("text").and_then(|value| value.as_str()) {
+            // Thinking/redacted-thinking blocks may separate ordinary text.
+            content.push_str(text);
+        }
+    }
+    let content = if content.is_empty() && !tool_calls.is_empty() {
+        None
+    } else {
+        Some(Content::Text(content))
+    };
+    let tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
+    let finish_reason = anthropic_response
+        .get("stop_reason")
+        .and_then(|value| value.as_str())
+        .map(super::completions::normalize_anthropic_stop_reason)
+        .unwrap_or("stop")
+        .to_string();
 
     let usage = if let Some(u) = anthropic_response.get("usage") {
         Usage {
@@ -209,11 +321,11 @@ pub(super) fn convert_anthropic_response(
             message: Message {
                 tool_call_id: None,
                 role: Role::Assistant,
-                content: Some(Content::Text(content)),
+                content,
                 name: None,
-                tool_calls: None,
+                tool_calls,
             },
-            finish_reason: Some("stop".to_string()),
+            finish_reason: Some(finish_reason),
         }],
         usage,
         created: SystemTime::now()
@@ -226,6 +338,260 @@ pub(super) fn convert_anthropic_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_anthropic_response_preserves_stop_reasons_and_plain_text() {
+        for (stop_reason, expected) in [
+            (Some("end_turn"), "stop"),
+            (Some("max_tokens"), "length"),
+            (Some("tool_use"), "tool_calls"),
+            (Some("stop_sequence"), "stop_sequence"),
+            (Some("pause_turn"), "pause_turn"),
+            (None, "stop"),
+        ] {
+            let mut response = serde_json::json!({
+                "id":"plain-reply", "content":[
+                    {"type":"thinking", "thinking":"internal"},
+                    {"type":"text", "text":"First "},
+                    {"type":"redacted_thinking", "data":"redacted"},
+                    {"type":"text", "text":"second"}
+                ], "usage":{"input_tokens":2, "output_tokens":3}
+            });
+            if let Some(reason) = stop_reason {
+                response["stop_reason"] = serde_json::json!(reason);
+            }
+            let response = convert_anthropic_response(response, "claude-sonnet-4-6").unwrap();
+            let choice = &response.choices[0];
+            assert_eq!(choice.finish_reason.as_deref(), Some(expected));
+            assert!(choice.message.tool_calls.is_none());
+            assert!(matches!(
+                &choice.message.content, Some(Content::Text(text)) if text == "First second"
+            ));
+            assert_eq!(response.usage.total_tokens, 5);
+        }
+    }
+
+    #[test]
+    fn legacy_anthropic_response_rejects_malformed_tool_use() {
+        let mut cases = Vec::new();
+        for field in ["id", "name"] {
+            for value in [
+                None,
+                Some(serde_json::Value::Null),
+                Some(serde_json::json!("")),
+                Some(serde_json::json!("  ")),
+                Some(serde_json::json!(7)),
+            ] {
+                cases.push((field, value));
+            }
+        }
+        for value in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!([])),
+            Some(serde_json::json!("{}")),
+            Some(serde_json::json!(7)),
+        ] {
+            cases.push(("input", value));
+        }
+        for (field, value) in cases {
+            let mut block = serde_json::json!({
+                "type":"tool_use", "id":"tool-a", "name":"weather", "input":{}
+            });
+            if let Some(value) = value {
+                block[field] = value;
+            } else {
+                block.as_object_mut().unwrap().remove(field);
+            }
+            let result = convert_anthropic_response(
+                serde_json::json!({
+                    "content":[{"type":"text", "text":"Checking."}, block],
+                    "stop_reason":"tool_use"
+                }),
+                "claude-sonnet-4-6",
+            );
+            assert!(
+                matches!(result, Err(SDKError::ParseError(_))),
+                "a malformed {field} must not silently discard the tool call"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_anthropic_tool_results_preserve_ids_content_and_errors() {
+        let mut tool = Message::tool_result("call-weather", "sunny");
+        let message = |role, text: &str| Message {
+            tool_call_id: None,
+            role,
+            content: Some(Content::Text(text.into())),
+            name: None,
+            tool_calls: None,
+        };
+        let (system, messages) = convert_messages_to_anthropic(&[
+            message(Role::System, "system"),
+            message(Role::User, "weather?"),
+            tool.clone(),
+            message(Role::Assistant, "sunny today"),
+        ])
+        .unwrap();
+        assert_eq!(system.as_deref(), Some("system"));
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(
+            messages[1],
+            serde_json::json!({
+                "role":"user", "content":[{"type":"tool_result", "tool_use_id":"call-weather", "content":"sunny"}]
+            })
+        );
+        assert_eq!(messages[2]["role"], "assistant");
+
+        tool.content = Some(Content::Multimodal(vec![ContentPart::Text {
+            text: "part result".into(),
+        }]));
+        let (_, messages) = convert_messages_to_anthropic(&[tool.clone()]).unwrap();
+        assert_eq!(
+            messages[0]["content"][0]["content"],
+            serde_json::json!([
+                {"type":"text", "text":"part result"}
+            ])
+        );
+        tool.content = None;
+        let (_, messages) = convert_messages_to_anthropic(&[tool.clone()]).unwrap();
+        assert_eq!(messages[0]["content"][0]["content"], "");
+        tool.content = Some(Content::Multimodal(vec![ContentPart::Image {
+            image_url: ImageUrl {
+                url: "https://example.test/tool.png".into(),
+                detail: None,
+            },
+        }]));
+        assert!(matches!(
+            convert_messages_to_anthropic(&[tool]),
+            Err(SDKError::InvalidRequest(_))
+        ));
+    }
+
+    fn assistant_tool_message() -> Message {
+        serde_json::from_value(serde_json::json!({
+            "role": "assistant", "content": "Checking both cities.",
+            "tool_calls": [
+                {"id": "tool-a", "type": "function", "function": {
+                    "name": "weather", "arguments": "{\"city\":\"Paris\"}"
+                }},
+                {"id": "tool-b", "type": "function", "function": {
+                    "name": "weather", "arguments": "{\"city\":\"東京\"}"
+                }}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn legacy_anthropic_tool_history_preserves_parallel_ids_and_content() {
+        for rich in [false, true] {
+            let mut assistant = assistant_tool_message();
+            if rich {
+                assistant.content = Some(Content::Multimodal(vec![ContentPart::Text {
+                    text: "Checking both cities.".into(),
+                }]));
+            }
+            let mut result = Message::tool_result("tool-a", "18 °C");
+            if rich {
+                result.content = Some(Content::Multimodal(vec![
+                    ContentPart::Text {
+                        text: "18 °C".into(),
+                    },
+                    ContentPart::Image {
+                        image_url: ImageUrl {
+                            url: "data:image/png;base64,iVBORw==".into(),
+                            detail: None,
+                        },
+                    },
+                ]));
+            }
+            let (_, converted) = convert_messages_to_anthropic(&[
+                assistant,
+                result,
+                Message::tool_result("tool-b", ""),
+            ])
+            .unwrap();
+            assert_eq!(converted.len(), 3);
+            assert_eq!(converted[0]["role"], "assistant");
+            assert_eq!(
+                converted[0]["content"],
+                serde_json::json!([
+                    {"type":"text", "text":"Checking both cities."},
+                    {"type":"tool_use", "id":"tool-a", "name":"weather", "input":{"city":"Paris"}},
+                    {"type":"tool_use", "id":"tool-b", "name":"weather", "input":{"city":"東京"}}
+                ])
+            );
+            assert_eq!(converted[1]["role"], "user");
+            assert_eq!(converted[1]["content"][0]["type"], "tool_result");
+            assert_eq!(converted[1]["content"][0]["tool_use_id"], "tool-a");
+            let result_content = &converted[1]["content"][0]["content"];
+            if rich {
+                assert_eq!(
+                    result_content[0],
+                    serde_json::json!({"type":"text", "text":"18 °C"})
+                );
+                assert_eq!(
+                    result_content[1],
+                    serde_json::json!({
+                        "type":"image", "source":{"type":"base64", "media_type":"image/png", "data":"iVBORw=="}
+                    })
+                );
+            } else {
+                assert_eq!(result_content, "18 °C");
+            }
+            assert_eq!(
+                converted[2],
+                serde_json::json!({"role":"user", "content":[{
+                    "type":"tool_result", "tool_use_id":"tool-b", "content":""
+                }]})
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_anthropic_tool_history_rejects_missing_identity_and_invalid_arguments() {
+        for id in [None, Some(""), Some(" \t")] {
+            let mut result = Message::tool_result("tool-a", "value");
+            result.tool_call_id = id.map(str::to_string);
+            assert!(matches!(
+                convert_messages_to_anthropic(&[result]),
+                Err(SDKError::InvalidRequest(_))
+            ));
+        }
+        for arguments in [
+            None,
+            Some(""),
+            Some("{"),
+            Some("[]"),
+            Some("null"),
+            Some("42"),
+        ] {
+            let mut assistant = assistant_tool_message();
+            assistant.tool_calls.as_mut().unwrap()[0].function.arguments =
+                arguments.map(str::to_string);
+            assert!(matches!(
+                convert_messages_to_anthropic(&[assistant]),
+                Err(SDKError::InvalidRequest(_))
+            ));
+        }
+        for field in ["type", "id", "name"] {
+            let mut assistant = assistant_tool_message();
+            let call = &mut assistant.tool_calls.as_mut().unwrap()[0];
+            match field {
+                "type" => call.tool_type = "unsupported".into(),
+                "id" => call.id = " ".into(),
+                "name" => call.function.name.clear(),
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                convert_messages_to_anthropic(&[assistant]),
+                Err(SDKError::InvalidRequest(_))
+            ));
+        }
+    }
 
     #[test]
     fn test_convert_content_to_anthropic_text() {

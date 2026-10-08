@@ -71,6 +71,7 @@ async fn selected_unary_retry_uses_deployment_schedule() {
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, model, _deployment_id| {
@@ -104,6 +105,7 @@ async fn selected_stream_retry_uses_deployment_schedule() {
         router,
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, model, _deployment_id| {
@@ -183,6 +185,7 @@ async fn budget_fallback_ignores_retry_limit_and_keeps_same_provider_candidates(
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _deployment_id| {
@@ -234,6 +237,7 @@ async fn unpriced_model_fallback_skips_candidate_without_recording_failure() {
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, model, _deployment_id| {
@@ -285,6 +289,7 @@ async fn unpriced_model_fallback_returns_model_not_priced_when_all_candidates_fa
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         |_provider, model, _deployment_id| async move {
             Err::<(String, u64), _>(super::super::spend::model_not_priced_error(
                 "openai",
@@ -314,6 +319,7 @@ async fn stream_budget_fallback_ignores_retry_limit() {
         router.clone(),
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _selected_deployment_id| {
@@ -355,6 +361,7 @@ async fn stream_unpriced_fallback_returns_last_model_not_priced_error() {
         router,
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, model, _deployment_id| {

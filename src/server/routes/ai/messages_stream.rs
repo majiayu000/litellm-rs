@@ -7,10 +7,8 @@ use crate::server::guardrails::{GuardrailDecisionSink, messages_projection};
 use crate::server::routes::ai::stream_output_guardrail::StreamOutputGuardrail;
 use actix_web::HttpResponse;
 use bytes::Bytes;
-use futures::StreamExt;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 pub(super) fn response(
     state: AppState,
@@ -245,9 +243,7 @@ pub(super) fn response(
         let usage = (terminal && final_usage && !upstream_failed)
             .then(|| native_usage(&usage, require_inference_geo))
             .flatten();
-        let tokens_used = usage
-            .as_ref()
-            .map_or(0, |u| u64::from(u.normalized.total_tokens));
+        let tokens_used = usage.as_ref().map(|u| u64::from(u.normalized.total_tokens));
         let terminal_error = failure.clone().or_else(|| {
             upstream_failed.then(|| {
                 ProviderError::api_error("anthropic", 502, "Upstream Messages stream failed")
@@ -267,41 +263,29 @@ pub(super) fn response(
             )
             .await;
         };
-        if matches!(
+        let blocked = matches!(
             terminal_error.as_ref(),
             Some(ProviderError::ApiError {
                 provider: "guardrail",
                 ..
             })
-        ) {
-            lease
-                .settle_interrupted(tokens_used, None, settlement)
-                .await;
-        } else if let Some(error) = terminal_error.as_ref() {
-            lease
-                .settle_terminal(tokens_used, Some(error), settlement)
-                .await;
-        } else if terminal {
-            lease.settle_terminal(tokens_used, None, settlement).await;
-        } else {
-            lease
-                .settle_interrupted(tokens_used, None, settlement)
-                .await;
-        }
+        );
+        // The creation POST has been accepted even if its final usage never
+        // arrives. Keep one owner for admission, health and financial settlement.
+        lease
+            .settle_native_stream(
+                tokens_used,
+                terminal && terminal_error.is_none(),
+                if blocked {
+                    None
+                } else {
+                    terminal_error.as_ref()
+                },
+                settlement,
+            )
+            .await;
         if let Some(error) = failure {
             callback.fail(error.to_string(), "stream_error");
-            let blocked = matches!(
-                error,
-                ProviderError::ApiError {
-                    provider: "guardrail",
-                    ..
-                }
-            );
-            if blocked {
-                drop(lease);
-            } else {
-                lease.finish_failure_with_tokens(&error, tokens_used).await;
-            }
             let kind = if blocked {
                 "permission_error"
             } else {
@@ -313,25 +297,12 @@ pub(super) fn response(
                 .await;
         } else if upstream_failed {
             callback.fail("Upstream Messages stream failed", "provider_error");
-            lease
-                .finish_failure_with_tokens(
-                    &ProviderError::api_error("anthropic", 502, "Upstream Messages stream failed"),
-                    tokens_used,
-                )
-                .await;
         } else if terminal {
             callback.complete_pricing_usage(
                 usage.as_ref().map(|u| &u.normalized),
                 usage.as_ref().map(|u| &u.pricing),
                 "success",
             );
-            lease
-                .finish_success(
-                    usage
-                        .as_ref()
-                        .map_or(0, |u| u64::from(u.normalized.total_tokens)),
-                )
-                .await;
         } else {
             callback.fail("Client disconnected", "client_disconnect");
         }
@@ -339,7 +310,7 @@ pub(super) fn response(
     HttpResponse::Ok()
         .insert_header(("content-type", "text/event-stream"))
         .insert_header(("cache-control", "no-cache"))
-        .streaming(ReceiverStream::new(rx).map(Ok::<_, actix_web::Error>))
+        .streaming(super::super::sse_keepalive::channel_body(rx))
 }
 
 fn invalid(message: &str) -> ProviderError {

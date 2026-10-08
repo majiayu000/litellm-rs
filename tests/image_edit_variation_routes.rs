@@ -480,9 +480,11 @@ mod tests {
             "gpt-image-1-mini",
             ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
         );
-        let mut edit_usage = PricingUsage::new(4, 0);
+        // Each fixture uploads one nonempty image and no mask. The existing
+        // high-detail input floor is 1105 for both 9-byte and 16-byte uploads.
+        let mut edit_usage = PricingUsage::new(4 + 1105, 0);
         edit_usage.image_tokens = Some(1024);
-        let mut variation_usage = PricingUsage::new(1, 0);
+        let mut variation_usage = PricingUsage::new(1 + 1105, 0);
         variation_usage.image_tokens = Some(1024);
         let expected_cost = state
             .pricing
@@ -583,6 +585,7 @@ mod tests {
             .get_provider_usage("mock-openai-compatible")
             .expect("provider spend should be recorded")
             .current_spend;
+        eprintln!("image proxy expected={expected_cost:.12} actual_provider={provider_spend:.12}");
         assert!(
             (provider_spend - expected_cost).abs() < f64::EPSILON,
             "image proxy spend must charge image tokens once"
@@ -592,6 +595,7 @@ mod tests {
             .get_model_usage("gpt-image-1-mini")
             .expect("model spend should be recorded")
             .current_spend;
+        eprintln!("image proxy expected={expected_cost:.12} actual_model={model_spend:.12}");
         assert!(
             (model_spend - expected_cost).abs() < f64::EPSILON,
             "image proxy model spend must charge image tokens once"
@@ -670,6 +674,47 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].body, payload);
 
+        mock.stop_image_mock().await;
+    }
+
+    #[tokio::test]
+    async fn malformed_image_multipart_is_rejected_before_forwarding() {
+        let mock = MockImageServer::start_image_mock().await;
+        let state = build_test_state(vec![image_route_provider(&mock.base_url)]).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        let boundary = "malformed-upload";
+        // The model is readable, but the later upload has no closing boundary.
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-1-mini\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\n\r\npng-bytes"
+        );
+        for route in ["/v1/images/edits", "/v1/images/variations"] {
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri(route)
+                    .insert_header((
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    ))
+                    .set_payload(body.clone())
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let error: Value = test::read_body_json(response).await;
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Invalid multipart data")
+            );
+            assert!(mock.requests().is_empty());
+        }
         mock.stop_image_mock().await;
     }
 
@@ -833,4 +878,152 @@ mod tests {
 
     #[path = "image_edit_variation_routes_budget_tests.rs"]
     mod budget_tests;
+
+    #[tokio::test]
+    async fn image_proxy_admission_keeps_image_units_for_priced_and_unpriced_settlement() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        for (priced, variation, padded) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+            (true, true, true),
+        ] {
+            let mock = MockImageServer::start_image_mock().await;
+            let model = if priced {
+                "gpt-image-1-mini"
+            } else {
+                "unpriced-image-admission-fixture"
+            };
+            let mut provider = image_route_provider_with_name_and_models(
+                "image-admission-fixture",
+                &mock.base_url,
+                vec![model.to_string()],
+            );
+            // One upload plus output fits; two pre-fix output-only estimates also fit.
+            provider.tpm = 2140;
+            provider.rpm = 100;
+            provider.max_concurrent_requests = 100;
+            let state = build_test_state(vec![provider]).await;
+            if !priced {
+                let mut config = state.config().as_ref().clone();
+                config.gateway.pricing.unpriced_model_policy =
+                    litellm_rs::config::models::gateway::UnpricedModelPolicy::AllowUnpriced;
+                state.config.store(config);
+            }
+            let mut usage = PricingUsage::new(4, 0);
+            usage.image_tokens = Some(1024);
+            usage.output_image_count = Some(1);
+            assert_eq!(
+                state
+                    .pricing
+                    .calculate_loaded_usage_cost_for_provider("openai", model, &usage)
+                    .is_ok(),
+                priced
+            );
+            let deployment = state
+                .unified_router()
+                .get_deployment(&format!("image-admission-fixture-{model}"))
+                .unwrap();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let boundary = "image-admission-boundary";
+            let body = if variation {
+                image_variation_multipart_body_for_model(boundary, model)
+            } else {
+                image_edit_multipart_body_for_model(boundary, model)
+            };
+            let body = if padded {
+                String::from_utf8(body)
+                    .unwrap()
+                    .replace(
+                        &format!("--{boundary}\r\n"),
+                        &format!("--{boundary} \t\r\n"),
+                    )
+                    .into_bytes()
+            } else {
+                body
+            };
+            let route = if variation {
+                "/v1/images/variations"
+            } else {
+                "/v1/images/edits"
+            };
+            loop {
+                let second = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    % 60;
+                if second < 40 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(61 - second)).await;
+            }
+            let first = tokio::time::timeout(
+                Duration::from_secs(5),
+                test::call_service(
+                    &app,
+                    test::TestRequest::post()
+                        .uri(route)
+                        .insert_header((
+                            "content-type",
+                            format!("multipart/form-data; boundary={boundary}"),
+                        ))
+                        .set_payload(body.clone())
+                        .to_request(),
+                ),
+            )
+            .await
+            .unwrap();
+            let status = first.status();
+            let response: Value = test::read_body_json(first).await;
+            assert_eq!(status, StatusCode::OK, "priced={priced}: {response}");
+            if variation {
+                assert_eq!(response["data"][0]["b64_json"], "dmFyaWF0aW9u");
+            } else {
+                assert_eq!(
+                    response["data"][0]["url"],
+                    "https://images.example.test/edit.png"
+                );
+            }
+            assert_eq!(mock.requests().len(), 1);
+            assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+            // The next denied request and unchanged upstream count verify the retained estimate.
+            assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+            assert_eq!(deployment.state.success_requests.load(Relaxed), 1);
+            assert_eq!(deployment.state.fail_requests.load(Relaxed), 0);
+            assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+            let second = tokio::time::timeout(
+                Duration::from_secs(1),
+                test::call_service(
+                    &app,
+                    test::TestRequest::post()
+                        .uri(route)
+                        .insert_header((
+                            "content-type",
+                            format!("multipart/form-data; boundary={boundary}"),
+                        ))
+                        .set_payload(body)
+                        .to_request(),
+                ),
+            )
+            .await;
+            if let Ok(response) = second {
+                assert!(!response.status().is_success());
+            }
+            assert_eq!(mock.requests().len(), 1);
+            assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+            // The next denied request and unchanged upstream count verify the retained estimate.
+            assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+            assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+            mock.stop_image_mock().await;
+        }
+    }
 }

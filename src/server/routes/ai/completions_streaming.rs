@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+use crate::core::providers::base::sse::invalidates_stream_usage;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::streaming::types::Event;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
@@ -49,6 +50,15 @@ pub(super) async fn handle_streaming_completion(
         adapter_request.prompt = prompt.clone();
     }
     let request = Arc::new(masked);
+    let estimated_tokens = match super::super::execution::estimate::chat_with_key_limit(
+        request.as_ref(),
+        &[],
+        0,
+        context.api_key_max_tokens_per_request(),
+    ) {
+        Ok(tokens) => tokens,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
     let requested_model = request.model.clone();
 
     let core_request = match chat::build_core_chat_request_with_stream_usage(
@@ -171,6 +181,7 @@ pub(super) async fn handle_streaming_completion(
         router_for_stream.clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
+        estimated_tokens,
         start_stream.clone(),
     )
     .await
@@ -209,15 +220,37 @@ pub(super) async fn handle_streaming_completion(
                     #[allow(unused_assignments)]
                     let mut committed = false;
                     let mut retry_block = None;
-                    let mut tokens_used = 0_u64;
-                    let mut final_usage = None;
+                    let mut final_usage: Option<crate::core::types::responses::Usage> = None;
                     let mut saw_upstream_output = false;
+                    // Preserve a known provider failure through guardrail flushing
+                    // or client disconnects that may end this attempt early.
+                    let mut routing_error: Option<ProviderError> = None;
                     macro_rules! settle_if_chargeable {
-                        () => {
-                            if final_usage.is_some() || saw_upstream_output {
-                                settlement.record_disconnect(final_usage.as_ref()).await;
+                        () => {{
+                            if final_usage.is_some()
+                                || saw_upstream_output
+                                || routing_error.as_ref().is_some_and(invalidates_stream_usage)
+                            {
+                                if let Some(lease) = lease.as_mut() {
+                                    lease
+                                        .settle_native_stream(
+                                            final_usage
+                                                .as_ref()
+                                                .map(|usage| u64::from(usage.total_tokens)),
+                                            false,
+                                            routing_error.as_ref(),
+                                            settlement.record_disconnect(final_usage.as_ref()),
+                                        )
+                                        .await;
+                                } else {
+                                    settlement.record_disconnect(final_usage.as_ref()).await;
+                                }
+                            } else if let Some(error) = routing_error.as_ref()
+                                && let Some(lease) = lease.take()
+                            {
+                                lease.finish_failure(error).await;
                             }
-                        };
+                        }};
                     }
                     macro_rules! return_after_guardrail_error {
                         ($error:expr) => {{
@@ -226,10 +259,11 @@ pub(super) async fn handle_streaming_completion(
                                 guardrail_error,
                                 committed,
                             ) {
-                                if let Some(lease) = lease.take() {
-                                    retry_block = Some(lease.deployment_id().to_string());
-                                    drop(lease);
-                                }
+                                retry_block = lease
+                                    .as_ref()
+                                    .map(|lease| lease.deployment_id().to_string());
+                                settle_if_chargeable!();
+                                drop(lease.take());
                                 break;
                             }
                             send_stream_error(
@@ -239,7 +273,6 @@ pub(super) async fn handle_streaming_completion(
                                 guardrail_error.code(),
                             )
                             .await;
-                            drop(lease.take());
                             callback.fail(guardrail_error.message(), "guardrail_output");
                             settle_if_chargeable!();
                             return;
@@ -286,6 +319,10 @@ pub(super) async fn handle_streaming_completion(
                             match timed_result {
                                 Ok(result) => result,
                                 Err(_) => {
+                                    routing_error = Some(ProviderError::timeout(
+                                        "router",
+                                        format!("stream idle timeout after {}s", idle_timeout_secs),
+                                    ));
                                     flush_guardrail!();
                                     warn!(
                                         "Completion SSE stream idle timeout after {}s",
@@ -298,16 +335,6 @@ pub(super) async fn handle_streaming_completion(
                                         "timeout",
                                     )
                                     .await;
-                                    if let Some(lease) = lease.take() {
-                                        let error = ProviderError::timeout(
-                                            "router",
-                                            format!(
-                                                "stream idle timeout after {}s",
-                                                idle_timeout_secs
-                                            ),
-                                        );
-                                        lease.finish_failure(&error).await;
-                                    }
                                     callback.fail(
                                         format!("stream idle timeout after {}s", idle_timeout_secs),
                                         "timeout",
@@ -329,10 +356,6 @@ pub(super) async fn handle_streaming_completion(
                                 if let Some(usage) = &chunk.usage {
                                     final_usage = Some(usage.clone());
                                 }
-                                tokens_used = final_usage
-                                    .as_ref()
-                                    .map(|usage| u64::from(usage.total_tokens))
-                                    .unwrap_or(0);
                                 if chunk.choices.is_empty() && chunk.usage.is_none() {
                                     continue;
                                 }
@@ -363,6 +386,10 @@ pub(super) async fn handle_streaming_completion(
                                 let bytes = match serde_json::to_string(&completion_chunk) {
                                     Ok(json) => Event::default().data(&json).to_bytes(),
                                     Err(error) => {
+                                        routing_error = Some(ProviderError::serialization(
+                                            "router",
+                                            format!("Serialization error: {}", error),
+                                        ));
                                         flush_guardrail!();
                                         error!("Completion stream serialization error: {}", error);
                                         send_stream_error(
@@ -372,13 +399,6 @@ pub(super) async fn handle_streaming_completion(
                                             "internal_error",
                                         )
                                         .await;
-                                        if let Some(lease) = lease.take() {
-                                            let error = ProviderError::serialization(
-                                                "router",
-                                                format!("Serialization error: {}", error),
-                                            );
-                                            lease.finish_failure(&error).await;
-                                        }
                                         callback.fail(
                                             format!("Serialization error: {}", error),
                                             "serialization_error",
@@ -390,15 +410,17 @@ pub(super) async fn handle_streaming_completion(
                                 (output_deltas, bytes)
                             }
                             Err(error) => {
+                                if invalidates_stream_usage(&error) {
+                                    // Earlier usage proves acceptance, but no longer its cost.
+                                    final_usage = None;
+                                }
+                                routing_error = Some(error.clone());
                                 flush_guardrail!();
                                 error!("Completion stream chunk error: {}", error);
                                 let (error_type, error_code) =
                                     chat::sse_error_classification(&error);
                                 send_stream_error(&tx, &error.to_string(), error_type, error_code)
                                     .await;
-                                if let Some(lease) = lease.take() {
-                                    lease.finish_failure(&error).await;
-                                }
                                 callback.fail(error.to_string(), "provider_error");
                                 settle_if_chargeable!();
                                 return;
@@ -439,10 +461,11 @@ pub(super) async fn handle_streaming_completion(
                                 if output_fallback::allow_uncommitted_stream_fallback(
                                     error, committed,
                                 ) {
-                                    if let Some(lease) = lease.take() {
-                                        retry_block = Some(lease.deployment_id().to_string());
-                                        drop(lease);
-                                    }
+                                    retry_block = lease
+                                        .as_ref()
+                                        .map(|lease| lease.deployment_id().to_string());
+                                    settle_if_chargeable!();
+                                    drop(lease.take());
                                 } else {
                                     send_stream_error(
                                         &tx,
@@ -451,7 +474,6 @@ pub(super) async fn handle_streaming_completion(
                                         error.code(),
                                     )
                                     .await;
-                                    drop(lease.take());
                                     callback.fail(error.message(), "guardrail_output");
                                     settle_if_chargeable!();
                                     return;
@@ -466,6 +488,7 @@ pub(super) async fn handle_streaming_completion(
                         current = output_fallback::next_uncommitted_stream(
                             router_for_stream.clone(),
                             ProviderCapability::ChatCompletionStream,
+                            estimated_tokens,
                             &mut fallback_models,
                             &excluded,
                             start_stream.clone(),
@@ -491,23 +514,28 @@ pub(super) async fn handle_streaming_completion(
                         settle_if_chargeable!();
                         return;
                     }
-                    crate::server::routes::ai::execution::settle_stream_terminal(
-                        lease.as_mut(),
-                        tokens_used,
-                        None,
-                        settlement.record_completion(final_usage.as_ref(), saw_upstream_output),
-                    )
-                    .await;
-                    callback.complete_usage(final_usage.as_ref(), "success");
-                    if let Some(lease) = lease.take() {
-                        lease.finish_success(tokens_used).await;
+                    let accounting =
+                        settlement.record_completion(final_usage.as_ref(), saw_upstream_output);
+                    if let Some(lease) = lease.as_mut() {
+                        lease
+                            .settle_native_stream(
+                                final_usage
+                                    .as_ref()
+                                    .map(|usage| u64::from(usage.total_tokens)),
+                                true,
+                                None,
+                                accounting,
+                            )
+                            .await;
+                    } else {
+                        accounting.await;
                     }
+                    callback.complete_usage(final_usage.as_ref(), "success");
                     return;
                 }
             });
 
-            let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx)
-                .map(Ok::<_, actix_web::error::Error>);
+            let sse_stream = super::super::sse_keepalive::channel_body(rx);
             Ok(HttpResponse::Ok()
                 .insert_header((CONTENT_TYPE, "text/event-stream"))
                 .insert_header((CACHE_CONTROL, "no-cache"))

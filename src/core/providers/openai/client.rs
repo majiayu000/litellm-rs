@@ -32,6 +32,7 @@ use super::{
     config::OpenAIConfig,
     models::{OpenAIModelRegistry, get_openai_registry},
 };
+use crate::core::providers::shared::normalize_openai_chat_response_usage;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 
 /// OpenAI Provider implementation using unified architecture
@@ -486,7 +487,8 @@ impl OpenAIProvider {
     }
 
     /// Transform OpenAI response to standard format
-    fn transform_chat_response(&self, response: Value) -> Result<ChatResponse, ProviderError> {
+    fn transform_chat_response(&self, mut response: Value) -> Result<ChatResponse, ProviderError> {
+        normalize_openai_chat_response_usage(&mut response);
         let response: crate::core::providers::openai::models::OpenAIChatResponse =
             serde_json::from_value(response)?;
 

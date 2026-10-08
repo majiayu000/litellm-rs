@@ -91,6 +91,7 @@ async fn proxy_moderation(
             &state.unified_router(),
             &router_model,
             ProviderCapability::Moderation,
+            super::execution::estimate::json_input(&request)?,
             {
                 let request = request.clone();
                 let resolved_model = resolved_model.clone();
@@ -147,7 +148,10 @@ async fn proxy_moderation(
                                         .await
                                         .map_err(moderation_gateway_error_to_provider_error)
                                 },
-                                |response, _reservations, _budget| async move { (response, 0) },
+                                |response, _reservations, _budget| async move {
+                                    super::execution::completion::observe_unknown_usage();
+                                    (response, 0)
+                                },
                             )
                             .await
                     }

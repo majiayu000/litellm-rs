@@ -209,6 +209,53 @@ mod tests {
         build_state_with_config(config).await
     }
 
+    async fn cache_state_without_routing_retries(state: AppState) -> AppState {
+        use litellm_rs::core::router::{RouterConfig, UnifiedRouter};
+
+        let config = state.config();
+        let router = UnifiedRouter::from_gateway_config_with_aliases_and_pricing(
+            &config.gateway.providers,
+            Some(RouterConfig {
+                num_retries: 0,
+                enable_pre_call_checks: false,
+                ..Default::default()
+            }),
+            &config.gateway.model_aliases,
+            Arc::clone(&state.pricing),
+        )
+        .await
+        .expect("cache admission router should initialize");
+        let mut revision = state.pin_runtime().as_ref().clone();
+        revision.unified_router = Arc::new(router);
+        AppState::new_with_runtime(
+            revision,
+            state.auth.as_ref().clone(),
+            state.storage.as_ref().clone(),
+            Arc::clone(&state.pricing),
+            Arc::clone(&state.budget_limits),
+        )
+    }
+
+    async fn cache_admission_minute_guard() {
+        let second = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            % 60;
+        if second >= 40 {
+            tokio::time::sleep(Duration::from_secs(60 - second)).await;
+        }
+    }
+
+    fn set_cache_test_tpm(state: &AppState, model: &str, limit: u64) {
+        let router = state.unified_router();
+        let ids = router.get_deployments_for_model(model);
+        assert_eq!(ids.len(), 1);
+        let mut deployment = router.get_deployment(&ids[0]).unwrap().as_ref().clone();
+        deployment.config.tpm_limit = Some(limit);
+        router.add_deployment(deployment);
+    }
+
     async fn build_openai_compatible_embeddings_state(base_url: &str) -> AppState {
         let mut config = Config::default();
         config.gateway.auth.enable_jwt = false;
@@ -698,6 +745,148 @@ mod tests {
             2,
             "each deployment must execute once, then reuse only its own cached vector"
         );
+    }
+
+    #[tokio::test]
+    async fn test_embedding_cache_hit_preserves_tpm_and_exact_deployment_context() {
+        use actix_web::HttpMessage;
+        use litellm_rs::core::types::context::RequestContext;
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let captured_requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
+        let address = listener.local_addr().unwrap();
+        let captured_for_server = Arc::clone(&captured_requests);
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&captured_for_server)))
+                .route("/embeddings", web::post().to(mock_embeddings))
+        })
+        .listen(listener)
+        .unwrap()
+        .run();
+        let handle = server.handle();
+        let task = tokio::spawn(server);
+        let state = cache_state_without_routing_retries(
+            build_openai_alias_state_with_cache(&format!("http://{address}")).await,
+        )
+        .await;
+        let model = "text-embedding-3-small";
+        set_cache_test_tpm(&state, model, 2_048);
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(routes::ai::configure_routes),
+        )
+        .await;
+        cache_admission_minute_guard().await;
+        let payload = serde_json::json!({
+            "model": model,
+            "input": "embedding cache reservation ".repeat(64),
+            "user": "untrusted-body-user"
+        });
+        let request = |body: &Value, owner: &str| {
+            let req = test::TestRequest::post()
+                .uri("/v1/embeddings")
+                .set_json(body)
+                .to_request();
+            req.extensions_mut()
+                .insert(RequestContext::new().with_user_id(owner));
+            req
+        };
+        let warm = test::call_service(&app, request(&payload, "cache-owner")).await;
+        assert_eq!(warm.status(), StatusCode::OK);
+        let warm_body: Value = test::read_body_json(warm).await;
+        assert_eq!(warm_body["usage"]["total_tokens"], 1);
+        assert_eq!(captured_requests.lock().unwrap().len(), 1);
+        let router = state.unified_router();
+        let id = router.get_deployments_for_model(model).pop().unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 1);
+
+        // One remaining token fits the cache replay minimum, while the long
+        // input still requires the full estimate on every uncached operation.
+        set_cache_test_tpm(&state, model, 2);
+        let replay = test::call_service(&app, request(&payload, "cache-owner")).await;
+        assert_eq!(replay.status(), StatusCode::OK);
+        let replay_body: Value = test::read_body_json(replay).await;
+        assert_eq!(replay_body["data"], warm_body["data"]);
+        assert_eq!(captured_requests.lock().unwrap().len(), 1);
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 1);
+        assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+
+        let mut miss = payload.clone();
+        miss["input"] = serde_json::json!("different uncached embedding input ".repeat(64));
+        for (body, owner) in [(&miss, "cache-owner"), (&payload, "different-owner")] {
+            let denied = test::call_service(&app, request(body, owner)).await;
+            assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let error: Value = test::read_body_json(denied).await;
+            assert_eq!(error["error"]["code"], "provider_unavailable");
+            assert_eq!(captured_requests.lock().unwrap().len(), 1);
+            assert_eq!(deployment.state.tpm_current.load(Relaxed), 1);
+            assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+        }
+
+        // The route stored its selected provider model, not a model-free entry.
+        let cache = state.response_cache().unwrap();
+        let mut cache_request: litellm_rs::core::models::openai::EmbeddingRequest =
+            serde_json::from_value(payload.clone()).unwrap();
+        assert!(
+            cache
+                .get_embedding_response(&cache_request, Some("user:cache-owner"), &id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        cache_request.model = "text-embedding-3-large".to_string();
+        assert!(
+            cache
+                .get_embedding_response(&cache_request, Some("user:cache-owner"), &id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // The old deployment still has a matching cached vector. Replacing
+        // only its ID must not let that entry discount the new deployment's
+        // reservation or become the payload replayed by its operation.
+        let mut replacement = router.get_deployment(&id).unwrap().as_ref().clone();
+        replacement.id = format!("{id}-uncached-replacement");
+        let replacement_id = replacement.id.clone();
+        router.remove_deployment(&id);
+        router.add_deployment(replacement);
+        let denied = test::call_service(&app, request(&payload, "cache-owner")).await;
+        assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let error: Value = test::read_body_json(denied).await;
+        assert_eq!(error["error"]["code"], "provider_unavailable");
+        assert_eq!(captured_requests.lock().unwrap().len(), 1);
+
+        // With enough capacity the replacement must dispatch once, then only
+        // its own exact model/deployment/context entry may be replayed.
+        set_cache_test_tpm(&state, model, 2_048);
+        let admitted = test::call_service(&app, request(&payload, "cache-owner")).await;
+        assert_eq!(admitted.status(), StatusCode::OK);
+        let _: Value = test::read_body_json(admitted).await;
+        assert_eq!(captured_requests.lock().unwrap().len(), 2);
+        let replacement = router.get_deployment(&replacement_id).unwrap();
+        assert_eq!(replacement.state.tpm_current.load(Relaxed), 2);
+        set_cache_test_tpm(&state, model, 3);
+        let replay = test::call_service(&app, request(&payload, "cache-owner")).await;
+        assert_eq!(replay.status(), StatusCode::OK);
+        let _: Value = test::read_body_json(replay).await;
+        assert_eq!(captured_requests.lock().unwrap().len(), 2);
+        assert_eq!(replacement.state.tpm_current.load(Relaxed), 2);
+        assert_eq!(replacement.state.active_requests.load(Relaxed), 0);
+        assert!(
+            captured_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request["model"] == model)
+        );
+
+        handle.stop(true).await;
+        let _ = task.await;
     }
 
     #[tokio::test]

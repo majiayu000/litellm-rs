@@ -52,9 +52,12 @@ pub(super) fn extract_file_fields(
     let mut fields = Vec::new();
 
     loop {
-        let after_boundary = boundary_offset + marker.len();
+        let mut after_boundary = boundary_offset + marker.len();
         if bytes.get(after_boundary..after_boundary + 2) == Some(b"--") {
             return Some(fields);
+        }
+        while matches!(bytes.get(after_boundary), Some(b' ' | b'\t')) {
+            after_boundary += 1;
         }
         if bytes.get(after_boundary..after_boundary + 2) != Some(b"\r\n") {
             return None;
@@ -211,6 +214,24 @@ mod tests {
         );
         assert!(find_bytes(&replaced, binary).is_some());
         assert!(find_bytes(&replaced, b"public-image").is_none());
+    }
+
+    #[test]
+    fn file_extraction_accepts_transport_padding_and_distinguishes_parse_failure() {
+        let content_type = "multipart/form-data; boundary=padded";
+        let body = Bytes::from_static(b"--padded \t\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\n\r\nimage\r\n--padded-- \t\r\n");
+        assert_eq!(
+            extract_file_fields(&body, content_type, "image"),
+            Some(vec![b"image".to_vec()])
+        );
+        assert_eq!(
+            extract_file_fields(&body, content_type, "mask"),
+            Some(vec![])
+        );
+        assert_eq!(
+            extract_file_fields(&body.slice(..body.len() - 15), content_type, "image"),
+            None
+        );
     }
 
     #[test]

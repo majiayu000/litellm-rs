@@ -383,4 +383,91 @@ mod tests {
     mod budget_fallback_tests;
     #[path = "moderations_routes_proxy_selection_tests.rs"]
     mod proxy_selection_tests;
+
+    #[tokio::test]
+    async fn successful_moderation_without_usage_retains_input_admission() {
+        let mock = MockModerationServer::start_moderation_mock().await;
+        let body = json!({
+            "model": "omni-moderation-latest",
+            "input": "moderation quota input ".repeat(8)
+        });
+        let identity =
+            litellm_rs::utils::ai::counter::token_counter::TokenizerIdentity::approximate(
+                "gateway", "default",
+            );
+        let estimate = litellm_rs::utils::ai::counter::token_counter::TokenCounter::new()
+            .count_completion_tokens(&identity, &serde_json::to_string(&body).unwrap())
+            .unwrap()
+            .input_tokens;
+        assert!(estimate > 0);
+        let mut provider =
+            moderation_provider_with_models(&mock.base_url, vec!["omni-moderation-latest".into()]);
+        provider.tpm = estimate;
+        provider.rpm = 100;
+        provider.max_concurrent_requests = 100;
+        let deployment_id = format!("{}-omni-moderation-latest", provider.name);
+        let state = build_test_app_state(vec![provider]).await;
+        let router = state.unified_router();
+        let deployment = router.get_deployment(&deployment_id).unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        loop {
+            let second = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                % 60;
+            if second < 40 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(61 - second)).await;
+        }
+        let response = within(
+            "first quota request",
+            &mock.base_url,
+            test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/moderations")
+                    .set_json(&body)
+                    .to_request(),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let _: Value = test::read_body_json(response).await;
+        assert_eq!(mock.requests().len(), 1);
+        use std::sync::atomic::Ordering::Relaxed;
+        assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+        assert_eq!(deployment.state.success_requests.load(Relaxed), 1);
+        assert_eq!(deployment.state.fail_requests.load(Relaxed), 0);
+        assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+
+        // RPM/parallel limits are nonbinding. A quota retry may wait until the
+        // next minute; cancel that wait after proving no second dispatch.
+        let next = tokio::time::timeout(
+            Duration::from_secs(1),
+            test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/moderations")
+                    .set_json(&body)
+                    .to_request(),
+            ),
+        )
+        .await;
+        if let Ok(response) = next {
+            assert!(!response.status().is_success());
+        }
+        assert_eq!(mock.requests().len(), 1);
+        assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+        assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+        mock.stop_moderation_mock().await;
+    }
 }

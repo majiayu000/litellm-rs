@@ -89,6 +89,7 @@ async fn handle_rerank_with_state(
             &state.unified_router(),
             &router_model,
             ProviderCapability::Rerank,
+            super::execution::estimate::usage(&estimated_rerank_usage(&request)),
             {
                 let request = request.clone();
                 let requested_model = requested_model.clone();
@@ -168,6 +169,7 @@ async fn handle_rerank_with_state(
                                         Ok((response, total_tokens))
                                     },
                                     |(response, total_tokens), reservations, budget| async move {
+                                        super::execution::completion::observe_usage(u64::from(total_tokens));
                                         let usage = PricingUsage::new(total_tokens, 0);
                                         let (budget_reservation, key_budget_reservation) =
                                             reservations.into_parts();
@@ -211,7 +213,23 @@ async fn handle_rerank_with_state(
                                         .await
                                         .map_err(rerank_gateway_error_to_provider_error)
                                 },
-                                |response, _reservations, _budget| async move { (response, 0) },
+                                |response, _reservations, _budget| async move {
+                                    let tokens = response
+                                        .usage
+                                        .as_ref()
+                                        .and_then(|usage| usage.total_tokens)
+                                        .filter(|tokens| *tokens > 0)
+                                        .map(u64::from);
+                                    match tokens {
+                                        Some(tokens) => {
+                                            super::execution::completion::observe_usage(tokens);
+                                        }
+                                        None => {
+                                            super::execution::completion::observe_unknown_usage();
+                                        }
+                                    }
+                                    (response, tokens.unwrap_or(0))
+                                },
                             )
                             .await
                     }

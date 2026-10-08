@@ -113,6 +113,261 @@ async fn legacy_openai_stream_requests_and_preserves_terminal_usage() {
 }
 
 #[tokio::test]
+async fn legacy_anthropic_chat_and_stream_send_tool_history_over_http() {
+    use futures::StreamExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for streaming in [false, true] {
+        for tools in [false, true] {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let mut messages: Vec<Message> = serde_json::from_value(serde_json::json!([
+                    {"role":"system", "content":"Be precise."},
+                    {"role":"user", "content":"Weather?"},
+                    {"role":"assistant", "content":"Checking."}
+                ])).unwrap();
+                let expected_messages = if tools {
+                    messages[2].tool_calls = Some(serde_json::from_value(serde_json::json!([
+                        {"id":"tool-a", "type":"function", "function":{
+                            "name":"weather", "arguments":"{\"city\":\"Paris\"}"
+                        }},
+                        {"id":"tool-b", "type":"function", "function":{
+                            "name":"weather", "arguments":"{\"city\":\"東京\"}"
+                        }}
+                    ])).unwrap());
+                    messages.push(Message::tool_result("tool-a", "18 °C"));
+                    messages.push(Message::tool_result("tool-b", "21 °C"));
+                    serde_json::json!([
+                        {"role":"user", "content":"Weather?"},
+                        {"role":"assistant", "content":[
+                            {"type":"text", "text":"Checking."},
+                            {"type":"tool_use", "id":"tool-a", "name":"weather", "input":{"city":"Paris"}},
+                            {"type":"tool_use", "id":"tool-b", "name":"weather", "input":{"city":"東京"}}
+                        ]},
+                        {"role":"user", "content":[{"type":"tool_result", "tool_use_id":"tool-a", "content":"18 °C"}]},
+                        {"role":"user", "content":[{"type":"tool_result", "tool_use_id":"tool-b", "content":"21 °C"}]}
+                    ])
+                } else {
+                    messages.push(serde_json::from_value(serde_json::json!({
+                        "role":"user", "content":"Please continue."
+                    })).unwrap());
+                    serde_json::json!([
+                        {"role":"user", "content":"Weather?"},
+                        {"role":"assistant", "content":"Checking."},
+                        {"role":"user", "content":"Please continue."}
+                    ])
+                };
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let (body_start, length) = loop {
+                        let mut chunk = [0; 4096];
+                        let count = socket.read(&mut chunk).await.unwrap();
+                        assert_ne!(count, 0, "complete request headers are required");
+                        bytes.extend_from_slice(&chunk[..count]);
+                        if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                            assert!(headers.starts_with("POST /v1/messages HTTP/1.1\r\n"));
+                            let length = headers.lines().find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            }).expect("JSON request has a content length");
+                            break (end + 4, length);
+                        }
+                    };
+                    while bytes.len() < body_start + length {
+                        let mut chunk = [0; 4096];
+                        let count = socket.read(&mut chunk).await.unwrap();
+                        assert_ne!(count, 0, "complete request body is required");
+                        bytes.extend_from_slice(&chunk[..count]);
+                    }
+                    let request: serde_json::Value = serde_json::from_slice(
+                        &bytes[body_start..body_start + length]
+                    ).unwrap();
+                    // Reply only after the actual legacy adapter sent the complete
+                    // paired tool turn (or the unchanged ordinary text control).
+                    assert_eq!(request["messages"], expected_messages);
+                    assert_eq!(request["system"], "Be precise.");
+                    assert_eq!(request["model"], "claude-sonnet-4-6");
+                    assert_eq!(request["stream"].as_bool().unwrap_or(false), streaming);
+                    let (content_type, response_body) = if streaming {
+                        ("text/event-stream", concat!(
+                            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ready\"}}\n\n",
+                            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+                            "event: message_stop\ndata: {}\n\n"
+                        ).to_string())
+                    } else {
+                        ("application/json", serde_json::json!({
+                            "id":"legacy-tool-reply", "content":[{"type":"text", "text":"ready"}],
+                            "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}
+                        }).to_string())
+                    };
+                    socket.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                        response_body.len()
+                    ).as_bytes()).await.unwrap();
+                });
+                let mut provider = test_provider_config("legacy", ProviderType::Anthropic, "claude-sonnet-4-6");
+                provider.base_url = Some(format!("http://{address}"));
+                let client = LLMClient::new(ConfigBuilder::new().add_provider(provider).build()).unwrap();
+                if streaming {
+                    let mut stream = client.chat_stream(messages).await.unwrap();
+                    let mut text = String::new();
+                    while let Some(chunk) = stream.next().await {
+                        for choice in chunk.unwrap().choices {
+                            if let Some(content) = choice.delta.content {
+                                text.push_str(&content);
+                            }
+                        }
+                    }
+                    assert_eq!(text, "ready");
+                } else {
+                    let response = client.chat(messages).await.unwrap();
+                    assert!(matches!(&response.choices[0].message.content, Some(Content::Text(text)) if text == "ready"));
+                }
+                server.await.unwrap();
+            }).await.expect("the local legacy Anthropic exchange must complete");
+        }
+    }
+}
+
+#[tokio::test]
+async fn legacy_anthropic_tool_responses_round_trip_over_http() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for with_text in [false, true] {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let mut assistant_content = Vec::new();
+                if with_text {
+                    assistant_content.push(serde_json::json!({"type":"text", "text":"Checking."}));
+                }
+                assistant_content.extend([
+                    serde_json::json!({
+                        "type":"tool_use", "id":"tool-a", "name":"weather", "input":{"city":"Paris"}
+                    }),
+                    serde_json::json!({
+                        "type":"tool_use", "id":"tool-b", "name":"forecast", "input":{
+                            "city":"東京", "options":{"days":[1,2], "metric":true}, "note":null
+                        }
+                    }),
+                ]);
+                for turn in 0..2 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let (body_start, length) = loop {
+                        let mut chunk = [0; 4096];
+                        let count = socket.read(&mut chunk).await.unwrap();
+                        assert_ne!(count, 0, "complete request headers are required");
+                        bytes.extend_from_slice(&chunk[..count]);
+                        if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                            assert!(headers.starts_with("POST /v1/messages HTTP/1.1\r\n"));
+                            let length = headers.lines().find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            }).expect("JSON request has a content length");
+                            break (end + 4, length);
+                        }
+                    };
+                    while bytes.len() < body_start + length {
+                        let mut chunk = [0; 4096];
+                        let count = socket.read(&mut chunk).await.unwrap();
+                        assert_ne!(count, 0, "complete request body is required");
+                        bytes.extend_from_slice(&chunk[..count]);
+                    }
+                    let request: serde_json::Value = serde_json::from_slice(
+                        &bytes[body_start..body_start + length]
+                    ).unwrap();
+                    assert_eq!(request["system"], "Be precise.");
+                    assert_eq!(request["model"], "claude-sonnet-4-6");
+                    let response = if turn == 0 {
+                        assert_eq!(request["messages"], serde_json::json!([
+                            {"role":"user", "content":"Weather?"}
+                        ]));
+                        serde_json::json!({
+                            "id":"tool-turn", "content":assistant_content,
+                            "stop_reason":"tool_use", "usage":{"input_tokens":2,"output_tokens":3}
+                        })
+                    } else {
+                        // The second request uses the actual SDK response message,
+                        // so losing IDs, names, inputs, or text breaks this exchange.
+                        assert_eq!(request["messages"], serde_json::json!([
+                            {"role":"user", "content":"Weather?"},
+                            {"role":"assistant", "content":assistant_content},
+                            {"role":"user", "content":[{
+                                "type":"tool_result", "tool_use_id":"tool-a", "content":"18 °C"
+                            }]},
+                            {"role":"user", "content":[{
+                                "type":"tool_result", "tool_use_id":"tool-b", "content":"21 °C"
+                            }]}
+                        ]));
+                        serde_json::json!({
+                            "id":"final-turn", "content":[{"type":"text", "text":"Paris 18 °C; 東京 21 °C."}],
+                            "stop_reason":"end_turn", "usage":{"input_tokens":4,"output_tokens":2}
+                        })
+                    }.to_string();
+                    socket.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                        response.len()
+                    ).as_bytes()).await.unwrap();
+                }
+            });
+            let mut provider = test_provider_config("legacy", ProviderType::Anthropic, "claude-sonnet-4-6");
+            provider.base_url = Some(format!("http://{address}"));
+            let client = LLMClient::new(ConfigBuilder::new().add_provider(provider).build()).unwrap();
+            let mut messages: Vec<Message> = serde_json::from_value(serde_json::json!([
+                {"role":"system", "content":"Be precise."},
+                {"role":"user", "content":"Weather?"}
+            ])).unwrap();
+            let first = client.chat(messages.clone()).await.unwrap();
+            assert_eq!(first.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+            assert_eq!(first.usage.total_tokens, 5);
+            let assistant = &first.choices[0].message;
+            assert_eq!(assistant.role, Role::Assistant);
+            if with_text {
+                assert!(matches!(&assistant.content, Some(Content::Text(text)) if text == "Checking."));
+            } else {
+                assert!(assistant.content.is_none());
+            }
+            let calls = assistant.tool_calls.as_ref().unwrap();
+            assert_eq!(calls.len(), 2);
+            for (call, id, name, input) in [
+                (&calls[0], "tool-a", "weather", serde_json::json!({"city":"Paris"})),
+                (&calls[1], "tool-b", "forecast", serde_json::json!({
+                    "city":"東京", "options":{"days":[1,2], "metric":true}, "note":null
+                })),
+            ] {
+                assert_eq!(call.id, id);
+                assert_eq!(call.tool_type, "function");
+                assert_eq!(call.function.name, name);
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(call.function.arguments.as_deref().unwrap()).unwrap(),
+                    input
+                );
+            }
+            messages.push(assistant.clone());
+            messages.push(Message::tool_result(calls[0].id.clone(), "18 °C"));
+            messages.push(Message::tool_result(calls[1].id.clone(), "21 °C"));
+            let final_response = client.chat(messages).await.unwrap();
+            assert_eq!(final_response.choices[0].finish_reason.as_deref(), Some("stop"));
+            assert!(final_response.choices[0].message.tool_calls.is_none());
+            assert!(matches!(
+                &final_response.choices[0].message.content,
+                Some(Content::Text(text)) if text == "Paris 18 °C; 東京 21 °C."
+            ));
+            assert_eq!(final_response.usage.total_tokens, 6);
+            server.await.unwrap();
+        }).await.expect("both local legacy Anthropic turns must complete");
+    }
+}
+
+#[tokio::test]
 async fn test_llm_client_creation() {
     let config = ConfigBuilder::new()
         .add_provider(test_provider_config(

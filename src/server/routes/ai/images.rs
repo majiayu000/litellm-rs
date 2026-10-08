@@ -62,6 +62,7 @@ struct ImageProxyFormFields {
     size: Option<String>,
     quality: Option<String>,
     n: u32,
+    input_image_tokens: u32,
 }
 
 pub async fn image_generations(
@@ -144,7 +145,7 @@ async fn proxy_image_multipart_endpoint(
     let context = ensure_image_route_authorized(state, req)?;
     let content_type = image_multipart_content_type(req)?;
     let body = read_image_multipart_payload(payload).await?;
-    let form_fields = extract_image_proxy_form_fields(&body, &content_type);
+    let form_fields = extract_image_proxy_form_fields(&body, &content_type)?;
     let public_model = required_image_proxy_model(&form_fields)?;
     super::context::enforce_api_key_model_and_token_limits(req, public_model, None)?;
     let requested_model = state.unified_router().resolve_model_name(public_model);
@@ -198,6 +199,7 @@ async fn proxy_image_multipart_endpoint(
             &state.unified_router(),
             &router_model,
             endpoint.capability(),
+            super::execution::estimate::usage(&estimated_image_proxy_admission_usage(&form_fields)),
             move |deployment| {
                 native_edit::deployment_supports_request(
                     &deployment.provider,
@@ -328,6 +330,7 @@ async fn proxy_image_multipart_endpoint(
                         let (budget_reservation, key_budget_reservation) =
                             reservations.into_parts();
 
+                        super::execution::completion::observe_unknown_usage();
                         record_image_proxy_spend(
                             &pricing_config,
                             budget_limits.as_ref(),
@@ -342,11 +345,10 @@ async fn proxy_image_multipart_endpoint(
                             key_budget_reservation,
                         )
                         .await;
-                        let tokens_used = image_proxy_tokens_used(&usage);
                         let response = image_proxy_response_to_http_response(response)
                             .await
                             .map_err(image_proxy_gateway_error_to_provider_error)?;
-                        Ok((response, tokens_used))
+                        Ok((response, 0))
                     }
                 }
             },
@@ -410,6 +412,17 @@ fn estimated_image_proxy_usage(
     pricing_provider: &str,
     pricing_model: &str,
 ) -> PricingUsage {
+    let mut usage = estimated_image_proxy_admission_usage(form_fields);
+    usage.output_image_pricing_keys = pricing_keys::image_pricing_keys(
+        pricing_provider,
+        pricing_model,
+        form_fields.size.as_deref(),
+        form_fields.quality.as_deref(),
+    );
+    usage
+}
+
+fn estimated_image_proxy_admission_usage(form_fields: &ImageProxyFormFields) -> PricingUsage {
     let prompt_tokens = form_fields
         .prompt
         .as_deref()
@@ -420,15 +433,12 @@ fn estimated_image_proxy_usage(
         form_fields.quality.as_deref(),
         form_fields.n,
     );
-    let mut usage = PricingUsage::new(prompt_tokens, 0);
+    let mut usage = PricingUsage::new(
+        prompt_tokens.saturating_add(form_fields.input_image_tokens),
+        0,
+    );
     usage.image_tokens = Some(image_tokens);
     usage.output_image_count = Some(form_fields.n.max(1));
-    usage.output_image_pricing_keys = pricing_keys::image_pricing_keys(
-        pricing_provider,
-        pricing_model,
-        form_fields.size.as_deref(),
-        form_fields.quality.as_deref(),
-    );
     usage
 }
 
@@ -455,19 +465,32 @@ fn estimated_image_output_tokens(size: Option<&str>, quality: Option<&str>, quan
         .saturating_mul(quantity.max(1))
 }
 
-fn extract_image_proxy_form_fields(body: &Bytes, content_type: &str) -> ImageProxyFormFields {
+fn extract_image_proxy_form_fields(
+    body: &Bytes,
+    content_type: &str,
+) -> Result<ImageProxyFormFields, GatewayError> {
     let n = extract_multipart_text_field(body, content_type, "n")
         .and_then(|value| value.parse::<u32>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(1);
 
-    ImageProxyFormFields {
+    let mut input_image_tokens = 0_u32;
+    for name in ["image", "mask"] {
+        let files = multipart::extract_file_fields(body, content_type, name)
+            .ok_or_else(|| GatewayError::validation("Invalid multipart data"))?;
+        for data in files {
+            input_image_tokens =
+                input_image_tokens.saturating_add(super::spend::uploaded_image_tokens(&data));
+        }
+    }
+    Ok(ImageProxyFormFields {
         model: extract_multipart_text_field(body, content_type, "model"),
         prompt: extract_multipart_text_field(body, content_type, "prompt"),
         size: extract_multipart_text_field(body, content_type, "size"),
         quality: extract_multipart_text_field(body, content_type, "quality"),
         n,
-    }
+        input_image_tokens,
+    })
 }
 
 fn ensure_image_route_authorized(
@@ -597,14 +620,6 @@ async fn image_proxy_upstream_error(response: reqwest::Response) -> ProviderErro
     }
 }
 
-fn image_proxy_tokens_used(usage: &PricingUsage) -> u64 {
-    u64::from(
-        usage
-            .total_tokens
-            .saturating_add(usage.image_tokens.unwrap_or(0)),
-    )
-}
-
 fn image_proxy_base_url(provider: &ProviderConfig) -> Result<String, GatewayError> {
     if let Some(base_url) = provider.base_url.as_deref() {
         let trimmed = base_url.trim().trim_end_matches('/');
@@ -720,5 +735,29 @@ impl ImageProxyEndpoint {
             Self::Edits => "edits",
             Self::Variations => "variations",
         }
+    }
+}
+
+#[cfg(test)]
+mod media_usage_tests {
+    use super::*;
+
+    #[test]
+    fn image_upload_only_admission_counts_each_image_and_mask() {
+        let boundary = "upload-only";
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let mut body = Vec::new();
+        for (name, bytes) in [("image", 9000), ("image", 6000), ("mask", 4500)] {
+            body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"input.png\"\r\n\r\n").as_bytes());
+            body.extend(vec![0; bytes]);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        let fields = extract_image_proxy_form_fields(&Bytes::from(body), &content_type).unwrap();
+        assert!(fields.prompt.is_none());
+        let usage = estimated_image_proxy_admission_usage(&fields);
+        assert_eq!(usage.prompt_tokens, 1 + 3000 + 2000 + 1500);
+        assert_eq!(usage.image_tokens, Some(1024));
+        assert_eq!(super::super::execution::estimate::usage(&usage), 7525);
     }
 }

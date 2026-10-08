@@ -22,6 +22,7 @@ use crate::core::audio::types::{
 use crate::core::providers::base::{
     BaseConfig, BaseHttpClient, HeaderPair, HttpErrorMapper, HttpMethod, apply_provider_headers,
 };
+use crate::core::providers::shared::normalize_openai_embedding_response_usage;
 use crate::core::traits::error_mapper::trait_def::ErrorMapper;
 use crate::core::types::embedding::EmbeddingRequest;
 use crate::core::types::image::ImageEditRequest;
@@ -68,11 +69,15 @@ impl OpenAIProvider {
 
         let response_bytes = read_success_response_bytes(response).await?;
 
-        let response_json: Value =
+        let mut response_json: Value =
             serde_json::from_slice(&response_bytes).map_err(|e| OpenAIError::ResponseParsing {
                 provider: "openai",
                 message: e.to_string(),
             })?;
+
+        // Embeddings generate no completion tokens; the standard wire usage
+        // contains only prompt_tokens and total_tokens.
+        normalize_openai_embedding_response_usage(&mut response_json);
 
         // Transform response
         serde_json::from_value(response_json).map_err(|e| OpenAIError::ResponseParsing {

@@ -18,6 +18,8 @@ struct Upstream {
     status: StatusCode,
     broken: bool,
     fault: Arc<Mutex<Option<&'static str>>>,
+    terminal_output_tokens: Arc<Mutex<Option<u32>>>,
+    release_error: Arc<tokio::sync::Notify>,
 }
 fn usage() -> Value {
     json!({"inference_geo":"global","input_tokens":40,"output_tokens":10,"cache_creation_input_tokens":50,"cache_read_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20,"ephemeral_5m_input_tokens":30},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1}})
@@ -54,10 +56,27 @@ async fn upstream(
     result["usage"] = data.reported_usage.lock().unwrap().clone();
     result["model"] = body["model"].clone();
     if body["stream"] == true {
+        use futures::StreamExt;
+        let fault = *data.fault.lock().unwrap();
+        if fault == Some("admission_before_output") {
+            return HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(
+                    futures::stream::once(async {
+                        Ok::<_, std::io::Error>(Bytes::from_static(b": accepted\n\n"))
+                    })
+                    .chain(futures::stream::pending()),
+                );
+        }
+        let terminal_output_tokens = *data.terminal_output_tokens.lock().unwrap();
         let mut first = result;
         first["content"] = json!([]);
         first["stop_reason"] = Value::Null;
-        first["usage"]["output_tokens"] = json!(1);
+        first["usage"]["output_tokens"] = json!(if terminal_output_tokens.is_some() {
+            0
+        } else {
+            1
+        });
         let mut events = vec![
             json!({"type":"message_start","message":first}),
             json!({"type":"ping"}),
@@ -69,11 +88,12 @@ async fn upstream(
         if data.broken {
             events.push(json!({"type":"error","error":{"type":"overloaded_error","message":"Capacity exhausted"}}));
         } else {
-            events.push(json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":5}}));
-            events.push(json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10},"future_event":true}));
+            events.push(json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":terminal_output_tokens.unwrap_or(5)}}));
+            events.push(json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":terminal_output_tokens.unwrap_or(10)},"future_event":true}));
             events.push(json!({"type":"message_stop"}));
         }
         match *data.fault.lock().unwrap() {
+            Some("admission_disconnect" | "admission_error") => events.truncate(4),
             Some("missing_start") => {
                 events.remove(0);
             }
@@ -141,6 +161,32 @@ async fn upstream(
             .chunks(3)
             .map(|chunk| Ok::<_, actix_web::Error>(Bytes::copy_from_slice(chunk)))
             .collect::<Vec<_>>();
+        if matches!(fault, Some("admission_disconnect" | "admission_error")) {
+            let release_error = data.release_error.clone();
+            return HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(futures::stream::iter(chunks).chain(futures::stream::once(async move {
+                    if fault == Some("admission_error") {
+                        release_error.notified().await;
+                        Ok(Bytes::from_static(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"admission fixture failed\"}}\n\n"))
+                    } else {
+                        std::future::pending().await
+                    }
+                })));
+        }
+        if fault == Some("admission_delayed_complete") {
+            return HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(
+                    futures::stream::once(async {
+                        Ok::<_, actix_web::Error>(Bytes::from_static(b": accepted\n\n"))
+                    })
+                    .chain(futures::stream::once(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+                        Ok(Bytes::from(wire))
+                    })),
+                );
+        }
         return HttpResponse::Ok()
             .insert_header(("content-type", "text/event-stream"))
             .streaming(futures::stream::iter(chunks));
@@ -184,6 +230,8 @@ async fn fixture(
         status,
         broken,
         fault: Arc::default(),
+        terminal_output_tokens: Arc::default(),
+        release_error: Arc::default(),
     };
     let data = upstream_state.clone();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1156,4 +1204,553 @@ async fn haiku_five_minute_cache_reservation_uses_write_rate() {
     assert!(upstream.seen.lock().unwrap().is_empty());
     assert_eq!(upstream.counted.lock().unwrap().len(), 1);
     handle.stop(false).await;
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AdmissionCase {
+    FiniteUnknown,
+    FiniteZero,
+    FiniteThree,
+    StreamZero,
+    StreamThree,
+    Disconnect,
+    AcceptedBeforeOutput,
+    FinDisconnect,
+    FinBeforeOutput,
+    HalfClosedWriter,
+    UpstreamError,
+    Guardrail,
+    MissingFinal,
+}
+
+impl AdmissionCase {
+    fn streaming(self) -> bool {
+        !matches!(
+            self,
+            Self::FiniteUnknown | Self::FiniteZero | Self::FiniteThree
+        )
+    }
+
+    fn observed(self) -> Option<u64> {
+        match self {
+            Self::FiniteZero | Self::StreamZero => Some(0),
+            Self::FiniteThree | Self::StreamThree | Self::HalfClosedWriter => Some(3),
+            _ => None,
+        }
+    }
+
+    fn successes(self) -> u64 {
+        u64::from(self.observed().is_some())
+    }
+
+    fn failures(self) -> u64 {
+        u64::from(matches!(
+            self,
+            Self::FiniteUnknown | Self::UpstreamError | Self::MissingFinal
+        ))
+    }
+}
+
+fn admission_request(stream: bool) -> Value {
+    json!({"model":"claude-opus-5","messages":[{"role":"user","content":"Hello"}],"max_tokens":64,"stream":stream})
+}
+
+async fn assert_messages_accounting(
+    deployment: &litellm_rs::core::router::deployment::Deployment,
+    requests: u64,
+    tokens: u64,
+    successes: u64,
+    failures: u64,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let state = &deployment.state;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if (
+                state.active_requests.load(Relaxed),
+                state.rpm_current.load(Relaxed),
+                state.tpm_current.load(Relaxed),
+                state.success_requests.load(Relaxed),
+                state.fail_requests.load(Relaxed),
+                state.total_requests.load(Relaxed),
+            ) == (
+                0,
+                requests,
+                tokens,
+                successes,
+                failures,
+                successes + failures,
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "Messages accounting active={} rpm={} tpm={} success={} failure={} total={}",
+            state.active_requests.load(Relaxed),
+            state.rpm_current.load(Relaxed),
+            state.tpm_current.load(Relaxed),
+            state.success_requests.load(Relaxed),
+            state.fail_requests.load(Relaxed),
+            state.total_requests.load(Relaxed)
+        )
+    });
+}
+
+async fn messages_owned_keys(
+    connection: &mut redis::aio::MultiplexedConnection,
+    deployment: &str,
+) -> (String, String) {
+    let mut cursor = 0_u64;
+    let mut keys = Vec::<String>::new();
+    loop {
+        let (next, found): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(format!("litellm-rs:admission:v1:{deployment}:*"))
+            .arg("COUNT")
+            .arg(100)
+            .query_async(&mut *connection)
+            .await
+            .unwrap();
+        keys.extend(found);
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), 1, "one captured identity for this UUID fixture");
+    let admission = keys.pop().unwrap();
+    let identity = admission.strip_prefix("litellm-rs:admission:v1:").unwrap();
+    let circuit = format!("litellm-rs:circuit:v1:{identity}");
+    (admission, circuit)
+}
+
+async fn assert_messages_shared(
+    connection: &mut redis::aio::MultiplexedConnection,
+    keys: &(String, String),
+    requests: u64,
+    actual: Option<u64>,
+    successes: u64,
+    failures: u64,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let (pending, rpm, tokens): (u64, u64, u64) = redis::cmd("HMGET")
+                .arg(&keys.0)
+                .arg(&["p", "r", "t"])
+                .query_async(&mut *connection)
+                .await
+                .unwrap();
+            if pending == 0 {
+                assert_eq!(rpm, requests);
+                match actual {
+                    Some(actual) => assert_eq!(tokens, actual),
+                    None => assert!(
+                        (65..=128).contains(&tokens),
+                        "retain the complete positive request estimate: {tokens}"
+                    ),
+                }
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shared Messages hold must finish");
+    let (total, failed): (Option<u64>, Option<u64>) = redis::cmd("HMGET")
+        .arg(&keys.1)
+        .arg(&["tot", "fail"])
+        .query_async(&mut *connection)
+        .await
+        .unwrap();
+    assert_eq!(
+        (total.unwrap_or(0), failed.unwrap_or(0)),
+        (successes + failures, failures)
+    );
+    let fields: Vec<String> = redis::cmd("HKEYS")
+        .arg(&keys.0)
+        .query_async(connection)
+        .await
+        .unwrap();
+    assert!(!fields.iter().any(|field| field.starts_with("l:")));
+}
+
+#[tokio::test]
+async fn native_messages_accepted_usage_keeps_tpm_and_classifies_completion_once() {
+    use futures::StreamExt;
+    use litellm_rs::core::guardrails::{GuardrailAction, PIIConfig};
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for shared in [false, true] {
+        let redis_url = if shared {
+            match std::env::var("REDIS_URL") {
+                Ok(url) => Some(url),
+                Err(_) if std::env::var_os("CI").is_some() => panic!("actual Redis required in CI"),
+                Err(_) => {
+                    eprintln!("Skipping shared native Messages cases: REDIS_URL unset");
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        for case in [
+            AdmissionCase::FiniteUnknown,
+            AdmissionCase::FiniteZero,
+            AdmissionCase::FiniteThree,
+            AdmissionCase::StreamZero,
+            AdmissionCase::StreamThree,
+            AdmissionCase::Disconnect,
+            AdmissionCase::AcceptedBeforeOutput,
+            AdmissionCase::FinDisconnect,
+            AdmissionCase::FinBeforeOutput,
+            AdmissionCase::HalfClosedWriter,
+            AdmissionCase::UpstreamError,
+            AdmissionCase::Guardrail,
+            AdmissionCase::MissingFinal,
+        ] {
+            let (state, upstream, upstream_handle) = fixture(StatusCode::OK, false, |config| {
+                config.gateway.providers[0].name =
+                    format!("messages-admission-{}", uuid::Uuid::new_v4());
+                config.gateway.providers[0].tpm = 128;
+                config.gateway.providers[0].rpm = 100;
+                config.gateway.providers[0].max_concurrent_requests = 100;
+                config.gateway.router.load_balancer.health_check_enabled = false;
+                config.gateway.server.stream_idle_timeout = 0;
+                config.gateway.guardrails.enabled = true;
+                config.gateway.guardrails.check_output = true;
+                config.gateway.guardrails.stream_output_check_chars = 1;
+                if matches!(case, AdmissionCase::Guardrail) {
+                    config.gateway.guardrails.pii = Some(PIIConfig {
+                        enabled: true,
+                        action: GuardrailAction::Block,
+                        ..Default::default()
+                    });
+                }
+                if let Some(url) = &redis_url {
+                    config.gateway.storage.redis.enabled = true;
+                    config.gateway.storage.redis.allow_degraded = false;
+                    config.gateway.storage.redis.url = url.clone();
+                }
+            })
+            .await;
+            let usage = case.observed().unwrap_or(3);
+            *upstream.reported_usage.lock().unwrap() =
+                if matches!(case, AdmissionCase::FiniteUnknown) {
+                    Value::Null
+                } else {
+                    json!({"inference_geo":"global","input_tokens":0,"output_tokens":usage})
+                };
+            *upstream.terminal_output_tokens.lock().unwrap() = Some(u32::try_from(usage).unwrap());
+            *upstream.fault.lock().unwrap() = match case {
+                AdmissionCase::Disconnect | AdmissionCase::FinDisconnect => {
+                    Some("admission_disconnect")
+                }
+                AdmissionCase::AcceptedBeforeOutput | AdmissionCase::FinBeforeOutput => {
+                    Some("admission_before_output")
+                }
+                AdmissionCase::HalfClosedWriter => Some("admission_delayed_complete"),
+                AdmissionCase::UpstreamError => Some("admission_error"),
+                AdmissionCase::Guardrail => Some("output_pii"),
+                AdmissionCase::MissingFinal => Some("terminal_missing_usage"),
+                _ => None,
+            };
+            let router = state.unified_router();
+            let ids = router.get_deployments_for_model("claude-opus-5");
+            assert_eq!(ids.len(), 1);
+            let deployment = router.get_deployment(&ids[0]).unwrap();
+            let initial_health = deployment.state.health.load(Relaxed);
+            let mut connection = match &redis_url {
+                Some(url) => Some(
+                    redis::Client::open(url.as_str())
+                        .unwrap()
+                        .get_multiplexed_async_connection()
+                        .await
+                        .unwrap(),
+                ),
+                None => None,
+            };
+            // Both quota implementations use a fixed wall-clock minute.
+            loop {
+                let local = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    % 60;
+                let remote = if let Some(connection) = &mut connection {
+                    let (seconds, _): (u64, u64) =
+                        redis::cmd("TIME").query_async(connection).await.unwrap();
+                    seconds % 60
+                } else {
+                    local
+                };
+                let wait = [local, remote]
+                    .into_iter()
+                    .filter(|second| *second >= 40)
+                    .map(|second| 61 - second)
+                    .max();
+                match wait {
+                    Some(seconds) => tokio::time::sleep(Duration::from_secs(seconds)).await,
+                    None => break,
+                }
+            }
+            deployment.state.reset_minute();
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = HttpServer::new(move || {
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes)
+            })
+            .workers(1)
+            .listen(listener)
+            .unwrap()
+            .run();
+            let gateway_handle = server.handle();
+            let gateway_task = tokio::spawn(server);
+            let endpoint = format!("http://{address}/v1/messages");
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .http1_only()
+                .pool_max_idle_per_host(0)
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap();
+            let body = admission_request(case.streaming());
+            let mut reserved_tokens = None;
+            if matches!(
+                case,
+                AdmissionCase::Disconnect
+                    | AdmissionCase::AcceptedBeforeOutput
+                    | AdmissionCase::FinDisconnect
+                    | AdmissionCase::FinBeforeOutput
+                    | AdmissionCase::HalfClosedWriter
+            ) {
+                let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+                let payload = serde_json::to_vec(&body).unwrap();
+                let header = format!(
+                    "POST /v1/messages HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    payload.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(&payload).await.unwrap();
+                if matches!(case, AdmissionCase::HalfClosedWriter) {
+                    // HTTP permits closing only the request/write half while
+                    // continuing to read the complete streaming response.
+                    socket.shutdown().await.unwrap();
+                }
+                let marker = if matches!(
+                    case,
+                    AdmissionCase::AcceptedBeforeOutput
+                        | AdmissionCase::FinBeforeOutput
+                        | AdmissionCase::HalfClosedWriter
+                ) {
+                    ": accepted"
+                } else {
+                    "思考中"
+                };
+                let mut wire = Vec::new();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !String::from_utf8_lossy(&wire).contains(marker) {
+                        let mut bytes = [0; 4096];
+                        let n = socket.read(&mut bytes).await.unwrap();
+                        assert_ne!(n, 0);
+                        wire.extend_from_slice(&bytes[..n]);
+                    }
+                })
+                .await
+                .expect("real downstream must observe the selected prefix");
+                assert!(String::from_utf8_lossy(&wire).starts_with("HTTP/1.1 200"));
+                assert_eq!(deployment.state.active_requests.load(Relaxed), 1);
+                if matches!(
+                    case,
+                    AdmissionCase::FinDisconnect | AdmissionCase::FinBeforeOutput
+                ) && let Some(connection) = &mut connection
+                {
+                    let keys = messages_owned_keys(connection, &deployment.id).await;
+                    let (pending, rpm, tokens): (u64, u64, u64) = redis::cmd("HMGET")
+                        .arg(&keys.0)
+                        .arg(&["p", "r", "t"])
+                        .query_async(connection)
+                        .await
+                        .unwrap();
+                    assert_eq!((pending, rpm), (1, 1));
+                    assert!((65..=128).contains(&tokens));
+                    reserved_tokens = Some(tokens);
+                }
+                if matches!(case, AdmissionCase::HalfClosedWriter) {
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while !String::from_utf8_lossy(&wire).contains("event: message_stop") {
+                            let mut bytes = [0; 4096];
+                            let n = socket.read(&mut bytes).await.unwrap();
+                            assert_ne!(n, 0, "write-half-close must preserve the reader");
+                            wire.extend_from_slice(&bytes[..n]);
+                        }
+                    })
+                    .await
+                    .expect("idle upstream must complete for a live response reader");
+                    let wire = String::from_utf8(wire).unwrap();
+                    assert!(wire.contains(": keep-alive"), "{wire}");
+                    assert!(wire.contains("思考中"), "{wire}");
+                    assert!(!wire.contains("event: error"), "{wire}");
+                } else if matches!(
+                    case,
+                    AdmissionCase::Disconnect | AdmissionCase::AcceptedBeforeOutput
+                ) {
+                    // Keep the original reset controls. The new FIN cases
+                    // close normally without forcing SO_LINGER=0.
+                    socket2::SockRef::from(&socket)
+                        .set_linger(Some(Duration::ZERO))
+                        .unwrap();
+                }
+                drop(socket);
+            } else {
+                let response = client.post(&endpoint).json(&body).send().await.unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    if matches!(case, AdmissionCase::FiniteUnknown) {
+                        502
+                    } else {
+                        200
+                    },
+                    "{case:?}/{shared}"
+                );
+                let wire = if matches!(case, AdmissionCase::UpstreamError) {
+                    let mut stream = response.bytes_stream();
+                    let mut wire = Vec::new();
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while !String::from_utf8_lossy(&wire).contains("思考中") {
+                            wire.extend_from_slice(
+                                &stream.next().await.expect("output before error").unwrap(),
+                            );
+                        }
+                    })
+                    .await
+                    .unwrap();
+                    assert_eq!(deployment.state.active_requests.load(Relaxed), 1);
+                    upstream.release_error.notify_one();
+                    while let Some(chunk) = stream.next().await {
+                        wire.extend_from_slice(&chunk.unwrap());
+                    }
+                    String::from_utf8(wire).unwrap()
+                } else {
+                    response.text().await.unwrap()
+                };
+                match case {
+                    AdmissionCase::UpstreamError => {
+                        assert!(wire.contains("admission fixture failed"))
+                    }
+                    AdmissionCase::Guardrail => {
+                        assert!(wire.contains("permission_error"));
+                        assert!(!wire.contains("alice@example.com"));
+                    }
+                    AdmissionCase::MissingFinal => {
+                        assert!(wire.contains("event: error"));
+                        assert!(!wire.contains("event: message_stop"));
+                    }
+                    AdmissionCase::StreamZero | AdmissionCase::StreamThree => {
+                        assert!(wire.contains("event: message_stop"))
+                    }
+                    _ => {}
+                }
+            }
+            let observed = case.observed();
+            let successes = case.successes();
+            let failures = case.failures();
+            assert_messages_accounting(&deployment, 1, observed.unwrap_or(0), successes, failures)
+                .await;
+            assert!(
+                deployment.is_healthy(),
+                "quota probe must not be blocked by health"
+            );
+            assert_eq!(deployment.state.cooldown_until.load(Relaxed), 0);
+            if successes == 0 && failures == 0 {
+                assert_eq!(deployment.state.health.load(Relaxed), initial_health);
+            }
+            assert_eq!(upstream.seen.lock().unwrap().len(), 1);
+            let keys = if let Some(connection) = &mut connection {
+                let keys = messages_owned_keys(connection, &deployment.id).await;
+                assert_messages_shared(connection, &keys, 1, observed, successes, failures).await;
+                if observed.is_none()
+                    && let Some(reserved) = reserved_tokens
+                {
+                    let tokens: u64 = redis::cmd("HGET")
+                        .arg(&keys.0)
+                        .arg("t")
+                        .query_async(connection)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        tokens, reserved,
+                        "accepted idle disconnect retains the whole E"
+                    );
+                }
+                Some(keys)
+            } else {
+                None
+            };
+            // A clean next finite request proves TPM retention independently of
+            // output guardrails, malformed upstream data, RPM or occupied slots.
+            *upstream.fault.lock().unwrap() = None;
+            *upstream.reported_usage.lock().unwrap() = json!({"inference_geo":"global","input_tokens":0,"output_tokens":observed.unwrap_or(0)});
+            let next = tokio::time::timeout(
+                Duration::from_secs(if observed.is_some() { 5 } else { 1 }),
+                client
+                    .post(&endpoint)
+                    .json(&admission_request(false))
+                    .send(),
+            )
+            .await;
+            let completed = if observed.is_some() {
+                let next = next
+                    .expect("known usage must admit the second request")
+                    .unwrap();
+                assert_eq!(next.status().as_u16(), 200);
+                let _: Value = next.json().await.unwrap();
+                2
+            } else {
+                assert!(
+                    next.is_err(),
+                    "unknown usage must prevent the next dispatch: {case:?}/{shared}"
+                );
+                1
+            };
+            assert_eq!(upstream.seen.lock().unwrap().len(), completed as usize);
+            assert_messages_accounting(
+                &deployment,
+                completed,
+                observed.unwrap_or(0) * completed,
+                successes + completed - 1,
+                failures,
+            )
+            .await;
+            if let (Some(connection), Some(keys)) = (&mut connection, &keys) {
+                assert_messages_shared(
+                    connection,
+                    keys,
+                    completed,
+                    observed.map(|tokens| tokens * completed),
+                    successes + completed - 1,
+                    failures,
+                )
+                .await;
+                let _: i64 = redis::cmd("DEL")
+                    .arg(&[&keys.0, &keys.1])
+                    .query_async(connection)
+                    .await
+                    .unwrap();
+            }
+            gateway_handle.stop(false).await;
+            gateway_task.await.unwrap().unwrap();
+            upstream_handle.stop(false).await;
+        }
+    }
 }

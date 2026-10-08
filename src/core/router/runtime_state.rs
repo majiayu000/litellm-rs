@@ -1,6 +1,7 @@
 //! Stable resource identity for gateway runtime revisions.
 
 use crate::config::models::provider::ProviderConfig;
+use crate::core::providers::{provider_type::ProviderType, registry as provider_registry};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
@@ -21,16 +22,159 @@ impl GatewayRuntimeIdentity {
     /// Routing policy, tags, limits, model lists and probe policy are excluded:
     /// editing those must not reset the underlying resource's quota state.
     pub(super) fn for_provider(config: &ProviderConfig) -> Self {
+        let mut settings = config.settings.clone();
+        let selector = config.effective_provider_selector();
+        let entry = provider_registry::entry_for_name(selector);
+        let catalog = match entry {
+            Some(entry) => {
+                entry.dispatch_kind == provider_registry::ProviderDispatchKind::CatalogOpenAiLike
+            }
+            None => {
+                provider_registry::get_definition(&selector.trim().to_ascii_lowercase()).is_some()
+            }
+        };
+        // The common factory inputs are execution policy for every known
+        // native/catalog provider. Unknown selectors retain every setting.
+        if entry.is_some() || catalog {
+            settings.remove("timeout");
+            settings.remove("max_retries");
+        }
+        // Match the options actually consumed by each factory builder. Never
+        // drop unknown keys globally: account selectors, headers, proxies,
+        // model mappings and endpoint/credential inputs remain resource facts.
+        let behavior_keys: &[&str] = match ProviderType::from(selector) {
+            ProviderType::Anthropic => &[
+                "connect_timeout",
+                "retry_delay_base",
+                "enable_multimodal",
+                "enable_cache_control",
+                "enable_computer_use",
+                "enable_experimental",
+                "allow_unknown_models",
+                "models",
+                "multimodal_models",
+            ],
+            ProviderType::Gemini => &[
+                "connect_timeout",
+                "retry_delay_ms",
+                "enable_caching",
+                "cache_ttl_seconds",
+                "enable_search_grounding",
+                "debug",
+            ],
+            ProviderType::Cloudflare => &["debug"],
+            ProviderType::Bedrock => &["timeout_seconds"],
+            ProviderType::VertexAI => &["enable_experimental"],
+            ProviderType::GitHubCopilot => &["disable_system_to_assistant", "debug"],
+            ProviderType::Cohere => &["timeout_seconds", "default_embedding_input_type"],
+            ProviderType::FalAI => &["output_format", "sync_mode"],
+            ProviderType::Replicate => &[
+                "timeout_seconds",
+                "polling_delay_seconds",
+                "polling_retries",
+                "use_streaming",
+            ],
+            ProviderType::Ollama => &[
+                "debug",
+                "mirostat",
+                "mirostat_eta",
+                "mirostat_tau",
+                "num_ctx",
+                "num_gqa",
+                "num_gpu",
+                "num_thread",
+                "repeat_last_n",
+                "repeat_penalty",
+                "tfs_z",
+                "system",
+                "template",
+                "keep_alive",
+            ],
+            ProviderType::OpenAICompatible => &["pass_through_params"],
+            _ if catalog => &["pass_through_params"],
+            _ => &[],
+        };
+        for key in behavior_keys {
+            settings.remove(*key);
+        }
+        let mut endpoint = config.base_url.as_deref();
+        let mut api_key = serde_json::json!(config.api_key);
+        let mut api_version = serde_json::json!(config.api_version);
+        let mut organization = serde_json::json!(config.organization);
+        let mut project = serde_json::json!(config.project);
+        if entry.is_some() || catalog {
+            use crate::core::providers::factory::{
+                configured_endpoint_for_keys, endpoint_keys_for_selector,
+            };
+            let endpoint_keys = endpoint_keys_for_selector(selector);
+            endpoint = configured_endpoint_for_keys(
+                config.base_url.as_deref(),
+                &config.settings,
+                endpoint_keys,
+            );
+            if matches!(ProviderType::from(selector), ProviderType::Databricks) {
+                // The enterprise builder renames generic aliases with
+                // entry(...).or_insert(...), so an explicit workspace_url
+                // wins even over the top-level base_url. Hash that workspace
+                // before discarding the aliases it shadows.
+                endpoint = config
+                    .settings
+                    .get("workspace_url")
+                    .and_then(serde_json::Value::as_str)
+                    .or(endpoint);
+            }
+            for key in endpoint_keys {
+                settings.remove(*key);
+            }
+            for (key, top, effective) in [
+                ("api_key", Some(config.api_key.as_str()), &mut api_key),
+                (
+                    "api_version",
+                    config.api_version.as_deref(),
+                    &mut api_version,
+                ),
+                (
+                    "organization",
+                    config.organization.as_deref(),
+                    &mut organization,
+                ),
+                ("project", config.project.as_deref(), &mut project),
+            ] {
+                let setting = settings.remove(key);
+                *effective = if catalog && matches!(key, "api_version" | "organization") {
+                    setting
+                        .filter(|value| {
+                            value.as_str().is_some_and(|value| !value.trim().is_empty())
+                        })
+                        .or_else(|| {
+                            top.filter(|value| !value.trim().is_empty())
+                                .map(|value| serde_json::json!(value))
+                        })
+                } else {
+                    top.filter(|value| !value.is_empty())
+                        .map(|value| serde_json::json!(value))
+                        .or(setting)
+                }
+                .unwrap_or(serde_json::Value::Null);
+            }
+            if config
+                .organization
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+            {
+                settings.remove("account_id");
+            }
+        }
         let mut value = serde_json::json!({
             "schema": 1,
             "provider": config.effective_provider_selector().to_ascii_lowercase(),
-            "api_key": config.api_key,
-            "base_url": config.base_url,
+            "api_key": api_key,
+            "base_url": endpoint,
             "endpoint_access": config.endpoint_access,
-            "api_version": config.api_version,
-            "organization": config.organization,
-            "project": config.project,
-            "settings": config.settings,
+            "api_version": api_version,
+            "organization": organization,
+            "project": project,
+            "settings": settings,
         });
         value.sort_all_objects();
         Self(Sha256::digest(value.to_string().as_bytes()).into())
@@ -189,3 +333,7 @@ mod tests {
         assert!(registry.states.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_state_settings_tests.rs"]
+mod settings_tests;

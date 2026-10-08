@@ -66,6 +66,7 @@ fn elapsed_window_resets_all_counters_before_publishing_timestamp() {
     assert_eq!(
         counters,
         MinuteCounters {
+            window_generation: 1,
             tpm: 0,
             rpm: 0,
             successes: 0,

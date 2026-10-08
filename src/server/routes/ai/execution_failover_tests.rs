@@ -89,6 +89,7 @@ async fn test_execute_with_selected_deployment_failover_excludes_failed_deployme
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _deployment_id| {
@@ -121,6 +122,7 @@ async fn test_execute_stream_failover_excludes_failed_deployment() {
         router.clone(),
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _selected_deployment_id| {
@@ -152,8 +154,12 @@ async fn test_execute_with_selected_deployment_single_target_still_retries() {
 
     // The only deployment fails once with a retryable error; the request
     // must still be retried against it via the full-pool fallback.
-    let result =
-        execute_with_selected_deployment(&router, "gpt-4", ProviderCapability::ChatCompletion, {
+    let result = execute_with_selected_deployment(
+        &router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        0,
+        {
             let attempts = attempts.clone();
             move |_provider, _model, deployment_id| {
                 let attempts = attempts.clone();
@@ -167,9 +173,10 @@ async fn test_execute_with_selected_deployment_single_target_still_retries() {
                     }
                 }
             }
-        })
-        .await
-        .expect("single-deployment setup should still get same-target retries");
+        },
+    )
+    .await
+    .expect("single-deployment setup should still get same-target retries");
 
     assert_eq!(result, "ok");
     assert_eq!(
@@ -219,6 +226,7 @@ async fn test_execute_stream_single_target_still_retries() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, _model, deployment_id| {
@@ -261,6 +269,7 @@ async fn test_execute_with_selected_deployment_rotates_soft_exclusions_each_swee
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             let fallback_attempts = fallback_attempts.clone();
@@ -306,6 +315,7 @@ async fn test_execute_stream_rotates_soft_exclusions_each_sweep() {
         router.clone(),
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             let fallback_attempts = fallback_attempts.clone();
@@ -399,6 +409,7 @@ async fn test_execute_with_selected_deployment_waits_for_temporarily_unavailable
                 router.as_ref(),
                 "shared-model",
                 ProviderCapability::ChatCompletion,
+                0,
                 move |_provider, _model, deployment_id| {
                     let attempts = attempts.clone();
                     let primary_entered = primary_entered.clone();
@@ -461,6 +472,7 @@ async fn test_execute_stream_waits_for_temporarily_unavailable_untried_target() 
                 router,
                 "shared-model",
                 ProviderCapability::ChatCompletionStream,
+                0,
                 move |_provider, _model, deployment_id| {
                     let attempts = attempts.clone();
                     let primary_entered = primary_entered.clone();
@@ -516,6 +528,7 @@ async fn test_execute_with_selected_deployment_preserves_last_operation_error_at
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, _model, deployment_id| {
@@ -567,6 +580,7 @@ async fn test_execute_stream_preserves_last_operation_error_at_attempt_limit() {
         router,
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, _model, deployment_id| {

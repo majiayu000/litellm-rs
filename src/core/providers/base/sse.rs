@@ -19,6 +19,7 @@ pub use cohere::CohereTransformer;
 pub use databricks::DatabricksTransformer;
 pub use gemini::GeminiTransformer;
 pub use openai::OpenAICompatibleTransformer;
+pub(crate) use openai::invalidates_stream_usage;
 
 use crate::core::providers::unified_provider::ProviderError;
 use crate::core::types::responses::{ChatChunk, FinishReason};

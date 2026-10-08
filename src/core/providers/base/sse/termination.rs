@@ -18,6 +18,13 @@ pub(super) fn combine_stream_errors(
     first: ProviderError,
     finalization: ProviderError,
 ) -> ProviderError {
+    // Lifecycle finalization must not erase the accounting invalidation signal.
+    if super::invalidates_stream_usage(&first) {
+        return first;
+    }
+    if super::invalidates_stream_usage(&finalization) {
+        return finalization;
+    }
     let first = format!("{:?}", first.redacted());
     match finalization.redacted() {
         ProviderError::Streaming {

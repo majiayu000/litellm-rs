@@ -172,6 +172,10 @@ pub async fn audio_transcriptions(
         &state.unified_router(),
         &requested_model,
         ProviderCapability::AudioTranscription,
+        super::super::execution::estimate::usage(&super::budgeting::audio_file_usage(
+            &transcription_request.file,
+            transcription_request.prompt.as_deref(),
+        )),
         move |provider, selected_model, _deployment_id| {
             let mut request = transcription_request.clone();
             let context = context_for_execution.clone();
@@ -231,7 +235,7 @@ pub async fn audio_transcriptions(
                                     .duration
                                     .filter(|duration| duration.is_finite() && *duration > 0.0)
                                     .unwrap_or(total_time_seconds);
-                                let tokens_used = u64::from(settle_usage.total_tokens);
+                                super::super::execution::completion::observe_unknown_usage();
                                 super::budgeting::record_audio_spend(
                                     &settle_request_pricing,
                                     &settle_pricing_config,
@@ -249,7 +253,7 @@ pub async fn audio_transcriptions(
                                     key_budget_reservation,
                                 )
                                 .await;
-                                (response, tokens_used)
+                                (response, 0)
                             }
                         },
                     )

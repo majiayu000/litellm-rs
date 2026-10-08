@@ -350,3 +350,202 @@ async fn invalid_choice_event_preserves_its_own_usage_before_terminal_error() {
         );
     }
 }
+
+#[test]
+fn untrusted_usage_does_not_discard_output_or_release_an_estimate() {
+    for reported in [
+        json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":0}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":3}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":8}),
+        json!({"prompt_tokens":3,"completion_tokens":2}),
+        json!({"prompt_tokens":3,"total_tokens":5}),
+        json!({"completion_tokens":2,"total_tokens":5}),
+        json!({"prompt_tokens":-1,"completion_tokens":2,"total_tokens":1}),
+        json!({"prompt_tokens":3.5,"completion_tokens":2,"total_tokens":5.5}),
+        json!({"prompt_tokens":"3","completion_tokens":2,"total_tokens":5}),
+        json!({"prompt_tokens":u64::MAX,"completion_tokens":1,"total_tokens":0}),
+    ] {
+        let transformer = OpenAICompatibleTransformer::new("test");
+        let data = json!({
+            "choices":[choice(0, Some("stop"))],
+            "usage":reported.clone()
+        })
+        .to_string();
+        let chunk = transformer.transform_stream_chunk(&data).unwrap().unwrap();
+        assert!(chunk.usage.is_none(), "{reported}");
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("你好"));
+        assert!(chunk.choices[0].finish_reason.is_some());
+        transformer.finish_stream().unwrap();
+    }
+}
+
+#[test]
+fn strict_usage_validation_preserves_valid_token_details() {
+    let reported = json!({
+        "prompt_tokens":30,
+        "completion_tokens":20,
+        "total_tokens":50,
+        "prompt_tokens_details":{
+            "cached_tokens":7,
+            "cache_creation_tokens":2,
+            "cache_read_tokens":5,
+            "audio_tokens":4
+        },
+        "completion_tokens_details":{"reasoning_tokens":6,"audio_tokens":3},
+        "thinking_usage":{
+            "thinking_tokens":6,
+            "budget_tokens":10,
+            "thinking_cost":0.1,
+            "provider":"test"
+        }
+    });
+    let transformer = OpenAICompatibleTransformer::new("test");
+    let data = json!({"choices":[], "usage":reported.clone()}).to_string();
+    let chunk = transformer.transform_chunk(&data).unwrap().unwrap();
+    let actual = serde_json::to_value(chunk.usage.unwrap()).unwrap();
+    assert_eq!(actual, reported);
+}
+
+#[tokio::test]
+async fn invalid_choice_event_cannot_recover_untrusted_usage() {
+    for reported in [
+        json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":0}),
+    ] {
+        let first = event(json!([choice(0, Some("stop"))]), Value::Null);
+        let invalid = event(json!([choice(0, None)]), reported);
+        for bodies in [
+            vec![format!("{first}{invalid}data: [DONE]\n\n")],
+            vec![first.clone(), invalid.clone()],
+            vec![first.clone(), invalid.trim_end().to_owned()],
+        ] {
+            let source = stream::iter(
+                bodies
+                    .into_iter()
+                    .map(|body| Ok::<_, reqwest::Error>(Bytes::from(body))),
+            );
+            let mut output =
+                UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("test"));
+            assert!(output.next().await.unwrap().unwrap().usage.is_none());
+            match output.next().await.unwrap().unwrap_err() {
+                ProviderError::Streaming { message, .. } => {
+                    assert!(message.contains("after its terminal finish_reason"));
+                }
+                error => panic!("expected typed lifecycle error, got {error}"),
+            }
+            assert!(output.next().await.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn later_invalid_usage_revokes_earlier_usage_in_all_parser_batches() {
+    for reported in [
+        json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":0}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":3}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":8}),
+        json!({"prompt_tokens":3,"completion_tokens":2}),
+        json!({"prompt_tokens":3,"total_tokens":5}),
+        json!({"completion_tokens":2,"total_tokens":5}),
+        json!({"prompt_tokens":-1,"completion_tokens":2,"total_tokens":1}),
+        json!({"prompt_tokens":3.5,"completion_tokens":2,"total_tokens":5.5}),
+        json!({"prompt_tokens":"3","completion_tokens":2,"total_tokens":5}),
+        json!({"prompt_tokens":u64::MAX,"completion_tokens":1,"total_tokens":0}),
+        json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,
+            "prompt_tokens_details":{"cached_tokens":"bad"}}),
+        json!("not an object"),
+        json!([]),
+    ] {
+        for with_output in [false, true] {
+            let choices = if with_output {
+                json!([choice(0, None)])
+            } else {
+                json!([])
+            };
+            let first = event(choices, usage());
+            for choices in [Some(json!([])), None, Some(json!({})), Some(json!(42))] {
+                let mut invalid = json!({"usage":reported.clone()});
+                if let Some(choices) = choices {
+                    invalid["choices"] = choices;
+                }
+                let invalid = format!("data: {invalid}\n\n");
+                for bodies in [
+                    vec![format!("{first}{invalid}data: [DONE]\n\n")],
+                    vec![first.clone(), invalid.clone()],
+                    vec![first.clone(), invalid.trim_end().to_owned()],
+                ] {
+                    let source = stream::iter(
+                        bodies
+                            .into_iter()
+                            .map(|body| Ok::<_, reqwest::Error>(Bytes::from(body))),
+                    );
+                    let mut output =
+                        UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("test"));
+                    let accepted = output.next().await.unwrap().unwrap();
+                    assert_eq!(accepted.usage.unwrap().total_tokens, 5);
+                    assert_eq!(!accepted.choices.is_empty(), with_output);
+                    let error = output.next().await.unwrap().unwrap_err();
+                    assert!(invalidates_stream_usage(&error), "{reported}: {error:?}");
+                    assert!(output.next().await.is_none());
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn valid_usage_survives_missing_frames_and_clones_reset_usage_history() {
+    for reported in [None, Some(Value::Null), Some(usage())] {
+        let first = event(json!([choice(0, None)]), usage());
+        let mut last = json!({"choices":[choice(0, Some("stop"))]});
+        if let Some(reported) = reported {
+            last["usage"] = reported;
+        }
+        let body = format!("{first}data: {last}\n\ndata: [DONE]\n\n");
+        let source = stream::iter([Ok::<_, reqwest::Error>(Bytes::from(body))]);
+        let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("test"));
+        let accepted = output.next().await.unwrap().unwrap();
+        assert_eq!(accepted.usage.unwrap().total_tokens, 5);
+        assert!(output.next().await.unwrap().is_ok());
+        assert!(output.next().await.is_none());
+    }
+
+    let original = OpenAICompatibleTransformer::new("test");
+    original
+        .transform_stream_chunk(
+            &json!({"choices":[choice(0, Some("stop"))],"usage":usage()}).to_string(),
+        )
+        .unwrap();
+    let fresh = original.clone();
+    let first_invalid = fresh
+        .transform_stream_chunk(
+            &json!({"choices":[choice(0, Some("stop"))],
+                "usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}})
+            .to_string(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(first_invalid.usage.is_none());
+    fresh.finish_stream().unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_structural_errors_do_not_retract_valid_usage() {
+    for reported in [None, Some(Value::Null), Some(usage())] {
+        let first = event(json!([choice(0, None)]), usage());
+        let mut malformed = json!({"id":"missing-choices"});
+        if let Some(reported) = reported {
+            malformed["usage"] = reported;
+        }
+        let body = format!("{first}data: {malformed}\n\n");
+        let source = stream::iter([Ok::<_, reqwest::Error>(Bytes::from(body))]);
+        let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("test"));
+        let accepted = output.next().await.unwrap().unwrap();
+        assert_eq!(accepted.usage.unwrap().total_tokens, 5);
+        let error = output.next().await.unwrap().unwrap_err();
+        assert!(!invalidates_stream_usage(&error), "{error:?}");
+        assert!(output.next().await.is_none());
+    }
+}

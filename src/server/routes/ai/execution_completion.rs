@@ -25,7 +25,9 @@ pub(super) struct UnaryCompletion {
     started_at: Instant,
     provider_succeeded: AtomicBool,
     recorded: AtomicBool,
-    usage: Mutex<Option<u64>>,
+    // None means no accounting observation (for example a cache hit).
+    // Some(None) means accepted provider work with unavailable token usage.
+    usage: Mutex<Option<Option<u64>>>,
     // Native response facts are authoritative even when usage is unknown.
     // Legacy budget hooks must not replace None (or a known count) with zero.
     native_usage: Option<Option<u64>>,
@@ -70,7 +72,7 @@ impl UnaryCompletion {
             started_at,
             provider_succeeded: AtomicBool::new(matches!(outcome, TerminalOutcome::Success)),
             recorded: AtomicBool::new(false),
-            usage: Mutex::new(Some(tokens)),
+            usage: Mutex::new(Some(Some(tokens))),
             native_usage: None,
             terminal: Some(outcome),
         });
@@ -128,29 +130,43 @@ impl UnaryCompletion {
         self.recorded.store(true, Ordering::Release);
     }
 
-    pub(super) fn complete_success(&self, tokens: u64) {
-        if self.native_usage.is_some() {
+    pub(super) fn complete_success(&self, tokens: u64) -> Option<u64> {
+        if let Some(usage) = self.native_usage {
             self.record_cancelled();
-            return;
+            return usage;
         }
+        let usage = (*self.usage.lock()).unwrap_or(Some(tokens));
         if !self.recorded.swap(true, Ordering::AcqRel) {
-            if let Some(hold) = &self.hold {
-                hold.prepare_settlement(tokens);
-            }
+            self.prepare_observed_usage(usage);
             self.deployment.record_success_with_admission(
-                tokens,
+                usage.unwrap_or(0),
                 self.started_at.elapsed().as_micros() as u64,
                 self.hold.as_ref(),
             );
+        }
+        usage
+    }
+
+    fn prepare_observed_usage(&self, usage: Option<u64>) {
+        match usage {
+            Some(tokens) => self.prepare_admission_usage(tokens),
+            None => {
+                if let Some(hold) = &self.hold {
+                    hold.prepare_retention(0);
+                }
+            }
         }
     }
 
     pub(super) async fn finish_admission(&self, lease: &mut DeploymentLease) {
         let usage = *self.usage.lock();
-        if let Some(tokens) = usage {
-            lease.commit_admission_async(tokens).await;
-        } else {
-            lease.cancel_admission_async().await;
+        // Record consumed work and replace the local reservation before shared
+        // cleanup can yield; Drop and nested budget waits share the same owner.
+        self.record_cancelled();
+        match usage {
+            Some(Some(tokens)) => lease.commit_admission_async(tokens).await,
+            Some(None) => lease.retain_admission_async(0).await,
+            None => lease.cancel_admission_async().await,
         }
     }
 }
@@ -158,14 +174,12 @@ impl UnaryCompletion {
 impl UnaryCompletion {
     pub(super) fn record_cancelled(&self) {
         if !self.recorded.swap(true, Ordering::AcqRel)
-            && let Some(tokens) = self
-                .native_usage
-                .map(|usage| usage.unwrap_or(0))
-                .or_else(|| *self.usage.lock())
+            && let Some(usage) = self.native_usage.or_else(|| *self.usage.lock())
         {
             // Local postprocessing failure or cancellation before a validated
             // settlement must retain usage without inventing provider success.
-            self.prepare_admission_usage(tokens);
+            self.prepare_observed_usage(usage);
+            let tokens = usage.unwrap_or(0);
             match &self.terminal {
                 Some(TerminalOutcome::Success)
                     if self.provider_succeeded.load(Ordering::Acquire) =>
@@ -209,8 +223,19 @@ pub(in crate::server::routes::ai) fn provider_succeeded() {
 pub(in crate::server::routes::ai) fn observe_usage(tokens: u64) {
     let _ = CURRENT.try_with(|completion| {
         if completion.native_usage.is_none() {
-            *completion.usage.lock() = Some(tokens);
+            *completion.usage.lock() = Some(Some(tokens));
             completion.prepare_admission_usage(tokens);
+        }
+    });
+}
+
+/// Missing provider usage is an admission fact, distinct from a known zero.
+/// Native/terminal scopes already own their immutable settlement contract.
+pub(in crate::server::routes::ai) fn observe_unknown_usage() {
+    let _ = CURRENT.try_with(|completion| {
+        if completion.native_usage.is_none() && completion.terminal.is_none() {
+            *completion.usage.lock() = Some(None);
+            completion.prepare_observed_usage(None);
         }
     });
 }
@@ -259,8 +284,8 @@ impl Drop for BudgetSettlementWait {
         if !self.finished
             && let Some(completion) = &self.completion
         {
-            let tokens = completion.usage.lock().unwrap_or_default();
-            completion.complete_success(tokens);
+            let tokens = completion.usage.lock().flatten().unwrap_or_default();
+            let _ = completion.complete_success(tokens);
         }
     }
 }

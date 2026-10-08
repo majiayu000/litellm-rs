@@ -31,6 +31,7 @@ mod tests {
     #[derive(Clone)]
     struct MockRerankState {
         captured_requests: Arc<Mutex<Vec<CapturedRerankRequest>>>,
+        token_usage: Option<u32>,
     }
 
     struct MockRerankServer {
@@ -42,9 +43,14 @@ mod tests {
 
     impl MockRerankServer {
         async fn start_rerank_mock() -> Self {
+            Self::start_rerank_mock_with_usage(None).await
+        }
+
+        async fn start_rerank_mock_with_usage(token_usage: Option<u32>) -> Self {
             let captured_requests = Arc::new(Mutex::new(Vec::new()));
             let state = MockRerankState {
                 captured_requests: Arc::clone(&captured_requests),
+                token_usage,
             };
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("mock server should bind");
@@ -117,7 +123,7 @@ mod tests {
             _ => {}
         }
 
-        HttpResponse::Ok().json(json!({
+        let mut response = json!({
             "id": "rerank_mock",
             "results": [
                 { "index": 1, "relevance_score": 0.91 },
@@ -126,7 +132,11 @@ mod tests {
             "meta": {
                 "billed_units": { "search_units": 1 }
             }
-        }))
+        });
+        if let Some(tokens) = state.token_usage {
+            response["usage"] = json!({ "total_tokens": tokens });
+        }
+        HttpResponse::Ok().json(response)
     }
 
     fn capture_request(state: &MockRerankState, request: &HttpRequest, body: Bytes) -> Value {
@@ -797,5 +807,115 @@ mod tests {
         );
 
         mock.stop_rerank_mock().await;
+    }
+
+    #[tokio::test]
+    async fn availability_rerank_admission_distinguishes_missing_zero_and_positive_usage() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        for (jina, usage) in [
+            (false, None),
+            (true, None),
+            (true, Some(0)),
+            (true, Some(3)),
+        ] {
+            let mock = MockRerankServer::start_rerank_mock_with_usage(usage).await;
+            let model = if jina {
+                "jina-reranker-v1-base-en"
+            } else {
+                "rerank-english-v3.0"
+            };
+            let mut provider = if jina {
+                jina_rerank_provider_with_models(&mock.base_url, vec![model.into()])
+            } else {
+                cohere_rerank_provider(&mock.base_url)
+            };
+            // 40 query + 20 + 20 document tokens; only TPM can deny the next call.
+            provider.tpm = 83;
+            provider.rpm = 100;
+            provider.max_concurrent_requests = 100;
+            let deployment_id = format!("{}-{model}", provider.name);
+            let state = build_test_app_state(vec![provider]).await;
+            let deployment = state
+                .unified_router()
+                .get_deployment(&deployment_id)
+                .unwrap();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let body = json!({
+                "model": model,
+                "query": "q".repeat(160),
+                "documents": ["a".repeat(80), "b".repeat(80)],
+                "top_n": 2
+            });
+            loop {
+                let second = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    % 60;
+                if second < 40 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(61 - second)).await;
+            }
+            let response = tokio::time::timeout(
+                Duration::from_secs(5),
+                test::call_service(
+                    &app,
+                    test::TestRequest::post()
+                        .uri("/v1/rerank")
+                        .set_json(&body)
+                        .to_request(),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{model}: {usage:?}");
+            let _: Value = test::read_body_json(response).await;
+            assert_eq!(mock.requests().len(), 1);
+            assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+            assert_eq!(
+                deployment.state.tpm_current.load(Relaxed),
+                u64::from(usage.unwrap_or(0))
+            );
+            assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+            let next = tokio::time::timeout(
+                Duration::from_secs(1),
+                test::call_service(
+                    &app,
+                    test::TestRequest::post()
+                        .uri("/v1/rerank")
+                        .set_json(&body)
+                        .to_request(),
+                ),
+            )
+            .await;
+            if let Some(tokens) = usage.filter(|tokens| *tokens > 0) {
+                let response = next.expect("known usage releases unused reservation");
+                assert_eq!(response.status(), StatusCode::OK);
+                let _: Value = test::read_body_json(response).await;
+                assert_eq!(mock.requests().len(), 2);
+                assert_eq!(deployment.state.rpm_current.load(Relaxed), 2);
+                assert_eq!(
+                    deployment.state.tpm_current.load(Relaxed),
+                    u64::from(tokens) * 2
+                );
+            } else {
+                if let Ok(response) = next {
+                    assert!(!response.status().is_success());
+                }
+                assert_eq!(mock.requests().len(), 1);
+                assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+                assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+            }
+            assert_eq!(deployment.state.fail_requests.load(Relaxed), 0);
+            assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+            mock.stop_rerank_mock().await;
+        }
     }
 }

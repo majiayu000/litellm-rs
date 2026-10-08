@@ -944,4 +944,105 @@ mod tests {
             mock.shutdown().await;
         }
     }
+
+    #[tokio::test]
+    async fn audio_upload_routes_keep_audio_and_prompt_admission_after_settlement() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        for uri in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+            for prompt in [None, Some("guide")] {
+                let mock = MockAudioServer::start().await;
+                let state = build_audio_state(&mock.base_url).await;
+                add_test_time_audio_pricing(&state, "whisper-1", 0.001);
+                let file = vec![b'a'; 256];
+                let estimate = 64 + u32::from(prompt.is_some()) * 2;
+                let mut next = state.config().as_ref().clone();
+                next.gateway.providers[0].tpm = estimate;
+                next.gateway.providers[0].rpm = 100;
+                next.gateway.providers[0].max_concurrent_requests = 100;
+                state.apply_runtime(next).await.unwrap();
+                let deployment = state
+                    .unified_router()
+                    .get_deployment("mock-openai-audio-whisper-1")
+                    .unwrap();
+                let app = test::init_service(
+                    App::new()
+                        .app_data(web::Data::new(state))
+                        .configure(litellm_rs::server::routes::ai::configure_routes),
+                )
+                .await;
+                let boundary = "audio-admission-boundary";
+                let fields = prompt
+                    .map(|text| vec![("prompt", text)])
+                    .unwrap_or_default();
+                let body = audio_multipart_body_with_fields(
+                    boundary,
+                    "whisper-1",
+                    "sample.mp3",
+                    &file,
+                    &fields,
+                );
+                loop {
+                    let second = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        % 60;
+                    if second < 40 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(61 - second)).await;
+                }
+                let response = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    test::call_service(
+                        &app,
+                        test::TestRequest::post()
+                            .uri(uri)
+                            .insert_header((
+                                "content-type",
+                                format!("multipart/form-data; boundary={boundary}"),
+                            ))
+                            .set_payload(body.clone())
+                            .to_request(),
+                    ),
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{uri}: {prompt:?}");
+                let _: Value = test::read_body_json(response).await;
+                assert_eq!(mock.requests().len(), 1);
+                assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+                // The next denied request and unchanged upstream count verify the retained estimate.
+                assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+                assert_eq!(deployment.state.success_requests.load(Relaxed), 1);
+                assert_eq!(deployment.state.fail_requests.load(Relaxed), 0);
+                assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+                let next = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    test::call_service(
+                        &app,
+                        test::TestRequest::post()
+                            .uri(uri)
+                            .insert_header((
+                                "content-type",
+                                format!("multipart/form-data; boundary={boundary}"),
+                            ))
+                            .set_payload(body)
+                            .to_request(),
+                    ),
+                )
+                .await;
+                if let Ok(response) = next {
+                    assert!(!response.status().is_success());
+                }
+                assert_eq!(mock.requests().len(), 1);
+                assert_eq!(deployment.state.tpm_current.load(Relaxed), 0);
+                // The next denied request and unchanged upstream count verify the retained estimate.
+                assert_eq!(deployment.state.rpm_current.load(Relaxed), 1);
+                assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+                mock.shutdown().await;
+            }
+        }
+    }
 }

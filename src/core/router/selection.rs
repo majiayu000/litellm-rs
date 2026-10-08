@@ -191,7 +191,7 @@ impl Router {
         model_name: &str,
     ) -> Result<DeploymentLease, RouterError> {
         let snapshot = self.load_routing_snapshot();
-        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None, 0)
+        self.select_deployment_matching(snapshot.as_ref(), model_name, |_| true, None, |_| 0)
             .await
     }
 
@@ -204,7 +204,7 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
-        self.select_deployment_matching(snapshot, model_name, is_candidate, None, 0)
+        self.select_deployment_matching(snapshot, model_name, is_candidate, None, |_| 0)
             .await
     }
 
@@ -265,12 +265,59 @@ impl Router {
     where
         F: Fn(&Deployment) -> bool,
     {
+        self.select_deployment_lease_for_capability_matching_with_estimate_async(
+            model_name,
+            capability,
+            0,
+            is_candidate,
+        )
+        .await
+    }
+
+    /// Reserve request-derived tokens before dispatching a gateway operation.
+    pub(crate) async fn select_deployment_lease_for_capability_matching_with_estimate_async<F>(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+        estimated_tokens: u64,
+        is_candidate: F,
+    ) -> Result<DeploymentLease, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+    {
         let snapshot = self.load_routing_snapshot();
-        self.select_deployment_lease_for_capability_matching_in_snapshot(
+        self.select_deployment_lease_for_capability_matching_with_estimate(
             snapshot.as_ref(),
             model_name,
             capability,
             is_candidate,
+            estimated_tokens,
+        )
+        .await
+    }
+
+    /// Resolve a per-deployment estimate before making the same atomic admission.
+    /// Callers may reduce it only when they already hold that deployment's
+    /// replayable response; provider dispatch still reserves the full estimate.
+    #[cfg(feature = "gateway")]
+    pub(crate) async fn select_deployment_lease_for_capability_matching_with_estimator_async<F, E>(
+        &self,
+        model_name: &str,
+        capability: &ProviderCapability,
+        estimated_tokens: E,
+        is_candidate: F,
+    ) -> Result<DeploymentLease, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+        E: Fn(&Deployment) -> u64,
+    {
+        let snapshot = self.load_routing_snapshot();
+        self.select_deployment_lease_for_capability_matching_with_estimator(
+            snapshot.as_ref(),
+            model_name,
+            capability,
+            is_candidate,
+            estimated_tokens,
         )
         .await
     }
@@ -305,6 +352,28 @@ impl Router {
     ) -> Result<DeploymentLease, RouterError>
     where
         F: Fn(&Deployment) -> bool,
+    {
+        self.select_deployment_lease_for_capability_matching_with_estimator(
+            snapshot,
+            model_name,
+            capability,
+            is_candidate,
+            |_| estimated_tokens,
+        )
+        .await
+    }
+
+    async fn select_deployment_lease_for_capability_matching_with_estimator<F, E>(
+        &self,
+        snapshot: &RoutingSnapshot,
+        model_name: &str,
+        capability: &ProviderCapability,
+        is_candidate: F,
+        estimated_tokens: E,
+    ) -> Result<DeploymentLease, RouterError>
+    where
+        F: Fn(&Deployment) -> bool,
+        E: Fn(&Deployment) -> u64,
     {
         let resolved_name = snapshot.resolve_model_name(model_name);
         let candidates = snapshot
@@ -384,16 +453,17 @@ impl Router {
         }
     }
 
-    async fn select_deployment_matching<F>(
+    async fn select_deployment_matching<F, E>(
         &self,
         snapshot: &RoutingSnapshot,
         model_name: &str,
         is_candidate: F,
         no_matching_candidate_error: Option<RouterError>,
-        estimated_tokens: u64,
+        estimated_tokens: E,
     ) -> Result<DeploymentLease, RouterError>
     where
         F: Fn(&Deployment) -> bool,
+        E: Fn(&Deployment) -> u64,
     {
         // 1. Resolve model aliases and deployment indexes from one immutable
         // routing generation.
@@ -543,7 +613,7 @@ impl Router {
             };
 
             if let Ok(hold) = self
-                .try_reserve_deployment(&deployment, &resolved_name, estimated_tokens)
+                .try_reserve_deployment(&deployment, &resolved_name, estimated_tokens(&deployment))
                 .await
             {
                 self.provider_selected_count.fetch_add(1, Relaxed);
@@ -654,7 +724,7 @@ impl Router {
             model_name,
             |_| true,
             None,
-            estimated_tokens,
+            |_| estimated_tokens,
         ))
         .map(DeploymentLease::synchronous_cleanup)
     }
@@ -775,7 +845,7 @@ impl RuntimeHandle {
     ) -> Result<DeploymentLease, RouterError> {
         self.binding
             .router
-            .select_deployment_matching(self.snapshot.as_ref(), model_name, |_| true, None, 0)
+            .select_deployment_matching(self.snapshot.as_ref(), model_name, |_| true, None, |_| 0)
             .await
     }
 }

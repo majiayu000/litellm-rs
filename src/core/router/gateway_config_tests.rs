@@ -17,13 +17,13 @@ const ENVS: &[&str] = &[
     "GOOGLE_CLOUD_LOCATION", "VERTEX_AI_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS",
     "GITHUB_COPILOT_TOKEN_DIR", "GITHUB_COPILOT_ACCESS_TOKEN_FILE", "GITHUB_COPILOT_API_KEY_FILE",
 ];
-struct EnvScope {
+pub(super) struct EnvScope {
     previous: Vec<(&'static str, Option<String>)>,
     _lock: MutexGuard<'static, ()>,
 }
 
 impl EnvScope {
-    fn new(values: &[(&str, &str)]) -> Self {
+    pub(super) fn new(values: &[(&str, &str)]) -> Self {
         let lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let previous = ENVS
             .iter()
@@ -110,12 +110,14 @@ async fn copilot_captured_credentials_isolate_reloaded_runtime_state() {
     );
 
     // A changed effective path isolates even equal captured tokens; same-path
-    // access/API token changes also isolate the reconstructed resource.
+    // access/endpoint changes also isolate the reconstructed resource. An API
+    // token refresh with the same access authority and endpoint retains state.
     for variant in [
         "directory",
         "access-file",
         "key-file",
         "access-content",
+        "endpoint",
         "key-content",
     ] {
         unsafe {
@@ -153,6 +155,13 @@ async fn copilot_captured_credentials_isolate_reloaded_runtime_state() {
                 }
             }
             "access-content" => write(first.path(), "fixture-access-b", "fixture-key-a"),
+            "endpoint" => {
+                let path = first.path().join("api-key.json");
+                let mut key: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                key["endpoints"]["api"] = serde_json::json!("https://rotated.fixture.invalid");
+                std::fs::write(path, serde_json::to_vec(&key).unwrap()).unwrap();
+            }
             "key-content" => write(first.path(), "fixture-access-a", "fixture-key-b"),
             _ => unreachable!(),
         }
@@ -161,15 +170,23 @@ async fn copilot_captured_credentials_isolate_reloaded_runtime_state() {
             .unwrap();
         replacement.inherit_runtime_state(&original);
         let replaced = replacement.get_deployment(id).unwrap();
-        assert_ne!(
-            replaced.state.runtime_identity, original_deployment.state.runtime_identity,
-            "{variant}"
-        );
-        assert_eq!(
-            replaced.state.total_requests.load(Ordering::Relaxed),
-            0,
-            "{variant}"
-        );
+        if variant == "key-content" {
+            assert_eq!(
+                replaced.state.runtime_identity, original_deployment.state.runtime_identity,
+                "API refresh must retain the same access authority"
+            );
+            assert_eq!(replaced.state.total_requests.load(Ordering::Relaxed), 1);
+        } else {
+            assert_ne!(
+                replaced.state.runtime_identity, original_deployment.state.runtime_identity,
+                "{variant}"
+            );
+            assert_eq!(
+                replaced.state.total_requests.load(Ordering::Relaxed),
+                0,
+                "{variant}"
+            );
+        }
         assert_eq!(
             original_deployment
                 .state

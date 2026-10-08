@@ -108,6 +108,7 @@ pub(super) fn output_binding<'a>(
 pub(super) async fn next_uncommitted_stream<T, F, Fut>(
     router: Arc<UnifiedRouter>,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     fallback_models: &mut std::vec::IntoIter<String>,
     excluded: &HashSet<String>,
     operation: F,
@@ -122,6 +123,7 @@ where
             router.clone(),
             &model,
             capability.clone(),
+            estimated_tokens,
             move |deployment: &Deployment| !excluded.contains(deployment.id.as_str()),
             operation.clone(),
         )

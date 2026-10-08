@@ -36,9 +36,12 @@ mod responses;
 mod responses_stream;
 mod route_http;
 mod spend;
+mod sse_keepalive;
 mod stable_routes;
 mod stream_output_guardrail;
 mod token_policy;
+#[cfg(test)]
+mod unary_usage_tests;
 
 // Public re-exports for backward compatibility
 pub use audio::{audio_speech, audio_transcriptions, audio_translations};

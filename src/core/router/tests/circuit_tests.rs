@@ -111,7 +111,15 @@ mod redis {
         seed(&b, &id).await;
 
         a.record_failure_with_reason(&id, CooldownReason::Timeout);
-        // Expire the shared cooldown without racing a one-second probe lease.
+        // Expire both local and shared cooldown clocks without racing a one-second probe lease.
+        let local = a.get_deployment(&id).unwrap();
+        local.state.with_circuit_update(|fence| {
+            fence.local_cooldown_until = 1;
+            local
+                .state
+                .cooldown_until
+                .store(1, std::sync::atomic::Ordering::Relaxed);
+        });
         pool.hash_set(&RedisPool::circuit_key(&id), "opened", "1")
             .await
             .expect("expire cooldown fixture");
@@ -154,6 +162,14 @@ mod redis {
 
         a.record_failure_with_reason(&id, CooldownReason::Manual);
         // Advance to half-open through the fixture; the re-opened lease stays long.
+        let local = a.get_deployment(&id).unwrap();
+        local.state.with_circuit_update(|fence| {
+            fence.local_cooldown_until = 1;
+            local
+                .state
+                .cooldown_until
+                .store(1, std::sync::atomic::Ordering::Relaxed);
+        });
         pool.hash_set(&RedisPool::circuit_key(&id), "opened", "1")
             .await
             .expect("expire cooldown fixture");
