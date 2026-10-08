@@ -4,7 +4,7 @@
 
 use super::pool::RedisPool;
 use crate::utils::error::gateway_error::{GatewayError, Result};
-use redis::{AsyncCommands, RedisResult};
+use redis::AsyncCommands;
 use std::collections::HashMap;
 
 impl RedisPool {
@@ -34,12 +34,8 @@ impl RedisPool {
 
         let mut conn = self.get_connection().await?;
         if let Some(ref mut c) = conn.conn {
-            let result: RedisResult<String> = c.hget(key, field).await;
-            match result {
-                Ok(value) => Ok(Some(value)),
-                Err(e) if e.kind() == redis::ErrorKind::UnexpectedReturnType => Ok(None),
-                Err(e) => Err(GatewayError::from(e)),
-            }
+            let value: Option<String> = c.hget(key, field).await.map_err(GatewayError::from)?;
+            Ok(value)
         } else {
             Ok(None)
         }
