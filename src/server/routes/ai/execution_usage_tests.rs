@@ -504,11 +504,14 @@ async fn assert_media_pricing_admission(image: bool) {
                 }
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
                 assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+                // Shared reservations live in Redis; the local ledger only
+                // owns reservations for the in-process admission backend.
                 assert_eq!(
                     deployment
                         .state
                         .admission_tpm(crate::core::router::deployment::current_timestamp()),
-                    66
+                    if shared { 0 } else { 66 },
+                    "local admission ownership: shared={shared}, priced={priced}, wait={wait:?}"
                 );
                 assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
                 assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
