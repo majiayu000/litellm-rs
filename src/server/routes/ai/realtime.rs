@@ -102,6 +102,8 @@ pub(super) async fn connect(
         runtime.unified_router.clone(),
         &query.model,
         ProviderCapability::RealtimeApi,
+        // Handshakes own no generation; begin_response reserves each later generation.
+        0,
         |deployment| matches!(&deployment.provider, Provider::OpenAI(_)),
         move |provider, model, deployment_id| {
             let pricing = pricing.clone();
@@ -639,7 +641,7 @@ async fn relay(
                                 continue;
                             }
                             lease.refresh_realtime_deployment(current_runtime.unified_router.clone()).await.map_err(|error| error.redacted().to_string())?;
-                            if let Err(error) = lease.begin_response(1).await {
+                            if let Err(error) = lease.begin_response(u64::from(rates.max_input).saturating_add(u64::from(effective_output))).await {
                                 let kind = if matches!(error, ProviderError::RateLimit { .. }) { "rate_limit_error" } else { "server_error" };
                                 send_client(&mut downstream, json!({"type":"error","error":{"type":kind,"message":error.redacted().to_string()}}).to_string(), timeout).await?;
                                 continue;

@@ -1259,13 +1259,17 @@ async fn initialization_failure_retries_before_the_client_upgrade() {
 
 #[actix_web::test]
 async fn response_boundaries_recheck_deployment_rpm_tpm_and_parallel_admission() {
+    let bounds = rates();
+    let one_response_tokens = bounds.max_input.checked_add(bounds.max_output).unwrap();
     for rpm in [true, false] {
         let (state, url, key, calls, handles) = fixture_with_config(|config| {
             config.gateway.providers[0].max_concurrent_requests = 1;
             if rpm {
                 config.gateway.providers[0].rpm = 1;
             } else {
-                config.gateway.providers[0].tpm = 60;
+                // One full response reservation fits. Its observed 60 tokens then
+                // leave too little room for a second full reservation.
+                config.gateway.providers[0].tpm = one_response_tokens;
             }
         })
         .await;
@@ -2807,6 +2811,9 @@ async fn realtime_two_preserves_infinite_wire_limit_and_reserves_model_maximum()
     let (state, url, raw, calls, handles) = fixture_with_config(|c| {
         let p = &mut c.gateway.providers[0];
         p.models = vec!["gpt-realtime-2".into()];
+        // This test isolates the financial quota gate after the 160,000-token
+        // admission bound; the provider's default TPM limit is only 100,000.
+        p.tpm = 200_000;
         p.settings.insert("model_mappings".into(), json!({"gpt-realtime-2":"gpt-realtime-mini-mapped"}));
         p.settings.insert("model_identity_mappings".into(), json!({"gpt-realtime-2":{"capability_catalog_model":"gpt-realtime-2","pricing_model":"gpt-realtime-2"}}));
     }).await;
@@ -3004,6 +3011,8 @@ async fn live_routing_rejects_changed_transport_before_generation() {
 
 #[actix_web::test]
 async fn live_routing_applies_current_provider_rpm_and_tpm() {
+    let bounds = rates();
+    let one_response_tokens = bounds.max_input.checked_add(bounds.max_output).unwrap();
     for limit in ["rpm", "tpm"] {
         let (state, url, raw, calls, handles) = fixture().await;
         let mut socket = client(&url, &raw).await;
@@ -3013,7 +3022,9 @@ async fn live_routing_applies_current_provider_rpm_and_tpm() {
         if limit == "rpm" {
             next.gateway.providers[0].rpm = 1;
         } else {
-            next.gateway.providers[0].tpm = 1;
+            // One full response reservation fits. Its observed 60 tokens then
+            // leave too little room for a second full reservation.
+            next.gateway.providers[0].tpm = one_response_tokens;
         }
         state.apply_runtime(next).await.unwrap();
         socket

@@ -39,9 +39,9 @@ async fn operation_idempotency_controls_pre_header_failover() {
             router.clone(),
             "shared",
             ProviderCapability::Responses,
+            0,
             |_| true,
             idempotency,
-            0,
             {
                 let attempts = attempts.clone();
                 move |_, _, deployment| {
@@ -84,9 +84,9 @@ async fn non_idempotent_creation_still_allows_preflight_budget_fallback() {
         router,
         "shared",
         ProviderCapability::Responses,
+        0,
         |_| true,
         RequestIdempotency::NonIdempotent,
-        0,
         {
             let attempts = attempts.clone();
             move |_, _, deployment| {

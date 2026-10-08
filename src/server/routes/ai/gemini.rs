@@ -153,6 +153,7 @@ async fn proxy_gemini_route_inner(
             &state.unified_router(),
             &router_model,
             gemini_route_capability(),
+            gemini_estimated_admission_tokens(&request, &requested_model)?,
             {
                 let context = context.clone();
                 let request = request.clone();
@@ -235,6 +236,7 @@ async fn proxy_gemini_stream_route_inner(
             state.unified_router().clone(),
             &router_model,
             gemini_route_capability(),
+            gemini_estimated_admission_tokens(&request, &requested_model)?,
             {
                 let request = request.clone();
                 let requested_model = requested_model.clone();
@@ -403,8 +405,8 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
     let GeminiStreamResponseParts {
         context,
         provider,
-        mut budget_reservation,
-        mut key_budget_reservation,
+        budget_reservation,
+        key_budget_reservation,
         response,
         status,
         content_type,
@@ -419,97 +421,56 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
     let api_key_id = context.api_key_id();
     let should_record_spend = status.is_success();
 
-    tokio::spawn(async move {
-        let mut stream_lease = Some(stream_lease);
+    let ledger_facts = crate::core::request_ledger::current_facts();
+    let work = async move {
+        let mut stream_lease = stream_lease;
         let mut upstream = response.bytes_stream();
         let mut sse_buffer = String::new();
         let mut final_usage = GeminiStreamUsage::Missing;
         let mut saw_upstream_output = false;
 
-        while let Some(chunk_result) = upstream.next().await {
+        // One exit owns both the final observation and the financial settlement.
+        // A closed downstream must release an idle upstream without another byte.
+        let (completed, routing_error) = loop {
+            let next = tokio::select! {
+                biased;
+                _ = tx.closed() => break (false, None),
+                next = upstream.next() => next,
+            };
+            let Some(chunk_result) = next else {
+                break (true, None);
+            };
             let bytes = match chunk_result {
                 Ok(bytes) => bytes,
                 Err(_) => {
                     error!("Gemini SDK upstream stream error; closing client stream");
-                    let observation = finish_gemini_sse_observation(&mut sse_buffer);
-                    final_usage.observe(observation.usage);
-                    saw_upstream_output |= observation.saw_candidate_output;
-                    if let Some(lease) = stream_lease.take() {
-                        let error = ProviderError::streaming_error(
+                    break (
+                        false,
+                        Some(ProviderError::streaming_error(
                             "gemini_proxy",
                             "streamGenerateContent",
                             None,
                             None,
                             "Gemini upstream stream error",
-                        );
-                        lease.finish_failure(&error).await;
-                    }
-                    let spend_state = GeminiSpendState {
-                        pricing: pricing.as_ref(),
-                        pricing_config: &pricing_config,
-                        budget_limits: &budget_limits,
-                        key_manager: &key_manager,
-                        api_key_id,
-                    };
-                    settle_gemini_stream_spend(
-                        &spend_state,
-                        &provider,
-                        if should_record_spend {
-                            std::mem::take(&mut final_usage)
-                        } else {
-                            GeminiStreamUsage::Missing
-                        },
-                        budget_reservation.take(),
-                        key_budget_reservation.take(),
-                        should_record_spend && saw_upstream_output,
-                    )
-                    .await;
-                    if tx
-                        .send(Bytes::from_static(
-                            b"event: error\ndata: Gemini upstream stream error\n\n",
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        error!("client disconnected before Gemini stream error could be sent");
-                    }
-                    return;
+                        )),
+                    );
                 }
             };
             let observation = extract_gemini_sse_observation(&bytes, &mut sse_buffer);
             final_usage.observe(observation.usage);
             saw_upstream_output |= observation.saw_candidate_output;
             if tx.send(bytes).await.is_err() {
-                let observation = finish_gemini_sse_observation(&mut sse_buffer);
-                final_usage.observe(observation.usage);
-                saw_upstream_output |= observation.saw_candidate_output;
-                let spend_state = GeminiSpendState {
-                    pricing: pricing.as_ref(),
-                    pricing_config: &pricing_config,
-                    budget_limits: &budget_limits,
-                    key_manager: &key_manager,
-                    api_key_id,
-                };
-                settle_gemini_stream_spend(
-                    &spend_state,
-                    &provider,
-                    if should_record_spend {
-                        std::mem::take(&mut final_usage)
-                    } else {
-                        GeminiStreamUsage::Missing
-                    },
-                    budget_reservation.take(),
-                    key_budget_reservation.take(),
-                    should_record_spend && saw_upstream_output,
-                )
-                .await;
-                return;
+                break (false, None);
             }
-        }
+        };
 
         let observation = finish_gemini_sse_observation(&mut sse_buffer);
         final_usage.observe(observation.usage);
         saw_upstream_output |= observation.saw_candidate_output;
+        let usage = final_usage
+            .as_valid()
+            .map(|usage| u64::from(usage.total_tokens));
+        let chargeable = should_record_spend && (usage.is_some() || saw_upstream_output);
         let spend_state = GeminiSpendState {
             pricing: pricing.as_ref(),
             pricing_config: &pricing_config,
@@ -517,35 +478,55 @@ fn gemini_streaming_response(state: &AppState, parts: GeminiStreamResponseParts)
             key_manager: &key_manager,
             api_key_id,
         };
-        let tokens_used = final_usage
-            .as_valid()
-            .map(|usage| u64::from(usage.total_tokens))
-            .unwrap_or(0);
-        crate::server::routes::ai::execution::settle_stream_terminal(
-            stream_lease.as_mut(),
-            tokens_used,
-            None,
-            settle_gemini_stream_spend(
-                &spend_state,
-                &provider,
-                if should_record_spend {
-                    final_usage
-                } else {
-                    GeminiStreamUsage::Missing
-                },
-                budget_reservation.take(),
-                key_budget_reservation.take(),
-                should_record_spend && saw_upstream_output,
-            ),
-        )
-        .await;
-        if let Some(lease) = stream_lease.take() {
-            lease.finish_success(tokens_used).await;
+        let accounting = settle_gemini_stream_spend(
+            &spend_state,
+            &provider,
+            if should_record_spend {
+                final_usage
+            } else {
+                GeminiStreamUsage::Missing
+            },
+            budget_reservation,
+            key_budget_reservation,
+            should_record_spend && saw_upstream_output,
+        );
+        if chargeable {
+            // The strict Gemini parser leaves all-zero/invalid usage unknown.
+            // Retain its estimate without reporting it as actual token usage.
+            stream_lease
+                .settle_native_stream(usage, completed, routing_error.as_ref(), accounting)
+                .await;
+        } else {
+            // Preserve empty-EOF success while refunding unused TPM. A cancel
+            // before any chargeable output is neutral and refunds the full hold.
+            if let Some(error) = routing_error.as_ref() {
+                stream_lease.finish_failure(error).await;
+            } else if completed {
+                stream_lease.finish_success(0).await;
+            } else {
+                drop(stream_lease);
+            }
+            accounting.await;
+        }
+        if routing_error.is_some()
+            && tx
+                .send(Bytes::from_static(
+                    b"event: error\ndata: Gemini upstream stream error\n\n",
+                ))
+                .await
+                .is_err()
+        {
+            error!("client disconnected before Gemini stream error could be sent");
+        }
+    };
+    tokio::spawn(async move {
+        match ledger_facts {
+            Some(facts) => crate::core::request_ledger::scope_facts(facts, work).await,
+            None => work.await,
         }
     });
 
-    let upstream =
-        tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, actix_web::error::Error>);
+    let upstream = super::sse_keepalive::channel_body(rx);
     HttpResponse::build(status)
         .insert_header((actix_web::http::header::CONTENT_TYPE, content_type))
         .streaming(upstream)
@@ -623,6 +604,19 @@ fn gemini_requested_max_output_tokens(request: &Value) -> Option<u32> {
         .and_then(|tokens| u32::try_from(tokens).ok())
 }
 
+fn gemini_estimated_admission_tokens(request: &Value, model: &str) -> Result<u64, GatewayError> {
+    let candidates = request
+        .pointer("/generationConfig/candidateCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    super::execution::estimate::json_completion_with_candidates(
+        request,
+        model,
+        gemini_requested_max_output_tokens(request),
+        candidates,
+    )
+}
+
 fn apply_gemini_api_key_output_token_limit(
     max_tokens_per_request: Option<u32>,
     mut request: Value,
@@ -658,3 +652,49 @@ fn apply_gemini_api_key_output_token_limit(
 
     Ok(request)
 }
+
+#[cfg(test)]
+mod admission_estimate_tests {
+    use super::*;
+
+    #[test]
+    fn gemini_admission_estimate_counts_candidates_and_saturates() {
+        let model = "gateway-gemini-alias";
+        for candidates in [1, 3] {
+            let request = serde_json::json!({
+                "contents": [{"role":"user", "parts":[{"text":"Hello"}]}],
+                "generationConfig": {"maxOutputTokens":100_000, "candidateCount":candidates}
+            });
+            let input = super::super::execution::estimate::json_input(&request).unwrap();
+            assert_eq!(
+                gemini_estimated_admission_tokens(&request, model).unwrap(),
+                input + 100_000 * candidates,
+            );
+        }
+        let mut request = serde_json::json!({
+            "contents": [{"parts":[{"text":"Hello"}]}],
+            "generationConfig": {"candidateCount":3}
+        });
+        let input = super::super::execution::estimate::json_input(&request).unwrap();
+        let one =
+            super::super::execution::estimate::json_completion(&request, model, None).unwrap();
+        assert!(
+            one > input,
+            "omitted output bound must retain the default estimate"
+        );
+        assert_eq!(
+            gemini_estimated_admission_tokens(&request, model).unwrap(),
+            input + 3 * (one - input),
+        );
+        request["generationConfig"]["candidateCount"] = serde_json::json!(u64::MAX);
+        request["generationConfig"]["maxOutputTokens"] = serde_json::json!(u32::MAX);
+        assert_eq!(
+            gemini_estimated_admission_tokens(&request, model).unwrap(),
+            u64::MAX
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "gemini/stream_usage_tests.rs"]
+mod stream_usage_tests;

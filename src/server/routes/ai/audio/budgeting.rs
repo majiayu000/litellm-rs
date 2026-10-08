@@ -106,7 +106,7 @@ pub(super) async fn record_audio_spend(
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
-    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
+    let admission_tokens = super::super::execution::estimate::usage(usage);
     if let Some(cost) = audio_unit_cost(request_pricing, pricing_units) {
         match cost {
             Ok(cost) => {
@@ -144,7 +144,7 @@ pub(super) async fn record_audio_spend(
                      budget provider '{budget_provider}' model \
                      '{budget_model}': {error}; skipping budget spend"
                 );
-                super::super::spend::settle_unpriced_usage(
+                super::super::spend::settle_unpriced_usage_with_admission(
                     pricing_config,
                     budget_limits,
                     key_manager,
@@ -155,6 +155,7 @@ pub(super) async fn record_audio_spend(
                     budget_reservation,
                     key_budget_reservation,
                     "unit-based audio spend calculation failed",
+                    admission_tokens,
                 )
                 .await;
             }
@@ -162,7 +163,7 @@ pub(super) async fn record_audio_spend(
         return;
     }
 
-    super::super::spend::record_pricing_usage_spend_with_request_pricing(
+    super::super::spend::record_pricing_usage_spend_with_admission(
         request_pricing,
         pricing_config,
         budget_limits,
@@ -173,6 +174,7 @@ pub(super) async fn record_audio_spend(
         usage,
         budget_reservation,
         key_budget_reservation,
+        admission_tokens,
     )
     .await;
 }

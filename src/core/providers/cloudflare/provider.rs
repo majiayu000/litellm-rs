@@ -180,7 +180,7 @@ impl CloudflareProvider {
         default_http_error_mapper("cloudflare", status, body)
     }
 
-    fn decode_response(response: serde_json::Value) -> Result<ChatResponse, ProviderError> {
+    fn decode_response(mut response: serde_json::Value) -> Result<ChatResponse, ProviderError> {
         if response.get("success") == Some(&serde_json::Value::Bool(false)) {
             let message = response["errors"]
                 .as_array()
@@ -189,6 +189,7 @@ impl CloudflareProvider {
                 .unwrap_or("Cloudflare reported an unsuccessful response");
             return Err(ProviderError::api_error("cloudflare", 502, message));
         }
+        crate::core::providers::shared::normalize_openai_chat_response_usage(&mut response);
         let response: OpenAIChatResponse = serde_json::from_value(response)
             .map_err(|e| ProviderError::response_parsing("cloudflare", e.to_string()))?;
         if response.choices.is_empty() {

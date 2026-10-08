@@ -166,7 +166,36 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage(
     key_budget_reservation: Option<BudgetReservation>,
     context: &str,
 ) {
-    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
+    settle_unpriced_usage_with_admission(
+        pricing_config,
+        budget_limits,
+        key_manager,
+        api_key_id,
+        budget_provider,
+        budget_model,
+        usage,
+        budget_reservation,
+        key_budget_reservation,
+        context,
+        u64::from(usage.total_tokens),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) async fn settle_unpriced_usage_with_admission(
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    key_manager: &KeyManager,
+    api_key_id: Option<Uuid>,
+    budget_provider: &str,
+    budget_model: &str,
+    usage: &PricingUsage,
+    budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
+    context: &str,
+    _admission_tokens: u64,
+) {
     let cost = fallback_cost_for_usage(pricing_config, usage);
     super::capture_ledger_settlement(None, budget_provider, budget_model, None, None);
     crate::core::request_ledger::update_billing(None, |billing| {

@@ -205,13 +205,29 @@ impl Default for DeploymentConfig {
 pub struct DeploymentState {
     inner: Arc<DeploymentStateInner>,
     minute_window_lock: Arc<RwLock<()>>,
+    minute_window_generation: Arc<AtomicU64>,
     local_admission: Arc<Mutex<local_admission::LocalTokenLedger>>,
+    circuit_updates: Arc<Mutex<LocalCircuitFence>>,
     provider_instance_identity: ProviderInstanceIdentity,
     pub(super) runtime_identity: Option<GatewayRuntimeIdentity>,
     probe_health: Arc<AtomicU8>,
     probe_last_checked_at_millis: Arc<AtomicU64>,
     probe_lifecycle: Arc<ProbeLifecycle>,
     probe_generation: u64,
+}
+
+/// Serialize local failure publication against asynchronous shared snapshots.
+/// A locally known cooldown survives an unaccepted/cancelled Redis write until
+/// its real deadline; it does not permanently override the shared breaker.
+#[derive(Debug, Default)]
+pub(super) struct LocalCircuitFence {
+    pub(super) generation: u64,
+    pub(super) local_cooldown_until: u64,
+    pub(super) failure_window: u64,
+    pub(super) local_failure_floor: u32,
+    /// Actual local successes after a known failure and its cooldown. Shared
+    /// aggregate failure counts cannot prove that this failure was published.
+    pub(super) local_recovery_successes: Option<u32>,
 }
 
 impl Deref for DeploymentState {
@@ -301,7 +317,9 @@ impl DeploymentState {
                 minute_reset_at: AtomicU64::new(now),
             }),
             minute_window_lock: Arc::new(RwLock::new(())),
+            minute_window_generation: Arc::new(AtomicU64::new(0)),
             local_admission: Arc::new(Mutex::new(local_admission::LocalTokenLedger::default())),
+            circuit_updates: Arc::new(Mutex::new(LocalCircuitFence::default())),
             provider_instance_identity,
             runtime_identity: None,
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
@@ -309,6 +327,17 @@ impl DeploymentState {
             probe_lifecycle: Arc::new(ProbeLifecycle::new()),
             probe_generation: 0,
         }
+    }
+
+    pub(super) fn circuit_update_generation(&self) -> u64 {
+        self.circuit_updates.lock().generation
+    }
+
+    pub(super) fn with_circuit_update<T>(
+        &self,
+        operation: impl FnOnce(&mut LocalCircuitFence) -> T,
+    ) -> T {
+        operation(&mut self.circuit_updates.lock())
     }
 
     /// Explicitly start a fresh per-minute counter window.
@@ -333,6 +362,7 @@ impl DeploymentState {
     /// Read observed usage while the caller owns the current minute gate.
     fn observed_minute_counters(&self) -> MinuteCounters {
         MinuteCounters {
+            window_generation: self.current_minute_generation(),
             tpm: self.tpm_current.load(Ordering::Relaxed),
             rpm: self.rpm_current.load(Ordering::Relaxed),
             successes: self.successes_this_minute.load(Ordering::Relaxed),
@@ -340,7 +370,13 @@ impl DeploymentState {
         }
     }
 
-    fn with_current_minute<T>(&self, now: u64, operation: impl FnOnce() -> T) -> T {
+    /// Read only while holding the minute gate. Unlike the wall-clock reset
+    /// timestamp, this distinguishes two explicit resets in the same second.
+    pub(super) fn current_minute_generation(&self) -> u64 {
+        self.minute_window_generation.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn with_current_minute<T>(&self, now: u64, operation: impl FnOnce() -> T) -> T {
         let guard = self.minute_window_lock.read();
         let last = self.minute_reset_at.load(Ordering::Acquire);
         if !minute_window_needs_roll(now, last) {
@@ -369,6 +405,8 @@ impl DeploymentState {
         // The minute gate is already exclusive. Live reservations survive a
         // reset; only completed unknown usage belongs to the elapsed window.
         self.local_admission.lock().retained_unobserved = 0;
+        self.minute_window_generation
+            .fetch_add(1, Ordering::Relaxed);
         self.tpm_current.store(0, Ordering::Relaxed);
         self.rpm_current.store(0, Ordering::Relaxed);
         self.successes_this_minute.store(0, Ordering::Relaxed);
@@ -413,7 +451,9 @@ impl DeploymentState {
         Self {
             inner: Arc::clone(&self.inner),
             minute_window_lock: Arc::clone(&self.minute_window_lock),
+            minute_window_generation: Arc::clone(&self.minute_window_generation),
             local_admission: Arc::clone(&self.local_admission),
+            circuit_updates: Arc::clone(&self.circuit_updates),
             provider_instance_identity,
             runtime_identity: self.runtime_identity.clone(),
             probe_health: Arc::new(AtomicU8::new(HealthStatus::Unknown as u8)),
@@ -464,6 +504,7 @@ fn minute_window_needs_roll(now: u64, last: u64) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MinuteCounters {
+    pub(crate) window_generation: u64,
     pub(crate) tpm: u64,
     pub(crate) rpm: u64,
     pub(crate) successes: u64,
@@ -630,7 +671,17 @@ impl Deployment {
         latency_us: u64,
         admission: Option<&super::admission::AdmissionHold>,
     ) {
+        let mut fence = self.state.circuit_updates.lock();
+        fence.generation = fence
+            .generation
+            .checked_add(1)
+            .expect("circuit generation exhausted");
         let now = current_timestamp();
+        if now >= fence.local_cooldown_until
+            && let Some(successes) = &mut fence.local_recovery_successes
+        {
+            *successes = successes.saturating_add(1);
+        }
         self.state.total_requests.fetch_add(1, Ordering::Relaxed);
         self.state.success_requests.fetch_add(1, Ordering::Relaxed);
         self.state.with_current_minute(now, || {

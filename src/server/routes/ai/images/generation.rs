@@ -72,6 +72,9 @@ pub async fn handle_image_generation_with_state(
         &state.unified_router(),
         &requested_model,
         ProviderCapability::ImageGeneration,
+        super::super::execution::estimate::usage(&estimated_image_generation_admission_usage(
+            &core_request,
+        )),
         move |deployment| {
             deployment_supports_request(
                 &deployment.provider,
@@ -136,12 +139,9 @@ pub async fn handle_image_generation_with_state(
                     |reservations, budget| async move {
                         let (budget_reservation, key_budget_reservation) =
                             reservations.into_parts();
-                        let tokens_used = u64::from(
-                            settle_usage
-                                .total_tokens
-                                .saturating_add(settle_usage.image_tokens.unwrap_or(0)),
-                        );
-                        super::super::spend::record_pricing_usage_spend_with_request_pricing(
+                        super::super::execution::completion::observe_unknown_usage();
+                        let tokens_used = super::super::execution::estimate::usage(&settle_usage);
+                        super::super::spend::record_pricing_usage_spend_with_admission(
                             &settle_request_pricing,
                             &settle_pricing_config,
                             budget.budget_limits(),
@@ -152,9 +152,10 @@ pub async fn handle_image_generation_with_state(
                             &settle_usage,
                             budget_reservation,
                             key_budget_reservation,
+                            tokens_used,
                         )
                         .await;
-                        tokens_used
+                        0
                     },
                 )
                 .await
@@ -182,16 +183,7 @@ fn estimated_image_generation_usage(
     request: &CoreImageRequest,
     request_pricing: &super::super::spend::RequestPricing,
 ) -> PricingUsage {
-    let prompt_tokens = super::estimated_text_tokens(&request.prompt);
-    let image_count = request.n.unwrap_or(1);
-    let image_tokens = super::estimated_image_output_tokens(
-        request.size.as_deref(),
-        request.quality.as_deref(),
-        image_count,
-    );
-    let mut usage = PricingUsage::new(prompt_tokens, 0);
-    usage.image_tokens = Some(image_tokens);
-    usage.output_image_count = Some(image_count.max(1));
+    let mut usage = estimated_image_generation_admission_usage(request);
     usage.output_image_pricing_keys = request_pricing
         .priced_parts()
         .map(|(provider, model)| {
@@ -203,6 +195,20 @@ fn estimated_image_generation_usage(
             )
         })
         .unwrap_or_default();
+    usage
+}
+
+fn estimated_image_generation_admission_usage(request: &CoreImageRequest) -> PricingUsage {
+    let prompt_tokens = super::estimated_text_tokens(&request.prompt);
+    let image_count = request.n.unwrap_or(1);
+    let image_tokens = super::estimated_image_output_tokens(
+        request.size.as_deref(),
+        request.quality.as_deref(),
+        image_count,
+    );
+    let mut usage = PricingUsage::new(prompt_tokens, 0);
+    usage.image_tokens = Some(image_tokens);
+    usage.output_image_count = Some(image_count.max(1));
     usage
 }
 

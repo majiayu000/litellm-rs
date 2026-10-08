@@ -1387,3 +1387,244 @@ async fn openai_compatible_text_to_speech_maps_401_before_returning_audio()
     }
     Ok(())
 }
+
+async fn direct_openai_usage_provider(
+    api_base: &str,
+) -> crate::core::providers::openai::OpenAIProvider {
+    let mut config = crate::core::providers::openai::OpenAIConfig::default();
+    config.base.api_key = Some("sk-test-finite-usage-boundary".to_string());
+    config.base.api_base = Some(api_base.to_string());
+    config.base.endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
+    crate::core::providers::openai::OpenAIProvider::new(config)
+        .await
+        .unwrap()
+}
+
+fn finite_chat_response(usage: Option<serde_json::Value>) -> serde_json::Value {
+    let mut response = serde_json::json!({
+        "id":"chat-finite-usage",
+        "object":"chat.completion",
+        "created":1,
+        "model":"test-model",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"kept"},"finish_reason":"stop"}]
+    });
+    if let Some(usage) = usage {
+        response["usage"] = usage;
+    }
+    response
+}
+
+#[tokio::test]
+async fn finite_openai_chat_validates_raw_usage_without_losing_content_or_details() {
+    use serde_json::json;
+    let direct = direct_openai_usage_provider(TEST_PUBLIC_API_BASE).await;
+    let compatible = openai_compatible_embeddings_provider(TEST_PUBLIC_API_BASE).await;
+    let invalid = [
+        None,
+        Some(Value::Null),
+        Some(json!({})),
+        Some(json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0})),
+        Some(json!({"prompt_tokens":100,"completion_tokens":50,"total_tokens":1})),
+        Some(json!({"prompt_tokens":2,"completion_tokens":1,"total_tokens":0})),
+        Some(json!({"prompt_tokens":2,"total_tokens":2})),
+        Some(json!({"prompt_tokens":-1,"completion_tokens":1,"total_tokens":0})),
+        Some(json!({"prompt_tokens":1.5,"completion_tokens":1,"total_tokens":2})),
+        Some(json!({"prompt_tokens":"2","completion_tokens":1,"total_tokens":3})),
+        Some(json!({"prompt_tokens":u64::MAX,"completion_tokens":1,"total_tokens":u64::MAX})),
+        Some(json!({
+            "prompt_tokens":u64::from(u32::MAX) + 1,
+            "completion_tokens":0,"total_tokens":u64::from(u32::MAX) + 1
+        })),
+        Some(json!({
+            "prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+            "prompt_tokens_details":{"cached_tokens":"3"}
+        })),
+        Some(json!({
+            "prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+            "completion_tokens_details":{"cached_tokens":"3"}
+        })),
+        Some(json!({
+            "prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+            "prompt_tokens_details":{"reasoning_tokens":"3"}
+        })),
+    ];
+    let detailed = json!({
+        "prompt_tokens":4,"completion_tokens":2,"total_tokens":6,
+        "prompt_tokens_details":{
+            "cached_tokens":1,"cache_creation_tokens":1,"cache_read_tokens":1,"audio_tokens":2
+        },
+        "completion_tokens_details":{"reasoning_tokens":1,"audio_tokens":1}
+    });
+    for native in [false, true] {
+        for usage in &invalid {
+            let wire = serde_json::to_vec(&finite_chat_response(usage.clone())).unwrap();
+            let response = if native {
+                direct.transform_response(&wire, "test-model", "").await
+            } else {
+                compatible.transform_response(&wire, "test-model", "").await
+            }
+            .unwrap();
+            assert_eq!(response.id, "chat-finite-usage");
+            assert!(matches!(
+                response.choices[0].message.content.as_ref(),
+                Some(MessageContent::Text(text)) if text == "kept"
+            ));
+            assert!(response.usage.is_none(), "native={native}, raw={usage:?}");
+        }
+        let wire = serde_json::to_vec(&finite_chat_response(Some(detailed.clone()))).unwrap();
+        let response = if native {
+            direct.transform_response(&wire, "test-model", "").await
+        } else {
+            compatible.transform_response(&wire, "test-model", "").await
+        }
+        .unwrap();
+        let usage = response.usage.unwrap();
+        assert_eq!(
+            (
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens
+            ),
+            (4, 2, 6)
+        );
+        let prompt = usage.prompt_tokens_details.unwrap();
+        assert_eq!(
+            (
+                prompt.cached_tokens,
+                prompt.cache_creation_tokens,
+                prompt.cache_read_tokens,
+                prompt.audio_tokens
+            ),
+            (Some(1), Some(1), Some(1), Some(2))
+        );
+        let completion = usage.completion_tokens_details.unwrap();
+        assert_eq!(
+            (completion.reasoning_tokens, completion.audio_tokens),
+            (Some(1), Some(1))
+        );
+    }
+}
+
+#[tokio::test]
+async fn finite_openai_embeddings_validate_usage_after_wire_normalization() {
+    use serde_json::json;
+    for native in [false, true] {
+        for (raw, expected) in [
+            (None, None),
+            (Some(Value::Null), None),
+            (Some(json!({})), None),
+            (Some(json!({"prompt_tokens":0,"total_tokens":0})), None),
+            (Some(json!({"prompt_tokens":100,"total_tokens":1})), None),
+            (
+                Some(json!({"prompt_tokens":2,"completion_tokens":1,"total_tokens":3})),
+                None,
+            ),
+            (Some(json!({"prompt_tokens":-1,"total_tokens":-1})), None),
+            (Some(json!({"prompt_tokens":1.5,"total_tokens":1.5})), None),
+            (Some(json!({"prompt_tokens":"3","total_tokens":3})), None),
+            (
+                Some(json!({
+                    "prompt_tokens":u64::from(u32::MAX) + 1,
+                    "total_tokens":u64::from(u32::MAX) + 1
+                })),
+                None,
+            ),
+            (
+                Some(json!({
+                    "prompt_tokens":3,"total_tokens":3,
+                    "prompt_tokens_details":{"cached_tokens":"3"}
+                })),
+                None,
+            ),
+            (Some(json!({"prompt_tokens":3,"total_tokens":3})), Some(3)),
+            (
+                Some(json!({"prompt_tokens":3,"completion_tokens":0,"total_tokens":3})),
+                Some(3),
+            ),
+        ] {
+            let mut body: Value = serde_json::from_str(EMBEDDING_SUCCESS_BODY).unwrap();
+            body.as_object_mut().unwrap().remove("usage");
+            if let Some(raw) = raw {
+                body["usage"] = raw;
+            }
+            let (api_base, captured) = openai_like_json_response_url("200 OK", &body.to_string())
+                .await
+                .unwrap();
+            let request = embedding_request(
+                "text-embedding-3-small",
+                EmbeddingInput::Text("hello".to_string()),
+            );
+            let response = if native {
+                let provider = direct_openai_usage_provider(&api_base).await;
+                LLMProvider::embeddings(&provider, request, RequestContext::default()).await
+            } else {
+                let provider = openai_compatible_embeddings_provider(api_base).await;
+                LLMProvider::embeddings(&provider, request, RequestContext::default()).await
+            }
+            .unwrap();
+            assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+            assert_eq!(
+                response.usage.as_ref().map(|usage| usage.total_tokens),
+                expected,
+                "native={native}, raw={body}"
+            );
+            if let Some(usage) = response.usage {
+                assert_eq!(usage.prompt_tokens, 3);
+                assert_eq!(usage.completion_tokens, 0);
+            }
+            assert_eq!(
+                captured.lock().unwrap().as_ref().unwrap().path,
+                "/embeddings"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn finite_compatible_embedding_total_only_normalization_remains_supported() {
+    use serde_json::json;
+    for provider_name in ["openai_like", "aiml"] {
+        for (raw, expected) in [
+            (json!({"total_tokens":3}), Some(3)),
+            (json!({"total_tokens":0}), None),
+            (json!({"prompt_tokens":4,"total_tokens":3}), None),
+        ] {
+            let mut body: Value = serde_json::from_str(EMBEDDING_SUCCESS_BODY).unwrap();
+            body["usage"] = raw;
+            let (api_base, _) = openai_like_json_response_url("200 OK", &body.to_string())
+                .await
+                .unwrap();
+            let mut config = private_openai_like_config(api_base);
+            config.provider_name = provider_name.to_string();
+            let provider = OpenAILikeProvider::new_openai_compatible(config)
+                .await
+                .unwrap();
+            let response = LLMProvider::embeddings(
+                &provider,
+                embedding_request(
+                    "text-embedding-3-small",
+                    EmbeddingInput::Text("hello".to_string()),
+                ),
+                RequestContext::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.data[0].embedding, vec![0.1, 0.2]);
+            assert_eq!(
+                response.usage.map(|usage| usage.total_tokens),
+                expected,
+                "{provider_name}, raw={body}"
+            );
+        }
+    }
+}
+
+#[test]
+fn typed_openai_transformer_keeps_trusted_zero_usage() {
+    let typed: OpenAIChatResponse = serde_json::from_value(finite_chat_response(Some(
+        serde_json::json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}),
+    )))
+    .unwrap();
+    let response = OpenAIResponseTransformer::transform(typed).unwrap();
+    assert_eq!(response.usage.unwrap().total_tokens, 0);
+}

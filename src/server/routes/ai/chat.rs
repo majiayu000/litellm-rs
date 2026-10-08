@@ -235,6 +235,12 @@ async fn handle_chat_completion_internal(
 ) -> Result<(ChatCompletionResponseWithExtensions, CallbackLifecycle), GatewayError> {
     let runtime = state.pin_runtime();
     let unified_router = runtime.unified_router.as_ref();
+    let estimated_tokens = super::execution::estimate::chat_with_key_limit(
+        request.as_ref(),
+        &extensions,
+        0,
+        context.api_key_max_tokens_per_request(),
+    )?;
     let requested_model = request.model.clone();
     let core_request = ChatContinuationRequest::new(
         build_core_chat_request(request.as_ref(), requested_model, false)?,
@@ -245,6 +251,7 @@ async fn handle_chat_completion_internal(
     } else {
         super::response_cache::lookup_chat(state, request.as_ref(), context.as_ref()).await?
     };
+    let has_cached_response = cached_response.is_some();
     let requested_model = core_request.request().model.clone();
     let callback = CallbackLifecycle::new(
         &state.callbacks,
@@ -413,10 +420,20 @@ async fn handle_chat_completion_internal(
         .enumerate()
     {
         let excluded = excluded_deployments.clone();
+        // A frozen replay does not dispatch provider work. Keep the existing
+        // minimal routing admission until a guardrail invalidates that replay;
+        // every live fallback must then reserve the complete request estimate.
+        let admission_estimate =
+            if has_cached_response && !skip_cached_replay.load(Ordering::Relaxed) {
+                0
+            } else {
+                estimated_tokens
+            };
         let routed = match execute_with_selected_deployment_matching(
             unified_router,
             &model,
             ProviderCapability::ChatCompletion,
+            admission_estimate,
             move |deployment| !excluded.contains(deployment.id.as_str()),
             operation.clone(),
         )

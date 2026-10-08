@@ -11,13 +11,13 @@ async fn test_github_copilot_provider_creation_default() {
 
 #[tokio::test]
 async fn test_github_copilot_config_from_env() {
-    let _env_lock = crate::core::providers::factory::CONSTRUCTION_ENV_LOCK
+    let _env = crate::core::providers::factory::CONSTRUCTION_ENV_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let previous = std::env::var("GITHUB_COPILOT_TOKEN_DIR").ok();
+    let previous = std::env::var_os("GITHUB_COPILOT_TOKEN_DIR");
     unsafe { std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", "/custom/path") };
     let config = GitHubCopilotConfig::default();
-    assert_eq!(config.get_token_dir(), "/custom/path");
+    let resolved = config.get_token_dir();
     for blank in ["", " "] {
         let explicit = GitHubCopilotConfig {
             token_dir: Some(blank.into()),
@@ -33,6 +33,7 @@ async fn test_github_copilot_config_from_env() {
         Some(value) => unsafe { std::env::set_var("GITHUB_COPILOT_TOKEN_DIR", value) },
         None => unsafe { std::env::remove_var("GITHUB_COPILOT_TOKEN_DIR") },
     }
+    assert_eq!(resolved, "/custom/path");
 }
 
 // Note: Error conversion tests removed - GitHubCopilotError is now a type alias to ProviderError

@@ -14,8 +14,11 @@ use std::time::Duration;
 use std::time::Instant;
 #[path = "execution_completion.rs"]
 pub(super) mod completion;
+#[path = "execution_estimate.rs"]
+pub(super) mod estimate;
 #[path = "execution_observability.rs"]
 pub(super) mod observability;
+
 pub(super) struct StreamingDeploymentLease {
     router: Arc<UnifiedRouter>,
     deployment: Arc<Deployment>,
@@ -83,6 +86,7 @@ impl StreamingDeploymentLease {
         self.settle_with_outcome(tokens, outcome, settlement)
     }
 
+    #[cfg(any(test, feature = "websockets"))]
     pub(super) fn settle_interrupted<'a, F: std::future::Future + 'a>(
         &'a mut self,
         tokens: u64,
@@ -457,6 +461,7 @@ impl Drop for StreamingDeploymentLease {
     }
 }
 
+#[cfg(test)]
 pub(super) fn settle_stream_terminal<'a, F: std::future::Future + 'a>(
     lease: Option<&'a mut StreamingDeploymentLease>,
     tokens: u64,
@@ -475,6 +480,7 @@ pub(super) async fn execute_with_selected_deployment<T, F, Fut>(
     router: &UnifiedRouter,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     operation: F,
 ) -> Result<T, GatewayError>
 where
@@ -485,6 +491,7 @@ where
         router,
         requested_model,
         capability,
+        estimated_tokens,
         |_| true,
         operation,
     )
@@ -495,6 +502,7 @@ pub(super) async fn execute_with_selected_deployment_matching<T, F, Fut, P>(
     router: &UnifiedRouter,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     is_candidate: P,
     operation: F,
 ) -> Result<T, GatewayError>
@@ -502,6 +510,39 @@ where
     F: Fn(Provider, String, String) -> Fut + Clone,
     Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
     P: Fn(&Deployment) -> bool,
+{
+    execute_with_selected_deployment_matching_with_estimator(
+        router,
+        requested_model,
+        capability,
+        |_| estimated_tokens,
+        is_candidate,
+        move |deployment: Arc<Deployment>| {
+            operation.clone()(
+                deployment.provider.clone(),
+                deployment.model.clone(),
+                deployment.id.clone(),
+            )
+        },
+    )
+    .await
+}
+
+/// Keep cache-aware estimates and replay bound to the exact selected deployment.
+/// The fixed-estimate entry point above retains its existing operation API.
+pub(super) async fn execute_with_selected_deployment_matching_with_estimator<T, F, Fut, P, E>(
+    router: &UnifiedRouter,
+    requested_model: &str,
+    capability: ProviderCapability,
+    estimated_tokens: E,
+    is_candidate: P,
+    operation: F,
+) -> Result<T, GatewayError>
+where
+    F: Fn(Arc<Deployment>) -> Fut + Clone,
+    Fut: std::future::Future<Output = Result<(T, u64), ProviderError>>,
+    P: Fn(&Deployment) -> bool,
+    E: Fn(&Deployment) -> u64,
 {
     let max_attempts = router.config().num_retries + 1;
     let mut attempt = 1;
@@ -521,9 +562,10 @@ where
         // exclusions so single-deployment setups still get same-target
         // retries. When even that pool is empty, fail closed below.
         let mut deployment_lease = match router
-            .select_deployment_lease_for_capability_matching_async(
+            .select_deployment_lease_for_capability_matching_with_estimator_async(
                 requested_model,
                 &capability,
+                &estimated_tokens,
                 |deployment| {
                     !excluded_budget_deployments.contains(deployment.id.as_str())
                         && !tried_deployments.contains(deployment.id.as_str())
@@ -535,9 +577,10 @@ where
             Ok(lease) => lease,
             Err(RouterError::UnsupportedCapability { .. }) if !tried_deployments.is_empty() => {
                 match router
-                    .select_deployment_lease_for_capability_matching_async(
+                    .select_deployment_lease_for_capability_matching_with_estimator_async(
                         requested_model,
                         &capability,
+                        &estimated_tokens,
                         |deployment| {
                             !excluded_budget_deployments.contains(deployment.id.as_str())
                                 && is_candidate(deployment)
@@ -608,28 +651,23 @@ where
             }
         };
 
-        let selected_deployment_id = deployment_lease.clone_deployment_id();
-        let provider = deployment_lease.deployment().provider.clone();
-        let selected_model = deployment_lease.deployment().model.clone();
-
         let completion = completion::UnaryCompletion::new(&deployment_lease, started_at);
         let result = completion::CURRENT
             .scope(
                 completion.clone(),
-                Box::pin(operation.clone()(
-                    provider,
-                    selected_model,
-                    selected_deployment_id,
-                )),
+                Box::pin(operation.clone()(deployment_lease.clone_deployment())),
             )
             .await;
         match result {
             Ok((value, tokens_used)) => {
-                completion.complete_success(tokens_used);
+                let usage = completion.complete_success(tokens_used);
                 router
                     .record_success_circuit_for_deployment_async(deployment_lease.deployment())
                     .await;
-                deployment_lease.commit_admission_async(tokens_used).await;
+                match usage {
+                    Some(tokens) => deployment_lease.commit_admission_async(tokens).await,
+                    None => deployment_lease.retain_admission_async(0).await,
+                }
                 drop(deployment_lease);
                 return Ok(value);
             }
@@ -727,6 +765,7 @@ pub(super) async fn execute_stream_with_selected_deployment<T, F, Fut>(
     router: Arc<UnifiedRouter>,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
 where
@@ -737,6 +776,7 @@ where
         router,
         requested_model,
         capability,
+        estimated_tokens,
         |_| true,
         operation,
     )
@@ -747,6 +787,7 @@ pub(super) async fn execute_stream_with_selected_deployment_matching<T, F, Fut, 
     router: Arc<UnifiedRouter>,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     is_candidate: P,
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
@@ -759,9 +800,9 @@ where
         router,
         requested_model,
         capability,
+        estimated_tokens,
         is_candidate,
         RequestIdempotency::Idempotent,
-        0,
         operation,
     )
     .await
@@ -778,9 +819,9 @@ pub(super) async fn execute_stream_with_selected_deployment_matching_with_idempo
     router: Arc<UnifiedRouter>,
     requested_model: &str,
     capability: ProviderCapability,
+    estimated_tokens: u64,
     is_candidate: P,
     idempotency: RequestIdempotency,
-    estimated_tokens: u64,
     operation: F,
 ) -> Result<(T, StreamingDeploymentLease), GatewayError>
 where
@@ -937,8 +978,12 @@ where
                     },
                 );
                 if retry_decision.should_retry {
+                    router.record_local_failure(
+                        deployment_lease.deployment(),
+                        CooldownReason::ConsecutiveFailures,
+                    );
                     router
-                        .record_failure_with_reason_for_deployment_async(
+                        .record_failure_circuit_for_deployment_async(
                             deployment_lease.deployment(),
                             crate::core::router::CooldownReason::ConsecutiveFailures,
                         )
@@ -959,8 +1004,9 @@ where
                 let cooldown_reason = infer_cooldown_reason(&err);
                 // Local caller policy errors do not describe provider health.
                 if !matches!(err, ProviderError::InvalidRequest { .. }) {
+                    router.record_local_failure(deployment_lease.deployment(), cooldown_reason);
                     router
-                        .record_failure_with_reason_for_deployment_async(
+                        .record_failure_circuit_for_deployment_async(
                             deployment_lease.deployment(),
                             cooldown_reason,
                         )
@@ -1000,3 +1046,7 @@ mod exclusion_tests;
 #[cfg(test)]
 #[path = "execution_idempotency_tests.rs"]
 mod idempotency_tests;
+
+#[cfg(test)]
+#[path = "execution_usage_tests.rs"]
+mod usage_tests;

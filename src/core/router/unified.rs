@@ -715,16 +715,26 @@ impl Router {
         &self,
         deployment: &Deployment,
     ) {
+        let generation = deployment.state.circuit_update_generation();
         match self
             .circuit
             .record_success_async(deployment, &self.config)
             .await
         {
-            CircuitWrite::Local => self.promote_from_local_success(deployment),
+            CircuitWrite::Local => deployment.state.with_circuit_update(|fence| {
+                if fence.generation == generation {
+                    self.promote_from_local_success(deployment);
+                }
+            }),
             #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {}
             #[cfg(feature = "gateway")]
-            CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
+            CircuitWrite::Applied(state) => apply_circuit_snapshot(
+                deployment,
+                &state,
+                generation,
+                self.config.success_threshold,
+            ),
         }
     }
 
@@ -780,6 +790,9 @@ impl Router {
         deployment: &Deployment,
         reason: CooldownReason,
     ) {
+        let generation = deployment.state.circuit_update_generation();
+        #[cfg(not(feature = "gateway"))]
+        let _ = generation;
         match self
             .circuit
             .record_failure_async(deployment, &self.config, reason)
@@ -788,13 +801,26 @@ impl Router {
             CircuitWrite::Local => self.record_local_failure(deployment, reason),
             #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {
-                let _ = deployment.record_failure_with_minute_counters();
-                deployment.enter_cooldown(self.config.cooldown_time_secs);
+                deployment.state.with_circuit_update(|fence| {
+                    self.record_local_failure_locked(deployment, reason, fence);
+                    self.protect_local_cooldown(deployment, fence);
+                });
             }
             #[cfg(feature = "gateway")]
             CircuitWrite::Applied(state) => {
-                let _ = deployment.record_failure_with_minute_counters();
-                apply_circuit_snapshot(deployment, &state);
+                let apply_generation = deployment.state.with_circuit_update(|fence| {
+                    let unchanged = fence.generation == generation;
+                    self.record_local_failure_locked(deployment, reason, fence);
+                    unchanged.then_some(fence.generation)
+                });
+                if let Some(generation) = apply_generation {
+                    apply_circuit_snapshot(
+                        deployment,
+                        &state,
+                        generation,
+                        self.config.success_threshold,
+                    );
+                }
             }
         }
     }
@@ -805,6 +831,9 @@ impl Router {
         deployment: &Deployment,
         reason: CooldownReason,
     ) {
+        let generation = deployment.state.circuit_update_generation();
+        #[cfg(not(feature = "gateway"))]
+        let _ = generation;
         match self
             .circuit
             .record_failure_async(deployment, &self.config, reason)
@@ -813,15 +842,62 @@ impl Router {
             CircuitWrite::Local => {}
             #[cfg(any(feature = "gateway", test))]
             CircuitWrite::StrictUnavailable => {
-                deployment.enter_cooldown(self.config.cooldown_time_secs)
+                deployment.state.with_circuit_update(|fence| {
+                    fence.generation = fence
+                        .generation
+                        .checked_add(1)
+                        .expect("circuit generation exhausted");
+                    self.protect_local_cooldown(deployment, fence);
+                });
             }
             #[cfg(feature = "gateway")]
-            CircuitWrite::Applied(state) => apply_circuit_snapshot(deployment, &state),
+            CircuitWrite::Applied(state) => apply_circuit_snapshot(
+                deployment,
+                &state,
+                generation,
+                self.config.success_threshold,
+            ),
         }
     }
 
     pub(crate) fn record_local_failure(&self, deployment: &Deployment, reason: CooldownReason) {
+        deployment.state.with_circuit_update(|fence| {
+            self.record_local_failure_locked(deployment, reason, fence);
+        });
+    }
+
+    fn protect_local_cooldown(
+        &self,
+        deployment: &Deployment,
+        fence: &mut super::deployment::LocalCircuitFence,
+    ) {
+        deployment.enter_cooldown(self.config.cooldown_time_secs);
+        fence.local_cooldown_until = fence
+            .local_cooldown_until
+            .max(deployment.state.cooldown_until.load(Relaxed));
+        deployment
+            .state
+            .cooldown_until
+            .store(fence.local_cooldown_until, Relaxed);
+    }
+
+    fn record_local_failure_locked(
+        &self,
+        deployment: &Deployment,
+        reason: CooldownReason,
+        fence: &mut super::deployment::LocalCircuitFence,
+    ) {
+        fence.generation = fence
+            .generation
+            .checked_add(1)
+            .expect("circuit generation exhausted");
         let minute = deployment.record_failure_with_minute_counters();
+        if fence.failure_window != minute.window_generation {
+            fence.failure_window = minute.window_generation;
+            fence.local_failure_floor = 0;
+        }
+        fence.local_failure_floor = fence.local_failure_floor.max(minute.failures);
+        fence.local_recovery_successes = Some(0);
 
         let should_cooldown = match reason {
             CooldownReason::RateLimit
@@ -854,7 +930,7 @@ impl Router {
                 cooldown_secs = self.config.cooldown_time_secs,
                 "deployment entering cooldown"
             );
-            deployment.enter_cooldown(self.config.cooldown_time_secs);
+            self.protect_local_cooldown(deployment, fence);
         }
     }
 
@@ -863,16 +939,61 @@ impl Router {
     }
 
     pub(crate) async fn deployment_is_selectable_async(&self, deployment: &Deployment) -> bool {
-        match self.circuit.observe_async(deployment, &self.config).await {
-            CircuitObserve::UseLocal => !deployment.is_in_cooldown() && deployment.is_healthy(),
-            #[cfg(any(feature = "gateway", test))]
-            CircuitObserve::Blocked => false,
-            #[cfg(feature = "gateway")]
-            CircuitObserve::Shared(state) => {
-                apply_circuit_snapshot(deployment, &state);
-                !state.blocks_selection() && deployment.is_healthy()
+        let circuit = &self.circuit;
+        let config = &self.config;
+        self.deployment_is_selectable_with_observer(deployment, move || {
+            circuit.observe_async(deployment, config)
+        })
+        .await
+    }
+
+    pub(super) async fn deployment_is_selectable_with_observer<F, Fut>(
+        &self,
+        deployment: &Deployment,
+        mut observe: F,
+    ) -> bool
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = CircuitObserve>,
+    {
+        for _ in 0..2 {
+            let generation = deployment.state.circuit_update_generation();
+            #[cfg(not(feature = "gateway"))]
+            let _ = generation;
+            let selectable = match observe().await {
+                CircuitObserve::UseLocal => {
+                    Some(!deployment.is_in_cooldown() && deployment.is_healthy())
+                }
+                #[cfg(any(feature = "gateway", test))]
+                CircuitObserve::Blocked => Some(false),
+                #[cfg(feature = "gateway")]
+                CircuitObserve::Shared(state) => {
+                    apply_circuit_snapshot(
+                        deployment,
+                        &state,
+                        generation,
+                        self.config.success_threshold,
+                    );
+                    deployment.state.with_circuit_update(|fence| {
+                        if fence.generation != generation {
+                            return None;
+                        }
+                        Some(
+                            !state.blocks_selection()
+                                && !deployment.is_in_cooldown()
+                                && deployment.is_healthy(),
+                        )
+                    })
+                }
+            };
+            if let Some(selectable) = selectable {
+                return selectable;
             }
+            // A newer local outcome invalidates this observation, not the
+            // shared restriction. Re-read under its current fence.
         }
+        // Continuous outcome updates must not bypass shared probe ownership.
+        false
     }
 
     // ========== Fallback Methods ==========

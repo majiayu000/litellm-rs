@@ -186,20 +186,47 @@ async fn forward(
     let sink = GuardrailDecisionSink::from_state(state, None, Some(provider), deployment);
     let mut guard = StreamOutputGuardrail::new(state.guardrails()).with_decision_sink(sink);
     let idle_seconds = state.config().gateway.server.stream_idle_timeout;
+    // A peer FIN may leave Actix's write half open. Comments let the transport
+    // observe a fully closed reader while preserving legitimate half-closed writers.
+    let period = std::time::Duration::from_secs(1);
+    let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     'upstream: loop {
-        let chunk = tokio::select! {
-            biased;
-            _ = tx.closed() => break,
-            _ = async { match deadline { Some(deadline) => tokio::time::sleep_until(deadline).await, None => std::future::pending::<()>().await } } => {
-                failure = Some(ProviderError::timeout("responses", "Background Responses stream tracking timed out")); break;
-            },
-            chunk = async {
-                if idle_seconds == 0 { Ok(response.chunk().await) }
-                else { tokio::time::timeout(std::time::Duration::from_secs(idle_seconds), response.chunk()).await }
-            } => match chunk {
-                Ok(chunk) => chunk,
-                Err(_) => { failure = Some(ProviderError::timeout("responses", "Responses stream idle timeout")); break; }
-            },
+        let chunk = {
+            // Keep this one provider wait pinned across comments: downstream
+            // traffic must never restart the upstream idle timeout.
+            let next_chunk = async {
+                if idle_seconds == 0 {
+                    Ok(response.chunk().await)
+                } else {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(idle_seconds),
+                        response.chunk(),
+                    )
+                    .await
+                }
+            };
+            tokio::pin!(next_chunk);
+            loop {
+                tokio::select! {
+                biased;
+                _ = tx.closed() => break 'upstream,
+                _ = async { match deadline { Some(deadline) => tokio::time::sleep_until(deadline).await, None => std::future::pending::<()>().await } } => {
+                    failure = Some(ProviderError::timeout("responses", "Background Responses stream tracking timed out")); break 'upstream;
+                },
+                chunk = &mut next_chunk => match chunk {
+                    Ok(chunk) => break chunk,
+                    Err(_) => { failure = Some(ProviderError::timeout("responses", "Responses stream idle timeout")); break 'upstream; }
+                },
+                _ = heartbeat.tick() => {
+                    // Comments carry no provider data or usage. Never block a
+                    // provider deadline on downstream backpressure.
+                    if matches!(tx.try_send(Bytes::from_static(b": keep-alive\n\n")), Err(mpsc::error::TrySendError::Closed(_))) {
+                        break 'upstream;
+                    }
+                },
+                    }
+            }
         };
         match chunk {
             Ok(Some(chunk)) => {

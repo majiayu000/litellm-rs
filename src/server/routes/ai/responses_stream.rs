@@ -9,6 +9,7 @@ use crate::core::models::openai::responses_api::{
     ResponsesApiRequest, ResponsesApiResponse,
 };
 use crate::core::providers::ProviderError;
+use crate::core::providers::base::sse::invalidates_stream_usage;
 use crate::core::streaming::types::Event;
 use crate::core::types::responses::Usage as ChatUsage;
 use crate::core::types::{context::SharedRequestContext, model::ProviderCapability};
@@ -64,6 +65,15 @@ pub(crate) async fn handle_streaming_response(
         include_usage: Some(true),
     });
     let chat_request = Arc::new(chat_request);
+    let estimated_tokens = match super::execution::estimate::chat_with_key_limit(
+        chat_request.as_ref(),
+        &[],
+        0,
+        context.api_key_max_tokens_per_request(),
+    ) {
+        Ok(tokens) => tokens,
+        Err(error) => return Ok(openai_errors::gateway_error_response(&error)),
+    };
     let model_name = chat_request.model.clone();
     let resp_id = format!("resp_{}", uuid_v4_hex());
     let created_at = current_unix_ts();
@@ -94,6 +104,7 @@ pub(crate) async fn handle_streaming_response(
         state.unified_router().clone(),
         &requested_model,
         ProviderCapability::ChatCompletionStream,
+        estimated_tokens,
         move |provider, selected_model, _selected_deployment_id| {
             let core_request = core_request.clone();
             let ctx = Arc::clone(&context_clone);
@@ -258,10 +269,33 @@ pub(crate) async fn handle_streaming_response(
                 let mut reasoning_item_id = String::new();
                 let mut reasoning_output_index: u32 = 0;
                 let mut reasoning_started = false;
+                // A later flush or client disconnect must not erase an already
+                // observed provider/serialization failure from this attempt.
+                let mut routing_error: Option<ProviderError> = None;
                 macro_rules! settle_if_chargeable {
                     () => {{
-                        if final_usage.is_some() || saw_upstream_output {
-                            settlement.record_disconnect(final_usage.as_ref()).await;
+                        if final_usage.is_some()
+                            || saw_upstream_output
+                            || routing_error.as_ref().is_some_and(invalidates_stream_usage)
+                        {
+                            if let Some(lease) = lease.as_mut() {
+                                lease
+                                    .settle_native_stream(
+                                        final_usage
+                                            .as_ref()
+                                            .map(|usage| u64::from(usage.total_tokens)),
+                                        false,
+                                        routing_error.as_ref(),
+                                        settlement.record_disconnect(final_usage.as_ref()),
+                                    )
+                                    .await;
+                            } else {
+                                settlement.record_disconnect(final_usage.as_ref()).await;
+                            }
+                        } else if let Some(error) = routing_error.as_ref()
+                            && let Some(lease) = lease.take()
+                        {
+                            lease.finish_failure(error).await;
                         }
                     }};
                 }
@@ -279,13 +313,10 @@ pub(crate) async fn handle_streaming_response(
                                 callback.fail("client disconnected", "client_disconnect");
                             }
                             ResponseStreamEmitError::Serialization(error) => {
-                                flush_guardrail!();
                                 let message = format!("stream serialization failed: {error}");
-                                if let Some(lease) = lease.take() {
-                                    let provider_error =
-                                        ProviderError::serialization("router", message.clone());
-                                    lease.finish_failure(&provider_error).await;
-                                }
+                                routing_error =
+                                    Some(ProviderError::serialization("router", message.clone()));
+                                flush_guardrail!();
                                 callback.fail(message, "serialization_error");
                             }
                         }
@@ -299,7 +330,6 @@ pub(crate) async fn handle_streaming_response(
                         if send_guardrail_error(&tx, error).await {
                             info!("Client disconnected before guardrail error could be sent");
                         }
-                        drop(lease.take());
                         callback.fail(error.message(), "guardrail_output");
                         settle_if_chargeable!();
                         return;
@@ -338,6 +368,10 @@ pub(crate) async fn handle_streaming_response(
                         match timed_result {
                             Ok(r) => r,
                             Err(_) => {
+                                routing_error = Some(ProviderError::timeout(
+                                    "router",
+                                    format!("stream idle timeout after {idle_timeout}s"),
+                                ));
                                 flush_guardrail!();
                                 warn!("Responses API stream idle timeout after {idle_timeout}s");
                                 let _ = tx
@@ -347,13 +381,6 @@ pub(crate) async fn handle_streaming_response(
                                         "timeout",
                                     ))
                                     .await;
-                                if let Some(lease) = lease.take() {
-                                    let error = ProviderError::timeout(
-                                        "router",
-                                        format!("stream idle timeout after {idle_timeout}s"),
-                                    );
-                                    lease.finish_failure(&error).await;
-                                }
                                 callback.fail(
                                     format!("stream idle timeout after {idle_timeout}s"),
                                     "timeout",
@@ -587,13 +614,15 @@ pub(crate) async fn handle_streaming_response(
                             }
                         }
                         Err(e) => {
+                            if invalidates_stream_usage(&e) {
+                                // Earlier usage proves acceptance, but no longer its cost.
+                                final_usage = None;
+                            }
+                            routing_error = Some(e.clone());
                             flush_guardrail!();
                             error!("Responses API stream error: {e}");
                             let (et, ec) = classify(&e);
                             let _ = tx.send(sse_error(&e.to_string(), et, ec)).await;
-                            if let Some(lease) = lease.take() {
-                                lease.finish_failure(&e).await;
-                            }
                             callback.fail(e.to_string(), "provider_error");
                             settle_if_chargeable!();
                             return;
@@ -715,7 +744,7 @@ pub(crate) async fn handle_streaming_response(
 
                 let output_items = output_items_in_stream_order(all_output);
 
-                let (total, budget_usage) =
+                let (_, budget_usage) =
                     response_stream_budget_usage(final_usage.clone(), in_tokens, out_tokens);
                 let usage = budget_usage.as_ref().map(response_usage_from_chat_usage);
                 let completed = ResponsesApiResponse {
@@ -742,25 +771,23 @@ pub(crate) async fn handle_streaming_response(
                             "storage_error",
                         ))
                         .await;
-                    crate::server::routes::ai::execution::settle_stream_terminal(
-                        lease.as_mut(),
-                        budget_usage
-                            .as_ref()
-                            .map_or(u64::from(total), |usage| u64::from(usage.total_tokens)),
-                        None,
-                        settlement.record_completion(budget_usage.as_ref(), saw_upstream_output),
-                    )
-                    .await;
-                    callback.fail("Response storage failed", "storage_error");
-                    if let Some(lease) = lease.take() {
+                    let accounting =
+                        settlement.record_completion(budget_usage.as_ref(), saw_upstream_output);
+                    if let Some(lease) = lease.as_mut() {
                         lease
-                            .finish_success(
-                                budget_usage.as_ref().map_or(u64::from(total), |usage| {
-                                    u64::from(usage.total_tokens)
-                                }),
+                            .settle_native_stream(
+                                budget_usage
+                                    .as_ref()
+                                    .map(|usage| u64::from(usage.total_tokens)),
+                                true,
+                                None,
+                                accounting,
                             )
                             .await;
+                    } else {
+                        accounting.await;
                     }
+                    callback.fail("Response storage failed", "storage_error");
                     return;
                 }
                 if let Err(error) = emit(
@@ -782,27 +809,26 @@ pub(crate) async fn handle_streaming_response(
                     return_after_disconnect!();
                 }
 
-                crate::server::routes::ai::execution::settle_stream_terminal(
-                    lease.as_mut(),
-                    budget_usage
-                        .as_ref()
-                        .map_or(u64::from(total), |usage| u64::from(usage.total_tokens)),
-                    None,
-                    settlement.record_completion(budget_usage.as_ref(), saw_upstream_output),
-                )
-                .await;
-                callback.complete_usage(budget_usage.as_ref(), "success");
-                if let Some(lease) = lease.take() {
-                    let tokens_used = budget_usage
-                        .as_ref()
-                        .map(|u| u.total_tokens)
-                        .unwrap_or(total);
-                    lease.finish_success(u64::from(tokens_used)).await;
+                let accounting =
+                    settlement.record_completion(budget_usage.as_ref(), saw_upstream_output);
+                if let Some(lease) = lease.as_mut() {
+                    lease
+                        .settle_native_stream(
+                            budget_usage
+                                .as_ref()
+                                .map(|usage| u64::from(usage.total_tokens)),
+                            true,
+                            None,
+                            accounting,
+                        )
+                        .await;
+                } else {
+                    accounting.await;
                 }
+                callback.complete_usage(budget_usage.as_ref(), "success");
             });
 
-            let body = tokio_stream::wrappers::ReceiverStream::new(rx)
-                .map(Ok::<_, actix_web::error::Error>);
+            let body = super::sse_keepalive::channel_body(rx);
 
             Ok(HttpResponse::Ok()
                 .insert_header((CONTENT_TYPE, "text/event-stream"))

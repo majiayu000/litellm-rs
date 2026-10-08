@@ -264,6 +264,53 @@ mod tests {
         server.state().clone()
     }
 
+    async fn cache_state_without_routing_retries(state: AppState) -> AppState {
+        use litellm_rs::core::router::{RouterConfig, UnifiedRouter};
+
+        let config = state.config();
+        let router = UnifiedRouter::from_gateway_config_with_aliases_and_pricing(
+            &config.gateway.providers,
+            Some(RouterConfig {
+                num_retries: 0,
+                enable_pre_call_checks: false,
+                ..Default::default()
+            }),
+            &config.gateway.model_aliases,
+            Arc::clone(&state.pricing),
+        )
+        .await
+        .expect("cache admission router should initialize");
+        let mut revision = state.pin_runtime().as_ref().clone();
+        revision.unified_router = Arc::new(router);
+        AppState::new_with_runtime(
+            revision,
+            state.auth.as_ref().clone(),
+            state.storage.as_ref().clone(),
+            Arc::clone(&state.pricing),
+            Arc::clone(&state.budget_limits),
+        )
+    }
+
+    async fn cache_admission_minute_guard() {
+        let second = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            % 60;
+        if second >= 40 {
+            tokio::time::sleep(Duration::from_secs(60 - second)).await;
+        }
+    }
+
+    fn set_cache_test_tpm(state: &AppState, model: &str, limit: u64) {
+        let router = state.unified_router();
+        let ids = router.get_deployments_for_model(model);
+        assert_eq!(ids.len(), 1);
+        let mut deployment = router.get_deployment(&ids[0]).unwrap().as_ref().clone();
+        deployment.config.tpm_limit = Some(limit);
+        router.add_deployment(deployment);
+    }
+
     async fn build_test_app_state_with_idle_timeout(
         base_url: &str,
         stream_idle_timeout: Option<u64>,
@@ -469,6 +516,198 @@ mod tests {
         );
 
         mock_server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_chat_cache_hit_uses_remaining_tpm_but_cache_miss_reserves_full_estimate() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+        let state = cache_state_without_routing_retries(
+            build_test_app_state_with_cache(&mock_server.base_url).await,
+        )
+        .await;
+        set_cache_test_tpm(&state, "gpt-4o", 2_048);
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state.clone()))
+                .configure(litellm_rs::server::routes::ai::configure_routes),
+        )
+        .await;
+        cache_admission_minute_guard().await;
+        let payload = json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hello cache admission"}],
+            "max_tokens": 64
+        });
+        let warm = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(&payload)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(warm.status(), StatusCode::OK);
+        let warm_body: Value = test::read_body_json(warm).await;
+        assert_eq!(warm_body["usage"]["total_tokens"], 16);
+        assert_eq!(mock_server.requests().len(), 1);
+        let router = state.unified_router();
+        let id = router.get_deployments_for_model("gpt-4o").pop().unwrap();
+        let deployment = router.get_deployment(&id).unwrap();
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 16);
+
+        // Keep exactly one token of headroom: the existing minimum cache
+        // reservation fits, while the explicit 64-token output estimate cannot.
+        set_cache_test_tpm(&state, "gpt-4o", 17);
+        let replay = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(&payload)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::OK);
+        let replay_body: Value = test::read_body_json(replay).await;
+        assert_eq!(replay_body["choices"], warm_body["choices"]);
+        assert_eq!(mock_server.requests().len(), 1);
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 16);
+        assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+
+        let mut miss = payload.clone();
+        miss["messages"][0]["content"] = json!("Different uncached request");
+        let denied = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(&miss)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let error: Value = test::read_body_json(denied).await;
+        assert_eq!(error["error"]["code"], "provider_unavailable");
+        assert_eq!(mock_server.requests().len(), 1);
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 16);
+        assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+
+        set_cache_test_tpm(&state, "gpt-4o", 2_048);
+        let admitted = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(&miss)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(admitted.status(), StatusCode::OK);
+        let _: Value = test::read_body_json(admitted).await;
+        assert_eq!(mock_server.requests().len(), 2);
+        assert_eq!(deployment.state.tpm_current.load(Relaxed), 32);
+        assert_eq!(deployment.state.active_requests.load(Relaxed), 0);
+        mock_server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_chat_cache_guardrail_fallback_restores_full_tpm_estimate() {
+        use litellm_rs::core::guardrails::config::CustomRuleConfig;
+        use litellm_rs::core::guardrails::{GuardrailAction, GuardrailEngine};
+        use litellm_rs::core::router::FallbackConfig;
+
+        for (fallback_limit, expected_dispatches) in [(17, 1), (2_048, 2)] {
+            let mock_server = MockOpenAIServer::start(MockScenario::NonStreamingSuccess).await;
+            let state = cache_state_without_routing_retries(
+                build_test_app_state_with_cache(&mock_server.base_url).await,
+            )
+            .await;
+            set_cache_test_tpm(&state, "gpt-4o", 2_048);
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            cache_admission_minute_guard().await;
+            let payload = json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hello cache fallback"}],
+                "max_tokens": 64
+            });
+            let warm = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/v1/chat/completions")
+                    .set_json(&payload)
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(warm.status(), StatusCode::OK);
+            let _: Value = test::read_body_json(warm).await;
+            assert_eq!(mock_server.requests().len(), 1);
+
+            let router = state.unified_router();
+            let id = router.get_deployments_for_model("gpt-4o").pop().unwrap();
+            let mut fallback = router.get_deployment(&id).unwrap().as_ref().clone();
+            // The same captured provider/model serves a separate fallback group.
+            // Its cloned local state retains the warm request's 16 actual tokens.
+            fallback.id = format!("{id}-cache-fallback");
+            fallback.model_name = "cache-fallback".to_string();
+            fallback.config.tpm_limit = Some(fallback_limit);
+            router.add_deployment(fallback);
+            router.set_fallback_config(
+                FallbackConfig::new()
+                    .add_content_policy("gpt-4o", vec!["cache-fallback".to_string()]),
+            );
+            set_cache_test_tpm(&state, "gpt-4o", 17);
+            let mut policy = state.config().gateway.guardrails.clone();
+            policy.enabled = true;
+            policy.check_input = false;
+            policy.custom_rules = vec![CustomRuleConfig {
+                name: "block-warmed-output".to_string(),
+                description: None,
+                enabled: true,
+                patterns: vec!["mocked response".to_string()],
+                action: GuardrailAction::Block,
+                message: None,
+            }];
+            let guardrails = GuardrailEngine::shared(policy).unwrap();
+            let state = state
+                .clone()
+                .with_request_policies(guardrails, Arc::clone(&state.ip_access));
+            let blocked_app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(state.clone()))
+                    .configure(litellm_rs::server::routes::ai::configure_routes),
+            )
+            .await;
+            let blocked = test::call_service(
+                &blocked_app,
+                test::TestRequest::post()
+                    .uri("/v1/chat/completions")
+                    .set_json(&payload)
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                mock_server.requests().len(),
+                expected_dispatches,
+                "invalidated cache must not discount the live fallback reservation"
+            );
+            let request = serde_json::from_value(payload).unwrap();
+            assert!(
+                state
+                    .response_cache()
+                    .unwrap()
+                    .get_chat_response(&request)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "blocked cached payload should be invalidated"
+            );
+            mock_server.shutdown().await;
+        }
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 use super::*;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use serde_json::{Value, json};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 type Seen = Arc<Mutex<Vec<(String, Value, String, String, String)>>>;
 
@@ -78,14 +78,28 @@ async fn fixture(
     .run();
     let handle = server.handle();
     tokio::spawn(server);
+    let credentials = tempfile::tempdir().unwrap();
+    std::fs::write(
+        credentials.path().join("access-token"),
+        "fake-local-access-token",
+    )
+    .unwrap();
+    std::fs::write(
+        credentials.path().join("api-key.json"),
+        json!({"token":"fake-local-copilot-token", "expires_at":u64::MAX}).to_string(),
+    )
+    .unwrap();
     let mut provider = GitHubCopilotProvider::new(GitHubCopilotConfig {
+        token_dir: Some(credentials.path().to_str().unwrap().into()),
+        access_token_file: Some("access-token".into()),
+        api_key_file: Some("api-key.json".into()),
         api_base: Some(format!("http://{address}")),
         ..Default::default()
     })
     .await
     .unwrap();
     provider.native_endpoint_access = crate::core::net::ProviderEndpointAccess::PrivateNetwork;
-    *provider.cached_api_key.write().await = Some("fake-local-copilot-token".into());
+    // Construction owns the bytes after this isolated directory is dropped.
     (provider, state, handle)
 }
 
@@ -298,6 +312,8 @@ async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_re
                 let mut provider = GitHubCopilotProvider::new(GitHubCopilotConfig {
                     api_base: Some(base),
                     token_dir: Some(tokens.path().display().to_string()),
+                    access_token_file: Some("access-token".into()),
+                    api_key_file: Some("api-key.json".into()),
                     timeout: 1,
                     ..Default::default()
                 })

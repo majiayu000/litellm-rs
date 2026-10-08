@@ -26,6 +26,7 @@ use std::sync::LazyLock;
 pub(super) use completion::{
     ChatCompletionBudgetRequest, reserve_chat_completion_budget_with_request_pricing,
     reserve_completion_budget_with_counted_input, try_estimate_chat_prompt_tokens,
+    uploaded_image_tokens,
 };
 #[cfg(test)]
 pub(super) use completion::{
@@ -39,14 +40,14 @@ pub(in crate::server::routes::ai) use key_budget::{
     settle_api_key_budget_reservation,
 };
 pub(super) use pricing::{
-    RequestPricing, estimate_embedding_input_tokens,
+    RequestPricing, estimate_embedding_input_tokens, record_pricing_usage_spend_with_admission,
     record_pricing_usage_spend_with_request_pricing, request_pricing_for_provider,
     reserve_embedding_budget_with_request_pricing,
     reserve_pricing_usage_budget_with_request_pricing,
 };
 pub(super) use unpriced::{
     fallback_cost_for_usage, is_model_not_priced_error, model_not_priced_error,
-    reserve_unpriced_usage_budget, settle_unpriced_usage,
+    reserve_unpriced_usage_budget, settle_unpriced_usage, settle_unpriced_usage_with_admission,
 };
 
 pub(super) fn stream_chunk_has_candidate_output(chunk: &ChatChunk) -> bool {
@@ -421,7 +422,7 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
         );
         billing.awaiting_since.get_or_insert_with(chrono::Utc::now);
     });
-    super::execution::completion::observe_usage(0);
+    super::execution::completion::observe_unknown_usage();
     let provider_reserved = budget_reservation
         .as_ref()
         .map(UnifiedBudgetReservation::reserved_amount);

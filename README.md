@@ -305,6 +305,14 @@ a gateway video route.
 | GitHub Copilot (`github_copilot`) | native factory (`providers-extended`) | ✅ | ✅ | – | – | – | Uses native GitHub Copilot auth and model access when `providers-extended` is enabled; otherwise explicitly unsupported. |
 | Generic OpenAI-compatible (`openai_compatible`) | always | ✅ | ✅ | passthrough | passthrough | passthrough | For self-hosted / unlisted OpenAI-compatible chat, embeddings, image, and audio endpoints. |
 
+GitHub Copilot captures its effective token directory, credential filenames, and
+file contents when the provider is constructed. Reload the gateway after changing
+those paths or switching credential files to another account. Existing requests
+and provider clones keep their captured credentials; API-key refresh uses that
+resource's access token and returns a matching token and endpoint. Authentication
+remains lazy when no credentials are available. If only an API-key cache was
+captured, configure an access token and reload before that key needs refreshing.
+
 ### Tier 1 — catalog providers (OpenAI-compatible, always available)
 
 All entries below route through `OpenAILikeProvider`. Chat and streaming use the compatible `/chat/completions` protocol. Selected providers also expose verified non-chat capabilities listed in [compatible non-chat support](docs/providers/compatible-nonchat.md); other capabilities fail explicitly.

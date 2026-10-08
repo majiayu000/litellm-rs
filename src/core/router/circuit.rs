@@ -32,7 +32,7 @@ pub(crate) enum CircuitBackend {
         probe_token: String,
         allow_degraded: bool,
         cache: std::sync::Arc<
-            DashMap<String, (crate::storage::redis::circuit::CircuitState, Instant)>,
+            DashMap<String, (crate::storage::redis::circuit::CircuitState, Instant, u64)>,
         >,
     },
     #[cfg(test)]
@@ -103,14 +103,21 @@ impl CircuitBackend {
                 cache,
             } => {
                 let shared_id = deployment.shared_state_id();
+                let generation = deployment.state.circuit_update_generation();
                 if let Some(entry) = cache.get(shared_id.as_str())
                     && entry.1.elapsed() < CACHE_TTL
+                    && entry.2 == generation
                 {
                     return CircuitObserve::Shared(entry.0);
                 }
                 match invoke(pool, &shared_id, probe_token, config, "observe", 0).await {
                     Ok(state) => {
-                        cache.insert(shared_id.clone(), (state, Instant::now()));
+                        deployment.state.with_circuit_update(|fence| {
+                            if fence.generation == generation {
+                                cache
+                                    .insert(shared_id.clone(), (state, Instant::now(), generation));
+                            }
+                        });
                         CircuitObserve::Shared(state)
                     }
                     Err(_) => redis_loss_observe(&deployment.id, *allow_degraded),
@@ -174,9 +181,14 @@ impl CircuitBackend {
                 cache,
             } => {
                 let shared_id = deployment.shared_state_id();
+                let generation = deployment.state.circuit_update_generation();
                 match invoke(pool, &shared_id, probe_token, config, op, reason).await {
                     Ok(state) => {
-                        cache.insert(shared_id, (state, Instant::now()));
+                        deployment.state.with_circuit_update(|fence| {
+                            if fence.generation == generation {
+                                cache.insert(shared_id, (state, Instant::now(), generation));
+                            }
+                        });
                         CircuitWrite::Applied(state)
                     }
                     Err(_) if *allow_degraded => {
@@ -205,30 +217,72 @@ impl CircuitBackend {
 pub(crate) fn apply_circuit_snapshot(
     deployment: &Deployment,
     state: &crate::storage::redis::circuit::CircuitState,
+    generation: u64,
+    success_threshold: u32,
 ) {
-    deployment
-        .state
-        .cooldown_until
-        .store(state.opened_until.max(0) as u64, Ordering::Relaxed);
-    deployment
-        .state
-        .consecutive_successes
-        .store(state.consecutive_successes.max(0) as u32, Ordering::Relaxed);
-    deployment
-        .state
-        .fails_this_minute
-        .store(state.fails.max(0) as u32, Ordering::Relaxed);
-    let health = if state.status == 1 {
-        HealthStatus::Cooldown
-    } else if deployment.state.probe_unhealthy.load(Ordering::Relaxed) {
-        HealthStatus::Unhealthy
-    } else {
-        HealthStatus::from(state.health.max(0) as u8)
-    };
-    deployment
-        .state
-        .health
-        .store(health as u8, Ordering::Relaxed);
+    deployment.state.with_circuit_update(|fence| {
+        if fence.generation != generation {
+            return;
+        }
+        let now = super::deployment::current_timestamp();
+        // Lock order is circuit fence -> minute gate. Minute rollover never
+        // takes the fence; clear its old lower bound lazily under both gates.
+        deployment.state.with_current_minute(now, || {
+            let window = deployment.state.current_minute_generation();
+            if fence.failure_window != window {
+                fence.failure_window = window;
+                fence.local_failure_floor = 0;
+                if fence.local_cooldown_until <= now {
+                    fence.local_recovery_successes = None;
+                }
+            }
+            if fence.local_cooldown_until <= now {
+                fence.local_cooldown_until = 0;
+            }
+            let local_cooldown = fence.local_cooldown_until > now;
+            let shared_fails = state.fails.max(0) as u32;
+            if !local_cooldown
+                && fence
+                    .local_recovery_successes
+                    .is_some_and(|successes| successes >= success_threshold)
+            {
+                fence.local_recovery_successes = None;
+            }
+            let preserve_local_recovery = fence.local_recovery_successes.is_some();
+            deployment.state.cooldown_until.store(
+                (state.opened_until.max(0) as u64).max(fence.local_cooldown_until),
+                Ordering::Relaxed,
+            );
+            deployment.state.fails_this_minute.store(
+                shared_fails.max(fence.local_failure_floor),
+                Ordering::Relaxed,
+            );
+            // An unrelated replica's failure count is not publication evidence.
+            // Preserve local recovery until real successes or window expiry.
+            if !local_cooldown && !preserve_local_recovery {
+                deployment
+                    .state
+                    .consecutive_successes
+                    .store(state.consecutive_successes.max(0) as u32, Ordering::Relaxed);
+            }
+            let shared_health = HealthStatus::from(state.health.max(0) as u8);
+            let health = if local_cooldown || state.status == 1 {
+                HealthStatus::Cooldown
+            } else if deployment.state.probe_unhealthy.load(Ordering::Relaxed) {
+                HealthStatus::Unhealthy
+            } else if preserve_local_recovery
+                && matches!(shared_health, HealthStatus::Healthy | HealthStatus::Unknown)
+            {
+                HealthStatus::Degraded
+            } else {
+                shared_health
+            };
+            deployment
+                .state
+                .health
+                .store(health as u8, Ordering::Relaxed);
+        });
+    });
 }
 
 fn reason_code(reason: CooldownReason) -> i64 {

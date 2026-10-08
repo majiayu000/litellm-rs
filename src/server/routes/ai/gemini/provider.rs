@@ -8,6 +8,10 @@ use crate::utils::error::gateway_error::GatewayError;
 use super::super::budgeted::ApiKeyBudgetPolicy;
 use uuid::Uuid;
 
+#[cfg(test)]
+#[path = "unary_usage_tests.rs"]
+mod unary_usage_tests;
+
 #[derive(Debug, Clone)]
 pub(super) struct GeminiRouteProvider {
     pub(super) provider_name: String,

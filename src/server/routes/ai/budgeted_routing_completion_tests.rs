@@ -68,6 +68,7 @@ async fn route_budget_completion(case: CompletionCase) {
         &router,
         "joint-route",
         ProviderCapability::ChatCompletion,
+        0,
         move |_, _, _| {
             let call = BudgetedCall::new(
                 limits.clone(),
@@ -87,6 +88,7 @@ async fn route_budget_completion(case: CompletionCase) {
                             Ok(Usage::new(6, 36))
                         },
                         |usage, reservations, budget| async move {
+                            execution::completion::observe_usage(u64::from(usage.total_tokens));
                             let keys = KeyManager::new(InMemoryKeyRepository::new());
                             let (provider, key) = reservations.into_parts();
                             if case == CompletionCase::CancelUnpriced {

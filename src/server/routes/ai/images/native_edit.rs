@@ -114,7 +114,9 @@ pub(super) async fn execute_selected_native_image_edit(
         || provider.edit_image(request, context),
         |reservations, budget| async move {
             let (budget_reservation, key_budget_reservation) = reservations.into_parts();
-            super::super::spend::record_pricing_usage_spend_with_request_pricing(
+            super::super::execution::completion::observe_unknown_usage();
+            let tokens_used = super::super::execution::estimate::usage(&settle_usage);
+            super::super::spend::record_pricing_usage_spend_with_admission(
                 &settle_request_pricing,
                 &settle_pricing_config,
                 budget.budget_limits(),
@@ -125,13 +127,10 @@ pub(super) async fn execute_selected_native_image_edit(
                 &settle_usage,
                 budget_reservation,
                 key_budget_reservation,
+                tokens_used,
             )
             .await;
-            u64::from(
-                settle_usage
-                    .total_tokens
-                    .saturating_add(settle_usage.image_tokens.unwrap_or(0)),
-            )
+            0
         },
     )
     .await
@@ -188,7 +187,16 @@ fn estimated_image_edit_usage(
     request_pricing: &super::super::spend::RequestPricing,
 ) -> PricingUsage {
     let image_count = request.n.unwrap_or(1);
-    let mut usage = PricingUsage::new(super::estimated_text_tokens(&request.prompt), 0);
+    let prompt_tokens = super::estimated_text_tokens(&request.prompt)
+        .saturating_add(super::super::spend::uploaded_image_tokens(&request.image))
+        .saturating_add(
+            request
+                .mask
+                .as_deref()
+                .map(super::super::spend::uploaded_image_tokens)
+                .unwrap_or(0),
+        );
+    let mut usage = PricingUsage::new(prompt_tokens, 0);
     usage.image_tokens = Some(super::estimated_image_output_tokens(
         request.size.as_deref(),
         None,
@@ -202,4 +210,36 @@ fn estimated_image_edit_usage(
         })
         .unwrap_or_default();
     usage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_image_edit_usage_counts_uploaded_image_and_mask() {
+        let pricing = crate::core::pricing_service::PricingService::new(None);
+        let pricing = super::super::super::spend::RequestPricing::from_exact(
+            &pricing,
+            "openai",
+            "gpt-image-1-mini",
+        );
+        let mut request = ImageEditRequest {
+            image: vec![0; 9000],
+            mask: Some(vec![0; 6000]),
+            prompt: String::new(),
+            model: None,
+            n: None,
+            size: None,
+            response_format: None,
+            user: None,
+        };
+        let with_mask = estimated_image_edit_usage(&request, &pricing);
+        assert_eq!(with_mask.prompt_tokens, 1 + 3000 + 2000);
+        request.mask = None;
+        let without_mask = estimated_image_edit_usage(&request, &pricing);
+        assert_eq!(without_mask.prompt_tokens, 1 + 3000);
+        assert_eq!(with_mask.image_tokens, without_mask.image_tokens);
+        assert_eq!(with_mask.output_image_count, Some(1));
+    }
 }

@@ -577,11 +577,40 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reque
     budget_reservation: Option<UnifiedBudgetReservation>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
-    super::super::execution::completion::observe_usage(u64::from(usage.total_tokens));
+    record_pricing_usage_spend_with_admission(
+        request_pricing,
+        pricing_config,
+        budget_limits,
+        key_manager,
+        api_key_id,
+        budget_provider,
+        budget_model,
+        usage,
+        budget_reservation,
+        key_budget_reservation,
+        u64::from(usage.total_tokens),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_admission(
+    request_pricing: &RequestPricing,
+    pricing_config: &GatewayPricingConfig,
+    budget_limits: &UnifiedBudgetLimits,
+    key_manager: &KeyManager,
+    api_key_id: Option<Uuid>,
+    budget_provider: &str,
+    budget_model: &str,
+    usage: &PricingUsage,
+    budget_reservation: Option<UnifiedBudgetReservation>,
+    key_budget_reservation: Option<BudgetReservation>,
+    admission_tokens: u64,
+) {
     let cost = match request_pricing.calculate_settlement(usage) {
         Ok(breakdown) => breakdown.total_cost,
         Err(_) => {
-            super::unpriced::settle_unpriced_usage(
+            super::unpriced::settle_unpriced_usage_with_admission(
                 pricing_config,
                 budget_limits,
                 key_manager,
@@ -592,6 +621,7 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_reque
                 budget_reservation,
                 key_budget_reservation,
                 "request pricing unavailable",
+                admission_tokens,
             )
             .await;
             return;

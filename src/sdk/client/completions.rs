@@ -589,7 +589,7 @@ fn find_sse_record_end_bytes(buffer: &[u8]) -> Option<(usize, usize)> {
 }
 
 /// Map Anthropic-native `stop_reason` values to OpenAI-style `finish_reason` values.
-fn normalize_anthropic_stop_reason(stop_reason: &str) -> &str {
+pub(super) fn normalize_anthropic_stop_reason(stop_reason: &str) -> &str {
     match stop_reason {
         "end_turn" => "stop",
         "max_tokens" => "length",

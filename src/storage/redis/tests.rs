@@ -52,6 +52,64 @@ async fn test_redis_set_get_roundtrip_with_live_pool() {
 }
 
 #[tokio::test]
+async fn test_redis_hash_get_missing_and_present_fields_with_live_pool() {
+    let Some(pool) = live_redis_pool().await else {
+        return;
+    };
+
+    let key = unique_test_key("hash-get");
+    assert_eq!(
+        pool.hash_get(&key, "missing")
+            .await
+            .expect("a missing hash should return None"),
+        None
+    );
+
+    pool.hash_set(&key, "present", "value")
+        .await
+        .expect("hash set should succeed");
+    pool.hash_set(&key, "empty", "")
+        .await
+        .expect("empty hash field should be stored");
+    assert_eq!(
+        pool.hash_get(&key, "missing")
+            .await
+            .expect("a missing field should return None"),
+        None
+    );
+    assert_eq!(
+        pool.hash_get(&key, "present")
+            .await
+            .expect("a present field should be returned"),
+        Some("value".to_string())
+    );
+    assert_eq!(
+        pool.hash_get(&key, "empty")
+            .await
+            .expect("an empty field is present"),
+        Some(String::new())
+    );
+    pool.delete(&key)
+        .await
+        .expect("test hash should be removed");
+}
+
+#[tokio::test]
+async fn test_redis_hash_get_preserves_wrong_type_error_with_live_pool() {
+    let Some(pool) = live_redis_pool().await else {
+        return;
+    };
+
+    let key = unique_test_key("hash-get-wrong-type");
+    pool.set(&key, "not-a-hash", Some(30))
+        .await
+        .expect("string key should be stored");
+    let result = pool.hash_get(&key, "field").await;
+    pool.delete(&key).await.expect("test key should be removed");
+    assert!(matches!(result, Err(GatewayError::Storage(_))));
+}
+
+#[tokio::test]
 async fn test_redis_delete_by_prefix_with_live_pool() {
     let Some(pool) = live_redis_pool().await else {
         return;
@@ -381,6 +439,15 @@ async fn handle_mock_command(
         {
             cluster_slots_resp(host, port)
         }
+        "HGET" => match arg_str(args, 2).as_str() {
+            "missing" => b"$-1\r\n".to_vec(),
+            "present" => bulk_string("value"),
+            "empty" => bulk_string(""),
+            "wrong-type" => {
+                b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".to_vec()
+            }
+            _ => b"*0\r\n".to_vec(),
+        },
         "GET" => {
             let key = arg_str(args, 1);
             if pending_redirect.swap(false, Ordering::SeqCst) {
@@ -499,4 +566,37 @@ fn parse_crlf_int(buf: &[u8], start: usize) -> Option<(i64, usize)> {
     let cr = rest.windows(2).position(|window| window == b"\r\n")?;
     let value = std::str::from_utf8(rest.get(..cr)?).ok()?.parse().ok()?;
     Some((value, start + cr + 2))
+}
+
+#[tokio::test]
+async fn hash_get_nonnoop_resp_preserves_nil_present_empty_and_errors() {
+    let mock = MockCluster::bind(false).await;
+    let pool = RedisPool::new(&RedisConfig {
+        enabled: true,
+        url: mock.url.clone(),
+        cluster: false,
+        allow_degraded: false,
+        ..RedisConfig::default()
+    })
+    .await
+    .unwrap();
+    assert!(!pool.is_noop());
+    assert_eq!(pool.hash_get("hash", "missing").await.unwrap(), None);
+    assert_eq!(
+        pool.hash_get("hash", "present").await.unwrap(),
+        Some("value".into())
+    );
+    assert_eq!(
+        pool.hash_get("hash", "empty").await.unwrap(),
+        Some(String::new())
+    );
+    for field in ["wrong-type", "malformed"] {
+        assert!(
+            matches!(
+                pool.hash_get("hash", field).await,
+                Err(GatewayError::Storage(_))
+            ),
+            "{field}"
+        );
+    }
 }

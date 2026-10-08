@@ -595,6 +595,15 @@ fn image_prompt_floor(detail: Option<&str>) -> u32 {
     }
 }
 
+// The encoded image policy counts four base64 characters per token. For raw
+// uploads this is one token per three bytes, without allocating a base64 copy.
+pub(in crate::server::routes::ai) fn uploaded_image_tokens(data: &[u8]) -> u32 {
+    if data.is_empty() {
+        return 0;
+    }
+    IMAGE_HIGH_DETAIL_PROMPT_TOKENS.max(u32::try_from(data.len().div_ceil(3)).unwrap_or(u32::MAX))
+}
+
 fn encoded_media_tokens(data: &str) -> u32 {
     u32::try_from(data.chars().count().div_ceil(4)).unwrap_or(u32::MAX)
 }

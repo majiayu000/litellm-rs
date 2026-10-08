@@ -21,9 +21,9 @@ pub(super) async fn record_image_proxy_spend(
     api_key_id: Option<uuid::Uuid>,
     key_budget_reservation: Option<BudgetReservation>,
 ) {
-    super::super::execution::completion::observe_usage(super::image_proxy_tokens_used(usage));
+    let admission_tokens = super::super::execution::estimate::usage(usage);
     if unpriced {
-        super::super::spend::settle_unpriced_usage(
+        super::super::spend::settle_unpriced_usage_with_admission(
             pricing_config,
             budget_limits,
             key_manager,
@@ -34,6 +34,7 @@ pub(super) async fn record_image_proxy_spend(
             budget_reservation,
             key_budget_reservation,
             "image proxy pricing unavailable",
+            admission_tokens,
         )
         .await;
         return;

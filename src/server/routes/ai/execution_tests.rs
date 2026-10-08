@@ -47,6 +47,7 @@ async fn settlement_wrappers_box_large_borrowing_futures_before_polling() {
         router,
         "gpt-4",
         ProviderCapability::ChatCompletion,
+        0,
         |_, _, _| async { Ok::<_, ProviderError>(()) },
     )
     .await
@@ -86,6 +87,7 @@ fn unary_scope_does_not_inline_a_large_operation_future() {
         &router,
         "gpt-4",
         ProviderCapability::ChatCompletion,
+        0,
         |_, _, _| async {
             let payload = [0_u8; 128 * 1024];
             std::future::pending::<()>().await;
@@ -192,6 +194,7 @@ async fn test_execute_with_selected_deployment_uses_actual_deployment_model() {
         &router,
         "gpt-4",
         ProviderCapability::ChatCompletion,
+        0,
         |_provider, model, _deployment_id| async { Ok((model, 0)) },
     )
     .await
@@ -209,6 +212,7 @@ async fn test_execute_with_selected_deployment_uses_capability_selected_deployme
             &router,
             "shared-model",
             ProviderCapability::Embeddings,
+            0,
             |provider, model, _deployment_id| async move {
                 Ok(((provider.name().to_string(), model), 0))
             },
@@ -236,6 +240,7 @@ async fn test_execute_with_selected_deployment_rejects_unavailable_capability() 
         &router,
         "shared-model",
         ProviderCapability::Embeddings,
+        0,
         |_provider, _model, _deployment_id| async { Ok::<_, ProviderError>(("should not run", 0)) },
     )
     .await
@@ -255,6 +260,7 @@ async fn test_execute_with_selected_deployment_rejects_unsupported_capability() 
         &router,
         "shared-model",
         ProviderCapability::CodeExecution,
+        0,
         |_provider, _model, _deployment_id| async { Ok::<_, ProviderError>(("should not run", 0)) },
     )
     .await
@@ -274,6 +280,7 @@ async fn test_execute_with_selected_deployment_maps_provider_error() {
         &router,
         "gpt-4",
         ProviderCapability::ChatCompletion,
+        0,
         |_provider, _model, _deployment_id| async {
             Err::<(String, u64), _>(ProviderError::timeout("test", "timed out"))
         },
@@ -320,7 +327,7 @@ async fn native_media_mutations_fail_over_after_explicit_rate_limit_response() {
         let attempts = Arc::new(Mutex::new(Vec::new()));
 
         let result =
-            execute_with_selected_deployment(&router, "image-model", capability.clone(), {
+            execute_with_selected_deployment(&router, "image-model", capability.clone(), 0, {
                 let attempts = attempts.clone();
                 move |_provider, _model, deployment_id| {
                     let attempts = attempts.clone();
@@ -362,6 +369,7 @@ async fn test_execute_with_selected_deployment_excludes_provider_budget_failures
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _deployment_id| {
@@ -401,6 +409,7 @@ async fn test_execute_with_selected_deployment_excludes_model_budget_failures() 
         &router,
         "shared-model",
         ProviderCapability::ChatCompletion,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _deployment_id| {
@@ -442,6 +451,7 @@ async fn test_execute_stream_holds_deployment_active_until_success() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_provider, model, _selected_deployment_id| async move { Ok(model) },
     )
     .await
@@ -472,6 +482,7 @@ async fn test_stream_lease_drop_releases_without_recording_outcome() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_provider, model, _selected_deployment_id| async move { Ok(model) },
     )
     .await
@@ -494,6 +505,7 @@ async fn test_execute_stream_records_stream_failure() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_provider, model, _selected_deployment_id| async move { Ok(model) },
     )
     .await
@@ -518,6 +530,7 @@ async fn test_execute_stream_excludes_provider_budget_failures() {
         router.clone(),
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |provider, model, _selected_deployment_id| {
@@ -579,6 +592,7 @@ async fn test_execute_stream_startup_abort_releases_parallel_slot() {
                 router,
                 "gpt-4",
                 ProviderCapability::ChatCompletionStream,
+                0,
                 move |_provider, _model, _selected_deployment_id| {
                     let operation_entered = operation_entered.clone();
                     async move {
@@ -635,6 +649,7 @@ async fn stream_finalization_transient_failure_gated_by_thresholds() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_provider, model, _selected_deployment_id| async move { Ok(model) },
     )
     .await
@@ -678,6 +693,7 @@ async fn stream_finalization_failures_trip_cooldown_after_allowed_fails() {
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
+            0,
             |_provider, model, _selected_deployment_id| async move { Ok(model) },
         )
         .await
@@ -725,6 +741,7 @@ async fn stream_finalization_fail_fast_errors_trip_immediate_cooldown() {
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
+            0,
             |_provider, model, _selected_deployment_id| async move { Ok(model) },
         )
         .await
@@ -750,6 +767,7 @@ async fn test_execute_stream_returns_last_error_when_budget_excludes_every_deplo
         router,
         "shared-model",
         ProviderCapability::ChatCompletionStream,
+        0,
         {
             let attempts = attempts.clone();
             move |_provider, _model, deployment_id| {
@@ -824,6 +842,7 @@ async fn cancelled_realtime_admission_restores_shared_rpm() {
         Arc::new(router),
         "shared",
         ProviderCapability::ChatCompletion,
+        0,
         |_, _, _| async { Ok::<_, ProviderError>(()) },
     )
     .await
@@ -948,6 +967,7 @@ async fn local_http_observation_replaces_estimate_before_cancelled_circuit_wait(
                     router.clone(),
                     "gpt-4",
                     ProviderCapability::ChatCompletionStream,
+                    0,
                     |_, _, _| async { Ok(()) },
                 )
                 .await
@@ -965,6 +985,7 @@ async fn local_http_observation_replaces_estimate_before_cancelled_circuit_wait(
                     &router,
                     "gpt-4",
                     ProviderCapability::ChatCompletion,
+                    0,
                     move |_, _, _| {
                         let paused = pause_in_provider.clone();
                         async move {
@@ -1076,6 +1097,7 @@ async fn local_http_terminal_cancellation_replaces_estimate_exactly_once() {
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
+            0,
             |_, _, _| async { Ok(()) },
         )
         .await
@@ -1146,6 +1168,7 @@ async fn local_http_neutral_completion_replaces_estimate_exactly_once() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_, _, _| async { Ok(()) },
     )
     .await
@@ -1173,6 +1196,7 @@ async fn cancelled_stream_completion_records_local_success_exactly_once() {
         router.clone(),
         "gpt-4",
         ProviderCapability::ChatCompletionStream,
+        0,
         |_, _, _| async { Ok(()) },
     )
     .await
@@ -1211,6 +1235,7 @@ async fn cancelled_gateway_unary_settlement_retains_local_success() {
             &worker,
             "gpt-4",
             ProviderCapability::ChatCompletion,
+            0,
             move |_, _, _| {
                 let started = started.clone();
                 async move {
@@ -1244,6 +1269,7 @@ async fn cancelled_stream_failure_publishes_shared_failure_before_admission_clea
             router.clone(),
             "gpt-4",
             ProviderCapability::ChatCompletionStream,
+            0,
             |_, _, _| async { Ok(()) },
         )
         .await
@@ -1385,4 +1411,291 @@ async fn wait_for_actual_settlement(pool: &crate::storage::redis::RedisPool, id:
     .await
     .unwrap();
     pool.delete(&key).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_start_failure_survives_cancellation_before_circuit_bridge_admission() {
+    use crate::config::models::storage::RedisConfig;
+    use crate::storage::redis::RedisPool;
+    use std::time::Duration;
+
+    const CHILD: &str = "LITELLM_STREAM_START_FAILURE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Owning every circuit slot must not pause unrelated parallel tests.
+        let output = tokio::task::spawn_blocking(|| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "server::routes::ai::execution::tests::stream_start_failure_survives_cancellation_before_circuit_bridge_admission",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap()
+        }).await.unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed; 0 failed"),
+            "isolated stream-start regression must run once and pass:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let Ok(url) = std::env::var("REDIS_URL") else {
+        assert!(std::env::var("CI").is_err(), "REDIS_URL is required in CI");
+        eprintln!("Skipping stream-start shared circuit cases: REDIS_URL is unset");
+        return;
+    };
+    let pool = Arc::new(
+        RedisPool::new(&RedisConfig {
+            url,
+            enabled: true,
+            allow_degraded: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    for retries in [0, 1] {
+        for cancel in [false, true] {
+            let router = Arc::new(
+                UnifiedRouter::new(RouterConfig {
+                    num_retries: retries,
+                    retry_after_secs: 0,
+                    max_fallbacks: 0,
+                    allowed_fails: 1,
+                    min_requests: 1,
+                    cooldown_time_secs: 60,
+                    ..Default::default()
+                })
+                .with_admission_redis(pool.clone())
+                .with_circuit_redis(pool.clone()),
+            );
+            let id = uuid::Uuid::new_v4().to_string();
+            router.add_deployment(
+                Deployment::new(
+                    id.clone(),
+                    Provider::OpenAI(
+                        OpenAIProvider::with_api_key("sk-stream-start-fixture")
+                            .await
+                            .unwrap(),
+                    ),
+                    "gpt-4o-mini".into(),
+                    "stream-start".into(),
+                )
+                .with_config(DeploymentConfig {
+                    max_parallel_requests: Some(1),
+                    rpm_limit: Some(100),
+                    tpm_limit: Some(1000),
+                    ..Default::default()
+                }),
+            );
+            let deployment = router.get_deployment(&id).unwrap();
+            let paused = Arc::new(Mutex::new(None));
+            let pause_in_provider = paused.clone();
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let calls_in_provider = calls.clone();
+            let mut request = Box::pin(execute_stream_with_selected_deployment(
+                router.clone(),
+                "stream-start",
+                ProviderCapability::ChatCompletionStream,
+                20,
+                move |_, _, _| {
+                    let paused = pause_in_provider.clone();
+                    let calls = calls_in_provider.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        let slots = crate::core::router::circuit::pause_circuit_io().await;
+                        *paused.lock().unwrap() = Some(slots);
+                        Err::<(), ProviderError>(ProviderError::timeout(
+                            "openai",
+                            "stream failed before headers",
+                        ))
+                    }
+                },
+            ));
+            tokio::select! {
+                _ = request.as_mut() => panic!("shared failure publication must remain paused"),
+                () = async {
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while paused.lock().unwrap().is_none() {
+                            tokio::task::yield_now().await;
+                        }
+                    }).await.expect("the provider must return its failure");
+                } => {}
+            }
+            // This assertion precedes both bridge admission and cancellation.
+            assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+            assert!(deployment.is_in_cooldown());
+            if cancel {
+                drop(request);
+                drop(paused.lock().unwrap().take());
+            } else {
+                drop(paused.lock().unwrap().take());
+                let result = tokio::time::timeout(Duration::from_secs(5), request)
+                    .await
+                    .unwrap();
+                assert!(result.is_err());
+            }
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+            assert_eq!(deployment.state.total_requests.load(Ordering::Relaxed), 1);
+            assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 1);
+            assert!(deployment.is_in_cooldown());
+            let key = RedisPool::admission_key(&id);
+            let mut conn = pool.open_live_connection().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let counts: (i64, i64, i64) = redis::cmd("HMGET")
+                        .arg(&key)
+                        .arg(&["p", "r", "t"])
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap();
+                    let fields: Vec<String> = redis::cmd("HKEYS")
+                        .arg(&key)
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap();
+                    if counts == (0, 0, 0) && !fields.iter().any(|field| field.starts_with("l:")) {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the cancelled pre-stream lease must release exactly once");
+            assert_eq!(
+                shared_failure_counts(&pool, &id).await,
+                if cancel { (0, 0) } else { (1, 1) }
+            );
+            pool.delete(&key).await.unwrap();
+            pool.delete(&RedisPool::circuit_key(&id)).await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_audio_pricing_without_provider_tokens_retains_admission() {
+    use crate::config::models::gateway::GatewayPricingConfig;
+    use crate::core::budget::UnifiedBudgetLimits;
+    use crate::core::keys::{InMemoryKeyRepository, KeyManager};
+    use crate::core::pricing_service::{PricingService, PricingUsage};
+    let router = build_test_router().await;
+    let original = router.get_deployment("deployment-1").unwrap();
+    router.add_deployment(original.as_ref().clone().with_config(DeploymentConfig {
+        tpm_limit: Some(100),
+        ..Default::default()
+    }));
+    let deployment = router.get_deployment("deployment-1").unwrap();
+    let mut request = Box::pin(execute_with_selected_deployment(
+        &router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        60,
+        |_, _, _| async {
+            super::completion::provider_succeeded();
+            super::completion::observe_unknown_usage();
+            let mut usage = PricingUsage::new(0, 0);
+            usage.audio_tokens = Some(60);
+            let pricing = PricingService::with_embedded_default().unwrap();
+            let pricing = crate::server::routes::ai::spend::RequestPricing::from_exact(
+                &pricing, "openai", "gpt-4o",
+            );
+            crate::server::routes::ai::spend::record_pricing_usage_spend_with_request_pricing(
+                &pricing,
+                &GatewayPricingConfig::default(),
+                &UnifiedBudgetLimits::new(),
+                &KeyManager::new(InMemoryKeyRepository::new()),
+                None,
+                "openai",
+                "gpt-4o",
+                &usage,
+                None,
+                None,
+            )
+            .await;
+            let wait = super::completion::BudgetSettlementWait::new();
+            std::future::pending::<()>().await;
+            wait.finish();
+            Ok::<_, ProviderError>(((), 0))
+        },
+    ));
+    assert!(futures::poll!(request.as_mut()).is_pending());
+    drop(request);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        deployment
+            .state
+            .admission_tpm(crate::core::router::deployment::current_timestamp()),
+        60
+    );
+}
+
+#[tokio::test]
+async fn cancelled_rerank_pricing_keeps_observed_provider_total() {
+    use crate::config::models::gateway::GatewayPricingConfig;
+    use crate::core::budget::UnifiedBudgetLimits;
+    use crate::core::keys::{InMemoryKeyRepository, KeyManager};
+    use crate::core::pricing_service::{PricingService, PricingUsage};
+    let router = build_test_router().await;
+    let original = router.get_deployment("deployment-1").unwrap();
+    router.add_deployment(original.as_ref().clone().with_config(DeploymentConfig {
+        tpm_limit: Some(100),
+        ..Default::default()
+    }));
+    let deployment = router.get_deployment("deployment-1").unwrap();
+    let mut request = Box::pin(execute_with_selected_deployment(
+        &router,
+        "gpt-4",
+        ProviderCapability::ChatCompletion,
+        60,
+        |_, _, _| async {
+            super::completion::provider_succeeded();
+            super::completion::observe_usage(42);
+            let usage = PricingUsage::new(42, 0);
+            let pricing = PricingService::with_embedded_default().unwrap();
+            let pricing = crate::server::routes::ai::spend::RequestPricing::from_exact(
+                &pricing, "openai", "gpt-4o",
+            );
+            crate::server::routes::ai::spend::record_pricing_usage_spend_with_request_pricing(
+                &pricing,
+                &GatewayPricingConfig::default(),
+                &UnifiedBudgetLimits::new(),
+                &KeyManager::new(InMemoryKeyRepository::new()),
+                None,
+                "openai",
+                "gpt-4o",
+                &usage,
+                None,
+                None,
+            )
+            .await;
+            let wait = super::completion::BudgetSettlementWait::new();
+            std::future::pending::<()>().await;
+            wait.finish();
+            Ok::<_, ProviderError>(((), 42))
+        },
+    ));
+    assert!(futures::poll!(request.as_mut()).is_pending());
+    drop(request);
+    assert_eq!(deployment.state.rpm_current.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.tpm_current.load(Ordering::Relaxed), 42);
+    assert_eq!(deployment.state.success_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        deployment
+            .state
+            .admission_tpm(crate::core::router::deployment::current_timestamp()),
+        42
+    );
 }

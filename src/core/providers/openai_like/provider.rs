@@ -64,6 +64,9 @@ use super::{
     request_headers::build_request_headers,
 };
 use crate::core::providers::ProviderError;
+use crate::core::providers::shared::{
+    normalize_openai_chat_response_usage, normalize_openai_embedding_response_usage,
+};
 #[cfg(any(feature = "gateway", test))]
 use crate::core::providers::{GeminiNativeRequest, gemini_transport_error};
 
@@ -478,6 +481,7 @@ impl OpenAILikeProvider {
             }
             usage.entry("completion_tokens").or_insert(Value::from(0));
         }
+        normalize_openai_embedding_response_usage(&mut value);
         serde_json::from_value(value)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))
     }
@@ -741,7 +745,11 @@ impl OpenAILikeProvider {
         }
     }
 
-    fn transform_chat_response(&self, response: Value) -> Result<ChatResponse, OpenAILikeError> {
+    fn transform_chat_response(
+        &self,
+        mut response: Value,
+    ) -> Result<ChatResponse, OpenAILikeError> {
+        normalize_openai_chat_response_usage(&mut response);
         let resp: OpenAIChatResponse = serde_json::from_value(response)
             .map_err(|e| OpenAILikeError::response_parsing(PROVIDER_NAME, e.to_string()))?;
         OpenAIResponseTransformer::transform(resp)

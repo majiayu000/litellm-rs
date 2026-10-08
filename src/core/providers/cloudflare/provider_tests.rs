@@ -796,3 +796,64 @@ async fn test_provider_debug() {
 
     assert!(debug_str.contains("CloudflareProvider"));
 }
+
+#[test]
+fn unary_usage_validation_preserves_cloudflare_output_and_valid_details() {
+    use serde_json::{Value, json};
+
+    for raw in [
+        None,
+        Some(Value::Null),
+        Some(json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0})),
+        Some(json!({"prompt_tokens":100,"completion_tokens":50,"total_tokens":1})),
+        Some(json!({
+            "prompt_tokens":u64::from(u32::MAX) + 1,
+            "completion_tokens":0,"total_tokens":u64::from(u32::MAX) + 1
+        })),
+        Some(json!({
+            "prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+            "prompt_tokens_details":{"cached_tokens":"3"}
+        })),
+        Some(json!({
+            "prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+            "completion_tokens_details":{"cached_tokens":"3"}
+        })),
+        Some(json!({
+            "prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+            "prompt_tokens_details":{"reasoning_tokens":"3"}
+        })),
+        Some(json!({
+            "prompt_tokens":2,"completion_tokens":1,"total_tokens":3,
+            "prompt_tokens_details":{"cached_tokens":1},
+            "completion_tokens_details":{"reasoning_tokens":1}
+        })),
+    ] {
+        let valid = raw
+            .as_ref()
+            .is_some_and(|usage| usage["prompt_tokens"] == 2);
+        let mut wire = json!({
+            "id":"cloudflare-usage","object":"chat.completion","created":1,"model":"model",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"kept"},
+                "finish_reason":"stop"}]
+        });
+        if let Some(raw) = raw {
+            wire["usage"] = raw;
+        }
+        let response = CloudflareProvider::decode_response(wire).unwrap();
+        assert!(matches!(
+            response.choices[0].message.content.as_ref(),
+            Some(MessageContent::Text(text)) if text == "kept"
+        ));
+        if valid {
+            let usage = response.usage.unwrap();
+            assert_eq!(usage.total_tokens, 3);
+            assert_eq!(usage.prompt_tokens_details.unwrap().cached_tokens, Some(1));
+            assert_eq!(
+                usage.completion_tokens_details.unwrap().reasoning_tokens,
+                Some(1)
+            );
+        } else {
+            assert!(response.usage.is_none());
+        }
+    }
+}

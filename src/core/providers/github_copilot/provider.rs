@@ -7,11 +7,9 @@ use bytes::Bytes;
 use futures::Stream;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::debug;
 
-use super::authenticator::CopilotAuthenticator;
+use super::authenticator::{ApiKeyInfo, CopilotAuthenticator};
 use super::config::{GITHUB_COPILOT_API_BASE, GitHubCopilotConfig, get_copilot_default_headers};
 use super::model_info::{
     get_available_models, get_model_info, is_claude_model, supports_reasoning,
@@ -43,17 +41,24 @@ const GITHUB_COPILOT_CAPABILITIES: &[ProviderCapability] = &[
 ];
 
 /// GitHub Copilot provider implementation
-#[derive(Debug)]
 pub struct GitHubCopilotProvider {
     config: GitHubCopilotConfig,
     authenticator: CopilotAuthenticator,
     models: Vec<ModelInfo>,
-    /// Cached API key
-    cached_api_key: Arc<RwLock<Option<String>>>,
-    /// Cached API base
-    cached_api_base: Arc<RwLock<Option<String>>>,
     #[cfg(test)]
     native_endpoint_access: crate::core::net::ProviderEndpointAccess,
+}
+
+impl std::fmt::Debug for GitHubCopilotProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GitHubCopilotProvider")
+            .field("config", &self.config)
+            .field("authenticator", &self.authenticator)
+            .field("models", &self.models)
+            .field("cached_credentials", &"[redacted]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Clone for GitHubCopilotProvider {
@@ -62,8 +67,6 @@ impl Clone for GitHubCopilotProvider {
             config: self.config.clone(),
             authenticator: self.authenticator.clone(),
             models: self.models.clone(),
-            cached_api_key: Arc::new(RwLock::new(None)),
-            cached_api_base: Arc::new(RwLock::new(None)),
             #[cfg(test)]
             native_endpoint_access: self.native_endpoint_access,
         }
@@ -71,10 +74,6 @@ impl Clone for GitHubCopilotProvider {
 }
 
 impl GitHubCopilotProvider {
-    pub(crate) fn credential_resource_identity(&self) -> [u8; 32] {
-        self.authenticator.credential_resource_identity()
-    }
-
     /// Create a new GitHub Copilot provider instance
     pub async fn new(config: GitHubCopilotConfig) -> Result<Self, ProviderError> {
         let authenticator = CopilotAuthenticator::new(&config);
@@ -118,11 +117,13 @@ impl GitHubCopilotProvider {
             config,
             authenticator,
             models,
-            cached_api_key: Arc::new(RwLock::new(None)),
-            cached_api_base: Arc::new(RwLock::new(None)),
             #[cfg(test)]
             native_endpoint_access: crate::core::net::ProviderEndpointAccess::PublicOnly,
         })
+    }
+
+    pub(crate) fn credential_resource_identity(&self) -> [u8; 32] {
+        self.authenticator.credential_resource_identity()
     }
 
     fn native_http_client(
@@ -150,11 +151,11 @@ impl GitHubCopilotProvider {
         &self,
         model: &str,
         endpoint: &str,
+        api_base: &str,
         headers: &reqwest::header::HeaderMap,
     ) -> Result<(), ProviderError> {
-        let api_base = self.get_api_base().await;
         let url = format!("{}/models", api_base.trim_end_matches('/'));
-        let client = self.native_http_client(&api_base, false)?;
+        let client = self.native_http_client(api_base, false)?;
         let response = client
             .get(url)?
             .headers(headers.clone())
@@ -238,8 +239,9 @@ impl GitHubCopilotProvider {
         let model = body.get("model").and_then(Value::as_str).ok_or_else(|| {
             ProviderError::invalid_request("github_copilot", "model must be a string")
         })?;
-        let mut headers = self.build_headers(&[]).await?;
-        self.require_endpoint(model, "/responses", &headers).await?;
+        let (mut headers, api_base) = self.build_headers(&[]).await?;
+        self.require_endpoint(model, "/responses", &api_base, &headers)
+            .await?;
         let items = body.get("input").and_then(Value::as_array);
         let agent = items.is_some_and(|items| {
             items.iter().any(|item| {
@@ -265,7 +267,6 @@ impl GitHubCopilotProvider {
                 reqwest::header::HeaderValue::from_static("true"),
             );
         }
-        let api_base = self.get_api_base().await;
         let url = format!("{}/responses", api_base.trim_end_matches('/'));
         let client =
             self.native_http_client(&api_base, body.get("stream") == Some(&Value::Bool(true)))?;
@@ -283,62 +284,19 @@ impl GitHubCopilotProvider {
         self.check_native_status(response).await
     }
 
-    /// Get the API key, using cache or refreshing if needed
-    async fn get_api_key(&self) -> Result<String, ProviderError> {
-        // Check cache first
-        {
-            let cache = self.cached_api_key.read().await;
-            if let Some(ref key) = *cache {
-                return Ok(key.clone());
-            }
-        }
-
-        // Get fresh key
-        let key = self.authenticator.get_api_key().await?;
-
-        // Update cache
-        {
-            let mut cache = self.cached_api_key.write().await;
-            *cache = Some(key.clone());
-        }
-
-        // Also update API base cache
-        if let Some(api_base) = self.authenticator.get_api_base() {
-            let mut cache = self.cached_api_base.write().await;
-            *cache = Some(api_base);
-        }
-
-        Ok(key)
-    }
-
-    /// Get the API base URL
-    async fn get_api_base(&self) -> String {
-        // Check cache first
-        {
-            let cache = self.cached_api_base.read().await;
-            if let Some(ref base) = *cache {
-                return base.clone();
-            }
-        }
-
-        // Use config or authenticator
-        self.config
-            .api_base
+    /// Resolve the endpoint from the same API credential used by this request.
+    fn api_base_for(&self, credentials: &ApiKeyInfo) -> String {
+        credentials
+            .endpoints
+            .api
             .clone()
-            .or_else(|| self.authenticator.get_api_base())
+            .or_else(|| self.config.api_base.clone())
             .unwrap_or_else(|| GITHUB_COPILOT_API_BASE.to_string())
     }
 
-    /// Clear cached credentials (for refresh)
+    /// Clear the construction-owned API credential; refresh keeps its access token.
     async fn clear_cache(&self) {
-        {
-            let mut cache = self.cached_api_key.write().await;
-            *cache = None;
-        }
-        {
-            let mut cache = self.cached_api_base.write().await;
-            *cache = None;
-        }
+        self.authenticator.invalidate_api_key();
     }
 
     /// Transform messages for Copilot API
@@ -385,9 +343,10 @@ impl GitHubCopilotProvider {
     async fn build_headers(
         &self,
         messages: &[ChatMessage],
-    ) -> Result<reqwest::header::HeaderMap, ProviderError> {
-        let api_key = self.get_api_key().await?;
-        let default_headers = get_copilot_default_headers(&api_key);
+    ) -> Result<(reqwest::header::HeaderMap, String), ProviderError> {
+        let credentials = self.authenticator.get_api_key_info().await?;
+        let api_base = self.api_base_for(&credentials);
+        let default_headers = get_copilot_default_headers(&credentials.token);
 
         let mut headers = reqwest::header::HeaderMap::new();
         for (key, value) in default_headers {
@@ -432,7 +391,7 @@ impl GitHubCopilotProvider {
             );
         }
 
-        Ok(headers)
+        Ok((headers, api_base))
     }
 }
 
@@ -569,12 +528,11 @@ impl LLMProvider for GitHubCopilotProvider {
         self.transform_messages(&mut request.messages);
 
         // Build headers
-        let headers = self.build_headers(&request.messages).await?;
-        self.require_endpoint(&request.model, "/chat/completions", &headers)
+        let (headers, api_base) = self.build_headers(&request.messages).await?;
+        self.require_endpoint(&request.model, "/chat/completions", &api_base, &headers)
             .await?;
 
         // Build URL
-        let api_base = self.get_api_base().await;
         let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
 
         // Execute request
@@ -638,12 +596,11 @@ impl LLMProvider for GitHubCopilotProvider {
         request.stream = true;
 
         // Build headers
-        let headers = self.build_headers(&request.messages).await?;
-        self.require_endpoint(&request.model, "/chat/completions", &headers)
+        let (headers, api_base) = self.build_headers(&request.messages).await?;
+        self.require_endpoint(&request.model, "/chat/completions", &api_base, &headers)
             .await?;
 
         // Build URL
-        let api_base = self.get_api_base().await;
         let url = format!("{}/chat/completions", api_base.trim_end_matches('/'));
 
         // Execute request
@@ -691,8 +648,9 @@ impl LLMProvider for GitHubCopilotProvider {
         debug!("GitHub Copilot embeddings request: model={}", request.model);
 
         // Build headers
-        let api_key = self.get_api_key().await?;
-        let headers_map = get_copilot_default_headers(&api_key);
+        let credentials = self.authenticator.get_api_key_info().await?;
+        let api_base = self.api_base_for(&credentials);
+        let headers_map = get_copilot_default_headers(&credentials.token);
         let mut headers = reqwest::header::HeaderMap::new();
         for (key, value) in headers_map {
             if let (Ok(name), Ok(val)) = (
@@ -704,7 +662,6 @@ impl LLMProvider for GitHubCopilotProvider {
         }
 
         // Build URL
-        let api_base = self.get_api_base().await;
         let url = format!("{}/embeddings", api_base.trim_end_matches('/'));
 
         // Execute request
@@ -749,7 +706,7 @@ impl LLMProvider for GitHubCopilotProvider {
 
     async fn health_check(&self) -> HealthStatus {
         // Try to get API key as health check
-        match self.get_api_key().await {
+        match self.authenticator.get_api_key_info().await {
             Ok(_) => HealthStatus::Healthy,
             Err(_) => HealthStatus::Unhealthy,
         }
@@ -942,12 +899,11 @@ mod tests {
     #[test]
     fn test_determine_initiator() {
         let config = GitHubCopilotConfig::default();
+        let authenticator = CopilotAuthenticator::new(&config);
         let provider = GitHubCopilotProvider {
-            authenticator: CopilotAuthenticator::new(&config),
+            authenticator,
             config,
             models: vec![],
-            cached_api_key: Arc::new(RwLock::new(None)),
-            cached_api_base: Arc::new(RwLock::new(None)),
             #[cfg(test)]
             native_endpoint_access: crate::core::net::ProviderEndpointAccess::PublicOnly,
         };
@@ -960,6 +916,67 @@ mod tests {
             text_message(MessageRole::Assistant, "Hi!"),
         ];
         assert_eq!(provider.determine_initiator(&messages), "agent");
+    }
+
+    #[tokio::test]
+    async fn copilot_request_headers_keep_the_captured_token_and_endpoint_together() {
+        let directory = tempfile::tempdir().unwrap();
+        let api_path = directory.path().join("api-key.json");
+        std::fs::write(directory.path().join("access-token"), "captured-access").unwrap();
+        let config = GitHubCopilotConfig {
+            token_dir: Some(directory.path().to_str().unwrap().into()),
+            access_token_file: Some("access-token".into()),
+            api_key_file: Some("api-key.json".into()),
+            api_base: Some("https://configured.example".into()),
+            ..Default::default()
+        };
+        let write_key = |token: &str, endpoint: Option<&str>| {
+            std::fs::write(
+                &api_path,
+                serde_json::json!({
+                    "token": token, "expires_at": u64::MAX,
+                    "endpoints": {"api": endpoint},
+                })
+                .to_string(),
+            )
+            .unwrap();
+        };
+        write_key("captured-api", Some("https://captured.example"));
+        let first = GitHubCopilotProvider::new(config.clone()).await.unwrap();
+        let held = first.build_headers(&[]).await.unwrap();
+        write_key("rotated-api", Some("https://rotated.example"));
+        let rotated = GitHubCopilotProvider::new(config.clone()).await.unwrap();
+        let latest = rotated.build_headers(&[]).await.unwrap();
+        assert_eq!(held.0["authorization"], "Bearer captured-api");
+        assert_eq!(held.1, "https://captured.example");
+        assert_eq!(latest.0["authorization"], "Bearer rotated-api");
+        assert_eq!(latest.1, "https://rotated.example");
+        let cloned = first.clone().build_headers(&[]).await.unwrap();
+        assert_eq!(cloned.0["authorization"], held.0["authorization"]);
+        assert_eq!(cloned.1, held.1);
+        assert_ne!(
+            first.credential_resource_identity(),
+            rotated.credential_resource_identity()
+        );
+        let redacted = format!("{first:?}");
+        assert!(!redacted.contains("captured-api") && !redacted.contains("captured-access"));
+
+        write_key("endpoint-absent", None);
+        let configured = GitHubCopilotProvider::new(config.clone()).await.unwrap();
+        assert_eq!(
+            configured.build_headers(&[]).await.unwrap().1,
+            "https://configured.example"
+        );
+        let default_base = GitHubCopilotProvider::new(GitHubCopilotConfig {
+            api_base: None,
+            ..config
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            default_base.build_headers(&[]).await.unwrap().1,
+            GITHUB_COPILOT_API_BASE
+        );
     }
 
     #[tokio::test]

@@ -25,3 +25,6 @@ mod admission_tests;
 
 // Distributed deployment circuit breaker (issue #1281)
 mod circuit_tests;
+
+#[cfg(feature = "gateway")]
+mod circuit_snapshot_tests;

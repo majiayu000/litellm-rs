@@ -265,28 +265,96 @@ pub(crate) fn strict_usage(
 }
 
 pub(crate) fn strict_openai_chat_usage(usage: &Value) -> Option<Usage> {
+    strict_openai_usage(usage, false)
+}
+
+pub(crate) fn strict_openai_embedding_usage(usage: &Value) -> Option<Usage> {
+    strict_openai_usage(usage, true)
+}
+
+fn strict_openai_usage(usage: &Value, embedding: bool) -> Option<Usage> {
     let prompt = strict_token_count(usage.get("prompt_tokens"))?;
-    let completion = strict_token_count(usage.get("completion_tokens"))?;
+    let completion = match usage.get("completion_tokens") {
+        None if embedding => 0,
+        value => strict_token_count(value)?,
+    };
+    if embedding && completion != 0 {
+        return None;
+    }
     let total = strict_token_count(usage.get("total_tokens"))?;
+    let details = usage.get("prompt_tokens_details");
+    let mut cache_counts = [None; 3];
+    for (slot, name) in cache_counts.iter_mut().zip([
+        "cached_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+    ]) {
+        if let Some(value) = details.and_then(|details| details.get(name)) {
+            let count = strict_token_count(Some(value))?;
+            u32::try_from(count).ok()?;
+            if count > prompt {
+                return None;
+            }
+            *slot = Some(count);
+        }
+    }
+    let [cached, read, creation] = cache_counts;
+    if read
+        .or(cached)
+        .unwrap_or(0)
+        .checked_add(creation.unwrap_or(0))?
+        > prompt
+    {
+        return None;
+    }
     strict_usage(
         &[prompt],
         &[completion],
         Some((total, &[prompt, completion])),
-        None,
+        cached.map(|count| (count, prompt)),
     )
 }
 
-pub(crate) fn strict_openai_embedding_usage(usage: &Value) -> Option<Usage> {
-    let prompt = strict_token_count(usage.get("prompt_tokens"))?;
-    let completion = match usage.get("completion_tokens") {
-        Some(value) => strict_token_count(Some(value))?,
-        None => 0,
+/// Normalize only usage at an OpenAI-compatible unary chat wire boundary.
+/// Invalid accounting must not discard otherwise successful provider output.
+pub(crate) fn normalize_openai_chat_response_usage(response: &mut Value) {
+    normalize_openai_response_usage(response, false);
+}
+
+/// Embeddings omit completion_tokens; validate the raw input/total first.
+pub(crate) fn normalize_openai_embedding_response_usage(response: &mut Value) {
+    normalize_openai_response_usage(response, true);
+}
+
+fn normalize_openai_response_usage(response: &mut Value, embedding: bool) {
+    use crate::core::providers::openai::models::OpenAIUsage;
+
+    let Some(usage) = response.get_mut("usage") else {
+        return;
     };
-    if completion != 0 {
-        return None;
+    let valid = if embedding {
+        strict_openai_embedding_usage(usage)
+    } else {
+        strict_openai_chat_usage(usage)
+    };
+    if valid.is_none() {
+        *usage = Value::Null;
+        return;
     }
-    let total = strict_token_count(usage.get("total_tokens"))?;
-    strict_usage(&[prompt], &[0], Some((total, &[prompt])), None)
+    if embedding {
+        usage["completion_tokens"] = Value::from(0);
+    }
+    // Validate the actual endpoint type: OpenAI's token detail structs accept
+    // more fields than canonical Usage. A field ignored by one type can still
+    // fail the downstream decoder, so canonical validation alone is insufficient.
+    let representable = if embedding {
+        serde_json::from_value::<Usage>(usage.clone()).is_ok()
+    } else {
+        serde_json::from_value::<OpenAIUsage>(usage.clone()).is_ok()
+    };
+    if !representable {
+        *usage = Value::Null;
+    }
 }
 
 fn strict_google_usage_metadata(metadata: &Value, vertex_total: bool) -> Option<Usage> {
@@ -724,6 +792,42 @@ mod tests {
             });
             bad[field] = malformed;
             assert!(strict_direct_gemini_usage_metadata(&bad).is_none());
+        }
+    }
+
+    #[test]
+    fn raw_openai_cache_counters_are_strict_for_chat_and_embeddings() {
+        for embedding in [false, true] {
+            for field in [
+                "cached_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            ] {
+                for bad in [
+                    serde_json::json!(-1),
+                    serde_json::json!("1"),
+                    serde_json::json!(1.5),
+                    Value::Null,
+                    serde_json::json!(100),
+                    serde_json::json!(u64::MAX),
+                ] {
+                    let mut response = serde_json::json!({"output":"kept", "usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"prompt_tokens_details":{field:bad}}});
+                    normalize_openai_response_usage(&mut response, embedding);
+                    assert!(
+                        response["usage"].is_null(),
+                        "embedding={embedding} {field}: {bad}"
+                    );
+                    assert_eq!(response["output"], "kept");
+                }
+                let mut usage = serde_json::json!({"prompt_tokens":u64::MAX,"completion_tokens":0,"total_tokens":u64::MAX,"prompt_tokens_details":{field:u64::MAX}});
+                assert!(
+                    strict_openai_chat_usage(&usage).is_none(),
+                    "unrepresentable {field}"
+                );
+                usage["prompt_tokens_details"] =
+                    serde_json::json!({"cached_tokens":u64::MAX,"cache_creation_tokens":u64::MAX});
+                assert!(strict_openai_embedding_usage(&usage).is_none());
+            }
         }
     }
 

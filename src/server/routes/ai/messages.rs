@@ -122,10 +122,18 @@ async fn create(
         &requested_model,
         &context,
     );
+    let estimated_tokens = super::execution::estimate::json_completion(
+        &token_count_body(&body),
+        &model,
+        body.get("max_tokens")
+            .and_then(Value::as_u64)
+            .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
+    )?;
     let (call, mut lease) = super::execution::execute_stream_with_selected_deployment_matching(
         state.unified_router(),
         &model,
         ProviderCapability::ChatCompletion,
+        estimated_tokens,
         |deployment| matches!(&deployment.provider, Provider::Anthropic(_)),
         {
             let context = context.clone();
@@ -292,7 +300,7 @@ async fn create(
     });
     let tokens_used = usage
         .as_ref()
-        .map_or(0, |usage| u64::from(usage.normalized.total_tokens));
+        .map(|usage| u64::from(usage.normalized.total_tokens));
     let settlement = settle(
         state,
         &context,
@@ -304,38 +312,22 @@ async fn create(
         key_reservation,
         crate::core::request_ledger::current_facts(),
     );
-    match result.as_ref() {
-        Ok(_) => lease.settle_terminal(tokens_used, None, settlement).await,
-        Err(GatewayError::Provider(error)) => {
-            lease
-                .settle_terminal(tokens_used, Some(error), settlement)
-                .await
-        }
-        Err(_) => {
-            lease
-                .settle_interrupted(tokens_used, None, settlement)
-                .await
-        }
-    }
+    let routing_error = match result.as_ref() {
+        Err(GatewayError::Provider(error)) => Some(error),
+        _ => None,
+    };
+    // Successful POST headers already identify accepted provider work. Missing
+    // final usage retains its admission estimate alongside the reserved budget.
+    lease
+        .settle_native_stream(tokens_used, result.is_ok(), routing_error, settlement)
+        .await;
     let value = match result {
         Ok(value) => value,
         Err(error) => {
             callback.fail(error.to_string(), "provider_error");
-            if let GatewayError::Provider(provider_error) = &error {
-                lease
-                    .finish_failure_with_tokens(provider_error, tokens_used)
-                    .await;
-            }
             return Err(error);
         }
     };
-    lease
-        .finish_success(
-            usage
-                .as_ref()
-                .map_or(0, |usage| u64::from(usage.normalized.total_tokens)),
-        )
-        .await;
     let sink =
         GuardrailDecisionSink::from_state(state, Some(&model), Some(&provider), Some(&deployment));
     let value = guardrails::apply_native_messages(state.guardrails().as_ref(), value, true, &sink)
@@ -656,7 +648,7 @@ async fn settle(
                     "Messages usage unknown",
                 );
             }
-            super::execution::completion::observe_usage(0);
+            super::execution::completion::observe_unknown_usage();
             let budget_settlement = async {
                 if let Some(reservation) = reservation {
                     let reserved = reservation.reserved_amount();

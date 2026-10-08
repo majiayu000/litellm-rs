@@ -4,12 +4,23 @@ use std::sync::Mutex;
 
 use super::SSETransformer;
 use crate::core::providers::unified_provider::ProviderError;
-use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice};
+use crate::core::types::responses::{ChatChunk, ChatDelta, ChatStreamChoice, Usage};
 use crate::core::types::thinking::ThinkingDelta;
 
 #[cfg(test)]
 #[path = "openai_stream_tests.rs"]
 mod stream_tests;
+
+const INVALIDATED_USAGE_STREAM_TYPE: &str = "chat.completion.usage_invalidated";
+
+/// A later explicit declaration invalidated previously reported token counts.
+pub(crate) fn invalidates_stream_usage(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::Streaming { stream_type, .. }
+            if stream_type == INVALIDATED_USAGE_STREAM_TYPE
+    )
+}
 
 /// OpenAI-compatible SSE Transformer (can be reused by many providers)
 #[derive(Debug)]
@@ -19,6 +30,7 @@ pub struct OpenAICompatibleTransformer {
     /// chunk conversion remains usable without constructing an entire stream.
     choices: Mutex<BTreeMap<u32, bool>>,
     error_usage: Mutex<Option<ChatChunk>>,
+    valid_usage_seen: Mutex<bool>,
 }
 
 impl Clone for OpenAICompatibleTransformer {
@@ -35,6 +47,7 @@ impl OpenAICompatibleTransformer {
             provider,
             choices: Mutex::new(BTreeMap::new()),
             error_usage: Mutex::new(None),
+            valid_usage_seen: Mutex::new(false),
         }
     }
 
@@ -159,10 +172,15 @@ impl SSETransformer for OpenAICompatibleTransformer {
             });
         }
 
-        // Parse usage (optional). A parse failure must not drop the chunk, but
-        // usage feeds billing, so it must not be silently discarded either.
+        // Usage must satisfy the raw protocol invariants before it can release
+        // an admission estimate. Keep valid detail fields during deserialization;
+        // invalid usage must not discard the accompanying output.
         let usage = match json_value.get("usage") {
             None | Some(Value::Null) => None,
+            Some(v) if crate::core::providers::shared::strict_openai_chat_usage(v).is_none() => {
+                tracing::warn!("{}: ignoring untrusted usage in SSE chunk", self.provider);
+                None
+            }
             Some(v) => match serde_json::from_value(v.clone()) {
                 Ok(parsed) => Some(parsed),
                 Err(e) => {
@@ -192,8 +210,32 @@ impl SSETransformer for OpenAICompatibleTransformer {
     }
 
     fn transform_stream_chunk(&self, data: &str) -> Result<Option<ChatChunk>, ProviderError> {
+        let mut valid_usage_seen = self.valid_usage_seen.lock().map_err(|_| {
+            self.lifecycle_error(None, "OpenAI-compatible usage state lock poisoned")
+        })?;
+        // Inspect an explicit declaration before choice parsing can reject the
+        // frame. A structural error must not hide a simultaneous usage retraction.
+        if *valid_usage_seen
+            && let Ok(value) = serde_json::from_str::<Value>(data)
+            && let Some(usage) = value.get("usage")
+            && !usage.is_null()
+            && (crate::core::providers::shared::strict_openai_chat_usage(usage).is_none()
+                || serde_json::from_value::<Usage>(usage.clone()).is_err())
+        {
+            return Err(ProviderError::streaming_error(
+                self.provider,
+                INVALIDATED_USAGE_STREAM_TYPE,
+                None,
+                None,
+                "explicit invalid usage followed valid stream usage",
+            ));
+        }
         let chunk = self.transform_chunk(data)?;
         if let Some(chunk) = &chunk {
+            if chunk.usage.is_some() {
+                *valid_usage_seen = true;
+            }
+            drop(valid_usage_seen);
             let mut choices = self.choices.lock().map_err(|_| {
                 self.lifecycle_error(None, "OpenAI-compatible stream state lock poisoned")
             })?;
@@ -249,6 +291,45 @@ impl SSETransformer for OpenAICompatibleTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sse_cached_usage_must_fit_prompt() {
+        for (details, valid) in [
+            (serde_json::json!({"cached_tokens":100}), false),
+            (
+                serde_json::json!({"cached_tokens":1,"cache_read_tokens":100}),
+                false,
+            ),
+            (serde_json::json!({"cache_creation_tokens":100}), false),
+            (
+                serde_json::json!({"cached_tokens":2,"cache_creation_tokens":2}),
+                false,
+            ),
+            (
+                serde_json::json!({"cached_tokens":3,"cache_read_tokens":1,"cache_creation_tokens":2,"audio_tokens":1}),
+                true,
+            ),
+        ] {
+            let transformer = OpenAICompatibleTransformer::new("test");
+            let wire = serde_json::json!({
+                "id":"cache-bound", "created":1, "model":"test",
+                "choices":[{"index":0,"delta":{"content":"kept"}}],
+                "usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,
+                    "prompt_tokens_details":details}
+            });
+            let chunk = transformer
+                .transform_chunk(&wire.to_string())
+                .unwrap()
+                .unwrap();
+            assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("kept"));
+            if valid {
+                let preserved = chunk.usage.unwrap().prompt_tokens_details.unwrap();
+                assert_eq!(serde_json::to_value(preserved).unwrap(), details);
+            } else {
+                assert!(chunk.usage.is_none(), "{details}");
+            }
+        }
+    }
 
     #[test]
     fn test_preserves_upstream_choice_index() {
