@@ -3752,6 +3752,9 @@ async fn native_foreground_completion_retains_unknown_usage_and_settles_known_us
             for usage in [None, Some(0_u64), Some(15_u64)] {
                 let observed_usage = usage;
                 let retain_unknown = !failed && observed_usage.is_none();
+                // Known positive usage settles the shared request reservation
+                // even on provider failure. Local success RPM remains separate.
+                let retain_request = !failed || observed_usage.is_some_and(|tokens| tokens > 0);
                 let (state, upstream, handle) = fixture(StatusCode::OK, |config| {
                     if let Some(url) = &redis_url {
                         config.gateway.storage.redis.enabled = true;
@@ -3896,7 +3899,11 @@ async fn native_foreground_completion_retains_unknown_usage_and_settles_known_us
                         .query_async(conn)
                         .await
                         .unwrap();
-                    assert_eq!((admission.0, admission.1), (0, i64::from(!failed)));
+                    assert_eq!(
+                        (admission.0, admission.1),
+                        (0, i64::from(retain_request)),
+                        "shared admission request ownership: failed={failed}, usage={usage:?}"
+                    );
                     match observed_usage {
                         Some(tokens) => assert_eq!(admission.2, i64::try_from(tokens).unwrap()),
                         None if failed => assert_eq!(admission.2, 0),
@@ -3990,7 +3997,7 @@ async fn native_foreground_completion_retains_unknown_usage_and_settles_known_us
                         admission,
                         (
                             0,
-                            if failed { 0 } else { expected_requests },
+                            i64::from(retain_request) * expected_requests,
                             expected_tokens
                         )
                     );
