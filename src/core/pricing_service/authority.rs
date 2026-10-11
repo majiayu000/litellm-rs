@@ -440,15 +440,13 @@ fn exact_pricing_candidates(
         push_unique(&mut candidates, parsed.model());
         push_unique(&mut candidates, &format!("{provider}/{}", parsed.model()));
     }
-    if provider == "anthropic" && is_xiaomi_mimo_model(model) {
-        let local = if parsed.provider().is_some_and(|prefix| {
+    if provider == "anthropic"
+        && is_xiaomi_mimo_model(model)
+        && parsed.provider().is_none_or(|prefix| {
             crate::core::pricing::normalize_pricing_provider(prefix) == provider
-        }) {
-            parsed.model()
-        } else {
-            parsed.raw()
-        };
-        push_unique(&mut candidates, &format!("xiaomi_mimo/{local}"));
+        })
+    {
+        push_unique(&mut candidates, &format!("xiaomi_mimo/{}", parsed.model()));
     }
     candidates
 }
