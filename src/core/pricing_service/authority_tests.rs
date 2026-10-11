@@ -253,6 +253,10 @@ fn anthropic_mimo_v26_rejects_unknown_and_foreign_pricing() {
         "xiaomi_mimo/mimo-v2.6-foreign".to_string(),
         test_model_info("anthropic"),
     );
+    service.add_custom_model(
+        "xiaomi_mimo/mimo-other/mimo-v2.6-pro".to_string(),
+        test_model_info("xiaomi_mimo"),
+    );
 
     for model in [
         "mimo-v2.6-pro-unknown",
