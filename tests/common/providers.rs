@@ -153,7 +153,7 @@ pub fn test_models() -> std::collections::HashMap<&'static str, &'static str> {
     models.insert("gemini", "gemini-2.5-flash");
     models.insert("mistral", "mistral-small-latest");
     models.insert("deepseek", "deepseek-v4-flash");
-    models.insert("xiaomi_mimo", "mimo-v2.5");
+    models.insert("xiaomi_mimo", "mimo-v2.6-flash");
     models.insert("together", "meta-llama/Llama-3.2-3B-Instruct-Turbo");
     models
 }

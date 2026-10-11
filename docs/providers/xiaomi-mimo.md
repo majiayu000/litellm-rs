@@ -13,12 +13,21 @@ Anthropic-compatible messages API.
 
 | Model | Context | Max Output | Pricing per 1M tokens | Notes |
 |-------|---------|------------|------------------------|-------|
-| `mimo-v2.5-pro` | 1M | 128K | $0.435 cache-miss input, $0.0036 cache-hit input, $0.87 output | Text model |
-| `mimo-v2.5` | 1M | 128K | $0.14 cache-miss input, $0.0028 cache-hit input, $0.28 output | Text and image input |
+| `mimo-v2.6-pro` | 1M | 128K | $0.435 cache-miss input, $0.0036 cache-hit input, $0.87 output | Upstream multimodal model; configure each input type explicitly |
+| `mimo-v2.6-flash` | 1M | 128K | $0.14 cache-miss input, $0.0028 cache-hit input, $0.28 output | Upstream multimodal model; configure each input type explicitly |
 
-Legacy MiMo V2 model names are being replaced by the V2.5 series. Xiaomi's
-deprecation schedule lists `mimo-v2-pro`, `mimo-v2-omni`, `mimo-v2-flash`, and
-`mimo-v2-tts` for deprecation on 2026-06-30 Beijing time.
+The [official deprecation notice](https://mimo.mi.com/docs/en-US/updates/deprecate)
+expires `mimo-v2.5-pro` and `mimo-v2.5` at **10:00 UTC+8 on October 21, 2026**.
+Switch to `mimo-v2.6-pro` and `mimo-v2.6-flash` before then. As checked on
+October 11, the notice conflicts on the October 14 automatic-routing time:
+the table says 10:00 UTC+8, while the prose says 18:00 UTC+8. Do not depend on
+that transition window.
+
+Flash's omitted `max_completion_tokens` default increases from 32,768 to
+131,072. Set an explicit output cap when migrating. The upstream notice also
+says thinking mode fixes `temperature` at 1.0 and `top_p` at 0.95.
+The [published overseas token rates](https://mimo.mi.com/docs/en-US/price/pay-as-you-go)
+are unchanged between each old/new model pair; regional RMB prices differ.
 
 ## Setup
 
@@ -48,8 +57,8 @@ providers:
     api_key: "${MIMO_API_KEY}"
     base_url: "https://token-plan-sgp.xiaomimimo.com/v1"
     models:
-      - "mimo-v2.5"
-      - "mimo-v2.5-pro"
+      - "mimo-v2.6-flash"
+      - "mimo-v2.6-pro"
 ```
 
 For the Anthropic-compatible Token Plan endpoint, configure the native
@@ -63,31 +72,36 @@ providers:
     base_url: "https://token-plan-sgp.xiaomimimo.com/anthropic"
     settings:
       allow_unknown_models: true
-      multimodal_models:
-        - "mimo-v2.5"
     models:
-      - "mimo-v2.5"
-      - "mimo-v2.5-pro"
+      - "mimo-v2.6-flash"
+      - "mimo-v2.6-pro"
 ```
 
 `allow_unknown_models` is required because MiMo model IDs are not Claude model
 IDs. It keeps first-party Anthropic providers strict by default while allowing
-explicit Anthropic-compatible upstreams.
+explicit Anthropic-compatible upstreams. This example opts in to text chat only;
+upstream multimodal capability does not automatically enable image, audio, or
+video input in this configuration.
 
 ## Usage
 
 ```rust
-use litellm_rs::{completion, system_message, user_message};
+use litellm_rs::{CompletionOptions, completion, system_message, user_message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = completion(
-        "xiaomi_mimo/mimo-v2.5-pro",
+        "xiaomi_mimo/mimo-v2.6-pro",
         vec![
             system_message("You are a helpful assistant."),
             user_message("Summarize Xiaomi MiMo in one paragraph."),
         ],
-        None,
+        Some(CompletionOptions {
+            extra_params: std::collections::HashMap::from([
+                ("max_completion_tokens".into(), serde_json::json!(1024)),
+            ]),
+            ..Default::default()
+        }),
     )
     .await?;
 
@@ -108,7 +122,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 LiteLLM-RS stores Xiaomi MiMo cache-miss input pricing as
 `input_cost_per_token`, output pricing as `output_cost_per_token`, and cache-hit
-input pricing as `cache_read_input_token_cost`.
+input pricing as `cache_read_input_token_cost`. Anthropic-compatible requests
+using bare or `anthropic/`-qualified MiMo IDs resolve the exact
+`xiaomi_mimo/mimo-v2.6-pro` or `xiaomi_mimo/mimo-v2.6-flash` catalog row.
+Exact custom Xiaomi pricing rows retain priority; unknown models and foreign
+provider rows remain rejected. This lookup does not rewrite the upstream model
+ID or enable additional modalities.
 
 ## Resources
 
