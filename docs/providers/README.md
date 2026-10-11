@@ -9,7 +9,7 @@ LiteLLM-RS supports 100+ AI providers through a unified interface. This section 
 - [**Anthropic**](./anthropic.md) - Claude Opus 4.7, Sonnet 4.6, Haiku 4.5
 - [**AWS Bedrock**](./bedrock.md) - Native SigV4 Bedrock Runtime provider
 - [**DeepSeek**](./deepseek.md) - DeepSeek V4 Flash & Pro
-- [**Xiaomi MiMo**](./xiaomi-mimo.md) - MiMo V2.5 OpenAI-compatible endpoint
+- [**Xiaomi MiMo**](./xiaomi-mimo.md) - MiMo V2.6 OpenAI-compatible endpoint
 - [**Google**](./google.md) - Gemini Pro, PaLM, Vertex AI
 - [**Azure OpenAI**](./azure-openai.md) - Enterprise OpenAI deployment
 - **xAI** - OpenAI-compatible Grok routing with pass-through model IDs
@@ -60,8 +60,8 @@ let response = completion("gpt-5.5", messages, None).await?;
 let response = completion("deepseek-v4-flash", messages, None).await?;
 let reasoning = completion("deepseek-v4-pro", messages, None).await?;
 
-// Xiaomi MiMo V2.5
-let response = completion("xiaomi_mimo/mimo-v2.5", messages, None).await?;
+// Xiaomi MiMo V2.6
+let response = completion("xiaomi_mimo/mimo-v2.6-flash", messages, None).await?;
 
 // Anthropic Claude
 let response = completion("claude-opus-4-8", messages, None).await?;
@@ -79,7 +79,7 @@ let response = completion("xai/grok-4.3", messages, None).await?;
 let openai_response = completion("openai/gpt-5.5", messages, None).await?;
 let anthropic_response = completion("anthropic/claude-opus-4-8", messages, None).await?;
 let deepseek_response = completion("deepseek/deepseek-v4-flash", messages, None).await?;
-let mimo_response = completion("xiaomi_mimo/mimo-v2.5-pro", messages, None).await?;
+let mimo_response = completion("xiaomi_mimo/mimo-v2.6-pro", messages, None).await?;
 let xai_response = completion("xai/grok-4.3", messages, None).await?;
 ```
 

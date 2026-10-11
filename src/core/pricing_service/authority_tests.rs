@@ -197,6 +197,97 @@ fn provider_aware_authority_strips_qualified_anthropic_mimo_prefix() {
 }
 
 #[test]
+fn anthropic_mimo_v26_resolves_exact_xiaomi_pricing() {
+    let service = PricingService::with_embedded_default().unwrap();
+    let usage = PricingUsage {
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        cache_read_tokens: Some(200),
+        ..Default::default()
+    };
+
+    for model in ["mimo-v2.6-pro", "mimo-v2.6-flash"] {
+        let catalog_key = format!("xiaomi_mimo/{model}");
+        let expected = service
+            .calculate_loaded_usage_cost_for_provider("xiaomi_mimo", &catalog_key, &usage)
+            .unwrap();
+        for requested in [model.to_string(), format!("anthropic/{model}")] {
+            let (resolved, info) = service
+                .get_model_info_for_provider("anthropic", &requested)
+                .expect("MiMo v2.6 should resolve the exact Xiaomi catalog row");
+            assert_eq!(resolved, catalog_key);
+            assert_eq!(info.litellm_provider, "xiaomi_mimo");
+            assert_eq!(info.max_output_tokens, Some(131_072));
+            let cost = service
+                .calculate_loaded_usage_cost_for_provider("anthropic", &requested, &usage)
+                .unwrap();
+            assert_eq!(cost.provider, "anthropic");
+            assert_eq!(cost.model, catalog_key);
+            assert_eq!(cost.total_cost, expected.total_cost);
+            assert_eq!(cost.cache_cost, expected.cache_cost);
+        }
+    }
+}
+
+#[test]
+fn anthropic_mimo_v26_keeps_exact_custom_row_precedence() {
+    for custom_key in ["mimo-v2.6-pro", "anthropic/mimo-v2.6-pro"] {
+        let service = PricingService::with_embedded_default().unwrap();
+        service.add_custom_model(custom_key.to_string(), test_model_info("xiaomi_mimo"));
+
+        for requested in ["mimo-v2.6-pro", "anthropic/mimo-v2.6-pro"] {
+            let (resolved, info) = service
+                .get_model_info_for_provider("anthropic", requested)
+                .unwrap();
+            assert_eq!(resolved, custom_key);
+            assert_eq!(info.input_cost_per_token, Some(0.00001));
+        }
+    }
+}
+
+#[test]
+fn anthropic_mimo_v26_rejects_unknown_and_foreign_pricing() {
+    let service = PricingService::with_embedded_default().unwrap();
+    service.add_custom_model("mimo-v2.6-foreign".to_string(), test_model_info("openai"));
+    service.add_custom_model(
+        "xiaomi_mimo/mimo-v2.6-foreign".to_string(),
+        test_model_info("anthropic"),
+    );
+
+    for model in [
+        "mimo-v2.6-pro-unknown",
+        "anthropic/mimo-v2.6-flash-unknown",
+        "mimo-v2.6-foreign",
+        "openai/mimo-v2.6-pro",
+        "mimo-other/mimo-v2.6-pro",
+        "xiaomi_mimo/mimo-v2.6-pro",
+        "gpt-5.5",
+    ] {
+        assert!(
+            service
+                .get_model_info_for_provider("anthropic", model)
+                .is_none(),
+            "{model} must not borrow unrelated pricing"
+        );
+        assert!(
+            service
+                .calculate_loaded_usage_cost_for_provider(
+                    "anthropic",
+                    model,
+                    &PricingUsage::new(1000, 500),
+                )
+                .is_err(),
+            "{model} must retain the missing-pricing error"
+        );
+    }
+    assert!(
+        service
+            .get_model_info_for_provider("openai", "mimo-v2.6-pro")
+            .is_none()
+    );
+}
+
+#[test]
 fn google_authority_uses_specialized_character_pricing() {
     let service = PricingService::with_embedded_default()
         .unwrap_or_else(|error| panic!("embedded pricing should load: {error}"));
