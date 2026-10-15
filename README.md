@@ -32,10 +32,10 @@ cargo run --bin gateway --features sqlite
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --version 0.8.2 --locked --bin gateway --no-default-features \
+cargo install litellm-rs --version 0.9.0 --locked --bin gateway --no-default-features \
   --features postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.8.2/config/gateway.dev.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.9.0/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
@@ -45,8 +45,8 @@ uses the local `vllm` catalog provider. Use
 provider keys and auth enabled. The explicit `sqlite` feature enables the storage needed by the gateway binary.
 The registry install selects the same feature profile as release archives and
 containers, including MCP, A2A and Realtime. Binary and example config versions
-must match. See the [0.8 artifact verification](docs/gateway/release-0.8.0-verification.md)
-for source and published-artifact verification.
+must match. See the [0.9 compatibility and rollout notes](docs/gateway/reliability-release-20261007.md)
+and [versioned release assets](https://github.com/majiayu000/litellm-rs/releases/tag/v0.9.0).
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
@@ -72,48 +72,47 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 
 ## Container distribution status
 
-Version 0.8.2 is published as the [versioned crate](https://crates.io/crates/litellm-rs/0.8.2),
-[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.8.2)
-and `ghcr.io/majiayu000/litellm-rs:0.8.2` (Linux amd64/arm64). They share the
+Version 0.9.0 is published as the [versioned crate](https://crates.io/crates/litellm-rs/0.9.0),
+[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.9.0)
+and `ghcr.io/majiayu000/litellm-rs:0.9.0` (Linux amd64/arm64). They share the
 shipped gateway feature profile documented below. Prefer a versioned image tag
 or immutable digest; `latest` is mutable. Docker Hub publication is optional.
-Source checks and actual publication identifiers are recorded separately in
-the [0.8 verification record](docs/gateway/release-0.8.0-verification.md).
+The [0.8 verification record](docs/gateway/release-0.8.0-verification.md) is
+historical evidence for 0.8 artifacts, not verification of 0.9 artifacts.
 
 ## Rust Crate
 
 ```toml
 [dependencies]
-litellm-rs = { version = "0.8", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.9", default-features = false, features = ["lite"] }
 ```
 
 No `make` step is required for crate consumers.
 
 ### Library Example
 
-Add Tokio with `macros` and `rt-multi-thread` features. The application must
-install its configured `RuntimeBinding` with `install_default_runtime` before
-calling `completion`; the [verified consumer example](docs/gateway/release-0.8.0-verification.md#supplementary-consumer-and-native-route-acceptance)
-shows runtime setup and successful calls against a local mock.
+Add Tokio with `macros` and `rt-multi-thread` features. The complete
+[`hello` example](examples/hello.rs) constructs a local vLLM deployment and
+installs its `RuntimeBinding` before calling `completion`. Run it against an
+existing local OpenAI-compatible server, passing its endpoint and served model:
 
-```rust
-use litellm_rs::{completion, user_message, system_message};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let response = completion(
-        "gpt-4",
-        vec![
-            system_message("You are a helpful assistant."),
-            user_message("Hello!"),
-        ],
-        None,
-    ).await?;
-
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    Ok(())
-}
+```bash
+cargo run --example hello -- http://localhost:8000/v1 your-served-model
 ```
+
+```toml
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Copy `examples/hello.rs` into your application's `src/main.rs`. It uses public
+crate APIs and no provider credentials. The explicit `private_network` access
+policy permits the configured local endpoint; configure credentials and endpoint
+policy separately when integrating a hosted provider.
+
+For a credential-free local HTTP check of the **same example source** as an
+independent crate consumer, run `python3 scripts/test/library_consumer_smoke.py`.
+The smoke uses this checkout as a path dependency; it does not verify a published
+registry artifact or a real provider account.
 
 ## Gateway Configuration
 
@@ -196,15 +195,15 @@ storage feature such as `sqlite` or `postgres`.
 ```toml
 # Library with metrics and tracing
 [dependencies]
-litellm-rs = { version = "0.8", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.9", default-features = false, features = ["lite"] }
 
 # Library without optional observability
 [dependencies]
-litellm-rs = { version = "0.8", default-features = false }
+litellm-rs = { version = "0.9", default-features = false }
 
 # Gateway with SQLite (also enables Redis support)
 [dependencies]
-litellm-rs = { version = "0.8", features = ["sqlite"] }
+litellm-rs = { version = "0.9", features = ["sqlite"] }
 ```
 
 Use the crate root or `litellm_rs::prelude` for completion and embedding APIs.
