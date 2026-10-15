@@ -42,8 +42,9 @@ async fn serve_once(
             let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
             let length: usize = headers.lines().find_map(|line| {
                 let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse().unwrap())
-            }).unwrap();
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().expect("invalid Content-Length in test request"))
+            }).expect("missing Content-Length in test request");
             while request.len() < header_end + length {
                 let mut bytes = [0; 4096];
                 let n = socket.read(&mut bytes).await.unwrap();
@@ -105,6 +106,8 @@ async fn anthropic_http_stream_retains_first_frame_input_and_cache_usage() {
         .rev()
         .find_map(|chunk| chunk.usage.as_ref())
         .expect("terminal usage");
+    // Anthropic reports uncached input separately from cache writes and reads.
+    // https://platform.claude.com/docs/en/build-with-claude/prompt-caching#tracking-cache-performance
     assert_eq!(
         (
             usage.prompt_tokens,
@@ -131,7 +134,8 @@ async fn anthropic_http_stream_retains_first_frame_input_and_cache_usage() {
 async fn yaml_alias_and_priority_dispatch_to_local_vllm_primary() {
     let response = json!({"id":"local","object":"chat.completion","created":1,"model":"local-model","choices":[{"index":0,"message":{"role":"assistant","content":"primary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}});
     let (url, server) = serve_once(response.to_string(), "application/json").await;
-    let fallback = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let fallback = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    fallback.set_nonblocking(true).unwrap();
     let providers: Vec<ProviderConfig> = serde_yml::from_str(&format!(
         r#"
 - name: fallback
@@ -185,9 +189,8 @@ async fn yaml_alias_and_priority_dispatch_to_local_vllm_primary() {
     let (headers, request) = server.await.unwrap();
     assert!(headers.starts_with("POST /v1/chat/completions "));
     assert_eq!(request["model"], "local-model");
+    // Dispatch has completed; any fallback connection would be in the accept queue.
     assert!(
-        tokio::time::timeout(Duration::from_millis(50), fallback.accept())
-            .await
-            .is_err()
+        matches!(fallback.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
     );
 }

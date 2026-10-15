@@ -85,13 +85,43 @@ mod tests {
             self.captured_requests.lock().unwrap().clone()
         }
 
-        async fn shutdown(self) {
-            self.handle.stop(true).await;
-            let result = self.task.await.expect("mock server task should join");
+        async fn shutdown(mut self) {
+            // Assertions have finished; pooled/idle connections are not work to drain.
+            tokio::time::timeout(Duration::from_secs(5), self.handle.stop(false))
+                .await
+                .expect("mock audio server stop timed out");
+            let result = tokio::time::timeout(Duration::from_secs(5), &mut self.task)
+                .await
+                .expect("mock audio server join timed out")
+                .expect("mock server task should join");
             if let Err(error) = result {
                 panic!("mock server should stop cleanly: {error}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn mock_audio_shutdown_does_not_wait_for_idle_clients() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mock = MockAudioServer::start().await;
+        let address = mock.base_url.strip_prefix("http://").unwrap();
+        let mut idle_client = tokio::net::TcpStream::connect(address).await.unwrap();
+        idle_client
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = [0; 1024];
+        let read = tokio::time::timeout(Duration::from_secs(5), idle_client.read(&mut response))
+            .await
+            .expect("mock should answer readiness request")
+            .unwrap();
+        assert!(read > 0);
+        // Keep the client's connection alive while fixture cleanup completes.
+        tokio::time::timeout(Duration::from_secs(2), mock.shutdown())
+            .await
+            .expect("fixture shutdown must not drain idle clients");
+        drop(idle_client);
     }
 
     async fn wait_for_server(address: std::net::SocketAddr) {
@@ -794,7 +824,9 @@ mod tests {
                 "voice": "alloy"
             }))
             .to_request();
-        let resp = test::call_service(&app, req).await;
+        let resp = tokio::time::timeout(Duration::from_secs(10), test::call_service(&app, req))
+            .await
+            .expect("unsupported speech model must be rejected promptly");
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert!(
