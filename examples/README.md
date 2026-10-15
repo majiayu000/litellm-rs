@@ -4,6 +4,20 @@ This directory contains examples demonstrating how to use the LiteLLM Rust libra
 
 ## Available Examples
 
+### Local runtime (start here)
+
+[`hello.rs`](hello.rs) is the complete runtime-backed example linked from the
+main README. It installs a configured runtime before making a completion call:
+
+```bash
+cargo run --example hello -- http://localhost:8000/v1 your-served-model
+python3 scripts/test/library_consumer_smoke.py
+```
+
+The second command runs the same source as a separate crate against a local HTTP
+fixture, with no credentials. The provider snippets below require an already
+configured runtime; setting environment variables alone does not install one.
+
 ### OpenRouter
 - `openrouter_completion.rs` - Basic completion with OpenRouter API
 

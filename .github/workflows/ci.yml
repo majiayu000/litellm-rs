@@ -40,6 +40,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test default library
         run: cargo test --locked
+      - name: Smoke test documented external consumer
+        run: python3 scripts/test/library_consumer_smoke.py
 
   catalog-authority:
     name: Model Catalog Authority
