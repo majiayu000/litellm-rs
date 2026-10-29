@@ -2,7 +2,7 @@
 name = "litellm-rs"
 version = "0.9.0"
 edition = "2024"
-rust-version = "1.91.1"
+rust-version = "1.94.1"
 authors = ["lifcc"]
 description = "A high-performance AI Gateway written in Rust, providing OpenAI-compatible APIs with intelligent routing, load balancing, and enterprise features"
 documentation = "https://docs.rs/litellm-rs"
@@ -45,7 +45,7 @@ required-features = ["gateway"]
 
 [dependencies]
 # Web framework and async runtime
-actix-web = { version = "=4.13.0", default-features = false, features = [
+actix-web = { version = "=4.18.1", default-features = false, features = [
     "macros",
     "compress-brotli",
     "compress-gzip",
@@ -56,8 +56,8 @@ actix-web = { version = "=4.13.0", default-features = false, features = [
     "ws",
 ], optional = true }
 actix-cors = { version = "0.7", optional = true }
-actix-http = { version = "=3.12.1", default-features = false, features = ["rustls-0_23"], optional = true }
-actix-server = { version = "=2.6.0", default-features = false, optional = true }
+actix-http = { version = "=3.20.0", default-features = false, features = ["rustls-0_23"], optional = true }
+actix-server = { version = "=2.10.0", default-features = false, optional = true }
 actix-service = { version = "=2.0.3", default-features = false, optional = true }
 actix-tls = { version = "=3.5.0", default-features = false, features = ["accept", "rustls-0_23"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
