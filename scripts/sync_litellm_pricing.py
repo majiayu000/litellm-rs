@@ -712,16 +712,21 @@ def apply_official_overrides(
 
 
 def normalize_off_peak_pricing(model: str, row: dict[str, Any]) -> dict[str, Any]:
-    """Convert upstream UTC hour windows to the runtime's peak-window format."""
+    """Convert UTC hours and vendor-calendar weekdays to runtime UTC windows."""
     if "off_peak_pricing" not in row:
         return row
     off_peak = row["off_peak_pricing"]
     if not isinstance(off_peak, dict) or "time_of_use_pricing" in row:
         raise SystemExit(f"{model!r} has invalid or conflicting off_peak_pricing")
     fields = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    # The runtime stores one static UTC week, so only calendars with a fixed,
+    # whole-hour offset can be lowered here. Do not silently accept DST zones.
+    weekday_offsets = {"UTC": 0, "Asia/Shanghai": 8}
+    weekday_timezone = off_peak.get("weekday_timezone", "UTC")
     if (
         set(off_peak) - {*fields, "hours_utc", "windows", "weekday_timezone"}
-        or off_peak.get("weekday_timezone", "UTC") != "UTC"
+        or not isinstance(weekday_timezone, str)
+        or weekday_timezone not in weekday_offsets
         or ("hours_utc" in off_peak and "windows" in off_peak)
     ):
         raise SystemExit(f"{model!r}.off_peak_pricing has unsupported rate or schedule fields")
@@ -750,14 +755,33 @@ def normalize_off_peak_pricing(model: str, row: dict[str, Any]) -> dict[str, Any
             raise SystemExit(f"{model!r}.off_peak_pricing window has unsupported fields")
         hours = window.get("hours_utc")
         weekdays = window.get("weekdays")
-        match = re.fullmatch(r"([01][0-9]|2[0-3]):00-([01][0-9]|2[0-3]):00", hours) if isinstance(hours, str) else None
-        if not match or not isinstance(weekdays, list) or not weekdays or any(day not in day_names for day in weekdays):
+        if not isinstance(weekdays, list) or not weekdays:
             raise SystemExit(f"{model!r}.off_peak_pricing requires supported UTC hour windows and weekday names")
-        start, end = int(match[1]), int(match[2]) or 24
-        if start >= end:
-            raise SystemExit(f"{model!r}.off_peak_pricing requires split windows for spans across midnight")
+        allowed_days: set[int] = set()
         for day in weekdays:
-            off_hours.update((day_names.index(day) + 1, hour) for hour in range(start, end))
+            if isinstance(day, str) and day in day_names:
+                allowed_days.add(day_names.index(day) + 1)
+            elif isinstance(day, int) and not isinstance(day, bool) and 1 <= day <= 7:
+                allowed_days.add(day)
+            else:
+                raise SystemExit(f"{model!r}.off_peak_pricing weekdays must use names or ISO integers 1..7")
+        hour_windows = [hours] if isinstance(hours, str) else hours
+        if not isinstance(hour_windows, list) or not hour_windows:
+            raise SystemExit(f"{model!r}.off_peak_pricing requires non-empty UTC hour windows")
+        for hours in hour_windows:
+            match = re.fullmatch(r"([01][0-9]|2[0-3]):00-([01][0-9]|2[0-3]):00", hours) if isinstance(hours, str) else None
+            if not match:
+                raise SystemExit(f"{model!r}.off_peak_pricing requires supported UTC hour windows")
+            start, end = int(match[1]), int(match[2]) or 24
+            if start >= end:
+                raise SystemExit(f"{model!r}.off_peak_pricing requires split windows for spans across midnight")
+            for day in range(1, 8):
+                for hour in range(start, end):
+                    # hours_utc stays in UTC; only the weekday uses the vendor's
+                    # calendar. Friday 16:00 UTC is already Saturday in Shanghai.
+                    local_day = (day - 1 + (hour + weekday_offsets[weekday_timezone]) // 24) % 7 + 1
+                    if local_day in allowed_days:
+                        off_hours.add((day, hour))
     grouped: dict[tuple[int, int], list[int]] = {}
     for day in range(1, 8):
         hour = 0
@@ -822,6 +846,29 @@ def render_catalog(
     return data, len(overlay_entries)
 
 
+def prune_retired_unreviewed_decisions(
+    pricing_entries: dict[str, dict[str, Any]], decisions: dict[str, Any]
+) -> dict[str, Any]:
+    """Drop absent pending rows while retaining every maintainer-reviewed decision."""
+    if not isinstance(decisions, dict) or not isinstance(decisions.get("entries"), list):
+        return decisions
+    identities = {(row.get("litellm_provider"), key) for key, row in pricing_entries.items()}
+    retained = []
+    for entry in decisions["entries"]:
+        if (
+            isinstance(entry, dict)
+            and entry.get("decision") == "unreviewed"
+            and isinstance(entry.get("provider"), str)
+            and isinstance(entry.get("pricing_key"), str)
+            and (entry["provider"], entry["pricing_key"]) not in identities
+        ):
+            continue
+        retained.append(entry)
+    result = copy.deepcopy(decisions)
+    result["entries"] = copy.deepcopy(retained)
+    return result
+
+
 def add_unreviewed_decisions(
     pricing_entries: dict[str, dict[str, Any]],
     decisions: dict[str, Any],
@@ -833,7 +880,7 @@ def add_unreviewed_decisions(
     """Record new pricing identities without modifying existing review decisions.
 
     The authority builder remains responsible for validating the result. Stale
-    decisions still require explicit review rather than silent removal.
+    reviewed decisions still require explicit review rather than silent removal.
     """
     if not isinstance(decisions, dict):
         return decisions
@@ -992,6 +1039,7 @@ def main() -> int:
     validate_official_contracts(merged_entries, as_of_date)
     decisions = load_json(args.catalog_decisions)
     if not args.check:
+        decisions = prune_retired_unreviewed_decisions(merged_entries, decisions)
         upstream_identities = {
             key: row
             for key, row in merged_entries.items()
