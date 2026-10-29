@@ -864,9 +864,9 @@ def prune_retired_unreviewed_decisions(
         ):
             continue
         retained.append(entry)
-    result = copy.deepcopy(decisions)
-    result["entries"] = copy.deepcopy(retained)
-    return result
+    result = dict(decisions)
+    result["entries"] = retained
+    return copy.deepcopy(result)
 
 
 def add_unreviewed_decisions(
