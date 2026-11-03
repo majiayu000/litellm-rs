@@ -74,6 +74,7 @@ fn pricing_usage_preserves_cache_creation_and_read_tokens() {
         }),
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     };
 
     let pricing_usage = PricingUsage::from(&usage);

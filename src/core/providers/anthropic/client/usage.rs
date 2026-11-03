@@ -42,5 +42,6 @@ pub(crate) fn build_usage_from_parts(
             None
         },
         thinking_usage: None,
+        cost: None,
     }
 }

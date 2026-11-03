@@ -19,6 +19,7 @@ fn usage(prompt: u32, completion: u32) -> Usage {
         prompt_tokens_details: None,
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     }
 }
 

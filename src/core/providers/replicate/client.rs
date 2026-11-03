@@ -158,6 +158,7 @@ impl ReplicateClient {
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
                 thinking_usage: None,
+                cost: None,
             }),
         })
     }

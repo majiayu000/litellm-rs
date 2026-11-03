@@ -484,6 +484,7 @@ fn test_convert_usage_preserves_thinking_usage() {
                 .with_budget(1000)
                 .with_provider("anthropic"),
         ),
+        cost: None,
     });
 
     assert_eq!(
@@ -514,6 +515,7 @@ fn test_convert_usage_merges_thinking_tokens_into_existing_details() {
             audio_tokens: Some(3),
         }),
         thinking_usage: Some(ThinkingUsage::new(42)),
+        cost: None,
     });
 
     let details = converted.completion_tokens_details.unwrap();

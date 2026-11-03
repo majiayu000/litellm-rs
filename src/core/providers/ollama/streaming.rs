@@ -371,6 +371,7 @@ where
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
                 thinking_usage: None,
+                cost: None,
             })
         } else {
             None
@@ -779,6 +780,7 @@ mod tests {
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
                 thinking_usage: None,
+                cost: None,
             }),
         };
 

@@ -855,6 +855,7 @@ fn convert_usage(usage: types::responses::Usage) -> Usage {
         }),
         completion_tokens_details,
         thinking_usage: usage.thinking_usage,
+        cost: None,
     }
 }
 
