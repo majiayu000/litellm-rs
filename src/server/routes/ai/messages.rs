@@ -610,6 +610,7 @@ fn native_usage(value: &Value, require_inference_geo: bool) -> Option<NativeUsag
         }),
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     };
     let mut pricing = PricingUsage::from(&normalized);
     pricing.inference_geo = inference_geo;

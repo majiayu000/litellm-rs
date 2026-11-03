@@ -32,6 +32,7 @@ fn test_usage_to_usage_tokens_with_details() {
             audio_tokens: None,
         }),
         thinking_usage: None,
+        cost: None,
     };
     let tokens: UsageTokens = usage.into();
     assert_eq!(tokens.cached_tokens, Some(50));

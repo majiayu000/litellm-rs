@@ -165,6 +165,7 @@ fn test_response_usage_from_chat_usage_preserves_details() {
             audio_tokens: Some(3),
         }),
         thinking_usage: None,
+        cost: None,
     };
 
     let response_usage = response_usage_from_chat_usage(&usage);
@@ -194,6 +195,7 @@ fn response_stream_total_tokens_preserves_provider_saturation() {
         prompt_tokens_details: None,
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     };
 
     assert_eq!(

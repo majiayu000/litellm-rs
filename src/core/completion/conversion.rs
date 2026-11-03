@@ -78,6 +78,7 @@ pub fn convert_usage(usage: &crate::core::types::responses::Usage) -> Usage {
         prompt_tokens_details: None,
         completion_tokens_details: None,
         thinking_usage: usage.thinking_usage.clone(),
+        cost: None,
     }
 }
 
@@ -108,6 +109,7 @@ mod tests {
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         }
     }
 
@@ -563,6 +565,7 @@ mod tests {
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         };
 
         let result = convert_usage(&usage);
@@ -581,6 +584,7 @@ mod tests {
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         };
 
         let result = convert_usage(&usage);

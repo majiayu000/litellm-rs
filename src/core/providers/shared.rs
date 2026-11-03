@@ -261,6 +261,7 @@ pub(crate) fn strict_usage(
         }),
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     })
 }
 
@@ -431,6 +432,7 @@ pub mod test_utils {
             completion_tokens_details: None,
             prompt_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         }
     }
 }

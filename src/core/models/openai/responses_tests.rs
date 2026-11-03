@@ -22,6 +22,7 @@ fn test_usage_with_values() {
         prompt_tokens_details: None,
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     };
 
     assert_eq!(usage.prompt_tokens, 100);
@@ -46,6 +47,7 @@ fn test_usage_with_details() {
             audio_tokens: Some(5),
         }),
         thinking_usage: None,
+        cost: None,
     };
 
     assert!(usage.prompt_tokens_details.is_some());
@@ -72,6 +74,7 @@ fn test_usage_serialize() {
         prompt_tokens_details: None,
         completion_tokens_details: None,
         thinking_usage: None,
+        cost: None,
     };
 
     let json = serde_json::to_string(&usage).unwrap();
@@ -95,6 +98,7 @@ fn test_usage_serialize_thinking_usage() {
             audio_tokens: None,
         }),
         thinking_usage: Some(ThinkingUsage::new(25).with_budget(1000)),
+        cost: None,
     };
 
     let json = serde_json::to_value(&usage).unwrap();
@@ -339,6 +343,7 @@ fn test_chat_completion_chunk_with_usage() {
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         }),
     };
 

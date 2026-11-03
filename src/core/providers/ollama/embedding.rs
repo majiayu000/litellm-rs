@@ -101,6 +101,7 @@ pub(super) fn parse_embedding_response(
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         }),
         embeddings: None,
     })

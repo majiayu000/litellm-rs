@@ -115,6 +115,7 @@ pub(super) fn response_stream_budget_usage(
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         })
     });
     (total, usage)

@@ -31,6 +31,12 @@ pub struct Usage {
     /// DeepSeek R1, Gemini thinking).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_usage: Option<ThinkingUsage>,
+
+    /// Provider-reported charge for this response in USD, such as OpenRouter's
+    /// `usage.cost`. Read from upstream responses for settlement only; it is
+    /// never serialized back to gateway clients.
+    #[serde(default, skip_serializing)]
+    pub cost: Option<f64>,
 }
 
 impl Usage {
@@ -42,6 +48,7 @@ impl Usage {
             prompt_tokens_details: None,
             completion_tokens_details: None,
             thinking_usage: None,
+            cost: None,
         }
     }
 
@@ -148,6 +155,7 @@ mod tests {
                 thinking_cost: None,
                 provider: None,
             }),
+            cost: None,
         };
 
         assert_eq!(usage.thinking_tokens(), Some(300));
@@ -165,6 +173,7 @@ mod tests {
                 audio_tokens: None,
             }),
             thinking_usage: None,
+            cost: None,
         };
 
         assert_eq!(usage.thinking_tokens(), Some(150));
@@ -242,6 +251,7 @@ mod tests {
                 audio_tokens: Some(10),
             }),
             thinking_usage: None,
+            cost: None,
         };
 
         assert_eq!(
@@ -283,5 +293,27 @@ mod tests {
         assert!(!json.contains("prompt_tokens_details"));
         assert!(!json.contains("completion_tokens_details"));
         assert!(!json.contains("thinking_usage"));
+    }
+
+    #[test]
+    fn test_usage_reads_provider_reported_cost() {
+        let usage: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"cost":0.00042}"#,
+        )
+        .unwrap();
+        assert_eq!(usage.cost, Some(0.00042));
+
+        let without: Usage =
+            serde_json::from_str(r#"{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}"#)
+                .unwrap();
+        assert_eq!(without.cost, None);
+    }
+
+    #[test]
+    fn test_usage_never_serializes_provider_cost() {
+        let mut usage = Usage::new(10, 5);
+        usage.cost = Some(0.00042);
+        let json = serde_json::to_value(&usage).unwrap();
+        assert!(json.get("cost").is_none());
     }
 }
