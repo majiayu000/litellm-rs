@@ -41,7 +41,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Install cargo-edit
-        run: cargo install cargo-edit --locked
+        run: cargo install cargo-edit --locked --version 0.13.13  # 0.13.14 requires rustc 1.97; toolchain is pinned to 1.96.1
 
       - name: Analyze commits and determine version bump
         id: version
