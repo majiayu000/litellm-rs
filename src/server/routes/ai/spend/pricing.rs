@@ -62,6 +62,15 @@ impl RequestPricing {
         }
     }
 
+    /// Provider identity this request is priced (or admitted unpriced) under.
+    pub(in crate::server::routes::ai) fn provider(&self) -> &str {
+        match &self.identity {
+            PricingIdentity::Priced { provider, .. } | PricingIdentity::Unpriced { provider } => {
+                provider
+            }
+        }
+    }
+
     pub(in crate::server::routes::ai) fn priced_parts(&self) -> Option<(&str, &str)> {
         match &self.identity {
             PricingIdentity::Priced { provider, model } => Some((provider, model)),

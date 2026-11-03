@@ -348,6 +348,9 @@ pub struct OpenAIUsage {
     pub prompt_tokens_details: Option<OpenAITokenDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_details: Option<OpenAITokenDetails>,
+    /// Provider-reported charge in USD (OpenRouter `usage.cost`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
 }
 
 /// OpenAI Token Details

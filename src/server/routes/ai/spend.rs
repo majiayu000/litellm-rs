@@ -333,16 +333,25 @@ async fn record_completion_spend_inner(
     super::execution::completion::observe_usage(total_tokens);
     let usage_tokens = pricing_usage.unwrap_or_else(|| PricingUsage::from(usage));
 
-    let priced = match request_pricing.as_ref() {
-        Some(request_pricing) => request_pricing.calculate_settlement(&usage_tokens),
-        None => pricing_service.calculate_loaded_settlement_cost_for_provider(
-            pricing_provider,
-            pricing_model,
-            &usage_tokens,
-        ),
+    let billing_provider = request_pricing
+        .as_ref()
+        .map_or(pricing_provider, RequestPricing::provider);
+    let reported_cost = provider_reported_cost(billing_provider, usage);
+    let priced = match (reported_cost, request_pricing.as_ref()) {
+        (Some(cost), _) => Ok(cost),
+        (None, Some(request_pricing)) => request_pricing
+            .calculate_settlement(&usage_tokens)
+            .map(|breakdown| breakdown.total_cost),
+        (None, None) => pricing_service
+            .calculate_loaded_settlement_cost_for_provider(
+                pricing_provider,
+                pricing_model,
+                &usage_tokens,
+            )
+            .map(|breakdown| breakdown.total_cost),
     };
     let cost = match priced {
-        Ok(breakdown) => breakdown.total_cost,
+        Ok(cost) => cost,
         Err(e) => {
             tracing::error!(
                 "cost calculation failed for pricing provider '{pricing_provider}' model \
@@ -374,6 +383,9 @@ async fn record_completion_spend_inner(
         Some(usage),
         Some(cost),
     );
+    if reported_cost.is_some() {
+        crate::core::request_ledger::mark_provider_reported_charge(ledger_facts.as_ref());
+    }
 
     settle_api_key_budget_reservation(key_budget_reservation, cost, &format!("{provider}/{model}"));
     let budget_settlement = async {
@@ -399,6 +411,21 @@ async fn record_completion_spend_inner(
         }
     };
     tokio::join!(budget_settlement, usage_record);
+}
+
+/// Providers whose response `usage.cost` is the authoritative charge.
+///
+/// OpenRouter reports the exact amount it billed on every response, and upstream
+/// LiteLLM bills OpenRouter from it (BerriAI/litellm#45640). Other providers'
+/// self-reported figures are not trusted for settlement.
+const PROVIDER_REPORTED_COST_PROVIDERS: &[&str] = &["openrouter"];
+
+fn provider_reported_cost(provider: &str, usage: &Usage) -> Option<f64> {
+    let provider = crate::core::pricing::normalize_pricing_provider(provider);
+    if !PROVIDER_REPORTED_COST_PROVIDERS.contains(&provider.as_str()) {
+        return None;
+    }
+    usage.cost.filter(|cost| cost.is_finite() && *cost >= 0.0)
 }
 
 pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
@@ -685,6 +712,10 @@ mod stream_disconnect_tests;
 #[cfg(test)]
 #[path = "spend_no_usage_tests.rs"]
 mod no_usage_tests;
+
+#[cfg(test)]
+#[path = "spend_provider_cost_tests.rs"]
+mod provider_cost_tests;
 
 #[cfg(test)]
 #[path = "spend_runtime_pricing_tests.rs"]

@@ -549,3 +549,20 @@ async fn ordinary_structural_errors_do_not_retract_valid_usage() {
         assert!(output.next().await.is_none());
     }
 }
+
+#[tokio::test]
+async fn stream_usage_keeps_provider_reported_cost() {
+    let body = format!(
+        "{}{}data: [DONE]\n\n",
+        event(json!([choice(0, Some("stop"))]), Value::Null),
+        event(
+            json!([]),
+            json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"cost":0.00042})
+        )
+    );
+    let source = stream::iter([Ok::<_, reqwest::Error>(Bytes::from(body))]);
+    let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("openrouter"));
+    assert!(output.next().await.unwrap().unwrap().usage.is_none());
+    let usage = output.next().await.unwrap().unwrap().usage.unwrap();
+    assert_eq!(usage.cost, Some(0.00042));
+}

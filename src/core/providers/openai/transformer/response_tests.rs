@@ -31,6 +31,7 @@ fn test_transform_basic_response() {
             total_tokens: 15,
             prompt_tokens_details: None,
             completion_tokens_details: None,
+            cost: None,
         }),
         system_fingerprint: Some("fp_123".to_string()),
     };
@@ -107,6 +108,7 @@ fn test_transform_response_with_usage_details() {
                 audio_tokens: Some(10),
                 reasoning_tokens: Some(15),
             }),
+            cost: None,
         }),
         system_fingerprint: None,
     };
@@ -587,6 +589,7 @@ fn test_transform_stream_chunk_with_finish() {
             total_tokens: 30,
             prompt_tokens_details: None,
             completion_tokens_details: None,
+            cost: None,
         }),
         system_fingerprint: None,
     };
@@ -764,4 +767,16 @@ fn test_transform_logprobs_passes_refusal_through() {
     let parsed: serde_json::Value =
         serde_json::from_str(result.refusal.as_deref().unwrap()).unwrap();
     assert_eq!(parsed[0]["token"], "I");
+}
+
+#[test]
+fn test_transform_keeps_provider_reported_cost() {
+    let response: OpenAIChatResponse = serde_json::from_value(serde_json::json!({
+        "id":"gen-1","object":"chat.completion","created":1,"model":"openai/gpt-4o",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+        "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"cost":0.00042}
+    }))
+    .unwrap();
+    let result = OpenAIResponseTransformer::transform(response).unwrap();
+    assert_eq!(result.usage.unwrap().cost, Some(0.00042));
 }
