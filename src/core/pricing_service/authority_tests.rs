@@ -964,7 +964,9 @@ fn anthropic_canonical_cache_writes_and_long_context_tiers_are_priced() {
         assert!((cost.cache_cost - (600.0 * short + 400.0 * long)).abs() < 1e-12);
         assert_eq!(cost.tool_cost, 0.01);
     }
-    for (tokens, short, long) in [(200_000, 3.75e-6, 6e-6), (200_001, 7.5e-6, 12e-6)] {
+    // Anthropic retired the Sonnet 4.5 1M-context beta, so upstream removed its
+    // above-200k tiers (BerriAI/litellm#45647): cache writes stay flat past 200k.
+    for tokens in [200_000, 200_001] {
         let usage = PricingUsage {
             prompt_tokens: tokens,
             cache_creation_tokens: Some(tokens),
@@ -979,7 +981,7 @@ fn anthropic_canonical_cache_writes_and_long_context_tiers_are_priced() {
             )
             .unwrap();
         assert!(
-            (cost.cache_cost - (f64::from(tokens - 100_000) * short + 100_000.0 * long)).abs()
+            (cost.cache_cost - (f64::from(tokens - 100_000) * 3.75e-6 + 100_000.0 * 6e-6)).abs()
                 < 1e-12
         );
     }

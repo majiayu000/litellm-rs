@@ -287,8 +287,9 @@ fn test_runtime_pricing_supports_bedrock_provider_name() {
     let pricing = get_model_pricing("amazon.titan-text-express-v1", "bedrock")
         .expect("Bedrock provider should use embedded LiteLLM catalog pricing");
 
-    assert_cost_eq(pricing.input_cost_per_1k_tokens, 0.0013);
-    assert_cost_eq(pricing.output_cost_per_1k_tokens, 0.0017);
+    // AWS list price, corrected upstream in BerriAI/litellm#45793.
+    assert_cost_eq(pricing.input_cost_per_1k_tokens, 0.0002);
+    assert_cost_eq(pricing.output_cost_per_1k_tokens, 0.0006);
 }
 
 #[test]
