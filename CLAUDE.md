@@ -4,21 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Version Management
 
-### Automated Version Bumping (CI/CD)
+### Releasing (manual, two steps)
 
-Version bumping is **fully automated** via GitHub Actions. On every push to `main`:
+Merging to `main` does **not** bump the version or publish anything. Unreleased
+commits accumulate until a maintainer cuts a release:
 
-1. **Analyzes commits** using [Conventional Commits](https://conventionalcommits.org/):
-   - `feat:` → Minor bump (0.1.x → 0.2.0)
-   - `fix:`, `perf:`, `refactor:` → Patch bump (0.1.3 → 0.1.4)
-   - `feat!:`, `BREAKING CHANGE:` → Major bump (0.x.x → 1.0.0)
+1. **Bump**: run the `Version Bump` workflow (`gh workflow run version-bump.yml -f bump_type=auto`).
+   It reads [Conventional Commits](https://conventionalcommits.org/) since the last tag:
+   - `feat:` → minor (0.9.x → 0.10.0)
+   - `fix:`, `perf:`, `refactor:` → patch (0.9.0 → 0.9.1)
+   - `feat!:` / `BREAKING CHANGE:` → major; requires `-f confirm_breaking_changes=true`
 
-2. **Auto-updates**:
-   - `Cargo.toml` version
-   - `CHANGELOG.md` with categorized changes
-   - Creates git tag `v0.1.4`
+   It updates `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`, pushes the bump commit
+   to `main`, and pushes tag `vX.Y.Z`.
 
-3. **Triggers release pipeline** → builds binaries, Docker images, publishes to crates.io
+2. **Publish**: the tag is pushed with `GITHUB_TOKEN`, which does not trigger other
+   workflows, so start the release pipeline on the tag yourself:
+   `gh workflow run release.yml --ref vX.Y.Z`. It builds binaries and Docker images
+   and publishes to crates.io. A tag pushed from a maintainer's machine triggers
+   `release.yml` automatically instead.
 
 ### Commit Message Format
 
@@ -50,7 +54,7 @@ println!("Full: {}", full_version());       // "0.1.4-a1b2c3d"
 println!("Info: {}", build_info());         // "0.1.4-a1b2c3d (built 1704067200 with rustc 1.87)"
 ```
 
-### Manual Release (if needed)
+### Manual Release (without the Version Bump workflow)
 
 ```bash
 # 1. Update version
