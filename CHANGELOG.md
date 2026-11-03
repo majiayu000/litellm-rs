@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-03
+
+### Added
+- feat(spend): settle OpenRouter from provider-reported usage.cost (#1484)
+- feat(types): carry provider-reported cost on Usage (#1482)
+
+### Fixed
+- fix(ci): pin cargo-edit to a release that builds on the pinned toolchain (#1488)
+- fix(pricing): keep OpenRouter rows as compatibility overlays (#1483)
+- fix(pricing): restore upstream sync and clear audit blockers (#1479)
+- fix(ci): update vulnerable dependencies and bound audio fixture cleanup
+- fix(docs): make runtime onboarding executable for 0.9
+- fix(pricing): reject foreign MiMo fallback prefixes (#1477)
+- fix(pricing): resolve MiMo v2.6 exact rows (#1476)
+- Merge pull request #1470 from majiayu000/integrate/audit-candidates-20261007
+- fix(router): follow Databricks workspace endpoint precedence in runtime identity
+- Merge pull request #1474 from majiayu000/dot/fix-redis-optional-hash-20261008
+- fix: retain routed usage and resource boundaries across cancellation
+- fix(storage): decode optional Redis hash values [dot]
+
+### Changed
+- style(storage): apply CI rustfmt output to hash regression [dot]
+
+
+
+
 ## [0.9.0] - 2026-10-08
 
 ### Added
