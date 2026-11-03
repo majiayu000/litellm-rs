@@ -33,21 +33,24 @@ struct RequestPermit {
     owner: String,
 }
 impl Inflight {
-    fn acquire(self: &Arc<Self>, owner: String) -> Result<RequestPermit, HttpResponse> {
+    fn acquire(self: &Arc<Self>, owner: String) -> Result<RequestPermit, Box<HttpResponse>> {
         let mut owners = self.owners.lock().map_err(|_| {
-            transport_error(StatusCode::SERVICE_UNAVAILABLE, "MCP admission unavailable")
+            Box::new(transport_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "MCP admission unavailable",
+            ))
         })?;
         if owners.get(&owner).copied().unwrap_or(0) >= 128 {
-            return Err(transport_error(
+            return Err(Box::new(transport_error(
                 StatusCode::TOO_MANY_REQUESTS,
                 "MCP caller concurrency limit reached",
-            ));
+            )));
         }
         if owners.values().sum::<usize>() >= 4096 {
-            return Err(transport_error(
+            return Err(Box::new(transport_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "MCP request capacity reached",
-            ));
+            )));
         }
         *owners.entry(owner.clone()).or_default() += 1;
         Ok(RequestPermit {
@@ -313,7 +316,7 @@ async fn proxy(
     };
     let permit = match state.mcp_inflight.acquire(owner) {
         Ok(permit) => permit,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     // Reserve capacity before polling the payload. Keep the standard Bytes extractor
     // so resource PayloadConfig limits and its error status contract still apply.

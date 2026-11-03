@@ -485,7 +485,7 @@ async fn parse_upload(mut payload: Multipart) -> Result<ParsedFileUpload, HttpRe
             "purpose" => {
                 let value = read_text_field(&mut field).await?;
                 if !value.trim().is_empty() {
-                    purpose = Some(validate_upload_purpose(&value)?);
+                    purpose = Some(validate_upload_purpose(&value).map_err(|response| *response)?);
                 }
             }
             _ => drain_field(&mut field).await?,
@@ -497,7 +497,7 @@ async fn parse_upload(mut payload: Multipart) -> Result<ParsedFileUpload, HttpRe
         _ => return Err(openai_errors::validation_error("No file provided")),
     };
     let purpose = purpose.ok_or_else(|| openai_errors::validation_error("purpose is required"))?;
-    validate_purpose_size_limit(&purpose, content.len())?;
+    validate_purpose_size_limit(&purpose, content.len()).map_err(|response| *response)?;
 
     Ok(ParsedFileUpload {
         filename,
@@ -524,7 +524,8 @@ async fn drain_field(field: &mut actix_multipart::Field) -> Result<(), HttpRespo
             bytes.len(),
             MAX_DISCARDED_FIELD_BYTES,
             "Multipart field too large",
-        )?;
+        )
+        .map_err(|response| *response)?;
     }
     Ok(())
 }
@@ -545,7 +546,8 @@ async fn read_field_bytes(
             bytes.len(),
             max_bytes,
             "File size limit exceeded",
-        )?;
+        )
+        .map_err(|response| *response)?;
         data.extend_from_slice(&bytes);
     }
     Ok(data)
@@ -556,28 +558,28 @@ fn checked_field_size(
     additional: usize,
     max_bytes: usize,
     user_message: &'static str,
-) -> Result<usize, HttpResponse> {
+) -> Result<usize, Box<HttpResponse>> {
     let total = current
         .checked_add(additional)
-        .ok_or_else(|| openai_errors::validation_error(user_message))?;
+        .ok_or_else(|| Box::new(openai_errors::validation_error(user_message)))?;
     if total > max_bytes {
-        return Err(openai_errors::validation_error(user_message));
+        return Err(Box::new(openai_errors::validation_error(user_message)));
     }
     Ok(total)
 }
 
-fn validate_upload_purpose(value: &str) -> Result<String, HttpResponse> {
+fn validate_upload_purpose(value: &str) -> Result<String, Box<HttpResponse>> {
     let purpose = value.trim();
     if SUPPORTED_UPLOAD_PURPOSES.contains(&purpose) {
         return Ok(purpose.to_string());
     }
 
-    Err(openai_errors::validation_error(format!(
+    Err(Box::new(openai_errors::validation_error(format!(
         "Unsupported file purpose: {purpose}"
-    )))
+    ))))
 }
 
-fn validate_purpose_size_limit(purpose: &str, bytes: usize) -> Result<(), HttpResponse> {
+fn validate_purpose_size_limit(purpose: &str, bytes: usize) -> Result<(), Box<HttpResponse>> {
     let max_bytes = if purpose == "batch" {
         MAX_BATCH_FILE_UPLOAD_BYTES
     } else {

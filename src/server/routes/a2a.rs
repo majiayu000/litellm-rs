@@ -322,7 +322,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig, max_body_size: usize) {
         web::resource("/a2a/{agent_name}/.well-known/agent-card.json").route(web::get().to(card)),
     );
 }
-fn authenticated(req: &HttpRequest, name: &str) -> Result<String, HttpResponse> {
+fn authenticated(req: &HttpRequest, name: &str) -> Result<String, Box<HttpResponse>> {
     let key = get_authenticated_api_key(req);
     let user = get_authenticated_user(req);
     let principal = if let Some(key) = &key {
@@ -330,22 +330,22 @@ fn authenticated(req: &HttpRequest, name: &str) -> Result<String, HttpResponse> 
     } else if let Some(user) = &user {
         format!("user:{}", user.id())
     } else {
-        return Err(error(
+        return Err(Box::new(error(
             StatusCode::UNAUTHORIZED,
             Value::Null,
             -32000,
             "A2A requires gateway authentication",
-        ));
+        )));
     };
     if !check_permission(user.as_ref(), key.as_ref(), &format!("a2a.{name}"))
         || !matches!(api_key_allows_endpoint(key.as_ref(), req.path()), Ok(true))
     {
-        return Err(error(
+        return Err(Box::new(error(
             StatusCode::FORBIDDEN,
             Value::Null,
             -32000,
             "A2A agent access denied",
-        ));
+        )));
     }
     Ok(principal)
 }
@@ -384,7 +384,7 @@ async fn card(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
         }
     };
     if let Err(response) = authenticated(&req, name) {
-        return response;
+        return *response;
     }
     let Some(agent) = runtime
         .config
@@ -468,7 +468,7 @@ async fn proxy(req: HttpRequest, body: web::Bytes, state: web::Data<AppState>) -
     let name = req.match_info().get("agent_name").unwrap_or("");
     let principal = match authenticated(&req, name) {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let runtime = state.pin_runtime();
     let Some(agent) = runtime

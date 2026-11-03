@@ -10,7 +10,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
 
@@ -1201,6 +1201,28 @@ class OfficialPricingRegressionTests(unittest.TestCase):
 
 
 class OffPeakImportTests(unittest.TestCase):
+    def test_only_absent_unreviewed_identities_retire(self):
+        prices = {"retained": {"litellm_provider": "other"}, "local": {"litellm_provider": "local"}}
+        entries = [
+            {"provider": "other", "pricing_key": "removed", "decision": "unreviewed"},
+            {"provider": "other", "pricing_key": "retained", "decision": "unreviewed"},
+            {"provider": "local", "pricing_key": "local", "decision": "unreviewed"},
+            {"provider": "other", "pricing_key": "reviewed", "decision": "callable"},
+            {"provider": "other", "pricing_key": "historical", "decision": "pricing_only"},
+        ]
+        document = {"entries": entries, "sources": {"review": {"revision": "retained"}}}
+        result = sync.prune_retired_unreviewed_decisions(prices, document)
+        self.assertEqual(result["entries"], entries[1:])
+        self.assertEqual(result["sources"], document["sources"])
+        self.assertEqual(len(document["entries"]), 5)
+        self.assertEqual(sync.prune_retired_unreviewed_decisions(prices, result), result)
+
+    def test_malformed_decisions_remain_for_authority_validation(self):
+        for entry in (None, {}, {"decision": "unreviewed", "provider": [], "pricing_key": "x"}):
+            with self.subTest(entry=entry):
+                document = {"entries": [entry]}
+                self.assertEqual(sync.prune_retired_unreviewed_decisions({}, document), document)
+
     def row(self, **schedule):
         return {
             "input_cost_per_token": 4.0, "output_cost_per_token": 8.0,
@@ -1232,12 +1254,82 @@ class OffPeakImportTests(unittest.TestCase):
             {"weekdays": [1, 2, 3, 4, 5, 6, 7], "start_hour": 0, "end_hour": 16},
         ])
 
+    def test_failed_run_tencent_row_preserves_rates_for_every_hour_of_the_week(self):
+        # Exact row from BerriAI/litellm de5dc5b238b6e972869d7dedc6ba3c4fb8d931fe,
+        # the source used by failed scheduled run 40155157466 on 2026-10-25.
+        fixture = REPO_ROOT / "scripts/test/fixtures/tencent_off_peak.json"
+        row = json.loads(fixture.read_text(encoding="utf-8"))
+        original = json.loads(json.dumps(row))
+        result = sync.normalize_off_peak_pricing("tencent/deepseek-v4-pro-0813", row)
+        sync.validate_entries({"tencent/deepseek-v4-pro-0813": result}, min_models=1)
+        self.assertEqual(row, original)
+        self.assertNotIn("off_peak_pricing", result)
+        self.assertEqual(sync.normalize_off_peak_pricing("tencent/deepseek-v4-pro-0813", result), result)
+
+        monday = datetime(2026, 10, 26, tzinfo=timezone.utc)
+        shanghai = timezone(timedelta(hours=8))
+        for hour in range(7 * 24):
+            for minute in (0, 59):
+                at = monday + timedelta(hours=hour, minutes=minute)
+                local_weekend = at.astimezone(shanghai).isoweekday() >= 6
+                low_hours = at.hour < 1 or 4 <= at.hour < 6 or at.hour >= 10
+                expected = row["off_peak_pricing"] if local_weekend or low_hours else row
+                schedule = result["time_of_use_pricing"]
+                peak = any(
+                    at.isoweekday() in window["weekdays"]
+                    and window["start_hour"] <= at.hour < window["end_hour"]
+                    for window in schedule["peak_windows"]
+                )
+                actual = schedule["peak_rates"] if peak else result
+                with self.subTest(at=at.isoformat()):
+                    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+                        self.assertEqual(actual[field], expected[field])
+
+    def test_shanghai_weekend_rolls_over_on_friday_and_sunday_at_16_utc(self):
+        result = sync.normalize_off_peak_pricing("test", self.row(
+            weekday_timezone="Asia/Shanghai",
+            windows=[{"weekdays": [6, 7], "hours_utc": "00:00-00:00"}],
+        ))
+        self.assertEqual(result["time_of_use_pricing"]["peak_windows"], [
+            {"weekdays": [5], "start_hour": 0, "end_hour": 16},
+            {"weekdays": [1, 2, 3, 4], "start_hour": 0, "end_hour": 24},
+            {"weekdays": [7], "start_hour": 16, "end_hour": 24},
+        ])
+
+    def test_numeric_weekdays_and_hour_arrays_match_named_single_windows(self):
+        named = self.row(windows=[
+            {"weekdays": ["monday"], "hours_utc": hours}
+            for hours in ("01:00-04:00", "06:00-10:00")
+        ])
+        numeric = self.row(windows=[
+            {"weekdays": [1], "hours_utc": ["01:00-04:00", "06:00-10:00"]},
+        ])
+        self.assertEqual(sync.normalize_off_peak_pricing("test", named),
+                         sync.normalize_off_peak_pricing("test", numeric))
+
+    def test_malformed_new_schedule_forms_fail_closed(self):
+        for days in ([True], [False], [0], [8], [1.0], [{}], [], None):
+            with self.subTest(days=days), self.assertRaises(SystemExit):
+                sync.normalize_off_peak_pricing("test", self.row(windows=[
+                    {"weekdays": days, "hours_utc": "01:00-04:00"},
+                ]))
+        for hours in ([], [None], ["01:30-04:00"], ["01:00-04:00", "invalid"]):
+            with self.subTest(hours=hours), self.assertRaises(SystemExit):
+                sync.normalize_off_peak_pricing("test", self.row(windows=[
+                    {"weekdays": [1], "hours_utc": hours},
+                ]))
+        for calendar in ([], None, "America/New_York", "unknown"):
+            with self.subTest(calendar=calendar), self.assertRaises(SystemExit):
+                sync.normalize_off_peak_pricing("test", self.row(
+                    hours_utc="01:00-04:00", weekday_timezone=calendar,
+                ))
+
     def test_unrepresentable_schedule_and_invalid_rates_fail_closed(self):
         for schedule in ({"hours_utc": "16:30-00:00"}, {"windows": []},
                          {"windows": [{"weekdays": ["noday"], "hours_utc": "16:00-00:00"}]},
                          {"hours_utc": "22:00-02:00"}, {"hours_utc": "16:00-24:00"},
                          {"hours_utc": "invalid"},
-                         {"hours_utc": "16:00-00:00", "weekday_timezone": "Asia/Shanghai"},
+                         {"hours_utc": "16:00-00:00", "weekday_timezone": "America/New_York"},
                          {"hours_utc": "16:00-00:00", "cache_creation_input_token_cost": 0.1},
                          {"hours_utc": "16:00-00:00", "output_cost_per_reasoning_token": 0.1},
                          {"hours_utc": "16:00-00:00", "windows": [
@@ -1263,7 +1355,7 @@ class OffPeakImportTests(unittest.TestCase):
                     sync.normalize_off_peak_pricing("test", row)
 
     def test_main_rejects_unsupported_off_peak_without_writing_outputs(self):
-        for update in ({"weekday_timezone": "Asia/Shanghai"}, {"hours_utc": "16:30-00:00"},
+        for update in ({"weekday_timezone": "America/New_York"}, {"hours_utc": "16:30-00:00"},
                        {"cache_creation_input_token_cost": 0.1}, {"token_tier": 30.0}):
             with self.subTest(update=update), tempfile.TemporaryDirectory() as temp_dir:
                 directory = pathlib.Path(temp_dir)

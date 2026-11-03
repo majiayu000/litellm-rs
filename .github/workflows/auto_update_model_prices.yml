@@ -88,7 +88,7 @@ jobs:
             - Immutable source commit: `${{ steps.upstream.outputs.source_commit }}`
             - Runtime catalog: `config/model_prices_extended.json`
             - Generated exact classification authority: `config/model_catalog_authority.json`
-            - Decisions: `config/model_catalog_decisions.json` (new rows are unreviewed; existing decisions are preserved)
+            - Decisions: `config/model_catalog_decisions.json` (new rows enter as unreviewed; absent unreviewed rows retire; reviewed decisions are retained)
             - Official and compatibility overrides: validated and applied after upstream rows
 
             Review the catalog diff before merging. First-party overrides are retained

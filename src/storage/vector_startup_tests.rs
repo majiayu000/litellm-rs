@@ -18,7 +18,7 @@ async fn failing_qdrant_config(
     crate::config::models::file_storage::VectorDbConfig,
     tokio::task::JoinHandle<()>,
 ) {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -31,12 +31,28 @@ async fn failing_qdrant_config(
             .accept()
             .await
             .expect("mock Qdrant listener should accept one request");
+        // Drain the request head before replying: closing a socket with unread
+        // bytes makes Linux send RST, which can surface as a connection error
+        // instead of the 503 response this test asserts on.
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 1024];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let read = socket
+                .read(&mut buf)
+                .await
+                .expect("mock Qdrant request should be readable");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..read]);
+        }
         socket
             .write_all(
                 b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             )
             .await
             .expect("mock Qdrant response should be written");
+        let _ = socket.shutdown().await;
     });
     (
         vector_test_config("qdrant", format!("http://{address}"), allow_degraded),

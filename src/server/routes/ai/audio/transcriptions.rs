@@ -118,7 +118,7 @@ pub async fn audio_transcriptions(
             "temperature" => match read_text_field(&mut field).await {
                 Ok(value) => match parse_optional_f32_field("temperature", &value) {
                     Ok(parsed) => temperature = parsed,
-                    Err(response) => return Ok(response),
+                    Err(response) => return Ok(*response),
                 },
                 Err(e) => return Ok(upload_error_response(e)),
             },
