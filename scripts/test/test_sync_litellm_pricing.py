@@ -165,6 +165,20 @@ class SyncPricingTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "does not exist"):
                 sync.load_overlay_entries([missing])
 
+    def test_openrouter_rows_survive_upstream_removal(self) -> None:
+        # Upstream LiteLLM deleted every OpenRouter row (BerriAI/litellm#45665-#45669)
+        # and bills OpenRouter from usage.cost. The gateway still needs these rows
+        # to estimate admission reservations, so they must stay local overlays.
+        catalog = sync.load_json(CATALOG_PATH)
+        openrouter = {
+            model
+            for model, row in catalog.items()
+            if model != "_metadata" and row.get("litellm_provider") == "openrouter"
+        }
+        self.assertTrue(openrouter)
+        overlay = sync.load_overlay_entries([CATALOG_PATH])
+        self.assertLessEqual(openrouter, set(overlay))
+
     def test_new_output_path_is_not_an_implicit_declared_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = pathlib.Path(temp_dir) / "new-catalog.json"
