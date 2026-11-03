@@ -1242,6 +1242,13 @@
       "reviewed_on": "2026-10-04",
       "revision": "retrieved-2026-10-04",
       "sha256": "301e7b422688689413f80513edb87ef2bb67e6335cf63445895bea2d9a32e6c4"
+    },
+    "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76": {
+      "kind": "runtime_pricing_row_pending_provider_review",
+      "location": "https://raw.githubusercontent.com/BerriAI/litellm/baddc67041e0888b8bcdc32d43e86c946c867c76/model_prices_and_context_window.json",
+      "reviewed_on": "2026-11-03",
+      "revision": "baddc67041e0888b8bcdc32d43e86c946c867c76",
+      "sha256": "a9c185f9646bf2430278a5ad13966fdf1931de3e97961dd46d73eaa321748e78"
     }
   },
   "provider_aliases": {
@@ -10811,14 +10818,6 @@
     },
     {
       "provider": "bedrock_converse",
-      "pricing_key": "openai.gpt-6.1-sol",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "bedrock_converse",
       "pricing_key": "openai.gpt-oss-120b-1:0",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -11399,14 +11398,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "bedrock_converse",
-      "pricing_key": "xai.grok-4.7",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
       ]
     },
     {
@@ -16950,14 +16941,6 @@
     },
     {
       "provider": "fireworks_ai",
-      "pricing_key": "fireworks_ai/accounts/fireworks/models/",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "fireworks_ai",
       "pricing_key": "fireworks_ai/accounts/fireworks/models/SSD-1B",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -20438,46 +20421,6 @@
     },
     {
       "provider": "github_copilot",
-      "pricing_key": "github_copilot/claude-opus-4.5",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/claude-opus-4.6-fast",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/claude-opus-41",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/claude-sonnet-4",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/claude-sonnet-4.5",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
       "pricing_key": "github_copilot/gpt-3.5-turbo",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -20590,14 +20533,6 @@
     },
     {
       "provider": "github_copilot",
-      "pricing_key": "github_copilot/gpt-5",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
       "pricing_key": "github_copilot/gpt-5-mini",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -20606,47 +20541,7 @@
     },
     {
       "provider": "github_copilot",
-      "pricing_key": "github_copilot/gpt-5.1",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/gpt-5.1-codex-max",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/gpt-5.2",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
       "pricing_key": "github_copilot/gpt-5.3-codex",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/mai-code-1-flash",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "github_copilot",
-      "pricing_key": "github_copilot/mai-code-1-flash-internal",
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
@@ -31711,54 +31606,6 @@
       ]
     },
     {
-      "provider": "palm",
-      "pricing_key": "palm/chat-bison",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "palm",
-      "pricing_key": "palm/chat-bison-001",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "palm",
-      "pricing_key": "palm/text-bison",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "palm",
-      "pricing_key": "palm/text-bison-001",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "palm",
-      "pricing_key": "palm/text-bison-safety-off",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "palm",
-      "pricing_key": "palm/text-bison-safety-recitation-off",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
       "provider": "parallel_ai",
       "pricing_key": "parallel_ai/search",
       "decision": "unreviewed",
@@ -35185,14 +35032,6 @@
     {
       "provider": "together_ai",
       "pricing_key": "together_ai/arize-ai/qwen-2-1.5b-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/baai/bge-base-en-v1.5",
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
@@ -39807,6 +39646,4926 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "abliteration",
+      "pricing_key": "abliteration/abliterated-model",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "abliteration",
+      "pricing_key": "abliteration/abliterated-model-large",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "abliteration",
+      "pricing_key": "abliteration/abliterated-model-large-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "abliteration",
+      "pricing_key": "abliteration/abliterated-model-large-v2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/deepseek-ai/deepseek-v4-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/deepseek-ai/deepseek-v4-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/deepseek-ai/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/deepseek-ai/deepseek-v4.1-flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/google/gemma-4-31b-it",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/meta/muse-spark-open",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/moonshotai/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/moonshotai/kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/motif-technologies/motif-3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/openai/gpt-oss-120b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/qwen/qwen3.6-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/qwen/qwen3.8-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/zai-org/glm-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/zai-org/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "aiand",
+      "pricing_key": "aiand/zai-org/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "amazon.nova-2-5-sonic",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "amazon.nova-premier-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "apac.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "au.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/apac/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/apac/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/gpt-4o",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/gpt-4o-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/o1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/o3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/o3-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/eu/o4-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-realtime-2.1-2026-07-07",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-realtime-2.1-mini-2026-07-07",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-realtime-translate-2026-05-06",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-realtime-translate-2026-05-07",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-realtime-whisper-2026-05-06",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/gpt-realtime-whisper-2026-05-07",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/model-router",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/gpt-4o",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/gpt-4o-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/o1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/o3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/o3-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/us/o4-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure",
+      "pricing_key": "azure/whisper",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/Cohere-Embed-V5-Fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/Cohere-Embed-V5-Pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/MAI-Code-1.1-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/Microsoft-Decision-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/claude-opus-5-5-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "azure_ai",
+      "pricing_key": "azure_ai/kimi-k2-thinking",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/decision-models/baseten-elephant-9b-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/decision-models/baseten-joey-2b-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/decision-models/baseten-mammoth-27b-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/meta-models/muse-spark-open",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "baseten",
+      "pricing_key": "baseten/reflection/Beam-1.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/ap-northeast-1/mistral.voxtral-mini-3b-2507",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/ap-northeast-1/mistral.voxtral-small-24b-2507",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/ap-southeast-2/mistral.voxtral-mini-3b-2507",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/ap-southeast-2/mistral.voxtral-small-24b-2507",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-fable-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-fable-5-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-haiku-4-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-opus-4-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-opus-4-6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-opus-4-7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-opus-4-8",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-opus-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-opus-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-sonnet-4-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-sonnet-4-6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-sonnet-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/claude_platform/claude-sonnet-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/eu-west-2/mistral.voxtral-mini-3b-2507",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/eu-west-2/mistral.voxtral-small-24b-2507",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/us-gov-east-1/anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "bedrock/us-gov-west-1/anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_mantle",
+      "pricing_key": "bedrock_mantle/anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_mantle",
+      "pricing_key": "bedrock_mantle/openai.gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_mantle",
+      "pricing_key": "bedrock_mantle/us-gov-west-1/anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bespoke",
+      "pricing_key": "bespoke/bespokelabs/Bespoke-Nimble-9B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bespoke",
+      "pricing_key": "bespoke/nimble",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bespoke",
+      "pricing_key": "bespoke/nimble-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bigmodel",
+      "pricing_key": "bigmodel/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bigmodel",
+      "pricing_key": "bigmodel/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bigmodel",
+      "pricing_key": "bigmodel/glm-5.3-flashx",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cerebras",
+      "pricing_key": "cerebras/llama-3.1-70b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cerebras",
+      "pricing_key": "cerebras/llama-3.1-8b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6-astra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6-astra-law",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6-rosalind",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "chatgpt",
+      "pricing_key": "chatgpt/gpt-rosalind-discovery",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "anthropic",
+      "pricing_key": "claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/deepseek-v4-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/deepseek-v4-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/glm-4.7-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/glm-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/kimi-k2.6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "clf_ai_gateway",
+      "pricing_key": "clf_ai_gateway/qwen3.8-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/cloudflare/clairic",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/cloudflare/clef",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/cloudflare/clef-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/@cf/cloudflare/clef-omni",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/clairic",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/clef",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/clef-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "pricing_key": "cloudflare/clef-omni",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cohere",
+      "pricing_key": "cohere/embed-v5.0-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cohere",
+      "pricing_key": "cohere/embed-v5.0-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "computer-use-preview-2025-03-11",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "coralbricks",
+      "pricing_key": "coralbricks/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "coralbricks",
+      "pricing_key": "coralbricks/deepseek-v4.1-flash-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "coralbricks",
+      "pricing_key": "coralbricks/deepseek-v4.1-flash-fast-fp4",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "coralbricks",
+      "pricing_key": "coralbricks/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "coralbricks",
+      "pricing_key": "coralbricks/glm-5.3-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "coralbricks",
+      "pricing_key": "coralbricks/glm-5.3-fp4",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/happyhorse-1.0-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/happyhorse-1.0-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/happyhorse-1.0-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/happyhorse-1.1-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/happyhorse-1.1-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/happyhorse-1.1-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/qwen-audio-3.0-tts-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/qwen-audio-3.0-tts-plus",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/qwen-audio-3.1-tts-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/qwen-audio-3.1-tts-plus",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/qwen3-tts-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/wan2.7-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/wan2.7-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/wan2.7-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/wan3.0-video",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "dashscope",
+      "pricing_key": "dashscope/wan3.0-video-prime",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/ai_decide",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-claude-sonnet-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-deepseek-v4-1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-deepseek-v4-1-flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gemini-2-5-flash-lite",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gemini-3-1-flash-lite-image",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-5-4-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-6-1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-6-1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-6-astra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-image-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-image-1-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-image-1-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-gpt-image-2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-grok-4-7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-kimi-k2-7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-openjev-qwen35-4b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/databricks-typesafeai-jev-1-14-0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/system.ai.deepseek-v4-flash-0731",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "databricks",
+      "pricing_key": "databricks/system.ai.kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "deepgram",
+      "pricing_key": "deepgram/aura",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "deepgram",
+      "pricing_key": "deepgram/aura-2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "deepgram",
+      "pricing_key": "deepgram/streaming/nova-3-medical",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "deepinfra",
+      "pricing_key": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "deepinfra",
+      "pricing_key": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "deepseek",
+      "pricing_key": "deepseek/search",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_flash_v2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_flash_v2_5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_turbo_v2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_turbo_v2_5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_v3_conversational",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_v4",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "elevenlabs",
+      "pricing_key": "elevenlabs/eleven_v4_turbo",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "eu.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "eu_jev",
+      "pricing_key": "eu_jev/eu-jeff-1.0.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "eu_jev",
+      "pricing_key": "eu_jev/eu-jeff-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash-1017-us",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/models/minimax-m3p1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/models/muse-spark-open",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/models/rune",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/models/ultramarine-1-flash-us",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-spot",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/routers/glm-5p3-spot",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/routers/kimi-k3-spot",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/routers/rune",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "fireworks_ai",
+      "pricing_key": "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai-language-models",
+      "pricing_key": "gemini-nano-banana-2.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai-language-models",
+      "pricing_key": "gemini-robotics-er-2-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "gemini",
+      "pricing_key": "gemini/gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "gemini",
+      "pricing_key": "gemini/gemini-nano-banana-2.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-fable-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-fable-5.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-haiku-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-opus-4.8",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-opus-4.8-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-opus-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-opus-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-sonnet-4.6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-sonnet-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/claude-sonnet-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gemini-3.7-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gemini-3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.4",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.4-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.4-nano",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-5.6-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-6-astra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/grok-4.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/grok-4.6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "github_copilot",
+      "pricing_key": "github_copilot/mai-code-1.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "global.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "global.openai.gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "global.twelvelabs.pegasus-1-5-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "global.zai.glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-4o-mini-search-preview-2025-03-11",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-4o-search-preview-2025-03-11",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-5.5-cyber-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-6-astra-law",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-6-rosalind",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-audio-mini-2025-10-06",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "gpt-rosalind-discovery",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "hostinger_router",
+      "pricing_key": "hostinger_router/claude-sonnet-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "hostinger_router",
+      "pricing_key": "hostinger_router/gpt-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "hostinger_router",
+      "pricing_key": "hostinger_router/text-embedding-3-large",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "hostinger_router",
+      "pricing_key": "hostinger_router/text-embedding-3-small",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "in.moonshotai.kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/MiniMaxAI/MiniMax-M3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/Qwen/Qwen3-VL-235B-A22B-Instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/Qwen/Qwen3.8-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-ai/DeepSeek-V3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Pro-0813",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-ai/DeepSeek-V4.1-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-chat",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-reasoner",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-v3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-v4-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-v4-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/gpt-oss-120b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/gpt-oss-20b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/llama-3.1-8b-instant",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/llama-3.3-70b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/llama-3.3-70b-instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/llama-3.3-70b-versatile",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/meta-llama/Llama-3.3-70B-Instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/minimax-m3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/moonshotai/Kimi-K2.7-Code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/openai/gpt-oss-120b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/openai/gpt-oss-20b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/qwen3-vl",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/qwen3-vl-235b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/qwen3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/zai-org/GLM-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "inferenceapis",
+      "pricing_key": "inferenceapis/zai-org/GLM-5.3-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "jp.amazon.nova-2-lite-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "jp.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-fable-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-fable-5.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-haiku-4-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-haiku-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-opus-4-7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-opus-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-opus-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-sonnet-4-6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-sonnet-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/claude-sonnet-5.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/deepseek-r1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/deepseek-v3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/deepseek-v4-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/deepseek-v4-flash-vision-exp",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3.1-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3.5-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3.5-flash-lite",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3.6-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3.7-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gemma-4-31b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/glm-4.5-air",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/glm-4.7-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/glm-5.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/glm-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-5.6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-5.6-luna-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-5.6-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-5.6-sol-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-5.6-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-5.6-terra-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-6-astra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-6.1-sol",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/gpt-oss-120b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-4.20",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-4.20-multi-agent",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-4.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-4.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-4.6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/grok-build",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/hy3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/hy4-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/kimi-k2.6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/kimi-k3.1-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/llama-3.3-70b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/llama-4-maverick",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/mimo-v2.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/mimo-v2.6-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/mimo-v2.6-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/minimax-m2.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/minimax-m2.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/minimax-m3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/minimax-m3.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/muse-glimmer-30b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/muse-spark-1.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/muse-spark-1.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/muse-spark-1.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/muse-spark-open",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/muse-wonder",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/nemotron-3-ultra-550b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/nemotron-3.5-super-vl",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen-3-32b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen-3-coder",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen-3.6-plus",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen-3.7-max",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen-3.7-plus",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen-3.8-max",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen3.7-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen3.8-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/qwen3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/sonar",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/sonar-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/step-3.7-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "kyma",
+      "pricing_key": "kyma/step-5-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "laya",
+      "pricing_key": "laya/english",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "laya",
+      "pricing_key": "laya/multilingual",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "laya",
+      "pricing_key": "laya/typed-decisions",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "meta",
+      "pricing_key": "meta/muse-image-1.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "meta",
+      "pricing_key": "meta/muse-wonder-1.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "meta",
+      "pricing_key": "meta/sam-3.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "microsoft_365_copilot",
+      "pricing_key": "microsoft_365_copilot/chat",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "minimax",
+      "pricing_key": "minimax/MiniMax-H3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "minimax",
+      "pricing_key": "minimax/MiniMax-H3-Max",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/deepseek-v4-1-flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/mistral-large-4",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/mistral-large-4-0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-mini-transcribe-3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-mini-transcribe-3-0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-mini-transcribe-realtime-3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-mini-transcribe-realtime-3-0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-mini-tts-3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-mini-tts-3-0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-small-transcribe-3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/voxtral-small-transcribe-3-0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "mistral",
+      "pricing_key": "mistral/zai-glm-5-3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "moonshot",
+      "pricing_key": "moonshot/kimi-k3.1-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-dsv41flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-dsv41flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-dsv41flash-abliterated",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-dsv4flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-glm53-744b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-glm53flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-kimik3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "morph",
+      "pricing_key": "morph/morph-kimik3-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "nace",
+      "pricing_key": "nace/drex-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "nace",
+      "pricing_key": "nace/drex-v1.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "nace",
+      "pricing_key": "nace/drex-v1.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "nace",
+      "pricing_key": "nace/drex-v2.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "nebius",
+      "pricing_key": "nebius/reflection/beam",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "o3-deep-research-2025-06-26",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openai",
+      "pricing_key": "o4-mini-deep-research-2025-06-26",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "oci",
+      "pricing_key": "oci/openai.gpt-oss-120b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "oci",
+      "pricing_key": "oci/openai.gpt-oss-20b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "oci",
+      "pricing_key": "oci/xai.grok-4.20-0309-non-reasoning",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "oci",
+      "pricing_key": "oci/xai.grok-4.20-0309-reasoning",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "oci",
+      "pricing_key": "oci/xai.grok-4.20-non-reasoning",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "oci",
+      "pricing_key": "oci/xai.grok-4.20-reasoning",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/beam-free",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/deepseek-v4-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/glm-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/gpt-5.6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/grok-4.7",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/hy3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/hy4-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/kimi-k3.1-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/longcat-2.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/longcat-2.5-preview-free",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/mimo-v2.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/mimo-v2.5-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/mimo-v2.6-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/mimo-v2.6-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/minimax-m3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/minimax-m3.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/muse-spark-1.2-contributor",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/muse-spark-1.3-contributor",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/qwen3.7-plus",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/qwen3.8-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/qwen3.8-max",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "opencode_go",
+      "pricing_key": "opencode_go/step-5-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openinfer",
+      "pricing_key": "openinfer/@oi/GLM-5.3-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openinfer",
+      "pricing_key": "openinfer/@oi/Qwen3.5-27B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "openinfer",
+      "pricing_key": "openinfer/@oi/Qwen3.5-9B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "parallel_ai",
+      "pricing_key": "parallel_ai/decision",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/anthropic/claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-5-nano",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-5.3-codex",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/openai/gpt-6-astra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/perplexity/deepseek-v4-pro-0813",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-flash-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-flash-v1.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-v1-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-v1.1-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/pplx-decider-v1.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/happyhorse-1.0-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/happyhorse-1.0-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/happyhorse-1.0-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/happyhorse-1.1-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/happyhorse-1.1-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/happyhorse-1.1-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/wan2.7-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/wan2.7-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/wan2.7-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/wan3.0-video",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwen_ai_platform",
+      "pricing_key": "qwen_ai_platform/wan3.0-video-prime",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/happyhorse-1.0-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/happyhorse-1.0-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/happyhorse-1.0-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/happyhorse-1.1-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/happyhorse-1.1-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/happyhorse-1.1-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/wan2.7-i2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/wan2.7-r2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/wan2.7-t2v",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/wan3.0-video",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "qwencloud",
+      "pricing_key": "qwencloud/wan3.0-video-prime",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "refuseless",
+      "pricing_key": "refuseless/deepseek-v4.1-flash-abliterated",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "refuseless",
+      "pricing_key": "refuseless/deepseek-v4.1-flash-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "refuseless",
+      "pricing_key": "refuseless/glm-5.3-abliterated",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "refuseless",
+      "pricing_key": "refuseless/glm-5.3-flash-abliterated",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "refuseless",
+      "pricing_key": "refuseless/minimax-m3.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cohere",
+      "pricing_key": "rerank-v5.0-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "cohere",
+      "pricing_key": "rerank-v5.0-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scaledown",
+      "pricing_key": "scaledown/classify",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scaledown",
+      "pricing_key": "scaledown/compress",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scaledown",
+      "pricing_key": "scaledown/decisions",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scaledown",
+      "pricing_key": "scaledown/extract",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scaledown",
+      "pricing_key": "scaledown/summarize",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scx-ai",
+      "pricing_key": "scx-ai/DeepSeek-V4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scx-ai",
+      "pricing_key": "scx-ai/GLM-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "scx-ai",
+      "pricing_key": "scx-ai/Kimi-K3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "soniox",
+      "pricing_key": "soniox/stt-rt-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "soniox",
+      "pricing_key": "soniox/stt-rt-preview-v2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "soniox",
+      "pricing_key": "soniox/stt-rt-v3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "soniox",
+      "pricing_key": "soniox/stt-rt-v3-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "soniox",
+      "pricing_key": "soniox/stt-rt-v4",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "soniox",
+      "pricing_key": "soniox/stt-rt-v5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "strands_decider",
+      "pricing_key": "strands_decider/strands-decider-2B-hobson-v19",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/DeepSeek-V3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/DeepSeek-V4-Pro-0813",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/GLM-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/GLM-5.3-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/Kimi-K2-Instruct-0905",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-r1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-v3.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-v4-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-v4-flash-0731",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-v4-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-v4.1-flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/deepseek-v4.1-flash-260910",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/glm-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/glm-5.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/glm-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/kimi-k2.6",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/mimo-v2.6-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/mimo-v2.6-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/minimax-m2.5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/minimax-m3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/qwen3.5-397b-a17b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/qwen3.6-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/qwen3.6-35b-a3b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/qwen3.8-2.4t-a95b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "streamlake",
+      "pricing_key": "streamlake/qwen3.8-27b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/deepseek-v4-pro-0813",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/glm-5.2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/glm-5.3-flashx",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/kimi-k2.7-code",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/kimi-k2.7-code-highspeed",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/kimi-k2.8-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/seedream-image-v5.0-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/seedream-image-v5.0-lite",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "tencent",
+      "pricing_key": "tencent/seedream-image-v5.0-pro",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "together_ai",
+      "pricing_key": "together_ai/MiniMaxAI/MiniMax-M3.1-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "together_ai",
+      "pricing_key": "together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "together_ai",
+      "pricing_key": "together_ai/meta-models/Muse-Spark-Open-816B-A42B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "together_ai",
+      "pricing_key": "together_ai/nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "together_ai",
+      "pricing_key": "together_ai/reflection/Beam-1.0-501B-A23B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "twelvelabs.pegasus-1-5-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "typesafe",
+      "pricing_key": "typesafe/jev-1.14.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "us-gov.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "us.anthropic.claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "us.openai.gpt-6.1-terra",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-conservative-upscale-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-creative-upscale-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-fast-upscale-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-control-sketch-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-control-structure-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-erase-object-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-inpaint-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-remove-background-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-search-recolor-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-search-replace-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-image-style-guide-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-outpaint-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.stability.stable-style-transfer-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock",
+      "pricing_key": "us.twelvelabs.pegasus-1-5-v1:0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "bedrock_converse",
+      "pricing_key": "us.zai.glm-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai-anthropic_models",
+      "pricing_key": "vertex_ai/claude-haiku-5-5",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai-anthropic_models",
+      "pricing_key": "vertex_ai/claude-haiku-5-5@default",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai-deepseek_models",
+      "pricing_key": "vertex_ai/deepseek-ai/deepseek-v4.1-flash-maas",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/gemini-4-argon-cyber-permissive",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai-language-models",
+      "pricing_key": "vertex_ai/gemini-nano-banana-2.1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/gemini-robotics-er-2-preview",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-default",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-default-002",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-default-003",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-default-004",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-default@latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-fast-004",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "vertex_ai",
+      "pricing_key": "vertex_ai/semantic-ranker-fast@latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "volcengine",
+      "pricing_key": "volcengine/doubao-seed-2-1-lite-260915",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "volcengine",
+      "pricing_key": "volcengine/doubao-seed-2-1-pro-260915",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "volcengine",
+      "pricing_key": "volcengine/doubao-seedance-2-0-260128",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "volcengine",
+      "pricing_key": "volcengine/doubao-seedance-2-0-fast-260128",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "volcengine",
+      "pricing_key": "volcengine/doubao-seedance-2-0-mini-260615",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "volcengine",
+      "pricing_key": "volcengine/doubao-seedance-2-5-260628",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "wandb",
+      "pricing_key": "wandb/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "wandb",
+      "pricing_key": "wandb/reflection/Beam-1.0-501B-A23B",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "wandb",
+      "pricing_key": "wandb/zai-org/GLM-5.3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "xai",
+      "pricing_key": "xai/grok-imagine-video-1.5-lite",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "xai",
+      "pricing_key": "xai/grok-voice-2.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "xai",
+      "pricing_key": "xai/grok-voice-3.0",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "xai",
+      "pricing_key": "xai/grok-voice-latest",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zai",
+      "pricing_key": "zai/glm-5v-turbo",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/LFM2.5-1.2B-Instruct",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/LFM2.5-1.2B-Thinking",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/gpt-4.1-mini",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/gpt-5.4-nano",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/gpt-5.6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/gpt-6-luna",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/gpt-oss-120b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/llama-3.1-8b-instruct-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/llama-3.2-3b-instruct-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/qwen3-30b-a3b-fp8",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
+      ]
+    },
+    {
+      "provider": "zerogpu",
+      "pricing_key": "zerogpu/qwen3.6-35b-a3b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
       ]
     }
   ]
