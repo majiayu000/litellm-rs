@@ -72,7 +72,12 @@ jobs:
         if: steps.check_changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # PRs opened with GITHUB_TOKEN do not trigger CI. MODEL_PRICES_PR_TOKEN is a
+          # fine-grained PAT scoped to this repository (Contents + Pull requests:
+          # read/write) so the refresh PR runs the normal checks. Without it, the
+          # PR still opens (repo setting allows Actions to create PRs) but CI must be
+          # re-triggered manually.
+          token: ${{ secrets.MODEL_PRICES_PR_TOKEN || secrets.GITHUB_TOKEN }}
           add-paths: |
             config/model_prices_extended.json
             config/model_catalog_decisions.json
