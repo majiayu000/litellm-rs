@@ -269,6 +269,23 @@ pub fn current_facts() -> Option<SharedRequestLedgerFacts> {
     REQUEST_LEDGER_FACTS.try_with(Arc::clone).ok()
 }
 
+/// Charge basis for a cost the upstream provider reported on the response.
+pub const PROVIDER_REPORTED_CHARGE_BASIS: &str = "provider_reported";
+
+/// Mark the settled cost as provider-reported on a captured or current facts handle.
+pub fn mark_provider_reported_charge(facts: Option<&SharedRequestLedgerFacts>) {
+    let Some(facts) = facts.cloned().or_else(current_facts) else {
+        return;
+    };
+    let mut facts = match facts.lock() {
+        Ok(facts) => facts,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(billing) = facts.billing.as_mut() {
+        billing.charge_basis = Some(PROVIDER_REPORTED_CHARGE_BASIS.into());
+    }
+}
+
 /// Update the current request facts from spend settlement.
 pub fn record_current_settlement(
     provider: &str,

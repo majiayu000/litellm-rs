@@ -188,7 +188,7 @@ impl OpenAIResponseTransformer {
                     audio_tokens: details.audio_tokens,
                 }
             }),
-            cost: None,
+            cost: usage.cost,
         }
     }
 
