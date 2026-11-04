@@ -984,7 +984,8 @@ class CatalogAuthorityTests(unittest.TestCase):
         # Azure moved one callable alias and five pending rows to pricing-only.
         # Twelve native-only Azure protocols have no executable Azure AI adapter.
         self.assertEqual(target_counts["callable"], 138)
-        self.assertEqual(target_counts["pricing_only"], 447)
+        # LiteLLM cbe361d9 removed 18 retired Azure/Azure AI pricing-only rows.
+        self.assertEqual(target_counts["pricing_only"], 429)
         self.assertGreaterEqual(target_counts["unreviewed"], 71)
         # Preserve the reviewed Responses endpoint contracts after the merge.
         expected_contracts = sorted(

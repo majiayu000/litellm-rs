@@ -40,7 +40,6 @@ async fn vertex_cost_uses_shared_per_token_pricing() {
         ("gemini-2.0-flash", 0.00045),
         ("gemini-1.5-pro-002", 0.00875),
         ("gemini-1.5-flash-002", 0.000225),
-        ("claude-3-opus@20240229", 0.0525),
         ("claude-opus-4-6@20260114", 0.0175),
         ("claude-opus-4-5@20251110", 0.0175),
         ("claude-3-5-sonnet@20241022", 0.0105),
@@ -62,7 +61,12 @@ async fn vertex_cost_uses_shared_per_token_pricing() {
 async fn vertex_unknown_model_returns_typed_error() {
     let provider = pricing_test_provider().await;
 
-    for model in ["unknown-google-model", "gemini-1.5-flash-9999"] {
+    // LiteLLM cbe361d9 dropped the retired Claude 3 Opus Vertex rows.
+    for model in [
+        "unknown-google-model",
+        "gemini-1.5-flash-9999",
+        "claude-3-opus@20240229",
+    ] {
         let result = LLMProvider::calculate_cost(&provider, model, 1_000, 500).await;
         assert!(matches!(result, Err(ProviderError::ModelNotFound { .. })));
     }
