@@ -2,10 +2,10 @@
   "_metadata": {
     "schema_version": 1,
     "revision": "2026-10-04-remaining-static-catalog",
-    "decision_source_sha256": "fc873b7e36656559a7535ba85d8fb012d94b5bd113ddf060e0208a32b056abd0",
-    "pricing_universe_sha256": "d5e6312b504930265982321e5f8e7f2b523d194f463a38c859a56439761e5f65",
-    "classification_sha256": "979db3dc18f0d7892e58ed21ac0d068678cee1682c80d76c144c07d6d5390b26",
-    "total_entry_count": 5163,
+    "decision_source_sha256": "f865a2ee6b17511d08763ddfece88bf1293f6d64e0cc266d653083993f5f4975",
+    "pricing_universe_sha256": "0c2e7d514358b6f795db40d15d1ea3e93fa8dd9ddcbc437627df2175ab41e3c6",
+    "classification_sha256": "8f966407945bae91fcd8d5d2cd3b50d8b7535a6536cec68af0a7e48988c74acc",
+    "total_entry_count": 5128,
     "enforced_providers": [
       "azure",
       "azure_ai",
@@ -79,13 +79,13 @@
       },
       "azure": {
         "callable": 4,
-        "pricing_only": 301,
+        "pricing_only": 288,
         "unreviewed": 27
       },
       "azure_ai": {
         "callable": 23,
-        "pricing_only": 59,
-        "unreviewed": 68
+        "pricing_only": 54,
+        "unreviewed": 56
       },
       "azure_text": {
         "callable": 0,
@@ -135,7 +135,7 @@
       "cerebras": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 9
+        "unreviewed": 8
       },
       "chatgpt": {
         "callable": 0,
@@ -265,7 +265,7 @@
       "gemini": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 87
+        "unreviewed": 85
       },
       "gigachat": {
         "callable": 0,
@@ -295,7 +295,7 @@
       "groq": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 19
+        "unreviewed": 18
       },
       "heroku": {
         "callable": 0,
@@ -405,7 +405,7 @@
       "nebius": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 62
+        "unreviewed": 66
       },
       "nimble": {
         "callable": 0,
@@ -475,7 +475,7 @@
       "perplexity": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 95
+        "unreviewed": 97
       },
       "pinstripes": {
         "callable": 0,
@@ -635,7 +635,7 @@
       "together_ai": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 94
+        "unreviewed": 79
       },
       "transcribe": {
         "callable": 0,
@@ -670,7 +670,7 @@
       "vertex_ai-anthropic_models": {
         "callable": 0,
         "pricing_only": 0,
-        "unreviewed": 38
+        "unreviewed": 36
       },
       "vertex_ai-deepseek_models": {
         "callable": 0,
@@ -741,6 +741,11 @@
         "callable": 0,
         "pricing_only": 0,
         "unreviewed": 38
+      },
+      "wally": {
+        "callable": 0,
+        "pricing_only": 0,
+        "unreviewed": 10
       },
       "wandb": {
         "callable": 0,
@@ -2196,17 +2201,6 @@
     },
     {
       "provider": "azure",
-      "pricing_key": "azure/command-r-plus",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
       "pricing_key": "azure/computer-use-preview",
       "decision": "pricing_only",
       "evidence_sources": [
@@ -2333,17 +2327,6 @@
     {
       "provider": "azure",
       "pricing_key": "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/eu/gpt-4o-realtime-preview-2024-10-01",
       "decision": "pricing_only",
       "evidence_sources": [
         "evidence-005",
@@ -2756,15 +2739,6 @@
     },
     {
       "provider": "azure",
-      "pricing_key": "azure/eu/o1-preview",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "refresh-upstream"
-      ],
-      "reason": "Pricing metadata only; not an independently verified callable identity for this provider."
-    },
-    {
-      "provider": "azure",
       "pricing_key": "azure/eu/o3",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -2964,39 +2938,6 @@
     },
     {
       "provider": "azure",
-      "pricing_key": "azure/gpt-35-turbo-16k",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/gpt-35-turbo-16k-0613",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/gpt-4",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
       "pricing_key": "azure/gpt-4-0125-preview",
       "decision": "pricing_only",
       "evidence_sources": [
@@ -3008,40 +2949,7 @@
     },
     {
       "provider": "azure",
-      "pricing_key": "azure/gpt-4-0613",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
       "pricing_key": "azure/gpt-4-1106-preview",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/gpt-4-32k",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/gpt-4-32k-0613",
       "decision": "pricing_only",
       "evidence_sources": [
         "evidence-005",
@@ -3141,17 +3049,6 @@
     {
       "provider": "azure",
       "pricing_key": "azure/gpt-4.1-nano-2025-04-14",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/gpt-4.5-preview",
       "decision": "pricing_only",
       "evidence_sources": [
         "evidence-005",
@@ -3273,17 +3170,6 @@
     {
       "provider": "azure",
       "pricing_key": "azure/gpt-4o-mini-tts",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/gpt-4o-realtime-preview-2024-10-01",
       "decision": "pricing_only",
       "evidence_sources": [
         "evidence-005",
@@ -5005,17 +4891,6 @@
     },
     {
       "provider": "azure",
-      "pricing_key": "azure/us/gpt-4o-realtime-preview-2024-10-01",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "evidence-005",
-        "evidence-006",
-        "evidence-007"
-      ],
-      "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
       "pricing_key": "azure/us/gpt-4o-realtime-preview-2024-12-17",
       "decision": "pricing_only",
       "evidence_sources": [
@@ -5424,15 +5299,6 @@
         "evidence-007"
       ],
       "reason": "The exact runtime row is an Azure provider-scoped pricing identity. Microsoft documents that inference routes by the separately configured, user-changeable deployment name; region/deployment type changes billing, not the callable wire identity. The row is therefore not a universal callable catalog/deployment identity."
-    },
-    {
-      "provider": "azure",
-      "pricing_key": "azure/us/o1-preview",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "refresh-upstream"
-      ],
-      "reason": "Pricing metadata only; not an independently verified callable identity for this provider."
     },
     {
       "provider": "azure",
@@ -5985,98 +5851,10 @@
     },
     {
       "provider": "azure_ai",
-      "pricing_key": "azure_ai/Meta-Llama-3-70B-Instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Meta-Llama-3.1-70B-Instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
       "pricing_key": "azure_ai/Microsoft-Decision-1",
       "decision": "unreviewed",
       "evidence_sources": [
         "upstream-pricing-baddc67041e0888b8bcdc32d43e86c946c867c76"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3-medium-128k-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3-medium-4k-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3-mini-128k-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3-mini-4k-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3-small-128k-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3-small-8k-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3.5-MoE-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3.5-mini-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/Phi-3.5-vision-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
       ]
     },
     {
@@ -6212,6 +5990,14 @@
     },
     {
       "provider": "azure_ai",
+      "pricing_key": "azure_ai/claude-mythos-5-1",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "azure_ai",
       "pricing_key": "azure_ai/claude-opus-4-5",
       "decision": "pricing_only",
       "evidence_sources": [
@@ -6336,24 +6122,6 @@
     },
     {
       "provider": "azure_ai",
-      "pricing_key": "azure_ai/cohere-rerank-v3-english",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "azure-foundry-retirement-20261003"
-      ],
-      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/cohere-rerank-v3-multilingual",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "azure-foundry-retirement-20261003"
-      ],
-      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
-    },
-    {
-      "provider": "azure_ai",
       "pricing_key": "azure_ai/cohere-rerank-v4.0-fast",
       "decision": "callable",
       "evidence_sources": [
@@ -6391,14 +6159,6 @@
     {
       "provider": "azure_ai",
       "pricing_key": "azure_ai/deepseek-r1",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/deepseek-v3",
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-004"
@@ -6893,15 +6653,6 @@
     },
     {
       "provider": "azure_ai",
-      "pricing_key": "azure_ai/jamba-instruct",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "azure-foundry-retirement-20261003"
-      ],
-      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
-    },
-    {
-      "provider": "azure_ai",
       "pricing_key": "azure_ai/kimi-k2-thinking",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -6950,24 +6701,6 @@
         "evidence-azure-partners-20261004"
       ],
       "reason": "Current OCR model uses document/image-to-text protocol; azure_ai has no OCR adapter."
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/mistral-large",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "azure-foundry-retirement-20261003"
-      ],
-      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/mistral-large-2407",
-      "decision": "pricing_only",
-      "evidence_sources": [
-        "azure-foundry-retirement-20261003"
-      ],
-      "reason": "Historical Foundry model pricing; Microsoft lists the corresponding model as retired. The Mistral latest alias has no current Foundry model identity evidence."
     },
     {
       "provider": "azure_ai",
@@ -7037,14 +6770,6 @@
         "refresh-upstream"
       ],
       "reason": "Pricing metadata only; not an independently verified callable identity for this provider."
-    },
-    {
-      "provider": "azure_ai",
-      "pricing_key": "azure_ai/mistral-small",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-004"
-      ]
     },
     {
       "provider": "azure_ai",
@@ -12451,14 +12176,6 @@
     {
       "provider": "cerebras",
       "pricing_key": "cerebras/llama-3.3-70b",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "cerebras",
-      "pricing_key": "cerebras/llama3.1-70b",
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
@@ -21061,14 +20778,6 @@
     },
     {
       "provider": "gemini",
-      "pricing_key": "gemini-2.0-flash-exp-image-generation",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "gemini",
       "pricing_key": "gemini-2.5-flash-native-audio-latest",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -21190,14 +20899,6 @@
     {
       "provider": "gemini",
       "pricing_key": "gemini/deep-research-pro-preview-12-2025",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "gemini",
-      "pricing_key": "gemini/gemini-2.0-flash-exp-image-generation",
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
@@ -22465,14 +22166,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "groq",
-      "pricing_key": "groq/llama-guard-3-8b",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
       ]
     },
     {
@@ -25677,6 +25370,14 @@
     },
     {
       "provider": "nebius",
+      "pricing_key": "nebius/MiniMaxAI/MiniMax-M3.1-Flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "nebius",
       "pricing_key": "nebius/NousResearch/Hermes-3-Llama-3.1-405B",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -25925,6 +25626,14 @@
     },
     {
       "provider": "nebius",
+      "pricing_key": "nebius/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "nebius",
       "pricing_key": "nebius/google/gemma-3-27b-it",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -25977,6 +25686,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "nebius",
+      "pricing_key": "nebius/meta-models/muse-spark-open",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
       ]
     },
     {
@@ -26065,6 +25782,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "nebius",
+      "pricing_key": "nebius/nvidia/Nemotron-3.5-Super-VL",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
       ]
     },
     {
@@ -35167,6 +34892,14 @@
     },
     {
       "provider": "perplexity",
+      "pricing_key": "perplexity/google/gemini-4-argon",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "perplexity",
       "pricing_key": "perplexity/llama-2-70b-chat",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -35411,6 +35144,14 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
+      ]
+    },
+    {
+      "provider": "perplexity",
+      "pricing_key": "perplexity/perplexity/nemotron-3.5-super-120b-a12b",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
       ]
     },
     {
@@ -38871,14 +38612,6 @@
     },
     {
       "provider": "together_ai",
-      "pricing_key": "together_ai/NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
       "pricing_key": "together_ai/Prism-ML/Ternary-Bonsai-27B",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -38887,31 +38620,7 @@
     },
     {
       "provider": "together_ai",
-      "pricing_key": "together_ai/Qwen/QwQ-32B",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
       "pricing_key": "together_ai/Qwen/Qwen2-1.5B-Instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/Qwen/Qwen2-72B-Instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/Qwen/Qwen2-VL-72B-Instruct",
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
@@ -38947,14 +38656,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/Qwen/Qwen2.5-Coder-32B-Instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
       ]
     },
     {
@@ -39103,30 +38804,6 @@
     },
     {
       "provider": "together_ai",
-      "pricing_key": "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
       "pricing_key": "together_ai/deepseek-ai/DeepSeek-V3",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -39175,34 +38852,10 @@
     },
     {
       "provider": "together_ai",
-      "pricing_key": "together_ai/deepseek-ai/deepseek-coder-33b-instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/google/gemma-2-27b-it",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
       "pricing_key": "together_ai/google/gemma-4-31B-it",
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/meta-llama/Llama-3-8b-chat-hf",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
       ]
     },
     {
@@ -39243,22 +38896,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
       ]
     },
     {
@@ -39307,14 +38944,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "refresh-upstream"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/mistralai/Mistral-7B-Instruct-v0.1",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
       ]
     },
     {
@@ -39379,14 +39008,6 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
-      ]
-    },
-    {
-      "provider": "together_ai",
-      "pricing_key": "together_ai/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "refresh-upstream"
       ]
     },
     {
@@ -41007,22 +40628,6 @@
     },
     {
       "provider": "vertex_ai-anthropic_models",
-      "pricing_key": "vertex_ai/claude-3-opus",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "vertex_ai-anthropic_models",
-      "pricing_key": "vertex_ai/claude-3-opus@20240229",
-      "decision": "unreviewed",
-      "evidence_sources": [
-        "evidence-001"
-      ]
-    },
-    {
-      "provider": "vertex_ai-anthropic_models",
       "pricing_key": "vertex_ai/claude-3-sonnet",
       "decision": "unreviewed",
       "evidence_sources": [
@@ -42555,6 +42160,86 @@
       "decision": "unreviewed",
       "evidence_sources": [
         "evidence-001"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/deepseek-v4-flash-0731",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/deepseek-v4-pro-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/deepseek-v4.1-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/deepseek-v4.1-flash-1017",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/deepseek-v4.1-flash-f2",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/deepseek-v4.1-flash-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/glm-5.3-fast",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/glm-5.3-flash",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/kimi-k3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
+      ]
+    },
+    {
+      "provider": "wally",
+      "pricing_key": "wally/minimax-m3",
+      "decision": "unreviewed",
+      "evidence_sources": [
+        "upstream-pricing-cbe361d97079c73fe5b2800a4f215eb6057c857d"
       ]
     },
     {
