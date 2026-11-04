@@ -121,7 +121,13 @@ jobs:
       - name: Bump version
         if: steps.version.outputs.current_version != steps.version.outputs.new_version
         run: |
-          cargo set-version ${{ steps.version.outputs.new_version }}
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          cargo set-version "$NEW_VERSION"
+          # Keep the example crate and README install snippets on the new
+          # major.minor so the library consumer smoke test still resolves.
+          REQ="${NEW_VERSION%.*}"
+          sed -i -E "s/(litellm-rs = \{ version = \")[0-9]+\.[0-9]+(\")/\1${REQ}\2/" examples/Cargo.toml README.md
+          grep -q "litellm-rs = { version = \"${REQ}\"" examples/Cargo.toml
 
       - name: Update CHANGELOG
         if: steps.version.outputs.current_version != steps.version.outputs.new_version
@@ -160,7 +166,7 @@ jobs:
       - name: Commit and push version bump
         if: steps.version.outputs.current_version != steps.version.outputs.new_version
         run: |
-          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git add Cargo.toml Cargo.lock CHANGELOG.md examples/Cargo.toml README.md
           git commit -m "chore(release): bump version to ${{ steps.version.outputs.new_version }}"
           git push
 
