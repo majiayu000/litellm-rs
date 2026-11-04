@@ -84,7 +84,7 @@ historical evidence for 0.8 artifacts, not verification of 0.9 artifacts.
 
 ```toml
 [dependencies]
-litellm-rs = { version = "0.9", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.10", default-features = false, features = ["lite"] }
 ```
 
 No `make` step is required for crate consumers.
@@ -195,15 +195,15 @@ storage feature such as `sqlite` or `postgres`.
 ```toml
 # Library with metrics and tracing
 [dependencies]
-litellm-rs = { version = "0.9", default-features = false, features = ["lite"] }
+litellm-rs = { version = "0.10", default-features = false, features = ["lite"] }
 
 # Library without optional observability
 [dependencies]
-litellm-rs = { version = "0.9", default-features = false }
+litellm-rs = { version = "0.10", default-features = false }
 
 # Gateway with SQLite (also enables Redis support)
 [dependencies]
-litellm-rs = { version = "0.9", features = ["sqlite"] }
+litellm-rs = { version = "0.10", features = ["sqlite"] }
 ```
 
 Use the crate root or `litellm_rs::prelude` for completion and embedding APIs.
