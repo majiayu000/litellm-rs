@@ -25,8 +25,8 @@ fn chunked_request(tail: &[u8]) -> BytesMut {
     bytes
 }
 
-#[test]
-fn malformed_chunked_trailer_cannot_consume_a_pipelined_request() {
+#[actix_web::test]
+async fn malformed_chunked_trailer_cannot_consume_a_pipelined_request() {
     let mut bytes = chunked_request(b"0\r\n\nGET /next HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut codec = Codec::default();
     assert!(matches!(
@@ -36,8 +36,8 @@ fn malformed_chunked_trailer_cannot_consume_a_pipelined_request() {
     assert!(codec.decode(&mut bytes).is_err());
 }
 
-#[test]
-fn valid_chunked_terminator_preserves_the_next_request() {
+#[actix_web::test]
+async fn valid_chunked_terminator_preserves_the_next_request() {
     let mut bytes = chunked_request(b"0\r\n\r\nGET /next HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut codec = Codec::default();
     assert!(matches!(
