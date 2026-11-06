@@ -44,6 +44,9 @@ jobs:
       - name: cargo check --all-features
         run: cargo check --all-features
 
+      - name: Test Azure Key Vault authentication and secret operations
+        run: cargo test --locked --features azure-secrets core::secret_managers::azure:: --lib
+
   release-profile:
     name: Test and lint shipped gateway features
     runs-on: ubuntu-latest
