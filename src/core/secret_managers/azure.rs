@@ -216,6 +216,169 @@ mod implementation {
                 .finish()
         }
     }
+
+    #[cfg(test)]
+    mod security_tests {
+        use super::*;
+        use azure_core::{
+            Bytes,
+            credentials::{AccessToken, TokenCredential, TokenRequestOptions},
+            http::{
+                AsyncRawResponse, Body, HttpClient, Method, Request, StatusCode, Transport,
+                headers::{AUTHORIZATION, Headers, WWW_AUTHENTICATE},
+            },
+            time::{Duration, OffsetDateTime},
+        };
+        use azure_security_keyvault_secrets::SecretClientOptions;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug, Default)]
+        struct TestCredential {
+            scopes: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl TokenCredential for TestCredential {
+            async fn get_token(
+                &self,
+                scopes: &[&str],
+                _options: Option<TokenRequestOptions<'_>>,
+            ) -> azure_core::Result<AccessToken> {
+                self.scopes
+                    .lock()
+                    .unwrap()
+                    .extend(scopes.iter().map(|scope| scope.to_string()));
+                Ok(AccessToken::new(
+                    "test-token",
+                    OffsetDateTime::now_utc() + Duration::hours(1),
+                ))
+            }
+        }
+
+        #[derive(Debug)]
+        struct CapturedRequest {
+            method: Method,
+            path: String,
+            authorization: Option<String>,
+            body: Vec<u8>,
+        }
+
+        #[derive(Debug)]
+        struct ChallengeTransport {
+            challenge: &'static str,
+            requests: Mutex<Vec<CapturedRequest>>,
+        }
+
+        #[async_trait]
+        impl HttpClient for ChallengeTransport {
+            async fn execute_request(
+                &self,
+                request: &Request,
+            ) -> azure_core::Result<AsyncRawResponse> {
+                let authorization = request.headers().get_str(&AUTHORIZATION).ok();
+                let Body::Bytes(body) = request.body() else {
+                    panic!("secret operations should send a buffered JSON body");
+                };
+                self.requests.lock().unwrap().push(CapturedRequest {
+                    method: request.method(),
+                    path: request.url().path().to_string(),
+                    authorization: authorization.map(str::to_owned),
+                    body: body.to_vec(),
+                });
+                let mut headers = Headers::new();
+                if authorization.is_none() {
+                    headers.insert(WWW_AUTHENTICATE, self.challenge);
+                    Ok(AsyncRawResponse::from_bytes(
+                        StatusCode::Unauthorized,
+                        headers,
+                        Bytes::new(),
+                    ))
+                } else {
+                    Ok(AsyncRawResponse::from_bytes(
+                        StatusCode::Ok,
+                        headers,
+                        Bytes::from_static(br#"{"value":"stored-value"}"#),
+                    ))
+                }
+            }
+        }
+
+        fn test_manager(
+            challenge: &'static str,
+        ) -> (
+            AzureSecretManager,
+            Arc<TestCredential>,
+            Arc<ChallengeTransport>,
+        ) {
+            let credential = Arc::new(TestCredential::default());
+            let transport = Arc::new(ChallengeTransport {
+                challenge,
+                requests: Mutex::new(Vec::new()),
+            });
+            let config =
+                AzureSecretsConfig::new("https://test-vault.vault.azure.net").prefix("prod/");
+            let mut options = SecretClientOptions::default();
+            options.client_options.transport = Some(Transport::new(transport.clone()));
+            let client = SecretClient::new(&config.vault_url, credential.clone(), Some(options))
+                .expect("test client should build");
+            (AzureSecretManager { client, config }, credential, transport)
+        }
+
+        #[tokio::test]
+        async fn rejected_challenges_do_not_leak_tokens_or_secret_bodies_on_client_reuse() {
+            for challenge in [
+                r#"Bearer resource="https://attacker.example""#,
+                r#"Bearer scope="https://attacker.example/.default""#,
+            ] {
+                let (manager, credential, transport) = test_manager(challenge);
+                for _ in 0..2 {
+                    manager
+                        .write_secret("api_key", "must-not-leak")
+                        .await
+                        .expect_err("every mismatched challenge must be rejected");
+                }
+                assert!(credential.scopes.lock().unwrap().is_empty());
+                let requests = transport.requests.lock().unwrap();
+                assert_eq!(requests.len(), 2);
+                for request in requests.iter() {
+                    assert!(request.authorization.is_none());
+                    assert!(request.body.is_empty());
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn valid_challenge_preserves_secret_read_write_and_delete() {
+            let (manager, credential, transport) =
+                test_manager(r#"Bearer resource="https://vault.azure.net""#);
+            assert_eq!(
+                manager.read_secret("api_key").await.unwrap(),
+                Some("stored-value".to_string()),
+            );
+            manager.write_secret("api_key", "new-value").await.unwrap();
+            manager.delete_secret("api_key").await.unwrap();
+
+            assert_eq!(
+                *credential.scopes.lock().unwrap(),
+                ["https://vault.azure.net/.default"],
+            );
+            let requests = transport.requests.lock().unwrap();
+            assert_eq!(requests.len(), 4);
+            assert!(requests[0].authorization.is_none());
+            assert_eq!(requests[1].method, Method::Get);
+            assert_eq!(requests[2].method, Method::Put);
+            assert_eq!(requests[3].method, Method::Delete);
+            // An empty version selects the latest secret on GET.
+            assert_eq!(requests[1].path, "/secrets/prod-api-key/");
+            assert_eq!(requests[2].path, "/secrets/prod-api-key");
+            assert_eq!(requests[3].path, "/secrets/prod-api-key");
+            for request in &requests[1..] {
+                assert_eq!(request.authorization.as_deref(), Some("Bearer test-token"));
+            }
+            let body: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+            assert_eq!(body["value"], "new-value");
+        }
+    }
 }
 
 #[cfg(feature = "azure-secrets")]
