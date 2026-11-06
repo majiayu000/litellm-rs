@@ -45,7 +45,7 @@ required-features = ["gateway"]
 
 [dependencies]
 # Web framework and async runtime
-actix-web = { version = "=4.18.1", default-features = false, features = [
+actix-web = { version = "=4.18.2", default-features = false, features = [
     "macros",
     "compress-brotli",
     "compress-gzip",
@@ -56,7 +56,7 @@ actix-web = { version = "=4.18.1", default-features = false, features = [
     "ws",
 ], optional = true }
 actix-cors = { version = "0.7", optional = true }
-actix-http = { version = "=3.20.0", default-features = false, features = ["rustls-0_23"], optional = true }
+actix-http = { version = "=3.20.3", default-features = false, features = ["rustls-0_23"], optional = true }
 actix-server = { version = "=2.10.0", default-features = false, optional = true }
 actix-service = { version = "=2.0.3", default-features = false, optional = true }
 actix-tls = { version = "=3.5.0", default-features = false, features = ["accept", "rustls-0_23"], optional = true }
@@ -94,13 +94,13 @@ actix-ws = { version = "0.4", optional = true }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"], optional = true }
 
 # Caching
-lru = "0.16"
+lru = "0.18.2"
 
 # Object storage (S3 compatible)
 object_store = { version = "0.13", features = ["aws", "gcp", "azure"], optional = true }
 # Avoid the AWS SDK default `rustls` feature mix because it pulls the legacy
 # hyper-rustls 0.24 / rustls 0.21 stack flagged by `cargo audit`.
-aws-sdk-s3 = { version = "1.131", optional = true, default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
+aws-sdk-s3 = { version = "1.144", optional = true, default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
 aws-sdk-secretsmanager = { version = "1.104", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-config = { version = "1.8.16", optional = true, default-features = false, features = ["credentials-process", "default-https-client", "rt-tokio"] }
 
