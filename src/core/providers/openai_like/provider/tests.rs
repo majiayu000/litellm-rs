@@ -1,3 +1,5 @@
+mod api_base;
+
 use super::*;
 use crate::core::audio::types::{SpeechRequest, TranscriptionRequest, TranslationRequest};
 use crate::core::providers::unified_provider::ProviderError;
@@ -298,15 +300,6 @@ fn openai_like_chat_stream_request() -> ChatRequest {
         }],
         ..Default::default()
     }
-}
-
-#[tokio::test]
-async fn test_provider_creation_with_api_base() {
-    let provider = OpenAILikeProvider::with_api_base(TEST_PUBLIC_API_BASE).await;
-    assert!(provider.is_ok());
-
-    let provider = provider.unwrap();
-    assert_eq!(provider.name(), "openai_like");
 }
 
 #[tokio::test]

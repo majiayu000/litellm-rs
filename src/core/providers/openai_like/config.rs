@@ -201,12 +201,14 @@ impl OpenAILikeConfig {
         Ok(())
     }
 
-    /// Get the effective API base URL
+    /// Get the effective API base URL without trailing slashes for endpoint appends.
     pub fn get_api_base(&self) -> String {
         self.base
             .api_base
-            .clone()
-            .unwrap_or_else(|| "http://localhost:8000/v1".to_string())
+            .as_deref()
+            .unwrap_or("http://localhost:8000/v1")
+            .trim_end_matches('/')
+            .to_string()
     }
 
     /// Get the effective model name (strip prefix if configured)
