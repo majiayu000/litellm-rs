@@ -1,5 +1,9 @@
 #![cfg(all(feature = "gateway", feature = "sqlite"))]
 
+#[cfg(all(feature = "gateway", feature = "storage"))]
+#[path = "common/key_budget.rs"]
+pub mod key_budget_fixture;
+
 #[path = "common/providers.rs"]
 pub mod provider_fixtures;
 
@@ -7,7 +11,7 @@ use actix_web::{App, HttpMessage, http::StatusCode, test, web};
 use litellm_rs::{
     Config,
     core::{
-        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
         keys::CreateKeyConfig,
         types::context::RequestContext,
     },
@@ -166,7 +170,7 @@ fn body(mode: &str) -> Value {
     }
 }
 
-async fn budget_context(state: &AppState) -> (RequestContext, uuid::Uuid, BudgetScope) {
+async fn budget_context(state: &AppState) -> (RequestContext, uuid::Uuid, uuid::Uuid) {
     state.budget_limits.providers.set_provider_limit(
         "native-test",
         ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
@@ -175,12 +179,7 @@ async fn budget_context(state: &AppState) -> (RequestContext, uuid::Uuid, Budget
         "gpt-4o-mini",
         ModelLimitConfig::new(10.0, ResetPeriod::Monthly),
     );
-    let scope = BudgetScope::ApiKey("dispatch-test".into());
-    let budget = state
-        .budget_manager
-        .create_budget(scope.clone(), BudgetConfig::new("dispatch-test", 10.0))
-        .await
-        .unwrap();
+    let scope = key_budget_fixture::create(state, 10.0).await;
     let (key_id, _) = state
         .key_manager
         .generate_key(CreateKeyConfig {
@@ -192,7 +191,7 @@ async fn budget_context(state: &AppState) -> (RequestContext, uuid::Uuid, Budget
     (
         RequestContext::new()
             .with_api_key(key_id)
-            .with_api_key_budget(budget.id.parse().unwrap()),
+            .with_api_key_budget(scope),
         key_id,
         scope,
     )
@@ -240,7 +239,7 @@ async fn foreground_ambiguous_dispatch_retains_unknown_budgets() {
                     .get_model_usage("gpt-4o-mini")
                     .unwrap()
                     .current_spend,
-                state.budget_manager.get_current_spend(&scope),
+                key_budget_fixture::spend(&state.storage.database, scope).await,
             ] {
                 assert!(
                     (spend - 1.0).abs() < 1e-12,
@@ -344,7 +343,10 @@ async fn foreground_known_rejection_releases_budgets() {
                 .current_spend,
             0.0
         );
-        assert_eq!(state.budget_manager.get_current_spend(&scope), 0.0);
+        assert_eq!(
+            key_budget_fixture::spend(&state.storage.database, scope).await,
+            0.0
+        );
         assert_eq!(
             state
                 .key_manager

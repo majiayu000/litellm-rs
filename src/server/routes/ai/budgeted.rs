@@ -364,6 +364,13 @@ pub(super) struct BudgetReservations {
 }
 
 impl BudgetReservations {
+    pub(super) fn from_parts(
+        budget: Option<UnifiedBudgetReservation>,
+        key: Option<BudgetReservation>,
+    ) -> Self {
+        Self { budget, key }
+    }
+
     pub(super) fn into_parts(
         self,
     ) -> (Option<UnifiedBudgetReservation>, Option<BudgetReservation>) {

@@ -1,6 +1,8 @@
+#[cfg(all(feature = "gateway", feature = "storage"))]
+#[path = "../common/key_budget.rs"]
+pub mod key_budget_fixture;
 use super::*;
 use actix_web::body::MessageBody;
-use litellm_rs::core::budget::{BudgetConfig, BudgetScope};
 use litellm_rs::core::types::context::RequestContext;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -9,18 +11,9 @@ use uuid::Uuid;
 
 async fn route_key_budget_context(
     state: &litellm_rs::server::state::AppState,
-) -> (BudgetScope, RequestContext) {
-    let scope = BudgetScope::ApiKey(format!("gemini-route-{}", Uuid::new_v4()));
-    let budget = state
-        .budget_manager
-        .create_budget(
-            scope.clone(),
-            BudgetConfig::new("Gemini route key budget", 100.0),
-        )
-        .await
-        .expect("API key budget");
-    let budget_id = Uuid::parse_str(&budget.id).expect("budget id should be a UUID");
-    (scope, RequestContext::new().with_api_key_budget(budget_id))
+) -> (Uuid, RequestContext) {
+    let scope = key_budget_fixture::create(state, 100.0).await;
+    (scope, RequestContext::new().with_api_key_budget(scope))
 }
 
 #[tokio::test]
@@ -598,7 +591,7 @@ async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_e
         .expect("Gemini pricing")
         .max_cost;
     let (key_scope, key_context) = route_key_budget_context(&state).await;
-    let budget_manager = state.budget_manager.clone();
+    let database = state.storage.database.clone();
     let budget_limits = state.budget_limits.clone();
     let deployment = state
         .unified_router()
@@ -638,7 +631,8 @@ async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_e
     assert_eq!(model_usage.current_spend, provider_usage.current_spend);
     assert_eq!(model_usage.request_count, 1);
     assert!(
-        (budget_manager.get_current_spend(&key_scope) - expected_reservation).abs() < f64::EPSILON
+        (key_budget_fixture::spend(&database, key_scope).await - expected_reservation).abs()
+            < f64::EPSILON
     );
     assert_eq!(deployment.state.active_requests.load(Ordering::Relaxed), 0);
     assert_eq!(
@@ -654,7 +648,7 @@ async fn gemini_sdk_stream_route_settles_reserved_spend_after_output_then_read_e
 }
 
 #[tokio::test]
-async fn gemini_sdk_stream_heartbeat_before_read_error_does_not_charge_reservation() {
+async fn gemini_sdk_stream_heartbeat_then_read_error_retains_unknown_key_hold() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("empty broken stream should bind");
@@ -688,8 +682,13 @@ async fn gemini_sdk_stream_heartbeat_before_read_error_does_not_charge_reservati
         "gemini-3.1-flash-lite",
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
+    let expected_reservation = state
+        .pricing
+        .estimate_loaded_completion_cost_for_provider("gemini", "gemini-3.1-flash-lite", 7, Some(8))
+        .unwrap()
+        .max_cost;
     let (key_scope, key_context) = route_key_budget_context(&state).await;
-    let budget_manager = state.budget_manager.clone();
+    let database = state.storage.database.clone();
     let budget_limits = state.budget_limits.clone();
     let app = test::init_service(
         App::new()
@@ -721,7 +720,11 @@ async fn gemini_sdk_stream_heartbeat_before_read_error_does_not_charge_reservati
         .expect("model budget");
     assert_eq!(model_usage.current_spend, 0.0);
     assert_eq!(model_usage.request_count, 0);
-    assert_eq!(budget_manager.get_current_spend(&key_scope), 0.0);
+    // A heartbeat proves dispatch, not zero billable usage after connection loss.
+    assert!(
+        (key_budget_fixture::spend(&database, key_scope).await - expected_reservation).abs()
+            < f64::EPSILON
+    );
     upstream.await.expect("broken upstream should finish");
 }
 

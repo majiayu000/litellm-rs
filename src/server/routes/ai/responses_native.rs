@@ -369,6 +369,9 @@ async fn create_native(
                                     None, None, reservation, key_reservation,
                                     crate::core::request_ledger::current_facts(),
                                 ).await;
+                            } else if !background {
+                                budgeted::BudgetReservations::from_parts(reservation, key_reservation)
+                                    .on_error(&error).await;
                             }
                             return Err(error);
                         }

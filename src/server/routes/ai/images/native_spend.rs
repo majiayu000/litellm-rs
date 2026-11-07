@@ -36,6 +36,17 @@ where
             settle(reservations, budget).await;
             Err(error)
         }
+        Err(
+            error @ ProviderError::Network {
+                provider: "black_forest_labs" | "stability",
+                ..
+            },
+        ) => {
+            // These providers mark every potentially dispatched transport failure
+            // as a post-submit error, handled above. This connection never submitted.
+            reservations.cancel().await;
+            Err(error)
+        }
         Err(error) => {
             reservations.on_error(&error).await;
             Err(error)

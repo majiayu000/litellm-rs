@@ -1,15 +1,16 @@
+#[cfg(all(feature = "gateway", feature = "storage"))]
+#[path = "common/key_budget.rs"]
+pub mod key_budget_fixture;
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 #[path = "common/providers.rs"]
 pub mod provider_fixtures;
 
 #[cfg(all(test, feature = "gateway", feature = "storage"))]
 mod tests {
-    use super::provider_fixtures::mock_provider_config;
+    use super::{key_budget_fixture, provider_fixtures::mock_provider_config};
     use actix_web::{App, HttpRequest, HttpResponse, HttpServer, http::StatusCode, test, web};
     use litellm_rs::Config;
-    use litellm_rs::core::budget::{
-        BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod,
-    };
+    use litellm_rs::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use litellm_rs::core::models::user::types::{User, UserRole, UserStatus};
     use litellm_rs::core::models::{ApiKey, Metadata, UsageStats};
     use litellm_rs::server::HttpServer as GatewayHttpServer;
@@ -253,18 +254,9 @@ mod tests {
         }
     }
 
-    async fn create_api_key_budget(state: &AppState, max_budget: f64) -> (BudgetScope, Uuid) {
-        let scope = BudgetScope::ApiKey(format!("key-budget-{}", Uuid::new_v4()));
-        let budget = state
-            .budget_manager
-            .create_budget(
-                scope.clone(),
-                BudgetConfig::new("route key budget", max_budget),
-            )
-            .await
-            .expect("API key budget should be created");
-        let budget_id = Uuid::parse_str(&budget.id).expect("budget id should be a UUID");
-        (scope, budget_id)
+    async fn create_api_key_budget(state: &AppState, max_budget: f64) -> (Uuid, Uuid) {
+        let id = key_budget_fixture::create(state, max_budget).await;
+        (id, id)
     }
 
     async fn seed_api_key(state: &AppState, budget_id: Uuid) -> String {
@@ -339,12 +331,19 @@ mod tests {
         let mock = MockOpenAiServer::start(MockMode::Success).await;
         let state = build_state(&mock.base_url).await;
         let (scope, budget_id) = create_api_key_budget(&state, 1.0).await;
-        state
-            .budget_manager
-            .record_spend(&scope, 1.0)
+        use litellm_rs::storage::database::entities::api_key_budget;
+        use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+        let row = api_key_budget::Entity::find_by_id(budget_id)
+            .one(state.storage.database.connection())
             .await
-            .expect("pre-test spend should be recorded");
-        let budget_manager = state.budget_manager.clone();
+            .unwrap()
+            .unwrap();
+        let mut row: api_key_budget::ActiveModel = row.into();
+        row.used_amount = Set(1_000_000_000);
+        row.update(state.storage.database.connection())
+            .await
+            .unwrap();
+        let database = state.storage.database.clone();
         let raw_api_key = seed_api_key(&state, budget_id).await;
         let app = test::init_service(build_test_app(state)).await;
 
@@ -365,7 +364,7 @@ mod tests {
             mock.paths().is_empty(),
             "exhausted API key budget must reject every route before upstream"
         );
-        assert_eq!(budget_manager.get_current_spend(&scope), 1.0);
+        assert_eq!(key_budget_fixture::spend(&database, scope).await, 1.0);
         mock.stop().await;
     }
 
@@ -374,12 +373,12 @@ mod tests {
         let mock = MockOpenAiServer::start(MockMode::Success).await;
         let state = build_state(&mock.base_url).await;
         let (scope, budget_id) = create_api_key_budget(&state, 100.0).await;
-        let budget_manager = state.budget_manager.clone();
+        let database = state.storage.database.clone();
         let raw_api_key = seed_api_key(&state, budget_id).await;
         let app = test::init_service(build_test_app(state)).await;
 
         for endpoint in Endpoint::ALL {
-            let before = budget_manager.get_current_spend(&scope);
+            let before = key_budget_fixture::spend(&database, scope).await;
             let response = test::call_service(
                 &app,
                 test::TestRequest::post()
@@ -390,7 +389,7 @@ mod tests {
             )
             .await;
             assert_eq!(response.status(), StatusCode::OK);
-            let after = budget_manager.get_current_spend(&scope);
+            let after = key_budget_fixture::spend(&database, scope).await;
             assert!(
                 after > before,
                 "{} should settle API key budget spend after success",
@@ -414,7 +413,7 @@ mod tests {
         let mock = MockOpenAiServer::start(MockMode::Failure).await;
         let state = build_state(&mock.base_url).await;
         let (scope, budget_id) = create_api_key_budget(&state, 100.0).await;
-        let budget_manager = state.budget_manager.clone();
+        let database = state.storage.database.clone();
         let raw_api_key = seed_api_key(&state, budget_id).await;
         let app = test::init_service(build_test_app(state)).await;
 
@@ -434,7 +433,7 @@ mod tests {
                 endpoint.path()
             );
             assert_eq!(
-                budget_manager.get_current_spend(&scope),
+                key_budget_fixture::spend(&database, scope).await,
                 0.0,
                 "{} should release API key budget reservation after provider failure",
                 endpoint.path()

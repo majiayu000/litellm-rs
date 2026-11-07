@@ -1,5 +1,9 @@
 #![cfg(all(feature = "gateway", feature = "storage"))]
 
+#[cfg(all(feature = "gateway", feature = "storage"))]
+#[path = "common/key_budget.rs"]
+pub mod key_budget_fixture;
+
 #[path = "common/providers.rs"]
 pub mod provider_fixtures;
 
@@ -425,7 +429,7 @@ fn cache_write_pricing(state: &AppState, output_bound: Value) {
 #[tokio::test]
 async fn compact_reserves_model_output_and_cache_writes_before_generation() {
     use litellm_rs::core::{
-        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
         types::context::RequestContext,
     };
     // 0.02 catches the old 100-output-token allowance; 0.024 fits the model
@@ -445,15 +449,8 @@ async fn compact_reserves_model_output_and_cache_writes_before_generation() {
                     ModelLimitConfig::new(limit, ResetPeriod::Monthly),
                 ),
                 _ => {
-                    let budget = state
-                        .budget_manager
-                        .create_budget(
-                            BudgetScope::ApiKey("compact-test".into()),
-                            BudgetConfig::new("compact bound", limit),
-                        )
-                        .await
-                        .unwrap();
-                    context = context.with_api_key_budget(budget.id.parse().unwrap());
+                    let budget = key_budget_fixture::create(&state, limit).await;
+                    context = context.with_api_key_budget(budget);
                 }
             }
             let app = test::init_service(
@@ -480,7 +477,7 @@ async fn compact_reserves_model_output_and_cache_writes_before_generation() {
 #[tokio::test]
 async fn compact_settles_cache_write_usage_in_provider_model_and_key_budgets() {
     use litellm_rs::core::{
-        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
         keys::CreateKeyConfig,
         types::context::RequestContext,
     };
@@ -496,12 +493,8 @@ async fn compact_settles_cache_write_usage_in_provider_model_and_key_budgets() {
         "gpt-4o-mini",
         ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
     );
-    let scope = BudgetScope::ApiKey("compact-settlement".into());
-    let budget = state
-        .budget_manager
-        .create_budget(scope.clone(), BudgetConfig::new("compact settlement", 1.0))
-        .await
-        .unwrap();
+    let scope = key_budget_fixture::create(&state, 1.0).await;
+    let budget = scope;
     let (key_id, _) = state
         .key_manager
         .generate_key(CreateKeyConfig {
@@ -523,7 +516,7 @@ async fn compact_settles_cache_write_usage_in_provider_model_and_key_budgets() {
     req.extensions_mut().insert(
         RequestContext::new()
             .with_api_key(key_id)
-            .with_api_key_budget(budget.id.parse().unwrap()),
+            .with_api_key_budget(budget),
     );
     let response = test::call_service(&app, req).await;
     let status = response.status();
@@ -547,7 +540,7 @@ async fn compact_settles_cache_write_usage_in_provider_model_and_key_budgets() {
             .get_model_usage("gpt-4o-mini")
             .unwrap()
             .current_spend,
-        state.budget_manager.get_current_spend(&scope),
+        key_budget_fixture::spend(&state.storage.database, scope).await,
         state
             .key_manager
             .get_usage_stats(key_id)
@@ -3241,7 +3234,7 @@ async fn native_file_search_without_output_limit_reserves_catalog_bound() {
 #[tokio::test]
 async fn native_file_search_preserves_wire_and_settles_observed_calls_once() {
     use litellm_rs::core::{
-        budget::{BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
+        budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod},
         keys::CreateKeyConfig,
         types::context::RequestContext,
     };
@@ -3256,14 +3249,7 @@ async fn native_file_search_preserves_wire_and_settles_observed_calls_once() {
                 "gpt-4o-mini",
                 ModelLimitConfig::new(1.0, ResetPeriod::Monthly),
             );
-            let budget = state
-                .budget_manager
-                .create_budget(
-                    BudgetScope::ApiKey("file-search".into()),
-                    BudgetConfig::new("file search", 1.0),
-                )
-                .await
-                .unwrap();
+            let budget = key_budget_fixture::create(&state, 1.0).await;
             let (key_id, _) = state
                 .key_manager
                 .generate_key(CreateKeyConfig {
@@ -3289,7 +3275,7 @@ async fn native_file_search_preserves_wire_and_settles_observed_calls_once() {
             req.extensions_mut().insert(
                 RequestContext::new()
                     .with_api_key(key_id)
-                    .with_api_key_budget(budget.id.parse().unwrap()),
+                    .with_api_key_budget(budget),
             );
             let response = test::call_service(&app, req).await;
             assert_eq!(response.status(), StatusCode::OK);
@@ -3329,13 +3315,7 @@ async fn native_file_search_preserves_wire_and_settles_observed_calls_once() {
                     < 1e-10
             );
             assert!(
-                (state
-                    .budget_manager
-                    .get_budget(&BudgetScope::ApiKey("file-search".into()))
-                    .unwrap()
-                    .current_spend
-                    - expected)
-                    .abs()
+                (key_budget_fixture::spend(&state.storage.database, budget).await - expected).abs()
                     < 1e-10
             );
             let usage = state.key_manager.get_usage_stats(key_id).await.unwrap();
@@ -3350,21 +3330,14 @@ async fn native_file_search_preserves_wire_and_settles_observed_calls_once() {
 #[tokio::test]
 async fn native_file_search_reserves_retrieval_context_and_tool_fees_before_generation() {
     use litellm_rs::core::{
-        budget::{BudgetConfig, BudgetScope, ProviderLimitConfig, ResetPeriod},
+        budget::{ProviderLimitConfig, ResetPeriod},
         types::context::RequestContext,
     };
     for key_budget in [false, true] {
         let (state, upstream, handle) = fixture(StatusCode::OK, |_| {}).await;
         let context = if key_budget {
-            let budget = state
-                .budget_manager
-                .create_budget(
-                    BudgetScope::ApiKey("bounded-file-search".into()),
-                    BudgetConfig::new("bounded file search", 0.03),
-                )
-                .await
-                .unwrap();
-            RequestContext::new().with_api_key_budget(budget.id.parse().unwrap())
+            let budget = key_budget_fixture::create(&state, 0.03).await;
+            RequestContext::new().with_api_key_budget(budget)
         } else {
             state.budget_limits.providers.set_provider_limit(
                 "native-test",
