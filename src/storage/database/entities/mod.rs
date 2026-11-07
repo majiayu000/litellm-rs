@@ -43,3 +43,6 @@ pub mod response;
 
 /// Durable native Responses settlement intents.
 pub mod response_settlement;
+
+pub mod api_key_budget;
+pub mod api_key_budget_reservation;

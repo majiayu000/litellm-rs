@@ -14,7 +14,7 @@ use uuid::Uuid;
 #[async_trait]
 pub trait KeyRepository: Send + Sync {
     /// Store a new API key
-    async fn create(&self, key: ManagedApiKey) -> Result<ManagedApiKey>;
+    async fn create(&self, key: ManagedApiKey, max_budget: Option<f64>) -> Result<ManagedApiKey>;
 
     /// Find a key by ID
     async fn find_by_id(&self, id: Uuid) -> Result<Option<ManagedApiKey>>;
@@ -84,7 +84,12 @@ impl InMemoryKeyRepository {
 
 #[async_trait]
 impl KeyRepository for InMemoryKeyRepository {
-    async fn create(&self, key: ManagedApiKey) -> Result<ManagedApiKey> {
+    async fn create(&self, key: ManagedApiKey, max_budget: Option<f64>) -> Result<ManagedApiKey> {
+        if max_budget.is_some() {
+            return Err(GatewayError::validation(
+                "Persistent budgets require a database repository",
+            ));
+        }
         // Check if hash already exists
         if self.hash_index.contains_key(&key.key_hash) {
             return Err(GatewayError::conflict("API key already exists"));
@@ -109,6 +114,11 @@ impl KeyRepository for InMemoryKeyRepository {
     }
 
     async fn update(&self, id: Uuid, config: UpdateKeyConfig) -> Result<ManagedApiKey> {
+        if config.max_budget.is_some() {
+            return Err(GatewayError::validation(
+                "Persistent budgets require a database repository",
+            ));
+        }
         let mut entry = self
             .keys_by_id
             .get_mut(&id)
@@ -304,7 +314,7 @@ mod repository_tests {
         let key = create_test_key();
         let id = key.id;
 
-        let created = repo.create(key).await.unwrap();
+        let created = repo.create(key, None).await.unwrap();
         assert_eq!(created.id, id);
 
         let found = repo.find_by_id(id).await.unwrap();
@@ -317,7 +327,7 @@ mod repository_tests {
         let key = create_test_key();
         let hash = key.key_hash.clone();
 
-        repo.create(key).await.unwrap();
+        repo.create(key, None).await.unwrap();
 
         let found = repo.find_by_hash(&hash).await.unwrap();
         assert!(found.is_some());
@@ -330,7 +340,7 @@ mod repository_tests {
         let key = create_test_key();
         let id = key.id;
 
-        repo.create(key).await.unwrap();
+        repo.create(key, None).await.unwrap();
 
         let config = UpdateKeyConfig {
             name: Some("Updated Name".to_string()),
@@ -347,7 +357,7 @@ mod repository_tests {
         let key = create_test_key();
         let id = key.id;
 
-        repo.create(key).await.unwrap();
+        repo.create(key, None).await.unwrap();
         repo.update_status(id, KeyStatus::Revoked).await.unwrap();
 
         let found = repo.find_by_id(id).await.unwrap().unwrap();
@@ -361,15 +371,15 @@ mod repository_tests {
 
         let mut key1 = create_test_key();
         key1.user_id = Some(user_id);
-        repo.create(key1).await.unwrap();
+        repo.create(key1, None).await.unwrap();
 
         let mut key2 = create_test_key();
         key2.user_id = Some(user_id);
-        repo.create(key2).await.unwrap();
+        repo.create(key2, None).await.unwrap();
 
         let mut key3 = create_test_key();
         key3.user_id = Some(Uuid::new_v4());
-        repo.create(key3).await.unwrap();
+        repo.create(key3, None).await.unwrap();
 
         let keys = repo.list_by_user(user_id).await.unwrap();
         assert_eq!(keys.len(), 2);
@@ -382,7 +392,7 @@ mod repository_tests {
         let id = key.id;
         let hash = key.key_hash.clone();
 
-        repo.create(key).await.unwrap();
+        repo.create(key, None).await.unwrap();
         repo.delete(id).await.unwrap();
 
         assert!(repo.find_by_id(id).await.unwrap().is_none());
@@ -396,12 +406,12 @@ mod repository_tests {
         // Create an expired key
         let mut key1 = create_test_key();
         key1.expires_at = Some(Utc::now() - chrono::Duration::hours(1));
-        repo.create(key1).await.unwrap();
+        repo.create(key1, None).await.unwrap();
 
         // Create a valid key
         let key2 = create_test_key();
         let valid_id = key2.id;
-        repo.create(key2).await.unwrap();
+        repo.create(key2, None).await.unwrap();
 
         let deleted = repo.delete_expired().await.unwrap();
         assert_eq!(deleted, 1);
@@ -414,8 +424,8 @@ mod repository_tests {
     async fn test_count() {
         let repo = InMemoryKeyRepository::new();
 
-        repo.create(create_test_key()).await.unwrap();
-        repo.create(create_test_key()).await.unwrap();
+        repo.create(create_test_key(), None).await.unwrap();
+        repo.create(create_test_key(), None).await.unwrap();
 
         let count = repo.count(None).await.unwrap();
         assert_eq!(count, 2);
@@ -430,7 +440,7 @@ mod repository_tests {
         let key = create_test_key();
         let id = key.id;
 
-        repo.create(key).await.unwrap();
+        repo.create(key, None).await.unwrap();
         let result = repo.update_usage(id, UsageRecord::priced(100, 0.01)).await;
         assert!(result.is_ok(), "usage update should succeed: {result:?}");
 
@@ -446,12 +456,12 @@ mod repository_tests {
         let hash = "same_hash".to_string();
         key1.key_hash = hash.clone();
 
-        repo.create(key1).await.unwrap();
+        repo.create(key1, None).await.unwrap();
 
         let mut key2 = create_test_key();
         key2.key_hash = hash;
 
-        let result = repo.create(key2).await;
+        let result = repo.create(key2, None).await;
         assert!(result.is_err());
     }
 }

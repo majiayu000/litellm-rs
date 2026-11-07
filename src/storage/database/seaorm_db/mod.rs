@@ -31,3 +31,8 @@ mod virtual_key_ops;
 pub use request_ledger_ops::{RequestLedgerListFilter, RequestLedgerSink};
 pub use team_repository::SeaOrmTeamRepository;
 pub use types::{DatabaseBackendType, DatabaseStats, SeaOrmDatabase};
+
+pub(crate) mod api_key_budget_ops;
+
+#[cfg(all(test, feature = "sqlite"))]
+mod api_key_budget_tests;

@@ -635,87 +635,6 @@ async fn key_model_and_endpoint_permissions_are_enforced() {
 }
 
 #[actix_web::test]
-async fn key_budget_and_interruption_fallback_use_existing_reservations() {
-    use crate::core::budget::{BudgetConfig, BudgetScope};
-    let (state, _, _, _, handles) = fixture().await;
-    state.budget_limits.providers.set_provider_limit(
-        "openai",
-        ProviderLimitConfig::new(10.0, ResetPeriod::Monthly),
-    );
-    let scope = BudgetScope::ApiKey("realtime-budget-test".into());
-    let budget = state
-        .budget_manager
-        .create_budget(scope.clone(), BudgetConfig::new("realtime", 0.5))
-        .await
-        .unwrap();
-    let id = Some(budget.id.parse().unwrap());
-    let bound = rates().bound(rates().max_output);
-    let pending = Pending::reserve(
-        &state,
-        "openai",
-        "gpt-realtime-mini",
-        id,
-        bound,
-        rates().max_output,
-    )
-    .await
-    .unwrap();
-    assert!(
-        Pending::reserve(
-            &state,
-            "openai",
-            "gpt-realtime-mini",
-            id,
-            bound,
-            rates().max_output
-        )
-        .await
-        .is_err()
-    );
-    pending
-        .settle(
-            &state,
-            None,
-            Some(rates().cost(&usage(), rates().max_output).unwrap().unwrap()),
-        )
-        .await
-        .unwrap();
-    let expected = rates()
-        .cost(&usage(), rates().max_output)
-        .unwrap()
-        .unwrap()
-        .0;
-    assert!((state.budget_manager.get_current_spend(&scope) - expected).abs() < 1e-9);
-    let pending = Pending::reserve(
-        &state,
-        "openai",
-        "gpt-realtime-mini",
-        id,
-        bound,
-        rates().max_output,
-    )
-    .await
-    .unwrap();
-    drop(pending);
-    assert!((state.budget_manager.get_current_spend(&scope) - expected - bound).abs() < 1e-9);
-    assert!(
-        (state
-            .budget_limits
-            .providers
-            .get_provider_usage("openai")
-            .unwrap()
-            .current_spend
-            - expected
-            - bound)
-            .abs()
-            < 1e-9
-    );
-    for handle in handles {
-        handle.stop(false).await;
-    }
-}
-
-#[actix_web::test]
 async fn upstream_handshake_status_and_error_detail_are_preserved() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -3677,3 +3596,6 @@ async fn realtime_terminal_body_during_pending_generation_keeps_total_cost_unkno
         handle.stop(false).await;
     }
 }
+
+#[path = "realtime_key_budget_tests.rs"]
+mod persistent_budget_tests;

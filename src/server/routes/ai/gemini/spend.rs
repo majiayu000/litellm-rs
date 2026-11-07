@@ -275,7 +275,8 @@ async fn record_gemini_usage(
         key_budget_reservation,
         cost,
         "Gemini SDK spend",
-    );
+    )
+    .await;
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
             if let Err(error) =

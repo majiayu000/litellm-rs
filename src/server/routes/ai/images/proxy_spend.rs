@@ -51,7 +51,8 @@ pub(super) async fn record_image_proxy_spend(
         key_budget_reservation,
         cost,
         "image proxy",
-    );
+    )
+    .await;
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
             if let Err(error) =

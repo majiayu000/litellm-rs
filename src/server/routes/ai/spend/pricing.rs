@@ -641,7 +641,8 @@ pub(in crate::server::routes::ai) async fn record_pricing_usage_spend_with_admis
         key_budget_reservation,
         cost,
         &format!("{budget_provider}/{budget_model}"),
-    );
+    )
+    .await;
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
             if let Err(error) =

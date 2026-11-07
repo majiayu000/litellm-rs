@@ -17,6 +17,9 @@ use tracing::{debug, info, warn};
 /// background reset tasks.
 #[derive(Clone)]
 pub struct BudgetManager {
+    /// Gateway API-key accounting uses SQL; the generic embedded tracker stays local.
+    #[cfg(feature = "gateway")]
+    api_key_database: Option<Arc<crate::storage::database::Database>>,
     /// Internal budget tracker
     tracker: Arc<BudgetTracker>,
     /// Configuration
@@ -60,6 +63,8 @@ impl BudgetManager {
     /// Create a new budget manager with default configuration
     pub fn new() -> Self {
         Self {
+            #[cfg(feature = "gateway")]
+            api_key_database: None,
             tracker: Arc::new(BudgetTracker::new()),
             config: Arc::new(RwLock::new(BudgetManagerConfig::default())),
         }
@@ -68,6 +73,8 @@ impl BudgetManager {
     /// Create a budget manager with custom configuration
     pub fn with_config(config: BudgetManagerConfig) -> Self {
         Self {
+            #[cfg(feature = "gateway")]
+            api_key_database: None,
             tracker: Arc::new(BudgetTracker::new()),
             config: Arc::new(RwLock::new(config)),
         }
@@ -76,9 +83,25 @@ impl BudgetManager {
     /// Create a budget manager with an existing tracker
     pub fn with_tracker(tracker: BudgetTracker) -> Self {
         Self {
+            #[cfg(feature = "gateway")]
+            api_key_database: None,
             tracker: Arc::new(tracker),
             config: Arc::new(RwLock::new(BudgetManagerConfig::default())),
         }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn with_api_key_database(
+        mut self,
+        database: Arc<crate::storage::database::Database>,
+    ) -> Self {
+        self.api_key_database = Some(database);
+        self
+    }
+
+    #[cfg(feature = "gateway")]
+    pub(crate) fn api_key_database(&self) -> Option<&Arc<crate::storage::database::Database>> {
+        self.api_key_database.as_ref()
     }
 
     /// Get a reference to the internal tracker

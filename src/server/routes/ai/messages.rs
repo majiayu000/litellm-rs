@@ -647,7 +647,8 @@ async fn settle(
                     Some(reservation),
                     reserved,
                     "Messages usage unknown",
-                );
+                )
+                .await;
             }
             super::execution::completion::observe_unknown_usage();
             let budget_settlement = async {
