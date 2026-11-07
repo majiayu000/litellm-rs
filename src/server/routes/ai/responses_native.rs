@@ -370,8 +370,12 @@ async fn create_native(
                                     crate::core::request_ledger::current_facts(),
                                 ).await;
                             } else if !background {
-                                budgeted::BudgetReservations::from_parts(reservation, key_reservation)
-                                    .on_error(&error).await;
+                                let mut reservations = budgeted::BudgetReservations::from_parts(reservation, key_reservation);
+                                if generation_attempted {
+                                    reservations.on_error(&error).await;
+                                } else {
+                                    reservations.cancel().await;
+                                }
                             }
                             return Err(error);
                         }
