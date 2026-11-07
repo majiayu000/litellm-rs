@@ -264,6 +264,23 @@ async fn persistent_key_budget_key_mutations_are_atomic_and_cap_changes_preserve
         keys.get_key(rotated).await.unwrap().unwrap().budget_id,
         Some(id)
     );
+    assert!(
+        keys.update_key(
+            rotated,
+            UpdateKeyConfig {
+                budget_id: Some(None),
+                max_budget: Some(10.0),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err(),
+        "a contradictory cap update must not silently remove its binding"
+    );
+    assert_eq!(
+        keys.get_key(rotated).await.unwrap().unwrap().budget_id,
+        Some(id)
+    );
     let count = keys.count_keys(None).await.unwrap();
     assert!(
         keys.generate_key(CreateKeyConfig {

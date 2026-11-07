@@ -204,7 +204,7 @@ def main():
     config["storage"]["redis"].update(enabled=True, url=redis_url, allow_degraded=False)
     config["storage"]["config_sync_key_env"] = "LITELLM_HA_CONFIG_KEY"
     config["pricing"]["unpriced_fallback_cost_per_1k_tokens"] = 1000.0
-    config["auth"].update(enable_jwt=True, jwt_secret="Aa1!" + secrets.token_urlsafe(48))
+    config["auth"].update(enable_jwt=True, enable_api_key=True, jwt_secret="Aa1!" + secrets.token_urlsafe(48))
     key = secrets.token_hex(32)
     nodes = []
     results = {}
@@ -331,7 +331,9 @@ def main():
         upstream.hold()
         with concurrent.futures.ThreadPoolExecutor() as executor:
             first = executor.submit(key_chat, a)
-            assert upstream.entered.wait(10)
+            if not upstream.entered.wait(10):
+                raise AssertionError(first.result(timeout=1) if first.done()
+                                     else "budgeted request did not reach upstream")
             calls = upstream.calls
             assert key_chat(b)[0] == 402
             assert upstream.calls == calls

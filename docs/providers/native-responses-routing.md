@@ -114,9 +114,10 @@ Supported deployment combinations:
 - Shared SQL plus the existing Redis backend: also supports enabled provider/model
   limits. The Redis dataset must be persisted and shared; deleting it discards
   the budget counters and idempotency receipts it owns.
-- Process-local provider/model limits, or an API key referencing an in-process
-  `budget_id`: rejected before upstream dispatch. This change does not introduce
-  a persistent API-key budget subsystem or claim that local limits span replicas.
+- Process-local provider/model limits or an API key with a `budget_id`: rejected
+  before background dispatch. The background worker does not yet own API-key
+  reservation receipts, even when the key's normal inference budget is persisted
+  in SQL. See the [API-key budget boundary](../gateway/redis-budget-leases.md#api-key-budget-capability-boundary).
 
 If a dispatch's response ID or trustworthy terminal usage cannot be recovered,
 `outcome=reserved_unknown` retains the conservative reservation amount separately.
