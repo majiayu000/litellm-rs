@@ -238,13 +238,14 @@ impl SeaOrmDatabase {
         &self,
         api_key: &crate::core::models::ApiKey,
     ) -> Result<crate::core::models::ApiKey> {
-        self.update_api_key_with_budget(api_key, None).await
+        self.update_api_key_with_budget(api_key, None, None).await
     }
 
     pub(crate) async fn update_api_key_with_budget(
         &self,
         api_key: &crate::core::models::ApiKey,
         budget: Option<(uuid::Uuid, f64)>,
+        expected_version: Option<i64>,
     ) -> Result<crate::core::models::ApiKey> {
         let txn = self.db.begin().await.map_err(GatewayError::from)?;
 
@@ -254,7 +255,7 @@ impl SeaOrmDatabase {
             .map_err(GatewayError::from)?
             .ok_or_else(|| GatewayError::not_found("API key not found"))?;
 
-        if i64::from(current.version) != api_key.metadata.version {
+        if expected_version.is_some_and(|version| i64::from(current.version) != version) {
             return Err(GatewayError::conflict("API key was modified concurrently"));
         }
         let permissions = serde_json::to_string(&api_key.permissions)
