@@ -39,3 +39,22 @@ pub(in crate::server::routes::ai) fn record_candidate_exclusion(
         "unpriced deployment excluded from router selection"
     );
 }
+
+/// A key cap or local accounting failure applies to the whole request, not a supplier.
+/// Provider/model budget exclusions still use the existing candidate fallback path.
+pub(super) fn is_terminal_budget_error(error: &ProviderError) -> bool {
+    retryable_budget_scope(error).is_none()
+        && matches!(
+            error,
+            ProviderError::QuotaExceeded {
+                provider: "budget",
+                ..
+            } | ProviderError::ProviderUnavailable {
+                provider: "budget",
+                ..
+            } | ProviderError::InvalidRequest {
+                provider: "budget",
+                ..
+            }
+        )
+}

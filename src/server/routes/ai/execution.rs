@@ -672,6 +672,10 @@ where
                 return Ok(value);
             }
             Err(err) => {
+                if observability::is_terminal_budget_error(&err) {
+                    completion.finish_admission(&mut deployment_lease).await;
+                    return Err(GatewayError::Provider(err));
+                }
                 if observability::is_budget_or_unpriced_fallback(
                     deployment_lease.deployment(),
                     &err,
@@ -735,26 +739,6 @@ where
             message: "Unknown error during selected deployment retry".to_string(),
         },
     )))
-}
-
-#[cfg(test)]
-fn retry_delay_for_error(
-    config: &crate::core::router::config::RouterConfig,
-    attempt: u32,
-    error: &ProviderError,
-) -> Option<Duration> {
-    if crate::core::router::execution::retryable_budget_scope(error).is_some()
-        || super::spend::is_model_not_priced_error(error)
-    {
-        return None;
-    }
-
-    let decision = RetryPolicy.decide(config, error, RetryContext::unary(attempt, attempt + 1));
-    if decision.should_retry {
-        decision.delay
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -956,6 +940,10 @@ where
                 return Ok((stream, lease));
             }
             Err(err) => {
+                if observability::is_terminal_budget_error(&err) {
+                    deployment_lease.cancel_admission_async().await;
+                    return Err(GatewayError::Provider(err));
+                }
                 if observability::is_budget_or_unpriced_fallback(
                     deployment_lease.deployment(),
                     &err,
