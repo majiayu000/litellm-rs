@@ -1,14 +1,19 @@
+#[cfg(all(
+    feature = "gateway",
+    feature = "storage",
+    feature = "providers-extended"
+))]
+#[path = "../common/key_budget.rs"]
+pub mod key_budget_fixture;
 use super::*;
 #[cfg(feature = "providers-extended")]
-use litellm_rs::core::budget::{BudgetConfig, BudgetScope, ModelLimitConfig};
+use litellm_rs::core::budget::ModelLimitConfig;
 #[cfg(feature = "providers-extended")]
 use litellm_rs::core::providers::Provider;
 #[cfg(feature = "providers-extended")]
 use litellm_rs::core::types::context::RequestContext;
 #[cfg(feature = "providers-extended")]
 use litellm_rs::core::types::model::ProviderCapability;
-#[cfg(feature = "providers-extended")]
-use uuid::Uuid;
 
 #[tokio::test]
 async fn native_image_routes_fallback_when_selected_identity_snapshot_is_gone() {
@@ -766,8 +771,8 @@ async fn ambiguous_bfl_image_submissions_settle_all_budgets() {
             .models
             .set_model_limit(model, ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
     }
-    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
-    let budget_manager = state.budget_manager.clone();
+    let api_key_budget_id = key_budget_fixture::create(&state, 100.0).await;
+    let database = state.storage.database.clone();
     let budget_limits = state.budget_limits.clone();
     let app = test::init_service(
         App::new()
@@ -824,7 +829,9 @@ async fn ambiguous_bfl_image_submissions_settle_all_budgets() {
             .unwrap_or_default();
         assert!((spend - 0.06).abs() < f64::EPSILON, "{model}");
     }
-    assert!((budget_manager.get_current_spend(&api_key_scope) - 0.12).abs() < f64::EPSILON);
+    assert!(
+        (key_budget_fixture::spend(&database, api_key_budget_id).await - 0.12).abs() < f64::EPSILON
+    );
     assert!(
         budget_limits
             .providers
@@ -884,8 +891,8 @@ async fn ambiguous_stability_image_submissions_settle_all_budgets() {
             .models
             .set_model_limit(model, ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
     }
-    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
-    let budget_manager = state.budget_manager.clone();
+    let api_key_budget_id = key_budget_fixture::create(&state, 100.0).await;
+    let database = state.storage.database.clone();
     let budget_limits = state.budget_limits.clone();
     let app = test::init_service(
         App::new()
@@ -938,7 +945,9 @@ async fn ambiguous_stability_image_submissions_settle_all_budgets() {
             .unwrap_or_default();
         assert!((spend - 0.06).abs() < f64::EPSILON, "{model}");
     }
-    assert!((budget_manager.get_current_spend(&api_key_scope) - 0.12).abs() < f64::EPSILON);
+    assert!(
+        (key_budget_fixture::spend(&database, api_key_budget_id).await - 0.12).abs() < f64::EPSILON
+    );
 }
 
 #[cfg(feature = "providers-extended")]
@@ -984,9 +993,9 @@ async fn definite_connect_failures_cancel_native_image_budgets() {
             .models
             .set_model_limit(model, ModelLimitConfig::new(100.0, ResetPeriod::Monthly));
     }
-    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
+    let api_key_budget_id = key_budget_fixture::create(&state, 100.0).await;
     let budget_limits = state.budget_limits.clone();
-    let budget_manager = state.budget_manager.clone();
+    let database = state.storage.database.clone();
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state))
@@ -1040,22 +1049,10 @@ async fn definite_connect_failures_cancel_native_image_budgets() {
             .unwrap_or_default();
         assert_eq!(spend, 0.0, "{model}");
     }
-    assert_eq!(budget_manager.get_current_spend(&api_key_scope), 0.0);
-}
-
-#[cfg(feature = "providers-extended")]
-async fn create_test_api_key_budget(state: &AppState) -> (BudgetScope, Uuid) {
-    let scope = BudgetScope::ApiKey(format!("native-media-{}", Uuid::new_v4()));
-    let budget = state
-        .budget_manager
-        .create_budget(
-            scope.clone(),
-            BudgetConfig::new("native media route budget", 100.0),
-        )
-        .await
-        .expect("API key budget should be created");
-    let budget_id = Uuid::parse_str(&budget.id).expect("budget id should be a UUID");
-    (scope, budget_id)
+    assert_eq!(
+        key_budget_fixture::spend(&database, api_key_budget_id).await,
+        0.0
+    );
 }
 
 #[cfg(feature = "providers-extended")]
@@ -1088,9 +1085,9 @@ async fn pre_io_native_validation_failure_cancels_all_budgets() {
         "stable-image-core",
         ModelLimitConfig::new(100.0, ResetPeriod::Monthly),
     );
-    let (api_key_scope, api_key_budget_id) = create_test_api_key_budget(&state).await;
+    let api_key_budget_id = key_budget_fixture::create(&state, 100.0).await;
     let budget_limits = state.budget_limits.clone();
-    let budget_manager = state.budget_manager.clone();
+    let database = state.storage.database.clone();
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(state))
@@ -1131,7 +1128,10 @@ async fn pre_io_native_validation_failure_cancels_all_budgets() {
         .unwrap_or_default();
     assert_eq!(provider_spend, 0.0);
     assert_eq!(model_spend, 0.0);
-    assert_eq!(budget_manager.get_current_spend(&api_key_scope), 0.0);
+    assert_eq!(
+        key_budget_fixture::spend(&database, api_key_budget_id).await,
+        0.0
+    );
 }
 
 #[tokio::test]
