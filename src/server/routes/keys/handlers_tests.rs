@@ -12,37 +12,6 @@ use actix_web::{HttpMessage, body::to_bytes, http::StatusCode, test as actix_tes
 use chrono::Utc;
 use std::sync::Arc;
 
-#[test]
-fn test_create_key_config_from_request() {
-    let request = CreateKeyRequest {
-        name: "Test Key".to_string(),
-        description: Some("A test".to_string()),
-        user_id: None,
-        team_id: None,
-        budget_id: None,
-        max_budget: None,
-        permissions: None,
-        rate_limits: None,
-        expires_at: None,
-        metadata: None,
-    };
-
-    let config = CreateKeyConfig {
-        name: request.name.clone(),
-        description: request.description.clone(),
-        user_id: request.user_id,
-        team_id: request.team_id,
-        budget_id: request.budget_id,
-        permissions: request.permissions.clone().unwrap_or_default(),
-        rate_limits: request.rate_limits.clone().unwrap_or_default(),
-        expires_at: request.expires_at,
-        metadata: request.metadata.clone().unwrap_or(serde_json::Value::Null),
-    };
-
-    assert_eq!(config.name, "Test Key");
-    assert!(config.description.is_some());
-}
-
 pub(super) fn make_user(role: UserRole, team_ids: Vec<Uuid>) -> User {
     use crate::core::models::Metadata;
     use crate::core::models::UsageStats;
@@ -185,7 +154,11 @@ fn key_usage_response_serializes_unpriced_fields() {
         0.01,
         "allow_unpriced",
     ));
-    let response = KeyUsageResponse { key_id, usage };
+    let response = KeyUsageResponse {
+        key_id,
+        usage,
+        budget: None,
+    };
 
     let value = serde_json::to_value(response).expect("key usage response should serialize");
 
@@ -819,3 +792,6 @@ async fn verify_handler_hides_foreign_key_existence() {
         "unauthorized verification must not schedule a last_used update"
     );
 }
+
+#[path = "handlers_config_tests.rs"]
+mod persistent_budget_tests;

@@ -128,6 +128,8 @@ impl BudgetTracker {
         };
         if !budget.enabled {
             return Ok(BudgetReservation {
+                #[cfg(feature = "gateway")]
+                persistent: None,
                 tracker: self.clone(),
                 scope: scope.clone(),
                 key: Some(key),
@@ -151,6 +153,8 @@ impl BudgetTracker {
         budget.current_spend = add_budget_spend(budget.current_spend, max_amount)?.as_f64();
         budget.updated_at = chrono::Utc::now();
         Ok(BudgetReservation {
+            #[cfg(feature = "gateway")]
+            persistent: None,
             tracker: self.clone(),
             scope: scope.clone(),
             key: Some(key),
@@ -395,6 +399,8 @@ impl BudgetTracker {
 }
 
 pub struct BudgetReservation {
+    #[cfg(feature = "gateway")]
+    persistent: Option<(Arc<crate::storage::database::Database>, uuid::Uuid)>,
     tracker: BudgetTracker,
     scope: BudgetScope,
     key: Option<String>,
@@ -405,8 +411,59 @@ pub struct BudgetReservation {
 }
 
 impl BudgetReservation {
+    #[cfg(feature = "gateway")]
+    pub(crate) fn persistent(
+        database: Arc<crate::storage::database::Database>,
+        id: uuid::Uuid,
+        budget_id: uuid::Uuid,
+        amount: f64,
+        tracker: BudgetTracker,
+    ) -> Result<Self, BudgetReservationError> {
+        let mut reservation = Self::untracked(
+            tracker,
+            BudgetScope::ApiKey(budget_id.to_string()),
+            BudgetAmount::from_f64(amount)?,
+        );
+        reservation.persistent = Some((database, id));
+        Ok(reservation)
+    }
+
+    /// SQL settlement stays on the async I/O path and keeps its hold on failure.
+    #[cfg(feature = "gateway")]
+    pub async fn settle_async(
+        mut self,
+        amount: f64,
+    ) -> Result<Option<SpendResult>, BudgetReservationError> {
+        if let Some((database, id)) = self.persistent.take() {
+            let actual = BudgetAmount::from_f64(amount)?;
+            if actual > self.reserved {
+                return Err(BudgetReservationError::ActualExceedsReservation);
+            }
+            database.settle_api_key_budget(id, amount).await.map_err(|error| {
+                tracing::error!(%error, %id, "API key budget settlement failed; retaining hold");
+                BudgetReservationError::BackendUnavailable
+            })?;
+            self.settled = true;
+            Ok(None)
+        } else {
+            self.settle(amount)
+        }
+    }
+
+    #[cfg(feature = "gateway")]
+    pub async fn cancel_async(self) -> Result<(), BudgetReservationError> {
+        if self.persistent.is_some() {
+            self.settle_async(0.0).await.map(|_| ())
+        } else {
+            self.cancel();
+            Ok(())
+        }
+    }
+
     fn untracked(tracker: BudgetTracker, scope: BudgetScope, reserved: BudgetAmount) -> Self {
         Self {
+            #[cfg(feature = "gateway")]
+            persistent: None,
             tracker,
             scope,
             key: None,
@@ -417,10 +474,15 @@ impl BudgetReservation {
         }
     }
 
+    #[cfg(feature = "gateway")]
+    pub(crate) fn is_persistent(&self) -> bool {
+        self.persistent.is_some()
+    }
+
     /// Whether this reservation holds a configured budget counter.
     #[cfg(feature = "gateway")]
     pub(crate) fn is_tracked(&self) -> bool {
-        self.key.is_some()
+        self.persistent.is_some() || self.key.is_some()
     }
 
     pub fn scope(&self) -> &BudgetScope {
@@ -435,6 +497,10 @@ impl BudgetReservation {
         mut self,
         actual_amount: f64,
     ) -> Result<Option<SpendResult>, BudgetReservationError> {
+        #[cfg(feature = "gateway")]
+        if self.persistent.is_some() {
+            return Err(BudgetReservationError::BackendUnavailable);
+        }
         let actual = BudgetAmount::from_f64(actual_amount)?;
         let result = self
             .key

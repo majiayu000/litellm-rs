@@ -2055,7 +2055,7 @@
       },
       "CreateKeyRequest": {
         "type": "object",
-        "description": "API-key budget definitions and counters are process-local. The persisted key binding does not provide restart recovery or cross-gateway accounting. max_budget is unsupported and rejected.",
+        "description": "max_budget creates a persistent lifetime SQL budget in USD. The server assigns its budget_id; externally supplied budget_id bindings are rejected. Requires persistent SQL.",
         "required": ["name"],
         "properties": {
           "name": { "type": "string" },
@@ -2063,6 +2063,7 @@
           "user_id": { "type": "string", "format": "uuid" },
           "team_id": { "type": "string", "format": "uuid" },
           "budget_id": { "type": "string", "format": "uuid" },
+          "max_budget": { "type": "number", "exclusiveMinimum": 0 },
           "permissions": { "$ref": "#/components/schemas/KeyPermissions" },
           "rate_limits": { "$ref": "#/components/schemas/KeyRateLimits" },
           "expires_at": { "type": "string", "format": "date-time" },
@@ -2072,13 +2073,14 @@
       },
       "UpdateKeyRequest": {
         "type": "object",
-        "description": "budget_id references a budget already configured in this process; null removes the binding. Budget definitions and counters are not restored from SQL or shared through Redis. max_budget is unsupported and rejected.",
+        "description": "max_budget changes the persistent lifetime cap without resetting spend. budget_id may be null to remove the binding; non-null rebinding is rejected.",
         "properties": {
           "name": { "type": "string" },
           "description": { "type": ["string", "null"] },
           "permissions": { "$ref": "#/components/schemas/KeyPermissions" },
           "rate_limits": { "$ref": "#/components/schemas/KeyRateLimits" },
           "budget_id": { "type": ["string", "null"], "format": "uuid" },
+          "max_budget": { "type": "number", "exclusiveMinimum": 0 },
           "expires_at": { "type": ["string", "null"], "format": "date-time" },
           "metadata": { "type": "object", "additionalProperties": true }
         },
@@ -2286,7 +2288,16 @@
         "required": ["key_id", "usage"],
         "properties": {
           "key_id": { "type": "string", "format": "uuid" },
-          "usage": { "$ref": "#/components/schemas/KeyUsageStats" }
+          "usage": { "$ref": "#/components/schemas/KeyUsageStats" },
+          "budget": {
+            "type": ["object", "null"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "max_budget": { "type": "number" },
+              "spent_and_reserved": { "type": "number" },
+              "remaining": { "type": "number" }
+            }
+          }
         },
         "additionalProperties": false
       },

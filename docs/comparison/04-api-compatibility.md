@@ -767,7 +767,7 @@ Native background JSON/SSE requests persist a settlement intent before generatio
 
 When `background=true, store=false`, the gateway stores only owner/deployment/account binding, ID/status and the stream flag for ten minutes; it does not persist input/output content. Such handles cannot supply previous-response context. Normal stored responses retain the existing 24-hour gateway TTL.
 
-Background durability requires an enabled shared SQL database; provider/model budget limits require the existing Redis backend, and process-local API-key budget scopes are rejected before background dispatch. Recovery never replays generation POST. Unknown outcomes preserve budget protection but are not recorded as actual supplier charges. Deleted/expired content does not remove settlement obligations. See [durable settlement limits](../providers/native-responses-routing.md) for idempotency evidence, retained receipts and unsupported combinations. All current verification uses mock upstreams, not paid-provider calls.
+Background durability requires an enabled shared SQL database; provider/model budget limits require the existing Redis backend, and API-key budget bindings are rejected before background dispatch because that worker does not yet own their SQL reservation receipts. Recovery never replays generation POST. Unknown outcomes preserve budget protection but are not recorded as actual supplier charges. Deleted/expired content does not remove settlement obligations. See [durable settlement limits](../providers/native-responses-routing.md) for idempotency evidence, retained receipts and unsupported combinations. All current verification uses mock upstreams, not paid-provider calls.
 
 ### Native compaction and Gemini contracts (F09, unreleased)
 

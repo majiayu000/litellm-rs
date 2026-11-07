@@ -202,7 +202,8 @@ impl Pending {
                 &state.budget_manager,
                 key_budget,
                 Some(bound),
-            )?;
+            )
+            .await?;
             Ok::<_, ProviderError>((reservation, key))
         };
         let (reservation, key) = match &facts {
@@ -239,11 +240,14 @@ impl Pending {
                 actual.map(|(cost, _)| cost),
             );
         }
-        let key_error = self.key.take().and_then(|reservation| {
+        let key_error = if let Some(reservation) = self.key.take() {
             settle_key(reservation, cost, self.facts.as_ref())
+                .await
                 .err()
                 .map(|_| "Realtime key budget settlement failed".to_string())
-        });
+        } else {
+            None
+        };
         let reservation = self.provider.take();
         let budget_settlement = async {
             if let Some(reservation) = reservation {
@@ -294,13 +298,18 @@ impl Drop for Pending {
         if let Some(reservation) = self.provider.take() {
             reservation.settle_detached(self.bound, self.facts.clone());
         }
-        if let Some(reservation) = self.key.take()
-            && let Err(error) = settle_key(reservation, self.bound, self.facts.as_ref())
-        {
-            tracing::error!(
-                ?error,
-                "Realtime aborted response fallback settlement failed"
-            );
+        if let Some(reservation) = self.key.take() {
+            let bound = self.bound;
+            let facts = self.facts.clone();
+            // The SQL hold already exists before dispatch. Dropping this task cannot refund it.
+            tokio::spawn(async move {
+                if let Err(error) = settle_key(reservation, bound, facts.as_ref()).await {
+                    tracing::error!(
+                        ?error,
+                        "Realtime aborted response fallback settlement failed"
+                    );
+                }
+            });
         }
         if let (Some(session), Some(facts)) = (&self.session_facts, &self.facts) {
             finish_response(session, &snapshot_facts(facts));
@@ -308,14 +317,14 @@ impl Drop for Pending {
     }
 }
 
-fn settle_key(
+async fn settle_key(
     reservation: BudgetReservation,
     cost: f64,
     facts: Option<&SharedRequestLedgerFacts>,
 ) -> Result<(), crate::core::budget::BudgetReservationError> {
     let tracked = reservation.is_tracked();
     let reserved = reservation.reserved_amount();
-    let result = reservation.settle(cost);
+    let result = reservation.settle_async(cost).await;
     if tracked && facts.is_some() {
         update_billing(facts, |billing| {
             billing.key_reserved_amount = Some(reserved);

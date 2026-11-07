@@ -66,6 +66,22 @@ class Handler(BaseHTTPRequestHandler):
         self.server.entered.set()
         if mode == "hold" and not self.server.release.wait(660):
             raise TimeoutError("test did not release held upstream request")
+        if mode == "stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunk = {"id": "ha-stream", "object": "chat.completion.chunk", "created": 0,
+                     "model": request["model"], "choices": [{"index": 0,
+                     "delta": {"content": "started"}, "finish_reason": None}]}
+            try:
+                self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                self.wfile.flush()
+                if not self.server.release.wait(60):
+                    raise TimeoutError("stream test did not release upstream")
+                self.wfile.write(b"data: [DONE]\n\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Deliberate downstream interruption; usage is unknown.
+            return
         status = 429 if mode == "fail" else 200
         body = {"error": {"message": "test upstream rate limit", "type": "rate_limit_error"}} if status == 429 else {
             "id": "ha-response", "object": "chat.completion", "created": 0,
@@ -127,11 +143,12 @@ class Gateway:
             self.config_path.unlink(missing_ok=True)
             raise
 
-    def request(self, path, body=None, method=None):
+    def request(self, path, body=None, method=None, api_key=None):
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
             data=None if body is None else json.dumps(body).encode(), method=method,
             headers={"Content-Type": "application/json",
-                     **({"Authorization": f"Bearer {self.token}"} if self.token else {})})
+                     **({"x-api-key": api_key} if api_key else
+                        ({"Authorization": f"Bearer {self.token}"} if self.token else {}))})
         try:
             response = urllib.request.urlopen(request, timeout=25)
         except urllib.error.HTTPError as error:
@@ -187,7 +204,7 @@ def main():
     config["storage"]["redis"].update(enabled=True, url=redis_url, allow_degraded=False)
     config["storage"]["config_sync_key_env"] = "LITELLM_HA_CONFIG_KEY"
     config["pricing"]["unpriced_fallback_cost_per_1k_tokens"] = 1000.0
-    config["auth"].update(enable_jwt=True, jwt_secret="Aa1!" + secrets.token_urlsafe(48))
+    config["auth"].update(enable_jwt=True, enable_api_key=True, jwt_secret="Aa1!" + secrets.token_urlsafe(48))
     key = secrets.token_hex(32)
     nodes = []
     results = {}
@@ -260,10 +277,10 @@ def main():
         assert b.chat(model)[0] == 200
         results["budget_cannot_double_spend_and_settlement_releases_hold"] = True
 
-        def add_provider(suffix):
+        def add_provider(suffix, max_concurrent_requests=1):
             provider = copy.deepcopy(config["providers"][0])
             provider.update(name=prefix + "-" + suffix, models=[prefix + "-" + suffix],
-                            max_concurrent_requests=1)
+                            max_concurrent_requests=max_concurrent_requests)
             status, body = a.request("/admin/providers", provider)
             assert status == 200, (status, body)
             wait_until(lambda: b.revision()["active_revision"] == body["generation"])
@@ -298,6 +315,72 @@ def main():
         time.sleep(30.1)
         assert b.chat(circuit)[0] == 200
         results["cooldown_converges_and_recovers"] = True
+
+        # API-key budgets use SQL, including on a restarted gateway with empty local state.
+        key_model = add_provider("key-budget", max_concurrent_requests=10)
+        status, response = a.request("/v1/keys", {"name": "shared-key-budget", "max_budget": 150})
+        assert status == 201, (status, response)
+        key_id, raw_key = response["data"]["id"], response["data"]["key"]
+        def key_chat(node):
+            return node.request("/v1/chat/completions", {"model": key_model,
+                "messages": [{"role": "user", "content": "hello"}], "max_tokens": 100}, api_key=raw_key)
+        def balance(node):
+            status, response = node.request(f"/v1/keys/{key_id}/usage")
+            assert status == 200, (status, response)
+            return response["data"]["budget"]
+        upstream.hold()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            first = executor.submit(key_chat, a)
+            if not upstream.entered.wait(10):
+                raise AssertionError(first.result(timeout=1) if first.done()
+                                     else "budgeted request did not reach upstream")
+            calls = upstream.calls
+            assert key_chat(b)[0] == 402
+            assert upstream.calls == calls
+            assert balance(b)["spent_and_reserved"] > 100
+            upstream.release.set()
+            assert first.result(timeout=10)[0] == 200
+        spent = balance(b)["spent_and_reserved"]
+        assert spent == 2, spent
+        b.stop()
+        b = Gateway(args.binary.resolve(), config, key, args.output, "node-b-key-budget-restart")
+        nodes.append(b)
+        assert balance(b)["spent_and_reserved"] == spent
+        status, response = key_chat(b)
+        assert status == 200, (status, response)
+        assert balance(a)["spent_and_reserved"] == 4
+        # Updating through A must tighten B immediately, without resetting the ledger.
+        status, response = a.request(f"/v1/keys/{key_id}", {"max_budget": 4}, "PUT")
+        assert status == 200, (status, response)
+        assert balance(b)["spent_and_reserved"] == 4
+        calls = upstream.calls
+        assert key_chat(b)[0] == 402
+        assert upstream.calls == calls
+        results["api_key_budget_shared_restart_and_cap_update"] = True
+        status, response = a.request("/v1/keys", {"name": "interrupted-key-budget", "max_budget": 150})
+        assert status == 201, (status, response)
+        key_id, raw_key = response["data"]["id"], response["data"]["key"]
+        upstream.release.clear()
+        upstream.mode = "stream"
+        connection = http.client.HTTPConnection("127.0.0.1", a.port, timeout=10)
+        connection.request("POST", "/v1/chat/completions", json.dumps({"model": key_model,
+            "messages": [{"role": "user", "content": "hello"}], "max_tokens": 100, "stream": True}),
+            {"Content-Type": "application/json", "x-api-key": raw_key})
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.readline().startswith(b"data:")
+        response.close()
+        connection.close()
+        held = balance(b)["spent_and_reserved"]
+        assert held > 100, held
+        calls = upstream.calls
+        assert key_chat(b)[0] == 402
+        assert upstream.calls == calls
+        upstream.release.set()
+        upstream.mode = "ok"
+        assert balance(a)["spent_and_reserved"] == held
+        results["api_key_budget_interrupted_stream_keeps_hold"] = True
+
 
         owner_model = add_provider("owner")
         for node in [a, b]:

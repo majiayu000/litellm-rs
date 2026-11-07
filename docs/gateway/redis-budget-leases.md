@@ -188,24 +188,51 @@ verifies that late settlement records actual spend without releasing the new hol
 
 ## API-key budget capability boundary
 
-| Scope | Definition and spend state | Restart / multiple gateways |
+| Scope | Authoritative state | Restart / multiple gateways |
 | --- | --- | --- |
-| Provider/model with the distributed Redis backend | Configured limits plus Redis reservation/counter state | Shared reservation accounting under the documented lease and upgrade contract |
-| API-key `BudgetManager` | Process-local definitions, counters and reservations | Not restored from SQL and not distributed through the provider/model Redis backend |
-| Persisted API-key record | SQL record including its `budget_id` binding | The binding alone does not recreate a budget or its previous balance |
+| Provider/model with Redis | Configured limits plus Redis leases/counters | Shared under the lease contract above |
+| Gateway API-key budget | SQL `api_key_budgets` and `api_key_budget_reservations` | Durable; every gateway must connect to the same database |
+| Embedded `BudgetManager::new()` | In-memory generic tracker | Process-local; not the gateway API-key ledger |
 
-`POST /keys` and key updates reject `max_budget`. An embedded caller may create
-a process-local budget and bind an API key to that existing `budget_id`; this
-is a single-process capability. Missing budget bindings fail closed. Creating a
-fresh budget after restart does not recover its previous spend. Applications
-must not advertise a shared or restart-persistent API-key balance on this basis.
+`POST /v1/keys` accepts `max_budget`, a positive lifetime cap in USD. It creates
+the budget and key binding in one SQL transaction. `PUT /v1/keys/{id}` changes
+`max_budget` without resetting spend. Lowering the cap below spent/reserved money
+blocks new paid requests. Rotation preserves the budget ID and its balance.
+`GET /v1/keys/{id}/usage` returns `budget.max_budget`, `spent_and_reserved`, and
+`remaining` separately from the key's recorded usage statistics.
 
-Extending this capability requires persisted budget definitions and scopes,
-restoration and distribution, and a shared reservation ledger. Its acceptance
-must use production authentication with real SQL and Redis: gateway A spends,
-gateway B observes the same remaining balance, restarting A preserves accounting,
-and concurrent/stream-interrupted/late-settled requests respect one total. That
-capability is not introduced by the provider/model budget fixes.
+The database must be enabled and persistent; the management API rejects caps
+when SQL is disabled, explicitly in-memory, or a PostgreSQL connection has fallen
+back to a local SQLite database. Use shared PostgreSQL for multiple hosts. SQLite
+sharing requires the same file. Missing budgets and failed SQL reservations fail
+closed. There is no Redis balance or process-local fallback for persisted keys.
+
+HTTP callers configure a key-owned budget through `max_budget`; arbitrary
+non-null `budget_id` bindings are rejected to prevent attaching to or changing
+another key's budget. Explicit `budget_id: null` removes a binding. Removing it
+and later creating a budget starts a new budget; this is an explicit management
+action, not a reset. Existing process-local budget bindings are not backfilled.
+
+Amounts use integer nanodollars. Reservation increments and receipt creation are
+atomic. Settlement replaces the estimate with actual cost once; replaying the
+same receipt/amount is a no-op, and a different second amount is rejected. Invalid
+actual costs above the reserved bound and failed transactions keep the hold.
+Aborted requests and process crashes also keep the hold, so missing upstream
+usage cannot silently replenish the budget. Explicit upstream rejections refund through the same transactional settlement
+fence. Transport, parsing and server errors keep the hold because usage is unknown.
+
+Unknown-usage holds do not expire automatically and can exhaust the cap. Receipts
+remain in SQL for investigation and idempotent late settlement; this change does
+not introduce an automatic reconciliation/refund service or periodic resets.
+Background Responses still reject budgeted keys until their durable background
+settlement worker can own API-key receipts. Normal chat, streaming, Messages,
+Responses, images/audio, Gemini, and Realtime use the shared reservation path.
+
+Verification includes two independent SQL connections, restart, competing
+admissions, duplicate/late settlement, interrupted reservation ownership, and
+transaction rollback. The real PostgreSQL/Redis two-gateway driver also creates a
+key through authenticated HTTP, checks concurrent denial before upstream dispatch,
+restarts a replica, and checks that a cap update on A immediately constrains B.
 
 ## History growth measurement
 

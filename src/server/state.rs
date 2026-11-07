@@ -114,7 +114,8 @@ impl AppState {
         let storage = Arc::new(storage);
         let key_manager = KeyManager::new(DatabaseKeyRepository::new(storage.clone()))
             .with_hmac_secret(revision.config.gateway.auth.api_key_hmac_secret.clone());
-        let budget_manager = Arc::new(BudgetManager::new());
+        let budget_manager =
+            Arc::new(BudgetManager::new().with_api_key_database(storage.database.clone()));
         let budgeted = BudgetedExecutor::new(
             budget_limits.clone(),
             budget_manager.clone(),
