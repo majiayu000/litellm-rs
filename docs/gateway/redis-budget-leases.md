@@ -69,8 +69,9 @@ The synchronous provider/model budget SDK remains available. Gateway request
 handlers use `reserve_spend_async`, `settle_async` and `cancel_async`; the pricing
 helpers await the reservation before invoking a provider. Admin provider/model
 resets use the same bounded worker bridge. Availability checks,
-API-key in-process bookkeeping and local spend snapshots remain synchronous
-memory operations.
+embedded in-process bookkeeping and local spend snapshots remain synchronous
+memory operations. Gateway API-key reservations and settlement await their SQL
+ledger directly, as described in the capability boundary below.
 
 The async bridge runs the existing accounting operations on a separate budget
 SDK worker runtime, with at most 32 blocking workers. Redis I/O runs on its own
