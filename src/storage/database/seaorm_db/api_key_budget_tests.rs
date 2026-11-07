@@ -199,6 +199,12 @@ async fn persistent_key_budget_key_mutations_are_atomic_and_cap_changes_preserve
         .await
         .unwrap();
     let id = keys.get_key(key).await.unwrap().unwrap().budget_id.unwrap();
+    let stale_key = storage
+        .database
+        .find_api_key_by_id(key)
+        .await
+        .unwrap()
+        .unwrap();
     let receipt = storage
         .database
         .reserve_api_key_budget(id, 0.4)
@@ -222,6 +228,30 @@ async fn persistent_key_budget_key_mutations_are_atomic_and_cap_changes_preserve
     assert_eq!(
         (budget.max_amount, budget.used_amount),
         (200_000_000, 300_000_000)
+    );
+    assert!(matches!(
+        storage
+            .database
+            .update_api_key_with_budget(
+                &stale_key,
+                Some((id, 10.0)),
+                Some(stale_key.metadata.version),
+            )
+            .await,
+        Err(crate::utils::error::gateway_error::GatewayError::Conflict(
+            _
+        ))
+    ));
+    assert_eq!(
+        storage
+            .database
+            .api_key_budget(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .max_amount,
+        200_000_000,
+        "a stale key mutation must not change its budget"
     );
     assert!(matches!(
         storage.database.reserve_api_key_budget(id, 0.01).await,

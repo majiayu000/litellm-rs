@@ -59,13 +59,15 @@ impl KeyRepository for DatabaseKeyRepository {
         }
         let expected_version = domain_key.metadata.version;
         apply_update_config(&mut domain_key, config)?;
-        // The SQL writer compares the version read before applying this update.
-        domain_key.metadata.version = expected_version;
         let budget_id = from_domain_api_key(&domain_key).budget_id;
         let updated = self
             .storage
             .db()
-            .update_api_key_with_budget(&domain_key, budget_change(budget_id, max_budget)?)
+            .update_api_key_with_budget(
+                &domain_key,
+                budget_change(budget_id, max_budget)?,
+                Some(expected_version),
+            )
             .await?;
         Ok(from_domain_api_key(&updated))
     }
