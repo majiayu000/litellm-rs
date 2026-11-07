@@ -314,6 +314,12 @@ impl KeyErrorResponse {
     }
 }
 
+fn deserialize_budget_binding<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error> {
+    Option::<Uuid>::deserialize(deserializer).map(Some)
+}
+
 #[cfg(test)]
 mod types_tests {
     use super::*;
@@ -378,10 +384,4 @@ mod types_tests {
         assert_eq!(query.limit, 20);
         assert!(query.status.is_none());
     }
-}
-
-fn deserialize_budget_binding<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Option<Uuid>>, D::Error> {
-    Option::<Uuid>::deserialize(deserializer).map(Some)
 }

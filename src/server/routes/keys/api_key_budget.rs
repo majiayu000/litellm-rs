@@ -17,9 +17,6 @@ pub(super) async fn validate_update_key_budget_fields(
 ) -> Result<(), String> {
     ensure_persistent_database(state, request.max_budget)?;
     reject_external_binding(request.budget_id.flatten())?;
-    if request.budget_id == Some(None) && request.max_budget.is_some() {
-        return Err("Cannot remove a budget binding and set max_budget together".into());
-    }
     Ok(())
 }
 

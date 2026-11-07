@@ -28,7 +28,7 @@ impl KeyRepository for DatabaseKeyRepository {
         let stored = self
             .storage
             .db()
-            .create_api_key_with_budget(&domain_key, key.budget_id.zip(max_budget))
+            .create_api_key_with_budget(&domain_key, budget_change(key.budget_id, max_budget)?)
             .await?;
         Ok(from_domain_api_key(&stored))
     }
@@ -65,7 +65,7 @@ impl KeyRepository for DatabaseKeyRepository {
         let updated = self
             .storage
             .db()
-            .update_api_key_with_budget(&domain_key, budget_id.zip(max_budget))
+            .update_api_key_with_budget(&domain_key, budget_change(budget_id, max_budget)?)
             .await?;
         Ok(from_domain_api_key(&updated))
     }
@@ -133,4 +133,13 @@ impl KeyRepository for DatabaseKeyRepository {
     async fn count(&self, status: Option<KeyStatus>) -> Result<u64> {
         self.storage.db().count_api_keys(status).await
     }
+}
+
+fn budget_change(id: Option<Uuid>, max: Option<f64>) -> Result<Option<(Uuid, f64)>> {
+    max.map(|max| {
+        id.map(|id| (id, max)).ok_or_else(|| {
+            GatewayError::validation("Cannot set max_budget without a budget binding")
+        })
+    })
+    .transpose()
 }
