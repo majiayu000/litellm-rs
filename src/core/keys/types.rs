@@ -445,6 +445,9 @@ pub struct CreateKeyConfig {
     /// Custom metadata
     #[serde(default)]
     pub metadata: serde_json::Value,
+    /// Persistent lifetime budget cap in USD.
+    #[serde(default)]
+    pub max_budget: Option<f64>,
 }
 
 /// Configuration for updating an API key
@@ -477,6 +480,9 @@ pub struct UpdateKeyConfig {
     /// Update metadata
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    /// Persistent lifetime budget cap in USD.
+    #[serde(default)]
+    pub max_budget: Option<f64>,
 }
 
 /// Result of verifying a key

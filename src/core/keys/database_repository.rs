@@ -23,9 +23,13 @@ impl DatabaseKeyRepository {
 
 #[async_trait]
 impl KeyRepository for DatabaseKeyRepository {
-    async fn create(&self, key: ManagedApiKey) -> Result<ManagedApiKey> {
+    async fn create(&self, key: ManagedApiKey, max_budget: Option<f64>) -> Result<ManagedApiKey> {
         let domain_key = to_domain_api_key(&key)?;
-        let stored = self.storage.db().create_api_key(&domain_key).await?;
+        let stored = self
+            .storage
+            .db()
+            .create_api_key_with_budget(&domain_key, key.budget_id.zip(max_budget))
+            .await?;
         Ok(from_domain_api_key(&stored))
     }
 
@@ -47,8 +51,22 @@ impl KeyRepository for DatabaseKeyRepository {
             .await?
             .ok_or_else(|| GatewayError::not_found("API key not found"))?;
 
+        let max_budget = config.max_budget;
+        let mut config = config;
+        let existing_budget = from_domain_api_key(&domain_key).budget_id;
+        if max_budget.is_some() && config.budget_id.is_none() {
+            config.budget_id = Some(Some(existing_budget.unwrap_or_else(Uuid::new_v4)));
+        }
+        let expected_version = domain_key.metadata.version;
         apply_update_config(&mut domain_key, config)?;
-        let updated = self.storage.db().update_api_key(&domain_key).await?;
+        // The SQL writer compares the version read before applying this update.
+        domain_key.metadata.version = expected_version;
+        let budget_id = from_domain_api_key(&domain_key).budget_id;
+        let updated = self
+            .storage
+            .db()
+            .update_api_key_with_budget(&domain_key, budget_id.zip(max_budget))
+            .await?;
         Ok(from_domain_api_key(&updated))
     }
 

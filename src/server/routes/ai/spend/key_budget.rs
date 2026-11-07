@@ -5,7 +5,7 @@ use crate::core::budget::{
 };
 use crate::core::providers::unified_provider::ProviderError;
 
-pub(in crate::server::routes::ai) fn reserve_api_key_budget(
+pub(in crate::server::routes::ai) async fn reserve_api_key_budget(
     budget_manager: &BudgetManager,
     api_key_budget_id: Option<Uuid>,
     estimated_cost: Option<f64>,
@@ -19,14 +19,31 @@ pub(in crate::server::routes::ai) fn reserve_api_key_budget(
             format!("pricing is required for API key budget '{budget_id}'"),
         ));
     };
-    if estimated_cost <= 0.0 {
+    crate::core::budget::BudgetAmount::from_f64(estimated_cost)
+        .map_err(|error| key_reservation_error_to_provider_error(error.into(), budget_id))?;
+    if estimated_cost == 0.0 {
         return Ok(None);
     }
 
-    let scope = key_budget_scope(budget_manager, budget_id)?;
-    budget_manager
-        .tracker()
-        .reserve_spend(&scope, estimated_cost)
+    let reservation = if let Some(database) = budget_manager.api_key_database() {
+        let id = database
+            .reserve_api_key_budget(budget_id, estimated_cost)
+            .await
+            .map_err(|error| key_reservation_error_to_provider_error(error, budget_id))?;
+        BudgetReservation::persistent(
+            database.clone(),
+            id,
+            budget_id,
+            estimated_cost,
+            budget_manager.tracker().clone(),
+        )
+    } else {
+        let scope = key_budget_scope(budget_manager, budget_id)?;
+        budget_manager
+            .tracker()
+            .reserve_spend(&scope, estimated_cost)
+    };
+    reservation
         .map(|reservation| {
             if reservation.is_tracked() {
                 crate::core::request_ledger::update_billing(None, |billing| {
@@ -41,7 +58,7 @@ pub(in crate::server::routes::ai) fn reserve_api_key_budget(
         .map_err(|error| key_reservation_error_to_provider_error(error, budget_id))
 }
 
-pub(in crate::server::routes::ai) fn reserve_api_key_budget_for_reservation(
+pub(in crate::server::routes::ai) async fn reserve_api_key_budget_for_reservation(
     budget_manager: &BudgetManager,
     api_key_budget_id: Option<Uuid>,
     budget_reservation: Option<&UnifiedBudgetReservation>,
@@ -54,9 +71,10 @@ pub(in crate::server::routes::ai) fn reserve_api_key_budget_for_reservation(
         api_key_budget_id,
         Some(budget_reservation.reserved_amount()),
     )
+    .await
 }
 
-pub(in crate::server::routes::ai) fn settle_api_key_budget_reservation(
+pub(in crate::server::routes::ai) async fn settle_api_key_budget_reservation(
     reservation: Option<BudgetReservation>,
     actual_cost: f64,
     context: &str,
@@ -67,7 +85,7 @@ pub(in crate::server::routes::ai) fn settle_api_key_budget_reservation(
 
     let reserved = reservation.reserved_amount();
     let tracked = reservation.is_tracked();
-    let result = reservation.settle(actual_cost);
+    let result = reservation.settle_async(actual_cost).await;
     if tracked {
         crate::core::request_ledger::update_billing(None, |billing| {
             billing.key_reserved_amount.get_or_insert(reserved);
@@ -144,7 +162,7 @@ mod tests {
         let manager = BudgetManager::new();
         let budget_id = Uuid::new_v4();
 
-        let error = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.01)) {
+        let error = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.01)).await {
             Ok(_) => panic!("unknown API key budget should fail closed"),
             Err(error) => error,
         };
@@ -168,14 +186,15 @@ mod tests {
             Err(error) => panic!("budget id should be a UUID string: {error}"),
         };
 
-        let reservation = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.25)) {
+        let reservation = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.25)).await
+        {
             Ok(Some(reservation)) => reservation,
             Ok(None) => panic!("configured API key budget should reserve spend"),
             Err(error) => panic!("configured API key budget should reserve: {error}"),
         };
         assert_eq!(manager.get_current_spend(&scope), 0.25);
 
-        settle_api_key_budget_reservation(Some(reservation), 0.10, "test");
+        settle_api_key_budget_reservation(Some(reservation), 0.10, "test").await;
 
         assert_eq!(manager.get_current_spend(&scope), 0.10);
     }
@@ -196,7 +215,7 @@ mod tests {
             Err(error) => panic!("budget id should be a UUID string: {error}"),
         };
 
-        let reservation = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.0)) {
+        let reservation = match reserve_api_key_budget(&manager, Some(budget_id), Some(0.0)).await {
             Ok(reservation) => reservation,
             Err(error) => panic!("zero-cost priced request should not fail: {error}"),
         };
@@ -211,7 +230,7 @@ mod tests {
         let budget_id = Uuid::new_v4();
 
         let reservation =
-            match reserve_api_key_budget_for_reservation(&manager, Some(budget_id), None) {
+            match reserve_api_key_budget_for_reservation(&manager, Some(budget_id), None).await {
                 Ok(reservation) => reservation,
                 Err(error) => panic!("absent upstream reservation should not fail: {error}"),
             };

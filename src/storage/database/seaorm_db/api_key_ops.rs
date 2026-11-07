@@ -32,14 +32,26 @@ impl SeaOrmDatabase {
         &self,
         api_key: &crate::core::models::ApiKey,
     ) -> Result<crate::core::models::ApiKey> {
-        debug!("Creating API key: {}", api_key.metadata.id);
+        self.create_api_key_with_budget(api_key, None).await
+    }
+
+    pub(crate) async fn create_api_key_with_budget(
+        &self,
+        api_key: &crate::core::models::ApiKey,
+        budget: Option<(uuid::Uuid, f64)>,
+    ) -> Result<crate::core::models::ApiKey> {
+        let tx = self.db.begin().await?;
+        if let Some((id, max)) = budget {
+            super::api_key_budget_ops::write_budget(&tx, id, max).await?;
+        }
 
         let active_model = api_key::Model::from_domain_api_key(api_key)?;
         entities::ApiKey::insert(active_model)
-            .exec(&self.db)
+            .exec(&tx)
             .await
             .map_err(GatewayError::from)?;
 
+        tx.commit().await?;
         Ok(api_key.clone())
     }
 
@@ -226,6 +238,14 @@ impl SeaOrmDatabase {
         &self,
         api_key: &crate::core::models::ApiKey,
     ) -> Result<crate::core::models::ApiKey> {
+        self.update_api_key_with_budget(api_key, None).await
+    }
+
+    pub(crate) async fn update_api_key_with_budget(
+        &self,
+        api_key: &crate::core::models::ApiKey,
+        budget: Option<(uuid::Uuid, f64)>,
+    ) -> Result<crate::core::models::ApiKey> {
         let txn = self.db.begin().await.map_err(GatewayError::from)?;
 
         let current = entities::ApiKey::find_by_id(api_key.metadata.id)
@@ -234,6 +254,9 @@ impl SeaOrmDatabase {
             .map_err(GatewayError::from)?
             .ok_or_else(|| GatewayError::not_found("API key not found"))?;
 
+        if i64::from(current.version) != api_key.metadata.version {
+            return Err(GatewayError::conflict("API key was modified concurrently"));
+        }
         let permissions = serde_json::to_string(&api_key.permissions)
             .map_err(|e| GatewayError::validation(format!("Invalid permissions: {}", e)))?;
         let rate_limits = api_key
@@ -292,6 +315,9 @@ impl SeaOrmDatabase {
             return Err(GatewayError::conflict("API key was modified concurrently"));
         }
 
+        if let Some((id, max)) = budget {
+            super::api_key_budget_ops::write_budget(&txn, id, max).await?;
+        }
         txn.commit().await.map_err(GatewayError::from)?;
 
         self.find_api_key_by_id(api_key.metadata.id)

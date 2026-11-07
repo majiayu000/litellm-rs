@@ -387,7 +387,8 @@ async fn record_completion_spend_inner(
         crate::core::request_ledger::mark_provider_reported_charge(ledger_facts.as_ref());
     }
 
-    settle_api_key_budget_reservation(key_budget_reservation, cost, &format!("{provider}/{model}"));
+    settle_api_key_budget_reservation(key_budget_reservation, cost, &format!("{provider}/{model}"))
+        .await;
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
             if let Err(error) =
@@ -473,7 +474,8 @@ pub(in crate::server::routes::ai) async fn record_reserved_spend_without_usage(
         );
     }
     if let Some(reservation) = key_budget_reservation {
-        settle_api_key_budget_reservation(Some(reservation), recorded_cost.unwrap_or(0.0), context);
+        settle_api_key_budget_reservation(Some(reservation), recorded_cost.unwrap_or(0.0), context)
+            .await;
     }
     let budget_settlement = async {
         if let (Some(reservation), Some(reserved)) = (budget_reservation, provider_reserved)

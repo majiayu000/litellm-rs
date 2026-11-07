@@ -22,6 +22,8 @@ mod m20260908_000001_create_runtime_config;
 mod m20261003_000001_create_responses;
 mod m20261007_000001_request_ledger_billing;
 
+mod m20261107_000001_create_api_key_budgets;
+
 /// Database migrator for SeaORM
 pub struct Migrator;
 
@@ -84,6 +86,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260908_000001_create_runtime_config::Migration),
             Box::new(m20261003_000001_create_responses::Migration),
             Box::new(m20261007_000001_request_ledger_billing::Migration),
+            Box::new(m20261107_000001_create_api_key_budgets::Migration),
         ]
     }
 }

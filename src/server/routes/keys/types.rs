@@ -27,11 +27,11 @@ pub struct CreateKeyRequest {
     #[serde(default)]
     pub team_id: Option<Uuid>,
 
-    /// Existing process-local budget ID; its definition and counters are not persisted.
+    /// Budget binding is assigned by the server; use max_budget when creating a key.
     #[serde(default)]
     pub budget_id: Option<Uuid>,
 
-    /// Unsupported until API-key-scoped budgets are persisted.
+    /// Persistent lifetime spending cap in USD; changing it preserves existing spend.
     #[serde(default)]
     pub max_budget: Option<f64>,
 
@@ -71,11 +71,11 @@ pub struct UpdateKeyRequest {
     #[serde(default)]
     pub rate_limits: Option<KeyRateLimits>,
 
-    /// Update the process-local budget binding; null removes the binding.
-    #[serde(default)]
+    /// Set null to remove the budget binding; non-null rebinding is unsupported.
+    #[serde(default, deserialize_with = "deserialize_budget_binding")]
     pub budget_id: Option<Option<Uuid>>,
 
-    /// Unsupported until API-key-scoped budgets are persisted.
+    /// Persistent lifetime spending cap in USD; changing it preserves existing spend.
     #[serde(default)]
     pub max_budget: Option<f64>,
 
@@ -170,6 +170,16 @@ pub struct KeyUsageResponse {
 
     /// Usage statistics
     pub usage: KeyUsageStats,
+    /// Authoritative cap and spent-plus-reserved amount, if this key has a budget.
+    pub budget: Option<KeyBudgetUsage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyBudgetUsage {
+    pub id: Uuid,
+    pub max_budget: f64,
+    pub spent_and_reserved: f64,
+    pub remaining: f64,
 }
 
 /// Response for key rotation
@@ -368,4 +378,10 @@ mod types_tests {
         assert_eq!(query.limit, 20);
         assert!(query.status.is_none());
     }
+}
+
+fn deserialize_budget_binding<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error> {
+    Option::<Uuid>::deserialize(deserializer).map(Some)
 }

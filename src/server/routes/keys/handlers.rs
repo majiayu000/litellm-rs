@@ -77,6 +77,7 @@ pub async fn create_key(
         user_id: resolved_user_id,
         team_id: resolved_team_id,
         budget_id: request.budget_id,
+        max_budget: request.max_budget,
         permissions: request.permissions.clone().unwrap_or_default(),
         rate_limits: request.rate_limits.clone().unwrap_or_default(),
         expires_at: request.expires_at,
@@ -375,6 +376,7 @@ pub async fn update_key(
         permissions: request.permissions.clone(),
         rate_limits: request.rate_limits.clone(),
         budget_id: request.budget_id,
+        max_budget: request.max_budget,
         expires_at: request.expires_at,
         metadata: request.metadata.clone(),
     };
@@ -659,7 +661,16 @@ pub async fn get_key_usage(
 
     match key_manager.get_usage_stats(key_id).await {
         Ok(usage) => {
-            let response = KeyUsageResponse { key_id, usage };
+            let budget = super::api_key_budget::budget_usage(&state, key.budget_id)
+                .await
+                .map_err(|_| {
+                    actix_web::error::ErrorServiceUnavailable("Budget backend unavailable")
+                })?;
+            let response = KeyUsageResponse {
+                key_id,
+                usage,
+                budget,
+            };
             Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
         }
         Err(e) => {

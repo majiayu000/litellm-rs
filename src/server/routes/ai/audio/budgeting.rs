@@ -121,7 +121,8 @@ pub(super) async fn record_audio_spend(
                     key_budget_reservation,
                     cost.total_cost,
                     "time-based audio spend",
-                );
+                )
+                .await;
                 let budget_settlement = async {
                     settle_audio_budget_or_record(
                         budget_limits,

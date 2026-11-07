@@ -37,7 +37,7 @@ where
             Err(error)
         }
         Err(error) => {
-            reservations.cancel().await;
+            reservations.on_error(&error).await;
             Err(error)
         }
     }

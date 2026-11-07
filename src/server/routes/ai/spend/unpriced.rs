@@ -224,7 +224,8 @@ pub(in crate::server::routes::ai) async fn settle_unpriced_usage_with_admission(
         key_budget_reservation,
         cost,
         &format!("{context}: {budget_provider}/{budget_model}"),
-    );
+    )
+    .await;
     let budget_settlement = async {
         if let Some(reservation) = budget_reservation {
             if let Err(error) =
