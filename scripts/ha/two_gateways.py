@@ -346,7 +346,8 @@ def main():
         b = Gateway(args.binary.resolve(), config, key, args.output, "node-b-key-budget-restart")
         nodes.append(b)
         assert balance(b)["spent_and_reserved"] == spent
-        assert key_chat(b)[0] == 200
+        status, response = key_chat(b)
+        assert status == 200, (status, response)
         assert balance(a)["spent_and_reserved"] == 4
         # Updating through A must tighten B immediately, without resetting the ledger.
         status, response = a.request(f"/v1/keys/{key_id}", {"max_budget": 4}, "PUT")

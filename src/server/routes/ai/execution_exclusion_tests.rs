@@ -264,3 +264,58 @@ async fn test_stream_newer_soft_error_supersedes_older_hard_exclusion_error() {
     );
     assert_all_leases_released(router.as_ref());
 }
+
+#[tokio::test]
+async fn persistent_key_budget_rejections_do_not_retry_or_poison_deployments() {
+    use std::sync::atomic::AtomicUsize;
+    for streaming in [false, true] {
+        for error in [
+            ProviderError::quota_exceeded("budget", "API key budget exceeded"),
+            ProviderError::provider_unavailable("budget", "SQL unavailable"),
+        ] {
+            let router = build_mixed_exclusion_router(2).await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let attempts = calls.clone();
+            if streaming {
+                let result = execute_stream_with_selected_deployment(
+                    router.clone(),
+                    "shared-model",
+                    ProviderCapability::ChatCompletionStream,
+                    0,
+                    move |_, _, _| {
+                        attempts.fetch_add(1, Ordering::Relaxed);
+                        let error = error.clone();
+                        async move { Err::<(), _>(error) }
+                    },
+                )
+                .await;
+                assert!(result.is_err());
+            } else {
+                let result = execute_with_selected_deployment(
+                    &router,
+                    "shared-model",
+                    ProviderCapability::ChatCompletion,
+                    0,
+                    move |_, _, _| {
+                        attempts.fetch_add(1, Ordering::Relaxed);
+                        let error = error.clone();
+                        async move { Err::<((), u64), _>(error) }
+                    },
+                )
+                .await;
+                assert!(result.is_err());
+            }
+            assert_eq!(
+                calls.load(Ordering::Relaxed),
+                1,
+                "a key budget is not deployment-specific"
+            );
+            assert_all_leases_released(&router);
+            for id in ["primary-retry-target", "fallback-retry-target"] {
+                let deployment = router.get_deployment(id).unwrap();
+                assert_eq!(deployment.state.fail_requests.load(Ordering::Relaxed), 0);
+                assert!(!deployment.is_in_cooldown());
+            }
+        }
+    }
+}

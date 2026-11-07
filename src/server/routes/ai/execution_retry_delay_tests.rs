@@ -9,6 +9,25 @@ use crate::core::types::model::ProviderCapability;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+fn retry_delay_for_error(
+    config: &crate::core::router::config::RouterConfig,
+    attempt: u32,
+    error: &ProviderError,
+) -> Option<Duration> {
+    if crate::core::router::execution::retryable_budget_scope(error).is_some()
+        || super::super::spend::is_model_not_priced_error(error)
+    {
+        return None;
+    }
+
+    let decision = RetryPolicy.decide(config, error, RetryContext::unary(attempt, attempt + 1));
+    if decision.should_retry {
+        decision.delay
+    } else {
+        None
+    }
+}
+
 #[test]
 fn budget_retry_fallbacks_skip_retry_delay() {
     let config = RouterConfig {
