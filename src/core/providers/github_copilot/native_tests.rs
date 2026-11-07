@@ -229,9 +229,7 @@ async fn native_json_and_upstream_errors_are_preserved() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_replay() {
-    use crate::core::budget::{
-        BudgetConfig, BudgetScope, ModelLimitConfig, ProviderLimitConfig, ResetPeriod,
-    };
+    use crate::core::budget::{ModelLimitConfig, ProviderLimitConfig, ResetPeriod};
     use crate::core::keys::CreateKeyConfig;
     use crate::core::providers::Provider;
     use crate::core::request_ledger::{RequestLedgerFacts, scope_facts, snapshot_facts};
@@ -351,19 +349,22 @@ async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_re
                     .budget_limits
                     .models
                     .set_model_limit("gpt-4o", ModelLimitConfig::new(10.0, ResetPeriod::Monthly));
-                let scope = BudgetScope::ApiKey("copilot-fault".into());
-                let budget = state
-                    .budget_manager
-                    .create_budget(scope.clone(), BudgetConfig::new("copilot-fault", 10.0))
-                    .await
-                    .unwrap();
                 let (key, _) = state
                     .key_manager
                     .generate_key(CreateKeyConfig {
                         name: "copilot-fault".into(),
+                        max_budget: Some(10.0),
                         ..Default::default()
                     })
                     .await
+                    .unwrap();
+                let budget_id = state
+                    .key_manager
+                    .get_key(key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .budget_id
                     .unwrap();
                 let app = test::init_service(
                     App::new()
@@ -377,7 +378,7 @@ async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_re
                 req.extensions_mut().insert(
                     RequestContext::new()
                         .with_api_key(key)
-                        .with_api_key_budget(budget.id.parse().unwrap()),
+                        .with_api_key_budget(budget_id),
                 );
                 let facts = Arc::new(Mutex::new(RequestLedgerFacts::default()));
                 let response = scope_facts(facts.clone(), test::call_service(&app, req)).await;
@@ -414,7 +415,18 @@ async fn discovery_faults_refund_but_generation_faults_settle_unknown_without_re
                         .current_spend,
                     expected
                 );
-                assert_eq!(state.budget_manager.get_current_spend(&scope), expected);
+                assert_eq!(
+                    state
+                        .storage
+                        .database
+                        .api_key_budget(budget_id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .used_amount as f64
+                        / 1e9,
+                    expected
+                );
                 let usage = state.key_manager.get_usage_stats(key).await.unwrap();
                 assert_eq!(usage.total_requests, u64::from(generation_fault));
                 assert_eq!(usage.unpriced_requests, u64::from(generation_fault));
