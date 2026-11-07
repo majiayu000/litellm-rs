@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-07
+
+### Security
+
+- Upgrade Azure Key Vault dependencies to reject malicious authentication
+  challenges without exposing credentials or secret bodies (#1494).
+- Upgrade Actix HTTP/Web, LRU and the dependent AWS S3 SDK to patched versions;
+  refresh vulnerable dashboard-test dependencies (#1494).
+
+### Fixed
+
+- Normalize trailing slashes in OpenAI-like API bases while preserving custom
+  path prefixes for chat, streaming, embeddings, images and health checks (#1498).
+- Stabilize Redis admission regression coverage around the minute boundary
+  without changing production accounting or weakening assertions (#1494).
+- Refresh model pricing and retire upstream-removed rows (#1489).
+- Align versioned gateway install commands, configuration URLs and release links
+  with this security patch release.
+
 ## [0.10.0] - 2026-11-03
 
 ### Added

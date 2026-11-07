@@ -32,10 +32,10 @@ cargo run --bin gateway --features sqlite
 Or install the gateway binary:
 
 ```bash
-cargo install litellm-rs --version 0.9.0 --locked --bin gateway --no-default-features \
+cargo install litellm-rs --version 0.10.1 --locked --bin gateway --no-default-features \
   --features postgres,sqlite,redis,s3,metrics,tracing,websockets,providers-extra,providers-extended,mcp-validation,a2a
 mkdir -p config
-curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.9.0/config/gateway.dev.yaml.example -o config/gateway.yaml
+curl -L https://raw.githubusercontent.com/majiayu000/litellm-rs/v0.10.1/config/gateway.dev.yaml.example -o config/gateway.yaml
 gateway
 ```
 
@@ -46,7 +46,7 @@ provider keys and auth enabled. The explicit `sqlite` feature enables the storag
 The registry install selects the same feature profile as release archives and
 containers, including MCP, A2A and Realtime. Binary and example config versions
 must match. See the [0.9 compatibility and rollout notes](docs/gateway/reliability-release-20261007.md)
-and [versioned release assets](https://github.com/majiayu000/litellm-rs/releases/tag/v0.9.0).
+and [versioned release assets](https://github.com/majiayu000/litellm-rs/releases/tag/v0.10.1).
 
 The gateway serves its stable inference contract at `GET /openapi.json`; the
 versioned source is
@@ -72,13 +72,13 @@ For a first HTTP request or setup failure, use the [gateway setup and compatibil
 
 ## Container distribution status
 
-Version 0.9.0 is published as the [versioned crate](https://crates.io/crates/litellm-rs/0.9.0),
-[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.9.0)
-and `ghcr.io/majiayu000/litellm-rs:0.9.0` (Linux amd64/arm64). They share the
-shipped gateway feature profile documented below. Prefer a versioned image tag
+Install version 0.10.1 from the [versioned crate](https://crates.io/crates/litellm-rs/0.10.1),
+[GitHub Release archives](https://github.com/majiayu000/litellm-rs/releases/tag/v0.10.1)
+and `ghcr.io/majiayu000/litellm-rs:0.10.1` (Linux amd64/arm64). These distributions
+use the shipped gateway feature profile documented below. Prefer a versioned image tag
 or immutable digest; `latest` is mutable. Docker Hub publication is optional.
 The [0.8 verification record](docs/gateway/release-0.8.0-verification.md) is
-historical evidence for 0.8 artifacts, not verification of 0.9 artifacts.
+historical evidence for 0.8 artifacts, not verification of later releases.
 
 ## Rust Crate
 
