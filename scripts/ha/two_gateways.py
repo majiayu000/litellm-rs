@@ -66,6 +66,22 @@ class Handler(BaseHTTPRequestHandler):
         self.server.entered.set()
         if mode == "hold" and not self.server.release.wait(660):
             raise TimeoutError("test did not release held upstream request")
+        if mode == "stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunk = {"id": "ha-stream", "object": "chat.completion.chunk", "created": 0,
+                     "model": request["model"], "choices": [{"index": 0,
+                     "delta": {"content": "started"}, "finish_reason": None}]}
+            try:
+                self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                self.wfile.flush()
+                if not self.server.release.wait(60):
+                    raise TimeoutError("stream test did not release upstream")
+                self.wfile.write(b"data: [DONE]\n\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Deliberate downstream interruption; usage is unknown.
+            return
         status = 429 if mode == "fail" else 200
         body = {"error": {"message": "test upstream rate limit", "type": "rate_limit_error"}} if status == 429 else {
             "id": "ha-response", "object": "chat.completion", "created": 0,
@@ -338,6 +354,30 @@ def main():
         assert key_chat(b)[0] == 402
         assert upstream.calls == calls
         results["api_key_budget_shared_restart_and_cap_update"] = True
+        status, response = a.request("/v1/keys", {"name": "interrupted-key-budget", "max_budget": 150})
+        assert status == 201, (status, response)
+        key_id, raw_key = response["data"]["id"], response["data"]["key"]
+        upstream.release.clear()
+        upstream.mode = "stream"
+        connection = http.client.HTTPConnection("127.0.0.1", a.port, timeout=10)
+        connection.request("POST", "/v1/chat/completions", json.dumps({"model": key_model,
+            "messages": [{"role": "user", "content": "hello"}], "max_tokens": 100, "stream": True}),
+            {"Content-Type": "application/json", "x-api-key": raw_key})
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.readline().startswith(b"data:")
+        response.close()
+        connection.close()
+        held = balance(b)["spent_and_reserved"]
+        assert held > 100, held
+        calls = upstream.calls
+        assert key_chat(b)[0] == 402
+        assert upstream.calls == calls
+        upstream.release.set()
+        upstream.mode = "ok"
+        assert balance(a)["spent_and_reserved"] == held
+        results["api_key_budget_interrupted_stream_keeps_hold"] = True
+
 
         owner_model = add_provider("owner")
         for node in [a, b]:

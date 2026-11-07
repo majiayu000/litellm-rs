@@ -1,3 +1,4 @@
+use super::{ProviderError, SettlementMode};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
