@@ -9,18 +9,54 @@ support policies for runtime-backed APIs and legacy compatibility adapters.
 [![Documentation](https://docs.rs/litellm-rs/badge.svg)](https://docs.rs/litellm-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+## Measured against LiteLLM
+
+One recorded same-host run (2026-10-03), three rounds, all requests HTTP 200:
+
+| Per round | litellm-rs | LiteLLM proxy | Direct to mock |
+| --- | ---: | ---: | ---: |
+| Requests/s | 18,152–18,272 | 883–1,110 | 20,141–20,580 |
+| p50 latency | 2.63–2.70 ms | 56.51–69.49 ms | 2.31–2.38 ms |
+| Peak process-tree RSS | 95.1–97.0 MiB | 1,716–1,721 MiB | 25.3–26.7 MiB |
+
+That is roughly 16–21x LiteLLM's throughput in each round. Conditions: non-streaming
+chat completions to a deterministic localhost OpenAI-compatible mock (no real model
+API), concurrency 64, 10 s warmup plus 60 s sample, four workers per gateway, auth,
+storage, caching, rate limits, guardrails and spend logging disabled. litellm-rs at
+commit `93f4e090`, `litellm[proxy]==1.103.2`, oha 1.16.0, on a shared Apple M3 Max
+workstation (macOS 26.5.1, 16 logical CPUs, 128 GiB RAM). Latency is end-to-end
+client-observed, not overhead with the mock subtracted. Rust runs close to the
+direct-to-mock ceiling, so this is an observed result for this workload, not a
+general speedup claim. Full table, evidence bundle and reproduction command:
+[LiteLLM comparison](./docs/benchmarks/litellm-comparison.md); harness and
+regression policy: [gateway-overhead benchmark methodology](./docs/benchmarks/gateway-overhead.md).
+
 ## Features
 
 - **60+ runtime-wired providers** - OpenAI, Anthropic, AWS Bedrock, Mistral, Cloudflare, plus 50+ OpenAI-compatible providers via the Tier 1 catalog. See [Provider Support](#provider-support) for the full matrix.
 - **Stable OpenAI-Compatible API** - Versioned inference contract served at `GET /openapi.json`
 - **Admin control-plane OpenAPI** - Auth, keys, teams, budgets, routing, ledger, and provider APIs at `GET /admin/openapi.json`
-- **Measured Performance** - Reproducible [gateway-overhead benchmark methodology](./docs/benchmarks/gateway-overhead.md)
+- **Measured Performance** - [Same-host LiteLLM comparison](#measured-against-litellm) and reproducible [gateway-overhead benchmark methodology](./docs/benchmarks/gateway-overhead.md)
 - **Intelligent Routing** - Load balancing, failover, cost optimization
 - **Gateway Controls** - Default-on prompt-injection guardrails, configured IP access, auth, rate limiting, deterministic caching, metrics, and health endpoints
 
 ## Quick Start: Self-Hosted Gateway
 
-Run the primary supported product from source:
+Run the released container with the bundled development config:
+
+```bash
+docker run --rm -p 8000:8000 ghcr.io/majiayu000/litellm-rs:0.10.1 \
+  gateway --config config/gateway.dev.yaml.example --host 0.0.0.0 --port 8000
+curl http://localhost:8000/health
+```
+
+Prebuilt `gateway` binaries for Linux x86_64 (glibc and musl), macOS
+aarch64/x86_64 and Windows x86_64 are attached to the
+[v0.10.1 release](https://github.com/majiayu000/litellm-rs/releases/tag/v0.10.1)
+as `rust-litellm-gateway-v0.10.1-<platform>.tar.gz` (`.zip` on Windows) with
+`.sha256` checksums.
+
+Or run from source:
 
 ```bash
 git clone https://github.com/majiayu000/litellm-rs.git
