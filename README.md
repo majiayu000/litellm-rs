@@ -500,7 +500,7 @@ This project is one layer of an open-source stack for running coding agents (Cla
 | Remember | [remem](https://github.com/majiayu000/remem) | Local-first persistent memory for Claude Code and Codex sessions |
 | Orchestrate | [harness](https://github.com/majiayu000/harness) | Rust agent orchestration platform — rules, skills, GC, observability |
 | Route | [litellm-rs](https://github.com/majiayu000/litellm-rs) **◀ you are here** | Self-hosted Rust LLM gateway with OpenAI-compatible APIs, routing, and failover |
-| Keep | [keepline](https://github.com/majiayu000/keepline) | Session command center — monitor, recover, never lose agent work |
+| Keep | [fibo](https://github.com/majiayu000/fibo) | Session command center — monitor, recover, never lose agent work |
 
 ---
 
