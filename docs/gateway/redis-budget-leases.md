@@ -220,7 +220,9 @@ same receipt/amount is a no-op, and a different second amount is rejected. Inval
 actual costs above the reserved bound and failed transactions keep the hold.
 Aborted requests and process crashes also keep the hold, so missing upstream
 usage cannot silently replenish the budget. Explicit upstream rejections refund through the same transactional settlement
-fence. Transport, parsing and server errors keep the hold because usage is unknown.
+fence, and so do requests the gateway fails before sending anything upstream
+(unimplemented or disabled features, provider configuration errors).
+Transport, parsing and server errors keep the hold because usage is unknown.
 
 Unknown-usage holds do not expire automatically and can exhaust the cap. Receipts
 remain in SQL for investigation and idempotent late settlement; this change does
