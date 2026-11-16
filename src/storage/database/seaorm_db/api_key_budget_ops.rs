@@ -99,9 +99,21 @@ impl SeaOrmDatabase {
     }
 
     /// The receipt is a durable idempotency fence, including after a gateway restart.
+    ///
+    /// The fenced write is the transaction's first statement: SQLite queues a
+    /// write-first transaction behind other writers, but fails a read-then-write
+    /// lock upgrade with `SQLITE_BUSY` at once, which would keep the whole hold.
     pub(crate) async fn settle_api_key_budget(&self, id: Uuid, actual: f64) -> Result<()> {
         let actual = units(actual)?;
         let tx = self.db.begin().await?;
+        let changed = receipt::Entity::update_many()
+            .col_expr(receipt::Column::ChargedAmount, Expr::value(actual))
+            .filter(receipt::Column::Id.eq(id))
+            .filter(receipt::Column::ChargedAmount.is_null())
+            .filter(receipt::Column::ReservedAmount.gte(actual))
+            .exec(&tx)
+            .await?
+            .rows_affected;
         let row = receipt::Entity::find_by_id(id)
             .one(&tx)
             .await?
@@ -109,19 +121,8 @@ impl SeaOrmDatabase {
         if actual > row.reserved_amount {
             return Err(GatewayError::validation("Actual spend exceeds reservation"));
         }
-        let changed = receipt::Entity::update_many()
-            .col_expr(receipt::Column::ChargedAmount, Expr::value(actual))
-            .filter(receipt::Column::Id.eq(id))
-            .filter(receipt::Column::ChargedAmount.is_null())
-            .exec(&tx)
-            .await?
-            .rows_affected;
         if changed == 0 {
-            let latest = receipt::Entity::find_by_id(id)
-                .one(&tx)
-                .await?
-                .ok_or_else(|| GatewayError::not_found("API key budget reservation missing"))?;
-            if latest.charged_amount != Some(actual) {
+            if row.charged_amount != Some(actual) {
                 return Err(GatewayError::conflict(
                     "Reservation already settled with a different amount",
                 ));

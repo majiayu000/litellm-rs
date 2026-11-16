@@ -324,4 +324,82 @@ async fn persistent_key_budget_key_mutations_are_atomic_and_cap_changes_preserve
     assert_eq!(keys.count_keys(None).await.unwrap(), count);
 }
 
+/// File SQLite with a multi-connection pool, as the gateway opens it.
+async fn pooled_budget(directory: &tempfile::TempDir) -> (Arc<SeaOrmDatabase>, Uuid) {
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("budget.db").display()
+    );
+    let db = SeaOrmDatabase::new(&DatabaseConfig {
+        enabled: true,
+        url,
+        max_connections: 4,
+        fallback_to_sqlite: false,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    db.migrate().await.unwrap();
+    let id = Uuid::new_v4();
+    let tx = db.db.begin().await.unwrap();
+    write_budget(&tx, id, 100.0).await.unwrap();
+    tx.commit().await.unwrap();
+    (Arc::new(db), id)
+}
+
+#[tokio::test]
+async fn persistent_key_budget_settlement_waits_for_another_sqlite_writer() {
+    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let (db, id) = pooled_budget(&directory).await;
+    let receipt = db.reserve_api_key_budget(id, 0.1).await.unwrap();
+    // Another pooled connection holds the SQLite write lock while settlement starts.
+    let writer = db.db.begin().await.unwrap();
+    write_budget(&writer, Uuid::new_v4(), 1.0).await.unwrap();
+    let settlement = tokio::spawn({
+        let db = db.clone();
+        async move { db.settle_api_key_budget(receipt, 0.001).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    writer.commit().await.unwrap();
+    settlement
+        .await
+        .unwrap()
+        .expect("settlement must queue behind the writer, not keep the full hold");
+    assert_eq!(
+        db.api_key_budget(id).await.unwrap().unwrap().used_amount,
+        1_000_000
+    );
+}
+
+#[tokio::test]
+async fn persistent_key_budget_overlapping_requests_settle_to_actual_spend() {
+    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let (db, id) = pooled_budget(&directory).await;
+    let mut work = tokio::task::JoinSet::new();
+    for _ in 0..4 {
+        let db = db.clone();
+        work.spawn(async move {
+            let mut failed = 0;
+            for _ in 0..8 {
+                let receipt = db.reserve_api_key_budget(id, 0.1).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                if let Err(error) = db.settle_api_key_budget(receipt, 0.001).await {
+                    eprintln!("settlement failed: {error}");
+                    failed += 1;
+                }
+            }
+            failed
+        });
+    }
+    let mut failed = 0;
+    while let Some(result) = work.join_next().await {
+        failed += result.unwrap();
+    }
+    assert_eq!(failed, 0, "settlements failed and kept their full holds");
+    assert_eq!(
+        db.api_key_budget(id).await.unwrap().unwrap().used_amount,
+        32_000_000
+    );
+}
+
 use sea_orm::{ConnectionTrait, TransactionTrait};
