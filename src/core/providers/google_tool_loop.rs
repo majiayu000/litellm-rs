@@ -273,7 +273,7 @@ pub(crate) fn build_tool_declarations(
             declarations.push(json!({
                 "name": name,
                 "description": tool.function.description.clone().unwrap_or_default(),
-                "parameters": parameters
+                "parametersJsonSchema": parameters
             }));
         }
         return Ok((
@@ -312,7 +312,7 @@ pub(crate) fn build_tool_declarations(
                     .get("description")
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
-                "parameters": parameters
+                "parametersJsonSchema": parameters
             }));
         }
         return Ok((
