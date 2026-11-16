@@ -210,11 +210,7 @@ impl CallbackLifecycle {
         outcome: &'static str,
     ) {
         let pricing_usage = usage.map(PricingUsage::from);
-        self.complete(
-            usage.map(|usage| (usage.prompt_tokens, usage.completion_tokens)),
-            pricing_usage.as_ref(),
-            outcome,
-        );
+        self.complete(usage, pricing_usage.as_ref(), outcome);
     }
 
     pub(super) fn complete_pricing_usage(
@@ -223,11 +219,7 @@ impl CallbackLifecycle {
         pricing_usage: Option<&PricingUsage>,
         outcome: &'static str,
     ) {
-        self.complete(
-            usage.map(|usage| (usage.prompt_tokens, usage.completion_tokens)),
-            pricing_usage,
-            outcome,
-        );
+        self.complete(usage, pricing_usage, outcome);
     }
 
     pub(super) fn fail(&self, _message: impl Into<String>, error_type: &'static str) {
@@ -288,15 +280,24 @@ impl CallbackLifecycle {
 
     fn complete(
         &self,
-        tokens: Option<(u32, u32)>,
+        usage: Option<&crate::core::types::responses::Usage>,
         pricing_usage: Option<&PricingUsage>,
         outcome: &'static str,
     ) {
         if !self.has_started() {
             return;
         }
+        let tokens = usage.map(|usage| (usage.prompt_tokens, usage.completion_tokens));
         let target = self.inner.target.lock().clone();
+        // Settlement charges LLM completions a provider-reported cost; report the same.
+        let reported_cost = match (self.inner.kind, target.as_ref(), usage) {
+            (CallbackKind::Llm, Some(target), Some(usage)) => {
+                super::spend::provider_reported_cost(target.pricing.provider(), usage)
+            }
+            _ => None,
+        };
         let cost = match (target.as_ref(), pricing_usage) {
+            _ if reported_cost.is_some() => reported_cost,
             (Some(target), Some(usage)) if target.pricing.priced_parts().is_some() => {
                 match target.pricing.calculate_settlement(usage) {
                     Ok(cost) => Some(cost.total_cost),
