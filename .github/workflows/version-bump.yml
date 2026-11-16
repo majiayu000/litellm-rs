@@ -163,6 +163,19 @@ jobs:
           \\
           $(echo -e "$ENTRY" | sed 's/$/\\n/' | tr -d '\n')" CHANGELOG.md
 
+      - name: Sync pinned release references
+        if: steps.version.outputs.current_version != steps.version.outputs.new_version
+        run: |
+          # README.md pins the release in its image tag, release links, archive
+          # name and `cargo install --version`; CHANGELOG.md ends with one
+          # comparison link per version. The tag is cut from this commit and
+          # crates.io publishes its README, so stop before the commit when a
+          # reference still names another version.
+          python3 scripts/sync_version_references.py \
+            --from "${{ steps.version.outputs.current_version }}" \
+            --to "${{ steps.version.outputs.new_version }}"
+          python3 scripts/sync_version_references.py --check
+
       - name: Commit and push version bump
         if: steps.version.outputs.current_version != steps.version.outputs.new_version
         run: |
