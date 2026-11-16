@@ -21,4 +21,5 @@ pub use embedding::{EmbedResponse, EmbeddingData, EmbeddingResponse, EmbeddingUs
 pub use error::{ApiError, ErrorResponse};
 pub use image::{ImageData, ImageGenerationResponse, ImageResponse};
 pub use logprobs::{FinishReason, LogProbs, TokenLogProb, TopLogProb};
+pub(crate) use usage::deserialize_reported_cost;
 pub use usage::{CompletionTokensDetails, PromptTokensDetails, Usage};

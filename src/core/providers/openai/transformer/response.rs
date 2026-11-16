@@ -243,3 +243,7 @@ impl OpenAIResponseTransformer {
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
+
+#[cfg(test)]
+#[path = "response_usage_cost_tests.rs"]
+mod response_usage_cost_tests;
