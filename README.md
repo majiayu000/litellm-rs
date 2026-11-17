@@ -151,6 +151,67 @@ independent crate consumer, run `python3 scripts/test/library_consumer_smoke.py`
 The smoke uses this checkout as a path dependency; it does not verify a published
 registry artifact or a real provider account.
 
+#### Router retries
+
+`UnifiedRouter::from_gateway_config(&providers, None)` uses `RouterConfig::default()`,
+which sets `num_retries: 3`: a call that fails with a retryable error is tried up
+to 4 times. Streaming calls retry the same way until a provider returns a stream;
+an error after the stream is returned is passed to the caller and not retried.
+The gateway binary also runs with 3 router retries; the gateway `router` YAML
+section has no setting for it.
+If your application already handles retries, deadlines or switching upstreams,
+turn router retries off. The `hello` example does this:
+
+```rust
+use litellm_rs::core::router::{RouterConfig, UnifiedRouter};
+
+let router_config = RouterConfig {
+    num_retries: 0, // one attempt per call
+    ..RouterConfig::default()
+};
+let router = UnifiedRouter::from_gateway_config(&[provider], Some(router_config)).await?;
+```
+
+Fallbacks across model groups run only if you configure them with
+`with_fallback_config` or `set_fallback_config`.
+
+#### Single-attempt provider path
+
+To skip the router completely (no deployment selection, retries, fallbacks or
+cooldowns), build one provider with `core::providers::create_provider` and call
+`Provider::chat_completion_stream`. This path lives under `core::providers`, which
+is an advanced module (see [Installation](#installation)): it is public, but it is
+not covered by the runtime-backed support policy in
+[Supported Product Surfaces](#supported-product-surfaces), and its signatures may
+change in any 0.x minor release.
+Check `provider.capabilities()` before calling an optional method.
+An `openai_compatible` provider sends one HTTP request per call. A few provider
+transports (for example Replicate and fal.ai) retry on their own up to
+`ProviderConfig::max_retries`; set it to 0 for those as well.
+
+The provider layer sends the request exactly as you build it. `completion_stream`
+adds `stream_options: { include_usage: true }` for you; the provider path does not.
+Without it, some OpenAI-compatible endpoints (for example Azure OpenAI v1) send
+no usage chunk. Set it yourself:
+
+```rust
+use litellm_rs::core::types::chat::{ChatRequest, StreamOptions};
+use litellm_rs::core::types::context::RequestContext;
+
+let mut request = ChatRequest::new(model).add_user_message("Hi").with_streaming();
+request.stream_options = Some(StreamOptions { include_usage: Some(true) });
+let mut stream = provider.chat_completion_stream(request, RequestContext::default()).await?;
+// The final chunk has empty `choices` and `usage: Some(..)`.
+```
+
+The complete [`provider_stream_usage` example](examples/provider_stream_usage.rs)
+streams from an OpenAI-compatible endpoint and prints the final usage:
+
+```bash
+OPENAI_COMPAT_API_KEY=... cargo run --example provider_stream_usage -- \
+  https://<resource>.openai.azure.com/openai/v1 <deployment>
+```
+
 ## Gateway Configuration
 
 The gateway router config maps these fields into the runtime router:
