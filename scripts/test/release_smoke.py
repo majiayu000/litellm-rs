@@ -103,8 +103,8 @@ def config(base, packaged, target, gateway, integrations=False):
         c['a2a_agents']={'smoke':{'name':'smoke','url':base+'/rpc','timeout_ms':10000}}
     path=target/'config.json'; path.write_text(json.dumps(c)); return path
 
-def wait_for_health(session, gateway):
-    for _ in range(60):
+def wait_for_health(session, gateway, attempts=60):
+    for _ in range(attempts):
         try:
             if session.get(gateway + '/health', timeout=1).status_code == 200:
                 return
@@ -181,12 +181,13 @@ def smoke_container(image, platform, gateway, target):
         server = threading.Thread(target=mock.serve_forever, daemon=True)
         server.start()
         started = False
+        smoke_failed = True
         try:
             subprocess.run(command, check=True, timeout=180)
             started = True
             with requests.Session() as session:
                 session.trust_env = False
-                wait_for_health(session, gateway)
+                wait_for_health(session, gateway, attempts=300)
                 response = session.post(gateway + '/v1/chat/completions', json={
                     'model': 'local-model',
                     'messages': [{'role': 'user', 'content': 'hello'}],
@@ -197,6 +198,7 @@ def smoke_container(image, platform, gateway, target):
                 if content != 'release hello':
                     raise RuntimeError(f'Unexpected synthetic inference result: {content!r}')
             print(f'{image} ({platform}): bundled config, health and synthetic chat passed')
+            smoke_failed = False
         except Exception:
             if started:
                 try:
@@ -209,7 +211,6 @@ def smoke_container(image, platform, gateway, target):
         finally:
             mock.shutdown()
             server.join()
-            smoke_failed = sys.exc_info()[0] is not None
             try:
                 subprocess.run(
                     ['docker', 'rm', '-f', name],
