@@ -336,6 +336,28 @@ jobs:
         docker buildx imagetools inspect "$IMAGE@$DIGEST"
         printf 'Container: `%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
+    - uses: actions/setup-python@v5
+      if: needs.create-release.outputs.is_draft == 'true'
+      with:
+        python-version: '3.12'
+
+    - name: Install container smoke dependencies
+      if: needs.create-release.outputs.is_draft == 'true'
+      run: python3 -m pip install requests PyYAML
+
+    - name: Smoke the published container digest
+      if: needs.create-release.outputs.is_draft == 'true'
+      env:
+        IMAGE: ghcr.io/${{ github.repository }}
+        DIGEST: ${{ steps.image.outputs.digest }}
+      run: |
+        set -euo pipefail
+        for platform in linux/amd64 linux/arm64; do
+          python3 scripts/test/release_smoke.py container \
+            --image "$IMAGE@$DIGEST" --platform "$platform" \
+            --directory "$RUNNER_TEMP/container-smoke-${platform#linux/}"
+        done
+
   # Publish to crates.io
   publish-crate:
     name: Publish to crates.io

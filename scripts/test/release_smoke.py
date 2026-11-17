@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Exercise an installed gateway or container with local simulated upstreams.
 
-Requires requests and PyYAML. TLS certificates and a fresh fixture directory are
-supplied by the caller; no vendor API, production credential, or user database
-is used. See docs/gateway/release-0.8.0-verification.md for commands.
+Requires requests and PyYAML. The full protocol smoke uses caller-supplied TLS
+certificates. Container mode uses the bundled development config and an
+OpenAI-compatible fixture on the Linux runner's loopback network. Both modes
+use only local fixture data.
 """
 import argparse, base64, hashlib, http.server, json, os, pathlib, socket, socketserver, sqlite3, ssl, struct, subprocess, sys, time
 from urllib.parse import urlsplit
 import secrets
+import threading
 import requests, yaml
 
 
@@ -101,14 +103,20 @@ def config(base, packaged, target, gateway, integrations=False):
         c['a2a_agents']={'smoke':{'name':'smoke','url':base+'/rpc','timeout_ms':10000}}
     path=target/'config.json'; path.write_text(json.dumps(c)); return path
 
-def smoke(gateway, integrations=False, database=None):
-    s=requests.Session(); s.trust_env=False
+def wait_for_health(session, gateway):
     for _ in range(60):
         try:
-            if s.get(gateway+'/health',timeout=1).status_code==200: break
-        except requests.RequestException: pass
+            if session.get(gateway + '/health', timeout=1).status_code == 200:
+                return
+        except requests.RequestException:
+            pass
         time.sleep(.2)
-    else: raise RuntimeError('Gateway did not start')
+    raise RuntimeError(f'Gateway did not start at {gateway}')
+
+
+def smoke(gateway, integrations=False, database=None):
+    s=requests.Session(); s.trust_env=False
+    wait_for_health(s, gateway)
     username='release_smoke_'+secrets.token_hex(4)
     register=s.post(gateway+'/auth/register',json={'username':username,'email':username+'@example.invalid','password':'ReleaseSmokeOnly!Password123'},timeout=10)
     assert register.status_code==201,(register.status_code,register.text)
@@ -158,8 +166,69 @@ def smoke(gateway, integrations=False, database=None):
     report.append({'name':'realtime-ws','status':101,'completed_tokens':60})
     return report
 
+def smoke_container(image, platform, gateway, target):
+    # The bundled config resolves its vLLM upstream on localhost:8000.
+    # Give the unmodified image access to the fixture without mounting a config.
+    port = urlsplit(gateway).port
+    name = 'litellm-release-smoke-' + secrets.token_hex(6)
+    command = [
+        'docker', 'run', '--name', name, '--platform', platform,
+        '--network', 'host', '--detach', image,
+        'gateway', '--config', 'config/gateway.dev.yaml.example',
+        '--host', '127.0.0.1', '--port', str(port),
+    ]
+    with http.server.ThreadingHTTPServer(('127.0.0.1', 8000), Mock) as mock:
+        server = threading.Thread(target=mock.serve_forever, daemon=True)
+        server.start()
+        started = False
+        try:
+            subprocess.run(command, check=True, timeout=180)
+            started = True
+            with requests.Session() as session:
+                session.trust_env = False
+                wait_for_health(session, gateway)
+                response = session.post(gateway + '/v1/chat/completions', json={
+                    'model': 'local-model',
+                    'messages': [{'role': 'user', 'content': 'hello'}],
+                    'max_tokens': 32,
+                }, timeout=30)
+                response.raise_for_status()
+                content = response.json()['choices'][0]['message']['content']
+                if content != 'release hello':
+                    raise RuntimeError(f'Unexpected synthetic inference result: {content!r}')
+            print(f'{image} ({platform}): bundled config, health and synthetic chat passed')
+        except Exception:
+            if started:
+                try:
+                    with (target / 'gateway.log').open('w') as log:
+                        subprocess.run(['docker', 'logs', name], stdout=log, stderr=subprocess.STDOUT, timeout=15)
+                    print((target / 'gateway.log').read_text(errors='replace'), file=sys.stderr)
+                except (OSError, subprocess.SubprocessError) as error:
+                    print(f'Could not collect container logs: {error}', file=sys.stderr)
+            raise
+        finally:
+            mock.shutdown()
+            server.join()
+            smoke_failed = sys.exc_info()[0] is not None
+            try:
+                subprocess.run(
+                    ['docker', 'rm', '-f', name],
+                    check=started,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                if not smoke_failed:
+                    raise
+                print(f'Could not remove smoke container {name}: {error}', file=sys.stderr)
+
+
 if __name__=='__main__':
-    p=argparse.ArgumentParser(); p.add_argument('mode',choices=['mock','local','remote-config','remote-smoke']); p.add_argument('--binary'); p.add_argument('--packaged'); p.add_argument('--directory',required=True); p.add_argument('--certificates'); p.add_argument('--base',default='https://127.0.0.1:18443'); p.add_argument('--gateway',default='http://127.0.0.1:18808'); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument('mode',choices=['mock','local','remote-config','remote-smoke','container']); p.add_argument('--binary'); p.add_argument('--packaged'); p.add_argument('--directory',required=True); p.add_argument('--certificates'); p.add_argument('--base',default='https://127.0.0.1:18443'); p.add_argument('--gateway',default='http://127.0.0.1:18808')
+    p.add_argument('--image')
+    p.add_argument('--platform', choices=['linux/amd64', 'linux/arm64'])
+    a=p.parse_args()
     target=pathlib.Path(a.directory).resolve(); target.mkdir(parents=True,exist_ok=True)
     if a.mode in ('local','mock') and not a.certificates: p.error('--certificates is required for local/mock')
     certificates=pathlib.Path(a.certificates).resolve() if a.certificates else None
@@ -173,6 +242,13 @@ if __name__=='__main__':
         httpd.server_name='release-mock'; httpd.server_port=httpd.server_address[1]
         ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(certificates/'mock-cert.pem',certificates/'mock-key.pem'); httpd.socket=ctx.wrap_socket(httpd.socket,server_side=True)
         httpd.server_activate(); httpd.serve_forever()
+    elif a.mode == 'container':
+        if not a.image or not a.platform:
+            p.error('--image and --platform are required for container')
+        gateway = urlsplit(a.gateway)
+        if gateway.scheme != 'http' or gateway.hostname != '127.0.0.1' or gateway.port in (None, 8000):
+            p.error('container requires an HTTP loopback gateway on a port other than 8000')
+        smoke_container(a.image, a.platform, a.gateway, target)
     elif a.mode=='remote-config': print(config(a.base,a.packaged,target,a.gateway,True))
     elif a.mode=='remote-smoke': print(json.dumps(smoke(a.gateway,True,database=target/'smoke.sqlite'),indent=2))
     else:
