@@ -9,8 +9,15 @@
 # Ignore quick-xml duplicate-attribute quadratic parsing via object_store.
 # object_store 0.13/0.14 constrain quick-xml below the fixed 0.41.0 release,
 # so this cannot be fixed until object_store publishes a compatible update.
+# Ignore the bundled-SQLite WAL page-size issue (CVE-2026-119375) in libsqlite3-sys.
+# The fix is in libsqlite3-sys 0.39.0, and sqlx-sqlite 0.9.0, the newest release,
+# still requires libsqlite3-sys < 0.38, so no sqlx or sea-orm upgrade removes it.
+# Exposure needs the process to open a database and -wal file written by a less
+# trusted local party; the gateway opens only its own database file.
+# Remove this entry when sqlx-sqlite accepts libsqlite3-sys >= 0.39.
 ignore = [
     "RUSTSEC-2023-0071", # RSA Marvin Attack in sqlx-mysql (not actually used)
+    "RUSTSEC-2026-0459", # bundled SQLite via sqlx-sqlite; awaiting sqlx on libsqlite3-sys >=0.39.0
     "RUSTSEC-2026-0194", # quick-xml via object_store; awaiting object_store quick-xml >=0.41.0
     "RUSTSEC-2026-0195", # quick-xml via object_store; awaiting object_store quick-xml >=0.41.0
 ]

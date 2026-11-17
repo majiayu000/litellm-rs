@@ -256,6 +256,37 @@ class SyncPricingTests(unittest.TestCase):
         self.assertIn("real-model", rendered)
         self.assertEqual(rendered["_metadata"]["upstream_model_count"], 3)
 
+    def test_upstream_alias_entries_are_left_out_of_the_catalog(self) -> None:
+        source = {
+            "real-model": {
+                "litellm_provider": "openai",
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 2.0,
+            },
+            "real-latest": {"alias_of": "real-model"},
+        }
+        entries = sync.model_entries(source)
+        self.assertEqual(list(entries), ["real-model"])
+        sync.validate_entries(entries, 1)
+        rendered, _ = sync.render_catalog(
+            source, entries, {}, "https://example.invalid", "a" * 40, "d" * 64
+        )
+        self.assertNotIn("real-latest", rendered)
+        self.assertEqual(rendered["_metadata"]["upstream_model_count"], 1)
+
+    def test_malformed_alias_entry_is_not_silently_dropped(self) -> None:
+        priced = {"litellm_provider": "openai"}
+        for source, message in (
+            ({"a": priced, "b": {"alias_of": "missing"}}, "not a priced model"),
+            ({"a": priced, "b": {"alias_of": "c"}, "c": {"alias_of": "a"}}, "not a priced model"),
+            ({"a": priced, "b": {"alias_of": "sample_spec"}, "sample_spec": {}}, "not a priced model"),
+            ({"a": priced, "b": {"alias_of": "a", "input_cost_per_token": 1.0}}, "only a string"),
+            ({"a": priced, "b": {"alias_of": 7}}, "only a string"),
+        ):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(SystemExit, message):
+                    sync.model_entries(source)
+
     def test_malformed_control_block_is_not_silently_filtered(self) -> None:
         with self.assertRaisesRegex(SystemExit, "control block.*JSON object"):
             sync.model_entries({"sample_spec": []})

@@ -43,6 +43,8 @@ SOURCE_URL_PATTERN = re.compile(
     r"(?P<commit>[0-9a-f]{40})/model_prices_and_context_window\.json$"
 )
 NON_MODEL_KEYS = frozenset(("_metadata", "fallback_generalizations", "sample_spec"))
+# Upstream names a moving alias (`claude-opus-latest`) with `{"alias_of": "<model>"}`.
+ALIAS_FIELD = "alias_of"
 
 MISTRAL_SOURCE = "https://docs.mistral.ai/inference/pricing"
 COHERE_SOURCE = "https://docs.cohere.com/changelog/command-gets-refreshed"
@@ -411,6 +413,25 @@ def validate_control_block(key: str, value: Any) -> None:
         raise SystemExit(f"control block {key!r} must be a JSON object")
 
 
+def is_alias_entry(value: Any) -> bool:
+    return isinstance(value, dict) and ALIAS_FIELD in value
+
+
+def validate_alias_entry(key: str, value: dict[str, Any], data: dict[str, Any]) -> None:
+    target = value[ALIAS_FIELD]
+    if set(value) != {ALIAS_FIELD} or not isinstance(target, str) or not target:
+        raise SystemExit(f"alias entry {key!r} must contain only a string {ALIAS_FIELD}")
+    resolved = data.get(target)
+    if (
+        is_metadata_key(target)
+        or not isinstance(resolved, dict)
+        or is_alias_entry(resolved)
+    ):
+        raise SystemExit(
+            f"alias entry {key!r} points at {target!r}, which is not a priced model"
+        )
+
+
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -480,6 +501,11 @@ def model_entries(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     for key, value in data.items():
         if is_metadata_key(key):
             validate_control_block(key, value)
+            continue
+        if is_alias_entry(value):
+            # Carries no price or provider of its own, and moves with upstream; the
+            # catalog lists the dated model it points at.
+            validate_alias_entry(key, value, data)
             continue
         if not isinstance(value, dict):
             raise SystemExit(f"pricing entry {key!r} must be a JSON object")
@@ -835,7 +861,7 @@ def render_catalog(
     }
 
     for key, value in source_data.items():
-        if is_metadata_key(key):
+        if is_metadata_key(key) or is_alias_entry(value):
             continue
         data[key] = value
 
