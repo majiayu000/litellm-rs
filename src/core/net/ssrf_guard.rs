@@ -6,6 +6,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::str::FromStr;
 use url::Url;
 
+use super::endpoint_allow::EndpointAllowCidrs;
+
 /// Network scope allowed for a configured provider endpoint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,12 +45,29 @@ impl FromStr for ProviderEndpointAccess {
 /// Error returned when an outbound URL is not safe to use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SsrfError {
-    InvalidUrl { url: String, message: String },
-    UnsupportedScheme { scheme: String },
-    MissingHost { url: String },
-    PrivateOrReservedHost { host: String },
-    HostResolutionFailed { host: String, message: String },
-    AuthorityMismatch { expected: String, actual: String },
+    InvalidUrl {
+        url: String,
+        message: String,
+    },
+    UnsupportedScheme {
+        scheme: String,
+    },
+    MissingHost {
+        url: String,
+    },
+    /// `address` is the rejected IP (literal or resolved); `None` for blocked hostnames.
+    PrivateOrReservedHost {
+        host: String,
+        address: Option<IpAddr>,
+    },
+    HostResolutionFailed {
+        host: String,
+        message: String,
+    },
+    AuthorityMismatch {
+        expected: String,
+        actual: String,
+    },
 }
 
 impl fmt::Display for SsrfError {
@@ -63,10 +82,17 @@ impl fmt::Display for SsrfError {
             SsrfError::MissingHost { url } => {
                 write!(f, "Outbound URL has an invalid or missing host: {url}")
             }
-            SsrfError::PrivateOrReservedHost { host } => write!(
+            SsrfError::PrivateOrReservedHost {
+                host,
+                address: None,
+            } => write!(
                 f,
                 "Outbound URL targets a private or reserved address '{host}', which is not allowed (SSRF protection)"
             ),
+            SsrfError::PrivateOrReservedHost {
+                host,
+                address: Some(address),
+            } => write_disallowed_address(f, host, address),
             SsrfError::HostResolutionFailed { host, message } => write!(
                 f,
                 "Outbound URL host '{host}' could not be resolved: {message} (SSRF protection)"
@@ -79,19 +105,213 @@ impl fmt::Display for SsrfError {
     }
 }
 
+/// Name the rejected address. Which setting would allow it depends on the
+/// caller, so provider-endpoint callers append [`SsrfError::provider_setting_hint`].
+fn write_disallowed_address(
+    f: &mut fmt::Formatter<'_>,
+    host: &str,
+    address: &IpAddr,
+) -> fmt::Result {
+    let target = if host.parse::<IpAddr>().ok() == Some(*address) {
+        format!("'{host}'")
+    } else {
+        format!("'{host}' (resolved to {address})")
+    };
+    if is_metadata_ip(address) {
+        return write!(
+            f,
+            "Outbound URL targets a private or reserved address {target}; cloud metadata addresses are always blocked (SSRF protection)"
+        );
+    }
+    write!(
+        f,
+        "Outbound URL targets a private or reserved address {target}, which is not allowed (SSRF protection)"
+    )
+}
+
+impl SsrfError {
+    /// The concrete address the guard rejected, if it rejected one.
+    pub fn rejected_address(&self) -> Option<IpAddr> {
+        match self {
+            SsrfError::PrivateOrReservedHost { address, .. } => *address,
+            _ => None,
+        }
+    }
+
+    /// For a configured provider endpoint: the setting that would allow the
+    /// rejected address. `None` when no setting can (metadata, blocked names).
+    pub fn provider_setting_hint(&self) -> Option<String> {
+        let address = self.rejected_address().filter(|ip| !is_metadata_ip(ip))?;
+        let mut hint = format!(
+            "to allow it for this provider, add a CIDR covering {address} to the provider's `endpoint_allow_cidrs`"
+        );
+        if is_private_network_ip(&address) {
+            hint.push_str(" or set `endpoint_access: private_network`");
+        }
+        Some(hint)
+    }
+
+    /// `Display` plus [`Self::provider_setting_hint`] when there is one.
+    pub fn with_provider_setting_hint(&self) -> String {
+        match self.provider_setting_hint() {
+            Some(hint) => format!("{self}; {hint}"),
+            None => self.to_string(),
+        }
+    }
+}
+
 impl std::error::Error for SsrfError {}
+
+/// Address rules for one provider endpoint: its access level plus any
+/// operator-configured `endpoint_allow_cidrs`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct EndpointAddressRules {
+    access: ProviderEndpointAccess,
+    allow_cidrs: EndpointAllowCidrs,
+}
+
+impl From<ProviderEndpointAccess> for EndpointAddressRules {
+    fn from(access: ProviderEndpointAccess) -> Self {
+        Self::new(access, EndpointAllowCidrs::default())
+    }
+}
+
+impl EndpointAddressRules {
+    pub fn new(access: ProviderEndpointAccess, allow_cidrs: EndpointAllowCidrs) -> Self {
+        Self {
+            access,
+            allow_cidrs,
+        }
+    }
+
+    pub fn access(&self) -> ProviderEndpointAccess {
+        self.access
+    }
+
+    pub fn allow_cidrs(&self) -> &EndpointAllowCidrs {
+        &self.allow_cidrs
+    }
+
+    /// Whether `ip` may be dialed. Cloud metadata addresses are rejected even
+    /// when an allow-listed CIDR covers them.
+    pub fn allows_ip(&self, ip: &IpAddr) -> bool {
+        is_provider_endpoint_ip_allowed(self.access, ip)
+            || (!is_metadata_ip(ip) && self.allow_cidrs.contains(ip))
+    }
+
+    /// Reject the whole DNS answer if any address is disallowed.
+    pub fn validate_resolved_addresses(
+        &self,
+        host: &str,
+        addresses: &[IpAddr],
+    ) -> Result<(), SsrfError> {
+        if addresses.is_empty() {
+            return Err(SsrfError::HostResolutionFailed {
+                host: host.to_string(),
+                message: "no addresses returned".to_string(),
+            });
+        }
+        if let Some(address) = addresses.iter().find(|address| !self.allows_ip(address)) {
+            return Err(SsrfError::PrivateOrReservedHost {
+                host: host.to_string(),
+                address: Some(*address),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate an endpoint and resolve its hostname using the system resolver.
+    pub fn validate_url(&self, url: &Url) -> Result<(), SsrfError> {
+        self.validate_url_with_resolver(url, resolve_host_addresses)
+    }
+
+    /// Validate an endpoint without resolving its hostname.
+    pub fn validate_url_without_resolution(&self, url: &Url) -> Result<(), SsrfError> {
+        self.resolution_target(url).map(drop)
+    }
+
+    pub(crate) fn validate_url_with_resolver<F>(
+        &self,
+        url: &Url,
+        resolver: F,
+    ) -> Result<(), SsrfError>
+    where
+        F: Fn(&str, u16) -> Result<Vec<IpAddr>, SsrfError>,
+    {
+        if let Some((host, port)) = self.resolution_target(url)? {
+            let addresses = resolver(&host, port)?;
+            self.validate_resolved_addresses(&host, &addresses)?;
+        }
+        Ok(())
+    }
+
+    fn resolution_target(&self, url: &Url) -> Result<Option<(String, u16)>, SsrfError> {
+        match url.scheme() {
+            "http" | "https" | "ws" | "wss" => {}
+            scheme => {
+                return Err(SsrfError::UnsupportedScheme {
+                    scheme: scheme.to_string(),
+                });
+            }
+        }
+
+        let host = extract_url_host(url.as_str()).ok_or_else(|| SsrfError::MissingHost {
+            url: url.to_string(),
+        })?;
+
+        if is_permanently_blocked_hostname(&host) {
+            return Err(SsrfError::PrivateOrReservedHost {
+                host,
+                address: None,
+            });
+        }
+
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if !self.allows_ip(&ip) {
+                return Err(SsrfError::PrivateOrReservedHost {
+                    host,
+                    address: Some(ip),
+                });
+            }
+            return Ok(None);
+        }
+
+        if self.access == ProviderEndpointAccess::PublicOnly
+            && (matches!(host.as_str(), "localhost" | "internal" | "local")
+                || [".localhost", ".internal", ".local"]
+                    .iter()
+                    .any(|suffix| host.ends_with(suffix)))
+        {
+            return Err(SsrfError::PrivateOrReservedHost {
+                host,
+                address: None,
+            });
+        }
+
+        Ok(Some((host, url.port_or_known_default().unwrap_or(0))))
+    }
+}
 
 /// Immutable runtime policy for one provider endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderEndpointPolicy {
-    access: ProviderEndpointAccess,
+    rules: EndpointAddressRules,
     private_authority: Option<String>,
 }
 
 impl ProviderEndpointPolicy {
     pub fn public_only() -> Self {
         Self {
-            access: ProviderEndpointAccess::PublicOnly,
+            rules: EndpointAddressRules::default(),
+            private_authority: None,
+        }
+    }
+
+    /// Public-only policy for a provider without a configured base URL that
+    /// still honours its `endpoint_allow_cidrs`.
+    pub fn public_only_with_allow_cidrs(allow_cidrs: EndpointAllowCidrs) -> Self {
+        Self {
+            rules: EndpointAddressRules::new(ProviderEndpointAccess::PublicOnly, allow_cidrs),
             private_authority: None,
         }
     }
@@ -100,26 +320,39 @@ impl ProviderEndpointPolicy {
         access: ProviderEndpointAccess,
         raw_base_url: &str,
     ) -> Result<Self, SsrfError> {
+        Self::for_base_url_with_rules(access.into(), raw_base_url)
+    }
+
+    /// Bind access level and `endpoint_allow_cidrs` to one configured base URL.
+    pub fn for_base_url_with_rules(
+        rules: EndpointAddressRules,
+        raw_base_url: &str,
+    ) -> Result<Self, SsrfError> {
         let url = Url::parse(raw_base_url).map_err(|error| SsrfError::InvalidUrl {
             url: raw_base_url.to_string(),
             message: error.to_string(),
         })?;
-        validate_provider_endpoint_url_without_resolution(&url, access)?;
+        rules.validate_url_without_resolution(&url)?;
 
+        let private_authority = (rules.access == ProviderEndpointAccess::PrivateNetwork)
+            .then(|| endpoint_authority(&url))
+            .transpose()?;
         Ok(Self {
-            access,
-            private_authority: (access == ProviderEndpointAccess::PrivateNetwork)
-                .then(|| endpoint_authority(&url))
-                .transpose()?,
+            rules,
+            private_authority,
         })
     }
 
     pub fn access(&self) -> ProviderEndpointAccess {
-        self.access
+        self.rules.access
+    }
+
+    pub fn rules(&self) -> &EndpointAddressRules {
+        &self.rules
     }
 
     pub fn validate_url_without_resolution(&self, url: &Url) -> Result<(), SsrfError> {
-        validate_provider_endpoint_url_without_resolution(url, self.access)?;
+        self.rules.validate_url_without_resolution(url)?;
         self.validate_private_authority(url)
     }
 
@@ -202,7 +435,7 @@ pub fn validate_provider_endpoint_url(
     url: &Url,
     access: ProviderEndpointAccess,
 ) -> Result<(), SsrfError> {
-    validate_provider_endpoint_url_with_resolver(url, access, resolve_host_addresses)
+    EndpointAddressRules::from(access).validate_url(url)
 }
 
 /// Validate an endpoint without resolving its hostname.
@@ -210,10 +443,10 @@ pub fn validate_provider_endpoint_url_without_resolution(
     url: &Url,
     access: ProviderEndpointAccess,
 ) -> Result<(), SsrfError> {
-    resolution_target(url, access)?;
-    Ok(())
+    EndpointAddressRules::from(access).validate_url_without_resolution(url)
 }
 
+#[cfg(test)]
 pub(crate) fn validate_provider_endpoint_url_with_resolver<F>(
     url: &Url,
     access: ProviderEndpointAccess,
@@ -222,76 +455,7 @@ pub(crate) fn validate_provider_endpoint_url_with_resolver<F>(
 where
     F: Fn(&str, u16) -> Result<Vec<IpAddr>, SsrfError>,
 {
-    if let Some((host, port)) = resolution_target(url, access)? {
-        let addresses = resolver(&host, port)?;
-        validate_resolved_addresses(access, host, addresses)?;
-    }
-
-    Ok(())
-}
-
-fn resolution_target(
-    url: &Url,
-    access: ProviderEndpointAccess,
-) -> Result<Option<(String, u16)>, SsrfError> {
-    match url.scheme() {
-        "http" | "https" | "ws" | "wss" => {}
-        scheme => {
-            return Err(SsrfError::UnsupportedScheme {
-                scheme: scheme.to_string(),
-            });
-        }
-    }
-
-    let host = extract_url_host(url.as_str()).ok_or_else(|| SsrfError::MissingHost {
-        url: url.to_string(),
-    })?;
-
-    if is_permanently_blocked_hostname(&host) {
-        return Err(SsrfError::PrivateOrReservedHost { host });
-    }
-
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if !is_provider_endpoint_ip_allowed(access, &ip) {
-            return Err(SsrfError::PrivateOrReservedHost { host });
-        }
-        return Ok(None);
-    }
-
-    if access == ProviderEndpointAccess::PublicOnly
-        && (matches!(host.as_str(), "localhost" | "internal" | "local")
-            || [".localhost", ".internal", ".local"]
-                .iter()
-                .any(|suffix| host.ends_with(suffix)))
-    {
-        return Err(SsrfError::PrivateOrReservedHost { host });
-    }
-
-    Ok(Some((host, url.port_or_known_default().unwrap_or(0))))
-}
-
-fn validate_resolved_addresses(
-    access: ProviderEndpointAccess,
-    host: String,
-    addresses: Vec<IpAddr>,
-) -> Result<(), SsrfError> {
-    if addresses.is_empty() {
-        return Err(SsrfError::HostResolutionFailed {
-            host,
-            message: "no addresses returned".to_string(),
-        });
-    }
-
-    if let Some(address) = addresses
-        .iter()
-        .find(|address| !is_provider_endpoint_ip_allowed(access, address))
-    {
-        return Err(SsrfError::PrivateOrReservedHost {
-            host: format!("{host} ({address})"),
-        });
-    }
-
-    Ok(())
+    EndpointAddressRules::from(access).validate_url_with_resolver(url, resolver)
 }
 
 fn is_permanently_blocked_hostname(host: &str) -> bool {
@@ -358,7 +522,7 @@ fn is_metadata_ip(ip: &IpAddr) -> bool {
     }
 }
 
-fn embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+pub(super) fn embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     if let Some(v4) = ip.to_ipv4_mapped() {
         return Some(v4);
     }
@@ -452,289 +616,5 @@ pub fn is_private_or_reserved_ip(ip: &IpAddr) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::net::{Ipv4Addr, Ipv6Addr};
-
-    fn parse_test_url(raw_url: &str) -> Url {
-        match Url::parse(raw_url) {
-            Ok(url) => url,
-            Err(error) => panic!("test URL should parse: {error}"),
-        }
-    }
-
-    #[test]
-    fn extract_url_host_parses_standard_hosts() {
-        assert_eq!(
-            extract_url_host("https://example.com/path"),
-            Some("example.com".to_string())
-        );
-        assert_eq!(
-            extract_url_host("http://10.0.0.1:8080/api"),
-            Some("10.0.0.1".to_string())
-        );
-        assert_eq!(
-            extract_url_host("http://[::1]:9000/api"),
-            Some("::1".to_string())
-        );
-        assert_eq!(extract_url_host("not a url"), None);
-    }
-
-    #[test]
-    fn public_ipv4_addresses_are_allowed() {
-        assert!(!is_private_or_reserved_ip(&IpAddr::V4(Ipv4Addr::new(
-            8, 8, 8, 8
-        ))));
-        assert!(!is_private_or_reserved_ip(&IpAddr::V4(Ipv4Addr::new(
-            1, 1, 1, 1
-        ))));
-    }
-
-    #[test]
-    fn private_and_reserved_ipv4_addresses_are_rejected() {
-        for ip in [
-            Ipv4Addr::new(0, 0, 0, 0),
-            Ipv4Addr::new(0, 0, 0, 1),
-            Ipv4Addr::new(10, 1, 2, 3),
-            Ipv4Addr::new(100, 64, 0, 1),
-            Ipv4Addr::new(127, 0, 0, 1),
-            Ipv4Addr::new(169, 254, 169, 254),
-            Ipv4Addr::new(172, 20, 0, 1),
-            Ipv4Addr::new(192, 168, 0, 1),
-            Ipv4Addr::new(198, 18, 0, 1),
-            Ipv4Addr::new(240, 0, 0, 1),
-        ] {
-            assert!(is_private_or_reserved_ip(&IpAddr::V4(ip)), "{ip}");
-        }
-    }
-
-    #[test]
-    fn private_and_reserved_ipv6_addresses_are_rejected() {
-        for ip in [
-            Ipv6Addr::LOCALHOST,
-            Ipv6Addr::UNSPECIFIED,
-            "fc00::1".parse().unwrap(),
-            "fd00::1".parse().unwrap(),
-            "fe80::1".parse().unwrap(),
-            "fec0::1".parse().unwrap(),
-            "2001:db8::1".parse().unwrap(),
-            "2001:2::1".parse().unwrap(),
-            "100::1".parse().unwrap(),
-            "64:ff9b:1::1".parse().unwrap(),
-            "3fff::1".parse().unwrap(),
-            "1::1".parse().unwrap(),
-            "4000::1".parse().unwrap(),
-            "5f00::1".parse().unwrap(),
-            "fe00::1".parse().unwrap(),
-            "::ffff:127.0.0.1".parse().unwrap(),
-        ] {
-            assert!(is_private_or_reserved_ip(&IpAddr::V6(ip)), "{ip}");
-        }
-    }
-
-    #[test]
-    fn public_ipv6_and_nat64_require_a_globally_routable_destination() {
-        for ip in ["2606:4700:4700::1111", "64:ff9b::808:808"] {
-            assert!(!is_private_or_reserved_ip(&ip.parse().unwrap()), "{ip}");
-        }
-        assert!(is_private_or_reserved_ip(
-            &"64:ff9b::a00:1".parse().unwrap()
-        ));
-    }
-
-    #[test]
-    fn private_hostnames_are_rejected() {
-        assert!(is_private_or_reserved_host("localhost"));
-        assert!(is_private_or_reserved_host("my.localhost"));
-        assert!(is_private_or_reserved_host("metadata.google.internal"));
-        assert!(is_private_or_reserved_host("metadata.google.internal."));
-        assert!(is_private_or_reserved_host("metadata.goog"));
-        assert!(is_private_or_reserved_host("metadata.goog."));
-        assert!(is_private_or_reserved_host("api.metadata.goog"));
-    }
-
-    #[test]
-    fn validate_outbound_url_rejects_private_targets() {
-        let url = parse_test_url("http://169.254.169.254/latest/meta-data/");
-        assert!(matches!(
-            validate_outbound_url(&url),
-            Err(SsrfError::PrivateOrReservedHost { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_outbound_url_allows_public_targets() {
-        let url = parse_test_url("https://8.8.8.8/v1");
-        assert!(validate_outbound_url(&url).is_ok());
-    }
-
-    #[test]
-    fn validate_outbound_url_rejects_hostname_resolving_to_private_address() {
-        let url = parse_test_url("https://api.example.com/v1");
-
-        let result = validate_provider_endpoint_url_with_resolver(
-            &url,
-            ProviderEndpointAccess::PublicOnly,
-            |_host, _port| Ok(vec![IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))]),
-        );
-
-        assert!(matches!(
-            result,
-            Err(SsrfError::PrivateOrReservedHost { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_outbound_url_allows_hostname_resolving_to_public_address() {
-        let url = parse_test_url("https://api.example.com/v1");
-
-        let result = validate_provider_endpoint_url_with_resolver(
-            &url,
-            ProviderEndpointAccess::PublicOnly,
-            |_host, _port| Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]),
-        );
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn validate_outbound_url_rejects_unresolvable_hostname() {
-        let url = parse_test_url("https://api.example.com/v1");
-
-        let result = validate_provider_endpoint_url_with_resolver(
-            &url,
-            ProviderEndpointAccess::PublicOnly,
-            |host, _port| {
-                Err(SsrfError::HostResolutionFailed {
-                    host: host.to_string(),
-                    message: "lookup failed".to_string(),
-                })
-            },
-        );
-
-        assert!(matches!(
-            result,
-            Err(SsrfError::HostResolutionFailed { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_outbound_url_rejects_empty_dns_answers() {
-        let url = parse_test_url("https://api.example.com/v1");
-
-        let result = validate_provider_endpoint_url_with_resolver(
-            &url,
-            ProviderEndpointAccess::PublicOnly,
-            |_host, _port| Ok(vec![]),
-        );
-
-        assert!(matches!(
-            result,
-            Err(SsrfError::HostResolutionFailed { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_outbound_url_rejects_unsupported_scheme() {
-        let url = parse_test_url("file:///tmp/socket");
-        assert!(matches!(
-            validate_outbound_url(&url),
-            Err(SsrfError::UnsupportedScheme { .. })
-        ));
-    }
-
-    #[test]
-    fn endpoint_access_parsing_is_closed_and_defaults_public_only() {
-        assert_eq!(
-            ProviderEndpointAccess::default(),
-            ProviderEndpointAccess::PublicOnly
-        );
-        assert_eq!(
-            "private_network".parse(),
-            Ok(ProviderEndpointAccess::PrivateNetwork)
-        );
-        assert!("".parse::<ProviderEndpointAccess>().is_err());
-        assert!("private".parse::<ProviderEndpointAccess>().is_err());
-    }
-
-    #[test]
-    fn private_network_allows_only_explicit_private_ranges() {
-        let private = ProviderEndpointAccess::PrivateNetwork;
-        for ip in [
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1)),
-            IpAddr::V4(Ipv4Addr::new(192, 168, 0, 1)),
-            IpAddr::V6("fd00::1".parse().unwrap()),
-        ] {
-            assert!(is_provider_endpoint_ip_allowed(private, &ip), "{ip}");
-            assert!(!is_provider_endpoint_ip_allowed(
-                ProviderEndpointAccess::PublicOnly,
-                &ip
-            ));
-        }
-
-        for ip in [
-            IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
-            IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)),
-            IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
-            IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
-            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
-            IpAddr::V6("fd00:ec2::254".parse().unwrap()),
-            IpAddr::V6("::ffff:168.63.129.16".parse().unwrap()),
-            IpAddr::V6("64:ff9b::a83f:8110".parse().unwrap()),
-            IpAddr::V6("fe80::1".parse().unwrap()),
-        ] {
-            assert!(!is_provider_endpoint_ip_allowed(private, &ip), "{ip}");
-        }
-    }
-
-    #[test]
-    fn mixed_dns_answer_is_rejected_instead_of_partially_filtered() {
-        let url = parse_test_url("https://api.example.com/v1");
-        let result = validate_provider_endpoint_url_with_resolver(
-            &url,
-            ProviderEndpointAccess::PublicOnly,
-            |_host, _port| {
-                Ok(vec![
-                    IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
-                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-                ])
-            },
-        );
-        assert!(matches!(
-            result,
-            Err(SsrfError::PrivateOrReservedHost { .. })
-        ));
-    }
-
-    #[test]
-    fn private_policy_is_bound_to_exact_authority() {
-        let policy = ProviderEndpointPolicy::for_base_url(
-            ProviderEndpointAccess::PrivateNetwork,
-            "http://localhost:11434/v1",
-        )
-        .unwrap();
-        assert!(
-            policy
-                .validate_url_without_resolution(&parse_test_url("http://localhost:11434/api/chat"))
-                .is_ok()
-        );
-        assert!(
-            policy
-                .validate_url_without_resolution(&parse_test_url(
-                    "http://localhost.:11434/api/chat"
-                ))
-                .is_ok()
-        );
-        for mismatched in [
-            "http://localhost:11435/api/chat",
-            "https://localhost:11434/api/chat",
-        ] {
-            assert!(matches!(
-                policy.validate_url_without_resolution(&parse_test_url(mismatched)),
-                Err(SsrfError::AuthorityMismatch { .. })
-            ));
-        }
-    }
-}
+#[path = "ssrf_guard_tests.rs"]
+mod tests;

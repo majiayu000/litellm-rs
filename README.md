@@ -169,6 +169,34 @@ charges. OpenAI, Bedrock, OpenAI-compatible, Vertex AI, FalAI, and other multi-c
 require a custom `health_check.endpoint`. Without an active probe policy, readiness remains
 fail-closed (`Unknown`).
 
+Provider endpoints pass an SSRF guard at config load, on every request, and
+again when each connection resolves DNS. `endpoint_access: public_only` (the
+default) allows only globally routable addresses; `private_network` also allows
+loopback, RFC 1918 and ULA addresses for that one configured authority. Hosts
+whose DNS answers from a reserved range, such as fake-IP proxies (Clash, mihomo,
+sing-box, Surge) answering from `198.18.0.0/15` or CGNAT egress in
+`100.64.0.0/10`, can re-allow exactly that range per provider:
+
+```yaml
+providers:
+  - name: dashscope
+    provider_type: openai_compatible
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: "${DASHSCOPE_API_KEY}"
+    endpoint_allow_cidrs: ["198.18.0.0/15"]
+```
+
+The environment form is `LITELLM_PROVIDER_<NAME>_ENDPOINT_ALLOW_CIDRS=198.18.0.0/15,100.64.0.0/10`.
+An invalid CIDR, a `/0` range, or host bits set is a config error. Cloud metadata
+addresses (`169.254.169.254`, `168.63.129.16`, `fd00:ec2::254`, and their
+IPv4-mapped and NAT64 forms) stay blocked even when a listed range covers them.
+The setting is honoured by `openai`, `openai_compatible` and catalog
+OpenAI-compatible providers (including their health-check, batch, image,
+moderation and fine-tuning routes); other provider types reject it at startup
+rather than ignore it. In library mode set `BaseConfig::endpoint_allow_cidrs`
+or `ProviderConfig::endpoint_allow_cidrs`. A rejection names the resolved address
+and the setting that would allow it.
+
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
 
 Gateway YAML can publish stable model names and deterministic primary/fallback

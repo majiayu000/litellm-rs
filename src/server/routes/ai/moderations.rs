@@ -1,7 +1,7 @@
 //! OpenAI-compatible moderation API route.
 
 use crate::config::models::provider::ProviderConfig;
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::EndpointAddressRules;
 use crate::core::providers::{Provider, ProviderError};
 use crate::core::types::model::ProviderCapability;
 use crate::server::state::AppState;
@@ -26,7 +26,7 @@ struct ModerationProxyProvider {
     base_url: String,
     headers: Vec<(HeaderName, HeaderValue)>,
     timeout: Duration,
-    endpoint_access: ProviderEndpointAccess,
+    endpoint_rules: EndpointAddressRules,
 }
 
 /// Create a moderation request.
@@ -119,7 +119,7 @@ async fn proxy_moderation(
                                     let client = RouteHttpClient::new(
                                         "moderation_proxy",
                                         provider.base_url.clone(),
-                                        provider.endpoint_access,
+                                        provider.endpoint_rules.clone(),
                                         provider.timeout.as_secs(),
                                     )
                                     .map_err(moderation_gateway_error_to_provider_error)?;
@@ -325,7 +325,7 @@ fn moderation_proxy_provider_from_config(
         base_url: moderation_base_url(provider)?,
         headers: moderation_provider_headers(provider)?,
         timeout: Duration::from_secs(provider.timeout),
-        endpoint_access: provider.endpoint_access,
+        endpoint_rules: provider.endpoint_rules(),
     })
 }
 

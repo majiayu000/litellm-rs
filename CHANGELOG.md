@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-provider `endpoint_allow_cidrs` (env `LITELLM_PROVIDER_<NAME>_ENDPOINT_ALLOW_CIDRS`)
+  re-allows explicit address ranges such as fake-IP DNS `198.18.0.0/15` or CGNAT
+  `100.64.0.0/10` for `openai`, `openai_compatible` and catalog OpenAI-compatible
+  providers at config validation, request time, redirects and connect-time DNS.
+  The default is unchanged, invalid CIDRs fail config load, and cloud metadata
+  addresses stay blocked. SSRF rejections now name the resolved address and the
+  setting that would allow it (#1503).
+
 ## [0.10.1] - 2026-11-07
 
 ### Security
