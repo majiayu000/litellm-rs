@@ -123,6 +123,12 @@ fn write_disallowed_address(
             "Outbound URL targets a private or reserved address {target}; cloud metadata addresses are always blocked (SSRF protection)"
         );
     }
+    if is_link_local_ip(address) {
+        return write!(
+            f,
+            "Outbound URL targets a private or reserved address {target}; link-local addresses are always blocked (SSRF protection)"
+        );
+    }
     write!(
         f,
         "Outbound URL targets a private or reserved address {target}, which is not allowed (SSRF protection)"
@@ -139,12 +145,27 @@ impl SsrfError {
     }
 
     /// For a configured provider endpoint: the setting that would allow the
-    /// rejected address. `None` when no setting can (metadata, blocked names).
+    /// rejected address. `None` when no setting can (metadata, link-local,
+    /// blocked names).
     pub fn provider_setting_hint(&self) -> Option<String> {
-        let address = self.rejected_address().filter(|ip| !is_metadata_ip(ip))?;
-        let mut hint = format!(
-            "to allow it for this provider, add a CIDR covering {address} to the provider's `endpoint_allow_cidrs`"
-        );
+        self.provider_setting_hint_for(true)
+    }
+
+    /// Like [`Self::provider_setting_hint`], for a caller that knows whether the
+    /// provider type honours `endpoint_allow_cidrs`.
+    pub fn provider_setting_hint_for(&self, allow_cidrs_supported: bool) -> Option<String> {
+        let address = self
+            .rejected_address()
+            .filter(|ip| !is_never_allow_listed_ip(ip))?;
+        let mut hint = if allow_cidrs_supported {
+            format!(
+                "to allow it for this provider, add a CIDR covering {address} to the provider's `endpoint_allow_cidrs`"
+            )
+        } else {
+            format!(
+                "this provider type does not support `endpoint_allow_cidrs`; to allow {address}, configure the endpoint as `provider_type: openai_compatible` with an `endpoint_allow_cidrs` entry covering it"
+            )
+        };
         if is_private_network_ip(&address) {
             hint.push_str(" or set `endpoint_access: private_network`");
         }
@@ -153,7 +174,12 @@ impl SsrfError {
 
     /// `Display` plus [`Self::provider_setting_hint`] when there is one.
     pub fn with_provider_setting_hint(&self) -> String {
-        match self.provider_setting_hint() {
+        self.with_provider_setting_hint_for(true)
+    }
+
+    /// `Display` plus [`Self::provider_setting_hint_for`] when there is one.
+    pub fn with_provider_setting_hint_for(&self, allow_cidrs_supported: bool) -> String {
+        match self.provider_setting_hint_for(allow_cidrs_supported) {
             Some(hint) => format!("{self}; {hint}"),
             None => self.to_string(),
         }
@@ -192,11 +218,11 @@ impl EndpointAddressRules {
         &self.allow_cidrs
     }
 
-    /// Whether `ip` may be dialed. Cloud metadata addresses are rejected even
-    /// when an allow-listed CIDR covers them.
+    /// Whether `ip` may be dialed. Cloud metadata and link-local addresses are
+    /// rejected even when an allow-listed CIDR covers them.
     pub fn allows_ip(&self, ip: &IpAddr) -> bool {
         is_provider_endpoint_ip_allowed(self.access, ip)
-            || (!is_metadata_ip(ip) && self.allow_cidrs.contains(ip))
+            || (!is_never_allow_listed_ip(ip) && self.allow_cidrs.contains(ip))
     }
 
     /// Reject the whole DNS answer if any address is disallowed.
@@ -512,14 +538,47 @@ pub fn is_provider_endpoint_ip_allowed(access: ProviderEndpointAccess, ip: &IpAd
             || (access == ProviderEndpointAccess::PrivateNetwork && is_private_network_ip(ip)))
 }
 
+/// Cloud metadata and credential endpoints, blocked under every setting:
+/// the common IMDS address, Azure WireServer, Alibaba Cloud ECS metadata,
+/// AWS ECS task credentials, EKS Pod Identity (v4 + v6), AWS IMDS v6 and
+/// OCI IMDS v6, plus their IPv4-mapped and NAT64 forms.
 fn is_metadata_ip(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => matches!(v4.octets(), [169, 254, 169, 254] | [168, 63, 129, 16]),
+        IpAddr::V4(v4) => matches!(
+            v4.octets(),
+            [169, 254, 169, 254]
+                | [168, 63, 129, 16]
+                | [100, 100, 100, 200]
+                | [169, 254, 170, 2]
+                | [169, 254, 170, 23]
+        ),
         IpAddr::V6(v6) => {
-            v6.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254]
-                || embedded_ipv4(v6).is_some_and(|v4| is_metadata_ip(&IpAddr::V4(v4)))
+            matches!(
+                v6.segments(),
+                [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254 | 0x0023]
+                    | [0xfd00, 0x00c1, 0, 0, 0, 0, 0xa9fe, 0xa9fe]
+            ) || embedded_ipv4(v6).is_some_and(|v4| is_metadata_ip(&IpAddr::V4(v4)))
         }
     }
+}
+
+/// Link-local ranges (`169.254.0.0/16`, `fe80::/10`, and the IPv4-mapped and
+/// NAT64 forms of the former) host per-cloud metadata and credential agents at
+/// addresses beyond [`is_metadata_ip`]'s list, and no fake-IP or CGNAT setup
+/// answers from them, so `endpoint_allow_cidrs` never re-admits them.
+pub(super) fn is_link_local_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            (v6.segments()[0] & 0xffc0) == 0xfe80
+                || embedded_ipv4(v6).is_some_and(|v4| v4.is_link_local())
+        }
+    }
+}
+
+/// Addresses that no `endpoint_allow_cidrs` entry can re-admit.
+fn is_never_allow_listed_ip(ip: &IpAddr) -> bool {
+    is_metadata_ip(ip) || is_link_local_ip(ip)
 }
 
 pub(super) fn embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {

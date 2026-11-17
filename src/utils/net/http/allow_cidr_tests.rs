@@ -107,10 +107,14 @@ async fn fake_ip_answer_connects_when_the_range_is_allow_listed()
 async fn metadata_answer_stays_blocked_with_a_covering_allow_list()
 -> Result<(), Box<dyn std::error::Error>> {
     for (cidr, metadata) in [
-        ("169.254.0.0/16", "169.254.169.254"),
+        ("168.0.0.0/7", "169.254.169.254"),
+        ("168.0.0.0/7", "169.254.170.2"),
         ("168.63.0.0/16", "168.63.129.16"),
+        ("100.64.0.0/10", "100.100.100.200"),
         ("fd00::/8", "fd00:ec2::254"),
+        ("fd00::/8", "fd00:ec2::23"),
         ("::ffff:0:0/96", "::ffff:169.254.169.254"),
+        ("::ffff:0:0/96", "::ffff:100.100.100.200"),
     ] {
         let metadata: IpAddr = metadata.parse()?;
         let (result, accepted) = request_through_fake_ip_dns(rules(&[cidr]), metadata).await?;

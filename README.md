@@ -187,14 +187,21 @@ providers:
 ```
 
 The environment form is `LITELLM_PROVIDER_<NAME>_ENDPOINT_ALLOW_CIDRS=198.18.0.0/15,100.64.0.0/10`.
-An invalid CIDR, a `/0` range, or host bits set is a config error. Cloud metadata
-addresses (`169.254.169.254`, `168.63.129.16`, `fd00:ec2::254`, and their
-IPv4-mapped and NAT64 forms) stay blocked even when a listed range covers them.
+An invalid CIDR, a `/0` range, host bits set, or an entry that lies entirely in a
+link-local range is a config error. Cloud metadata and credential addresses
+(`169.254.169.254`, `168.63.129.16`, Alibaba Cloud `100.100.100.200`, AWS ECS
+`169.254.170.2`, EKS Pod Identity `169.254.170.23` / `fd00:ec2::23`,
+`fd00:ec2::254`, OCI `fd00:c1::a9fe:a9fe`) and all link-local addresses
+(`169.254.0.0/16`, `fe80::/10`) stay blocked even when a listed range covers them,
+including their IPv4-mapped (`::ffff:0:0/96`) and well-known NAT64
+(`64:ff9b::/96`) forms, so the CGNAT opt-in never reaches Alibaba Cloud metadata.
 The setting is honoured by `openai`, `openai_compatible` and catalog
 OpenAI-compatible providers (including their health-check, batch, image,
 moderation and fine-tuning routes); other provider types reject it at startup
-rather than ignore it. In library mode set `BaseConfig::endpoint_allow_cidrs`
-or `ProviderConfig::endpoint_allow_cidrs`. A rejection names the resolved address
+rather than ignore it; the gateway and provider factory enforce that, while
+direct library construction of other provider types ignores the field. In
+library mode set `BaseConfig::endpoint_allow_cidrs` or
+`ProviderConfig::endpoint_allow_cidrs` and build an OpenAI-compatible provider. A rejection names the resolved address
 and the setting that would allow it.
 
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.

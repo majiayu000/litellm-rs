@@ -4,15 +4,16 @@
 //! as reserved, most commonly fake-IP DNS proxies (Clash, mihomo, sing-box,
 //! Surge) that answer from `198.18.0.0/15`, or CGNAT egress in `100.64.0.0/10`.
 //! `endpoint_allow_cidrs` lets an operator re-allow exactly those ranges for one
-//! configured provider endpoint. Cloud metadata addresses stay blocked even when
-//! an allow-listed range covers them; that check lives in the SSRF guard.
+//! configured provider endpoint. Cloud metadata and link-local addresses stay
+//! blocked even when an allow-listed range covers them; that check lives in the
+//! SSRF guard.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use super::ssrf_guard::embedded_ipv4;
+use super::ssrf_guard::{embedded_ipv4, is_link_local_ip};
 
 /// One IPv4 or IPv6 network in CIDR notation, e.g. `198.18.0.0/15`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,10 +43,33 @@ impl IpCidr {
                 "{network}/{prefix_len} has host bits set; did you mean {masked}/{prefix_len}?"
             ));
         }
-        Ok(Self {
+        let cidr = Self {
             network,
             prefix_len,
-        })
+        };
+        if is_link_local_ip(&network) && is_link_local_ip(&cidr.last_address()) {
+            return Err(format!(
+                "{network}/{prefix_len} is link-local, which hosts cloud metadata and credential services and can never be allow-listed"
+            ));
+        }
+        Ok(cidr)
+    }
+
+    fn last_address(&self) -> IpAddr {
+        match self.network {
+            IpAddr::V4(v4) => {
+                let host = u32::MAX
+                    .checked_shr(u32::from(self.prefix_len))
+                    .unwrap_or(0);
+                IpAddr::V4((u32::from(v4) | host).into())
+            }
+            IpAddr::V6(v6) => {
+                let host = u128::MAX
+                    .checked_shr(u32::from(self.prefix_len))
+                    .unwrap_or(0);
+                IpAddr::V6((u128::from(v6) | host).into())
+            }
+        }
     }
 
     pub fn network(&self) -> IpAddr {
@@ -100,12 +124,19 @@ impl FromStr for IpCidr {
         let trimmed = value.trim();
         let invalid = |message: String| format!("invalid CIDR '{trimmed}': {message}");
         let (address, prefix_len) = match trimmed.split_once('/') {
-            Some((address, prefix)) => (
-                address,
-                Some(prefix.parse::<u8>().map_err(|error| {
-                    invalid(format!("prefix length '{prefix}' is not a number: {error}"))
-                })?),
-            ),
+            Some((address, prefix)) => {
+                let parsed = prefix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit())
+                    .then(|| prefix.parse::<u8>().ok())
+                    .flatten();
+                let prefix_len = parsed.ok_or_else(|| {
+                    invalid(format!(
+                        "prefix length '{prefix}' is not a number from 0 to 128"
+                    ))
+                })?;
+                (address, Some(prefix_len))
+            }
             None => (trimmed, None),
         };
         let network = address

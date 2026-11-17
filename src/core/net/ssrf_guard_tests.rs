@@ -371,12 +371,14 @@ fn allow_list_covers_ipv4_mapped_and_nat64_forms() {
 
 #[test]
 fn metadata_addresses_stay_blocked_even_when_an_allow_list_covers_them() {
+    // Broad ranges that cover every metadata address without being link-local only.
     let rules = rules_with(
         ProviderEndpointAccess::PrivateNetwork,
         &[
-            "169.254.0.0/16",
-            "168.63.0.0/16",
+            "168.0.0.0/7",
+            "100.64.0.0/10",
             "fd00::/8",
+            "fe00::/7",
             "64:ff9b::/96",
             "::ffff:0:0/96",
         ],
@@ -384,21 +386,106 @@ fn metadata_addresses_stay_blocked_even_when_an_allow_list_covers_them() {
     for metadata in [
         "169.254.169.254",
         "168.63.129.16",
+        "100.100.100.200",
+        "169.254.170.2",
+        "169.254.170.23",
         "fd00:ec2::254",
+        "fd00:ec2::23",
+        "fd00:c1::a9fe:a9fe",
         "::ffff:169.254.169.254",
         "::ffff:168.63.129.16",
+        "::ffff:100.100.100.200",
         "64:ff9b::a9fe:a9fe",
         "64:ff9b::a83f:8110",
+        "64:ff9b::6464:64c8",
+        "64:ff9b::a9fe:aa02",
     ] {
         let ip: IpAddr = metadata.parse().unwrap();
         assert!(!rules.allows_ip(&ip), "{metadata} must stay blocked");
+        assert!(
+            !is_provider_endpoint_ip_allowed(ProviderEndpointAccess::PrivateNetwork, &ip),
+            "{metadata}"
+        );
         let error = resolve_to(&rules, "https://api.provider.test/v1", ip)
             .expect_err("metadata answer must be rejected");
         assert!(error.to_string().contains("always blocked"), "{error}");
         assert_eq!(error.provider_setting_hint(), None, "{metadata}");
     }
-    // The non-metadata part of a listed range is still allowed.
-    assert!(rules.allows_ip(&"169.254.10.1".parse().unwrap()));
+    // The non-metadata, non-link-local parts of the listed ranges are still allowed.
+    for allowed in [
+        "168.63.1.1",
+        "100.100.100.201",
+        "100.64.3.9",
+        "fd00:ec2::24",
+    ] {
+        assert!(rules.allows_ip(&allowed.parse().unwrap()), "{allowed}");
+    }
+}
+
+#[test]
+fn cgnat_opt_in_does_not_reach_alibaba_metadata_through_redirects() {
+    // The README's recommended fake-IP + CGNAT list.
+    let rules = rules_with(
+        ProviderEndpointAccess::PublicOnly,
+        &["198.18.0.0/15", "100.64.0.0/10"],
+    );
+    for target in [
+        "http://100.100.100.200/latest/meta-data/ram/security-credentials/",
+        "http://[::ffff:100.100.100.200]/latest/meta-data/",
+        "http://[64:ff9b::6464:64c8]/latest/meta-data/",
+    ] {
+        let error = rules
+            .validate_url_without_resolution(&parse_test_url(target))
+            .expect_err("Alibaba metadata must stay blocked with a CGNAT opt-in");
+        assert!(
+            error.to_string().contains("always blocked"),
+            "{target}: {error}"
+        );
+    }
+    assert!(
+        resolve_to(
+            &rules,
+            "https://api.provider.test/v1",
+            "100.100.100.200".parse().unwrap()
+        )
+        .is_err()
+    );
+    assert!(rules.allows_ip(&CGNAT));
+}
+
+#[test]
+fn link_local_is_never_re_admitted_by_an_allow_list() {
+    let rules = rules_with(
+        ProviderEndpointAccess::PublicOnly,
+        &["168.0.0.0/7", "fe00::/7"],
+    );
+    for link_local in [
+        "169.254.0.1",
+        "169.254.0.23",
+        "169.254.10.1",
+        "::ffff:169.254.10.1",
+        "64:ff9b::a9fe:a01",
+        "fe80::a9fe:a9fe",
+    ] {
+        let ip: IpAddr = link_local.parse().unwrap();
+        assert!(!rules.allows_ip(&ip), "{link_local} must stay blocked");
+        let error = resolve_to(&rules, "https://api.provider.test/v1", ip)
+            .expect_err("link-local answer must be rejected");
+        assert!(error.to_string().contains("always blocked"), "{error}");
+        assert_eq!(error.provider_setting_hint(), None, "{link_local}");
+    }
+    assert!(rules.allows_ip(&"168.63.1.1".parse().unwrap()));
+    // An entry that is entirely link-local can never take effect, so it is a config error.
+    for entry in [
+        "169.254.0.0/16",
+        "169.254.170.0/24",
+        "169.254.170.2",
+        "fe80::/10",
+        "fe80::/64",
+    ] {
+        let error = EndpointAllowCidrs::parse([entry]).expect_err(entry);
+        assert!(error.contains("link-local"), "{entry}: {error}");
+    }
 }
 
 #[test]
@@ -458,6 +545,8 @@ fn allow_cidr_parsing_is_strict() {
         "0.0.0.0/0",
         "::/0",
         "198.18.0.0/x",
+        "198.18.0.0/+15",
+        "198.18.0.0/",
         "not-an-ip/8",
         "",
     ] {

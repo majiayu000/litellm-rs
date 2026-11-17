@@ -368,7 +368,11 @@ impl Validate for ProviderConfig {
                     format!(
                         "Provider {} base URL is invalid: {}",
                         self.name,
-                        error.with_provider_setting_hint()
+                        error.with_provider_setting_hint_for(
+                            crate::core::providers::factory::selector_supports_endpoint_allow_cidrs(
+                                &self.provider_type,
+                            ),
+                        )
                     )
                 })?;
         }
@@ -461,7 +465,11 @@ impl ProviderConfig {
                     format!(
                         "Provider {} health check endpoint is invalid: {}",
                         self.name,
-                        error.with_provider_setting_hint()
+                        error.with_provider_setting_hint_for(
+                            crate::core::providers::factory::selector_supports_endpoint_allow_cidrs(
+                                &self.provider_type,
+                            ),
+                        )
                     )
                 })?;
         }

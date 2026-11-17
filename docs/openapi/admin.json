@@ -1595,7 +1595,7 @@
           "endpoint_allow_cidrs": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Extra CIDR ranges the endpoint may resolve to (e.g. 198.18.0.0/15 under fake-IP DNS). Cloud metadata addresses stay blocked. Supported for openai, openai_compatible and catalog OpenAI-compatible providers."
+            "description": "Extra CIDR ranges the endpoint may resolve to (e.g. 198.18.0.0/15 under fake-IP DNS). Cloud metadata and link-local addresses stay blocked. Supported for openai, openai_compatible and catalog OpenAI-compatible providers."
           },
           "api_version": { "type": "string" },
           "organization": { "type": "string" },

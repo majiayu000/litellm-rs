@@ -74,7 +74,7 @@ async fn metadata_and_unsupported_runtimes_fail_closed() {
     let error = create_provider(provider(
         "openai_compatible",
         "http://169.254.169.254/v1",
-        &["169.254.0.0/16"],
+        &["168.0.0.0/7"],
     ))
     .await
     .expect_err("metadata endpoint must stay blocked")

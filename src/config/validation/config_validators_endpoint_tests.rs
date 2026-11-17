@@ -254,7 +254,14 @@ fn allow_cidrs_parse_at_config_load_and_invalid_cidr_is_an_error() {
     );
     assert!(Validate::validate(&parsed).is_ok());
 
-    for invalid in ["198.18.0.1/15", "0.0.0.0/0", "198.18.0.0/40", "fake-ip"] {
+    for invalid in [
+        "198.18.0.1/15",
+        "0.0.0.0/0",
+        "198.18.0.0/40",
+        "198.18.0.0/+15",
+        "169.254.0.0/16",
+        "fake-ip",
+    ] {
         let yaml = format!(
             "name: proxied\nprovider_type: openai_compatible\napi_key: sk-test\n\
              endpoint_allow_cidrs: [\"{invalid}\"]\n"
@@ -280,6 +287,16 @@ fn allow_cidrs_admit_a_fake_ip_endpoint_only_when_listed() {
         error.contains("198.18.0.7") && error.contains("endpoint_allow_cidrs"),
         "{error}"
     );
+    // Provider types that cannot honour the allow list are pointed at openai_compatible instead.
+    let error = Validate::validate(&fake_ip_provider("anthropic", &[]))
+        .expect_err("default must still reject the fake-IP range");
+    assert!(
+        error.contains("198.18.0.7")
+            && error.contains("does not support `endpoint_allow_cidrs`")
+            && error.contains("provider_type: openai_compatible"),
+        "{error}"
+    );
+    assert!(!error.contains("add a CIDR"), "{error}");
     for provider_type in ["openai_compatible", "openai", "deepseek"] {
         let mut config = fake_ip_provider(provider_type, &["198.18.0.0/15"]);
         if provider_type == "openai" {
@@ -289,9 +306,15 @@ fn allow_cidrs_admit_a_fake_ip_endpoint_only_when_listed() {
     }
     let metadata = ProviderConfig {
         base_url: Some("http://169.254.169.254/v1".to_string()),
-        ..fake_ip_provider("openai_compatible", &["169.254.0.0/16"])
+        ..fake_ip_provider("openai_compatible", &["168.0.0.0/7"])
     };
     let error = Validate::validate(&metadata).expect_err("metadata must stay blocked");
+    assert!(error.contains("always blocked"), "{error}");
+    let alibaba = ProviderConfig {
+        base_url: Some("http://100.100.100.200/v1".to_string()),
+        ..fake_ip_provider("openai_compatible", &["198.18.0.0/15", "100.64.0.0/10"])
+    };
+    let error = Validate::validate(&alibaba).expect_err("Alibaba metadata must stay blocked");
     assert!(error.contains("always blocked"), "{error}");
 }
 
