@@ -1,6 +1,22 @@
 name: Docker
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.dockerignore'
+      - '.github/workflows/docker.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'benches/**'
+      - 'config/**'
+      - 'deployment/docker/**'
+      - 'docs/openapi/**'
+      - 'examples/**'
+      - 'README.md'
+      - 'scripts/test/release_smoke.py'
+      - 'src/**'
   workflow_dispatch:
 
 concurrency:
@@ -12,67 +28,49 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # Build and test Docker image
   build-test:
     name: Build and Test Docker Image
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Login to Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
+    - uses: actions/checkout@v4
       with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        persist-credentials: false
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix=sha-
-          type=raw,value=latest,enable={{is_default_branch}}
+    - uses: docker/setup-buildx-action@v3
 
-    - name: Build Docker image
+    - name: Build local PR image
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./deployment/docker/Dockerfile
         platforms: linux/amd64
-        push: ${{ github.event_name != 'pull_request' }}
-        load: ${{ github.event_name == 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        load: true
+        push: false
+        tags: litellm-rs:pr-smoke
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        build-args: |
-          BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-          VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
-          REVISION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install container smoke dependencies
+      run: python3 -m pip install requests PyYAML
 
     - name: Test Docker image
       run: |
-        docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} /bin/sh -lc 'test -x /usr/local/bin/gateway && ldd /usr/local/bin/gateway >/dev/null'
+        python3 scripts/test/release_smoke.py container --image litellm-rs:pr-smoke \
+          --platform linux/amd64 --directory "$RUNNER_TEMP/container-smoke"
 
   # Security scan
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
     needs: merge-manifests
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: read
@@ -100,10 +98,13 @@ jobs:
       packages: write
     strategy:
       matrix:
-        platform:
-          - linux/amd64
-          - linux/arm64
-          - linux/arm/v7
+        include:
+          - platform: linux/amd64
+            artifact: linux-amd64
+          - platform: linux/arm64
+            artifact: linux-arm64
+          - platform: linux/arm/v7
+            artifact: linux-arm-v7
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -147,7 +148,7 @@ jobs:
     - name: Upload digest
       uses: actions/upload-artifact@v4
       with:
-        name: digests
+        name: digests-${{ matrix.artifact }}
         path: /tmp/digests/*
         if-no-files-found: error
         retention-days: 1
@@ -165,7 +166,8 @@ jobs:
     - name: Download digests
       uses: actions/download-artifact@v4
       with:
-        name: digests
+        pattern: digests-*
+        merge-multiple: true
         path: /tmp/digests
 
     - name: Set up Docker Buildx
@@ -201,7 +203,7 @@ jobs:
       packages: write
     steps:
     - name: Delete old images
-      uses: actions/delete-package-versions@v4
+      uses: actions/delete-package-versions@v5
       with:
         package-name: ${{ github.event.repository.name }}
         package-type: container
