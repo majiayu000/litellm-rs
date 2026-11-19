@@ -31,6 +31,12 @@ providers:
     provider_type: "openai"
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
+    # Hosts behind fake-IP DNS (Clash/mihomo/sing-box/Surge answer from 198.18.0.0/15)
+    # or CGNAT egress (100.64.0.0/10) must re-allow that exact range; cloud metadata
+    # (incl. Alibaba 100.100.100.200) and link-local addresses stay blocked
+    # regardless. Supported by openai, openai_compatible and
+    # catalog OpenAI-compatible providers.
+    # endpoint_allow_cidrs: ["198.18.0.0/15"]
     weight: 10.0
     # Lower values win when router.strategy is priority_based.
     priority: 0

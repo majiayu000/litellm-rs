@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-provider `endpoint_allow_cidrs` (env `LITELLM_PROVIDER_<NAME>_ENDPOINT_ALLOW_CIDRS`)
+  re-allows explicit address ranges such as fake-IP DNS `198.18.0.0/15` or CGNAT
+  `100.64.0.0/10` for `openai`, `openai_compatible` and catalog OpenAI-compatible
+  providers at config validation, request time, redirects and connect-time DNS.
+  The default is unchanged, invalid CIDRs fail config load, and cloud metadata
+  addresses stay blocked. SSRF rejections now name the resolved address and the
+  setting that would allow it (#1503).
+- The always-blocked cloud metadata set now also covers Alibaba Cloud
+  `100.100.100.200`, AWS ECS `169.254.170.2`, EKS Pod Identity `169.254.170.23` /
+  `fd00:ec2::23` and OCI `fd00:c1::a9fe:a9fe`, and `endpoint_allow_cidrs` never
+  re-admits link-local `169.254.0.0/16` or `fe80::/10`. Under
+  `endpoint_access: private_network`, `fd00:ec2::23` and `fd00:c1::a9fe:a9fe` are
+  now rejected (#1503).
+
 ## [0.10.1] - 2026-11-07
 
 ### Security

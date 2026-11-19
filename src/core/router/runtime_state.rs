@@ -176,6 +176,10 @@ impl GatewayRuntimeIdentity {
             "project": project,
             "settings": settings,
         });
+        // Only when set, so digests of configs without an allow list are unchanged.
+        if !config.endpoint_allow_cidrs.is_empty() {
+            value["endpoint_allow_cidrs"] = serde_json::json!(config.endpoint_allow_cidrs);
+        }
         value.sort_all_objects();
         Self(Sha256::digest(value.to_string().as_bytes()).into())
     }

@@ -2,6 +2,8 @@
 
 use reqwest::IntoUrl;
 
+use crate::core::net::EndpointAddressRules;
+#[cfg(test)]
 use crate::core::net::ProviderEndpointAccess;
 use crate::core::providers::base::{BaseConfig, BaseHttpClient, ProviderRequestBuilder};
 use crate::utils::error::gateway_error::GatewayError;
@@ -17,12 +19,14 @@ impl RouteHttpClient {
     pub(super) fn new(
         provider: &'static str,
         base_url: String,
-        endpoint_access: ProviderEndpointAccess,
+        endpoint_rules: impl Into<EndpointAddressRules>,
         timeout: u64,
     ) -> Result<Self, GatewayError> {
+        let endpoint_rules = endpoint_rules.into();
         let config = BaseConfig {
             api_base: Some(base_url),
-            endpoint_access,
+            endpoint_access: endpoint_rules.access(),
+            endpoint_allow_cidrs: endpoint_rules.allow_cidrs().clone(),
             timeout,
             ..BaseConfig::default()
         };

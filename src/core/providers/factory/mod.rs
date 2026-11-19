@@ -14,6 +14,8 @@ mod builder_tests;
 mod cohere_builder;
 #[cfg(test)]
 mod endpoint_access_tests;
+#[cfg(test)]
+mod endpoint_allow_cidrs_tests;
 mod endpoint_policy;
 mod enterprise_builder;
 #[cfg(test)]
@@ -39,6 +41,7 @@ pub(crate) static CONSTRUCTION_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex
 pub(crate) use endpoint_policy::{
     configured_endpoint_for_keys, endpoint_keys_for_selector, invalid_endpoint,
     selector_allows_implicit_private, selector_supports_endpoint_access,
+    selector_supports_endpoint_allow_cidrs,
 };
 pub use resolver::is_provider_selector_supported;
 
@@ -46,7 +49,7 @@ use super::provider_type::ProviderType;
 use super::unified_provider::ProviderError;
 use super::{Provider, openai_like, registry as provider_registry};
 use crate::core::net::ProviderEndpointAccess;
-use endpoint_policy::provider_type_supports;
+use endpoint_policy::{check_endpoint_fields, insert_endpoint_rules, provider_type_supports};
 use tracing::warn;
 
 fn provider_diagnostic_name(provider_type: &ProviderType) -> &'static str {
@@ -102,6 +105,7 @@ pub(crate) async fn create_provider_with_resources(
         api_key,
         base_url,
         endpoint_access,
+        endpoint_allow_cidrs,
         api_version,
         organization,
         project,
@@ -132,12 +136,7 @@ pub(crate) async fn create_provider_with_resources(
     let base_endpoint = base_url.as_deref().filter(|url| !url.trim().is_empty());
     let configured_endpoint = configured_endpoint_for_keys(base_endpoint, &settings, endpoint_keys);
     let has_endpoint = configured_endpoint.is_some();
-    if settings.contains_key("endpoint_access") {
-        return Err(ProviderError::configuration(
-            "provider",
-            "endpoint_access must be configured as a top-level provider field",
-        ));
-    }
+    check_endpoint_fields(provider_selector, &settings, &endpoint_allow_cidrs)?;
     if endpoint_access == ProviderEndpointAccess::PrivateNetwork
         && !has_endpoint
         && !selector_allows_implicit_private(provider_selector)
@@ -169,11 +168,9 @@ pub(crate) async fn create_provider_with_resources(
             base_endpoint.or(settings_base_url.as_deref()),
         );
         oai_config.base.endpoint_access = endpoint_access;
-        // Auto-detect private network access for catalog providers whose default
-        // base URL is localhost (e.g. vllm, lm_studio, ollama).  When the user
-        // relies on the catalog default and has not explicitly set the endpoint
-        // access policy, switch to PrivateNetwork so the SSRF guard permits the
-        // outbound connection to localhost.
+        oai_config.base.endpoint_allow_cidrs = endpoint_allow_cidrs;
+        // Catalog defaults on localhost (vllm, lm_studio, ollama) switch to PrivateNetwork when
+        // the user left endpoint_access unset, so the SSRF guard permits localhost.
         if endpoint_access == ProviderEndpointAccess::PublicOnly
             && base_endpoint.is_none()
             && settings_base_url.is_none()
@@ -238,10 +235,7 @@ pub(crate) async fn create_provider_with_resources(
     }
 
     let mut factory_config = serde_json::Map::new();
-    factory_config.insert(
-        "endpoint_access".to_string(),
-        Value::String(endpoint_access.to_string()),
-    );
+    insert_endpoint_rules(&mut factory_config, endpoint_access, &endpoint_allow_cidrs);
 
     if !api_key.is_empty() {
         factory_config.insert("api_key".to_string(), Value::String(api_key.clone()));

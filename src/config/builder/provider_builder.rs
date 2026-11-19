@@ -16,6 +16,7 @@ impl ProviderConfigBuilder {
             api_key: None,
             base_url: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: crate::core::net::EndpointAllowCidrs::default(),
             models: Vec::new(),
             model_identity_mappings: std::collections::HashMap::new(),
             max_requests_per_minute: None,
@@ -59,6 +60,12 @@ impl ProviderConfigBuilder {
     /// Set the requested network access for the provider endpoint.
     pub fn endpoint_access(mut self, endpoint_access: ProviderEndpointAccess) -> Self {
         self.endpoint_access = endpoint_access;
+        self
+    }
+
+    /// Re-allow extra address ranges for this endpoint, e.g. fake-IP DNS `198.18.0.0/15`.
+    pub fn endpoint_allow_cidrs(mut self, cidrs: crate::core::net::EndpointAllowCidrs) -> Self {
+        self.endpoint_allow_cidrs = cidrs;
         self
     }
 
@@ -136,6 +143,7 @@ impl ProviderConfigBuilder {
             api_key: self.api_key.unwrap_or_default(),
             base_url: self.base_url,
             endpoint_access: self.endpoint_access,
+            endpoint_allow_cidrs: self.endpoint_allow_cidrs,
             api_version: None,
             organization: None,
             project: None,

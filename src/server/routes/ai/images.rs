@@ -565,7 +565,7 @@ fn image_proxy_provider_from_config(
     let client = RouteHttpClient::new(
         "image_proxy",
         base_url.clone(),
-        provider.endpoint_access,
+        provider.endpoint_rules(),
         provider.timeout,
     )?;
     Ok(ImageProxyProvider {
