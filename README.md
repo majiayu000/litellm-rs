@@ -169,6 +169,41 @@ charges. OpenAI, Bedrock, OpenAI-compatible, Vertex AI, FalAI, and other multi-c
 require a custom `health_check.endpoint`. Without an active probe policy, readiness remains
 fail-closed (`Unknown`).
 
+Provider endpoints pass an SSRF guard at config load, on every request, and
+again when each connection resolves DNS. `endpoint_access: public_only` (the
+default) allows only globally routable addresses; `private_network` also allows
+loopback, RFC 1918 and ULA addresses for that one configured authority. Hosts
+whose DNS answers from a reserved range, such as fake-IP proxies (Clash, mihomo,
+sing-box, Surge) answering from `198.18.0.0/15` or CGNAT egress in
+`100.64.0.0/10`, can re-allow exactly that range per provider:
+
+```yaml
+providers:
+  - name: dashscope
+    provider_type: openai_compatible
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: "${DASHSCOPE_API_KEY}"
+    endpoint_allow_cidrs: ["198.18.0.0/15"]
+```
+
+The environment form is `LITELLM_PROVIDER_<NAME>_ENDPOINT_ALLOW_CIDRS=198.18.0.0/15,100.64.0.0/10`.
+An invalid CIDR, a `/0` range, host bits set, or an entry that lies entirely in a
+link-local range is a config error. Cloud metadata and credential addresses
+(`169.254.169.254`, `168.63.129.16`, Alibaba Cloud `100.100.100.200`, AWS ECS
+`169.254.170.2`, EKS Pod Identity `169.254.170.23` / `fd00:ec2::23`,
+`fd00:ec2::254`, OCI `fd00:c1::a9fe:a9fe`) and all link-local addresses
+(`169.254.0.0/16`, `fe80::/10`) stay blocked even when a listed range covers them,
+including their IPv4-mapped (`::ffff:0:0/96`) and well-known NAT64
+(`64:ff9b::/96`) forms, so the CGNAT opt-in never reaches Alibaba Cloud metadata.
+The setting is honoured by `openai`, `openai_compatible` and catalog
+OpenAI-compatible providers (including their health-check, batch, image,
+moderation and fine-tuning routes); other provider types reject it at startup
+rather than ignore it; the gateway and provider factory enforce that, while
+direct library construction of other provider types ignores the field. In
+library mode set `BaseConfig::endpoint_allow_cidrs` or
+`ProviderConfig::endpoint_allow_cidrs` and build an OpenAI-compatible provider. A rejection names the resolved address
+and the setting that would allow it.
+
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
 
 Gateway YAML can publish stable model names and deterministic primary/fallback

@@ -5,6 +5,7 @@ use super::*;
 use crate::core::net::ProviderEndpointAccess;
 
 const ACCESS_KEY: &str = "LITELLM_PROVIDER_OPENAI_ENDPOINT_ACCESS";
+const ALLOW_CIDRS_KEY: &str = "LITELLM_PROVIDER_OPENAI_ENDPOINT_ALLOW_CIDRS";
 const TEST_ENV_KEYS: &[&str] = &[
     ENV_HOST,
     ENV_PORT,
@@ -37,6 +38,7 @@ const TEST_ENV_KEYS: &[&str] = &[
     "LITELLM_PROVIDER_OPENAI_API_KEY",
     "LITELLM_PROVIDER_OPENAI_BASE_URL",
     ACCESS_KEY,
+    ALLOW_CIDRS_KEY,
     "LITELLM_PROVIDER_OPENAI_API_VERSION",
     "LITELLM_PROVIDER_OPENAI_ORGANIZATION",
     "LITELLM_PROVIDER_OPENAI_PROJECT",
@@ -96,6 +98,36 @@ fn endpoint_access_env_preserves_presence_and_rejects_invalid_values() {
     for invalid in ["", "private"] {
         unsafe { env::set_var(ACCESS_KEY, invalid) };
         assert!(GatewayConfig::from_env().is_err());
+    }
+}
+
+#[test]
+fn endpoint_allow_cidrs_env_parses_a_comma_list_and_rejects_invalid_cidrs() {
+    let _guard = GATEWAY_ENV_LOCK.blocking_lock();
+    let _env = EnvGuard::cleared();
+    unsafe {
+        env::set_var(ENV_ENABLE_JWT, "false");
+        env::set_var(ENV_PROVIDERS, "openai");
+        env::set_var("LITELLM_PROVIDER_OPENAI_TYPE", "openai");
+        env::set_var("LITELLM_PROVIDER_OPENAI_API_KEY", "sk-test");
+    }
+    let default = GatewayConfig::from_env().expect("env without an allow list should parse");
+    assert!(default.providers[0].endpoint_allow_cidrs.is_empty());
+
+    unsafe { env::set_var(ALLOW_CIDRS_KEY, "198.18.0.0/15, 100.64.0.0/10") };
+    let opted = GatewayConfig::from_env().expect("allow-list env should parse");
+    let listed: Vec<String> = opted.providers[0]
+        .endpoint_allow_cidrs
+        .as_slice()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(listed, ["198.18.0.0/15", "100.64.0.0/10"]);
+
+    for invalid in ["198.18.0.1/15", "0.0.0.0/0", "fake-ip"] {
+        unsafe { env::set_var(ALLOW_CIDRS_KEY, invalid) };
+        let error = GatewayConfig::from_env().expect_err("invalid CIDR must be a config error");
+        assert!(error.to_string().contains(ALLOW_CIDRS_KEY), "{error}");
     }
 }
 

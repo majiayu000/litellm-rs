@@ -34,6 +34,7 @@ pub struct ProviderConfigBuilder {
     pub(super) api_key: Option<String>,
     pub(super) base_url: Option<String>,
     pub(super) endpoint_access: crate::core::net::ProviderEndpointAccess,
+    pub(super) endpoint_allow_cidrs: crate::core::net::EndpointAllowCidrs,
     pub(super) models: Vec<String>,
     pub(super) model_identity_mappings:
         HashMap<String, crate::core::providers::model_identity::ModelIdentityMapping>,

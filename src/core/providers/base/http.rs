@@ -6,13 +6,37 @@ use std::time::Duration;
 use reqwest::{IntoUrl, Method};
 use serde_json::Value;
 
-use crate::core::net::{ProviderEndpointAccess, ProviderEndpointPolicy};
+use crate::core::net::{
+    EndpointAddressRules, ProviderEndpointAccess, ProviderEndpointPolicy, SsrfError,
+};
 use crate::core::providers::base::BaseConfig;
 use crate::core::providers::base::connection_pool::HeaderPair;
 use crate::core::providers::unified_provider::ProviderError;
 use crate::utils::net::http::{ProviderHttpClient, ProviderRequestBuilder};
 
 const ENDPOINT_POLICY_ERROR_MESSAGE: &str = "Provider endpoint rejected by SSRF protection";
+
+/// The detail names only the host, the rejected address and the setting that
+/// would allow it, never a path, query or credential.
+fn endpoint_policy_error(provider: &'static str, detail: Option<&SsrfError>) -> ProviderError {
+    match detail.filter(|error| error.rejected_address().is_some()) {
+        Some(error) => ProviderError::configuration(
+            provider,
+            format!(
+                "{ENDPOINT_POLICY_ERROR_MESSAGE}: {}",
+                error.with_provider_setting_hint()
+            ),
+        ),
+        None => ProviderError::configuration(provider, ENDPOINT_POLICY_ERROR_MESSAGE),
+    }
+}
+
+impl BaseConfig {
+    /// Address rules (access level plus `endpoint_allow_cidrs`) for this endpoint.
+    pub fn endpoint_rules(&self) -> EndpointAddressRules {
+        EndpointAddressRules::new(self.endpoint_access, self.endpoint_allow_cidrs.clone())
+    }
+}
 
 /// Base HTTP client wrapper used by provider implementations.
 #[derive(Debug, Clone)]
@@ -74,14 +98,16 @@ impl BaseHttpClient {
     ) -> Result<Self, ProviderError> {
         let policy = match config.api_base.as_deref() {
             Some(api_base) => {
-                ProviderEndpointPolicy::for_base_url(config.endpoint_access, api_base).map_err(
-                    |error| {
-                        ProviderError::configuration(
-                            provider,
-                            format!("invalid provider API base: {error}"),
-                        )
-                    },
-                )?
+                ProviderEndpointPolicy::for_base_url_with_rules(config.endpoint_rules(), api_base)
+                    .map_err(|error| {
+                    ProviderError::configuration(
+                        provider,
+                        format!(
+                            "invalid provider API base: {}",
+                            error.with_provider_setting_hint()
+                        ),
+                    )
+                })?
             }
             None if config.endpoint_access == ProviderEndpointAccess::PrivateNetwork => {
                 return Err(ProviderError::configuration(
@@ -89,7 +115,9 @@ impl BaseHttpClient {
                     "private_network endpoint access requires an API base",
                 ));
             }
-            None => ProviderEndpointPolicy::public_only(),
+            None => ProviderEndpointPolicy::public_only_with_allow_cidrs(
+                config.endpoint_allow_cidrs.clone(),
+            ),
         };
         let timeout = Duration::from_secs(config.timeout);
         let client_result = match redirect_mode {
@@ -130,8 +158,8 @@ impl BaseHttpClient {
         url: U,
     ) -> Result<ProviderRequestBuilder, ProviderError> {
         self.client.request(method, url).map_err(|error| {
-            if error.is_endpoint_policy() {
-                ProviderError::configuration(self.provider, ENDPOINT_POLICY_ERROR_MESSAGE)
+            if let Some(detail) = error.endpoint_policy_detail() {
+                endpoint_policy_error(self.provider, Some(detail))
             } else {
                 ProviderError::network(self.provider, error.to_string())
             }
@@ -140,7 +168,8 @@ impl BaseHttpClient {
 
     pub(crate) fn map_preserved_request_error(&self, error: reqwest::Error) -> ProviderError {
         if ProviderHttpClient::request_error_is_endpoint_policy(&error) {
-            ProviderError::configuration(self.provider, ENDPOINT_POLICY_ERROR_MESSAGE)
+            let detail = ProviderHttpClient::request_error_dns_policy_detail(&error);
+            endpoint_policy_error(self.provider, detail)
         } else if error.is_builder() {
             ProviderError::configuration(self.provider, "provider request could not be constructed")
         } else if error.is_timeout() {

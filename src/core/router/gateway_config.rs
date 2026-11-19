@@ -505,7 +505,7 @@ fn deployment_config_from_provider(
                 failure_threshold: config.health_check.failure_threshold,
                 recovery_timeout_secs: config.health_check.recovery_timeout,
                 endpoint,
-                endpoint_access: config.endpoint_access,
+                endpoint_rules: config.endpoint_rules(),
                 expected_codes: config.health_check.expected_codes.clone(),
             },
         ),
@@ -776,8 +776,8 @@ mod tests {
         assert_eq!(policy.failure_threshold, 3);
         assert_eq!(policy.recovery_timeout_secs, 47);
         assert_eq!(
-            policy.endpoint_access,
-            crate::core::net::ProviderEndpointAccess::PublicOnly
+            policy.endpoint_rules,
+            crate::core::net::ProviderEndpointAccess::PublicOnly.into()
         );
         assert_eq!(
             policy.endpoint.expect("endpoint should resolve").as_str(),

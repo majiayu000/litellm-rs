@@ -390,7 +390,8 @@ fn build_custom_client(
                 "health_probe",
                 BaseConfig {
                     api_base: Some(endpoint.to_string()),
-                    endpoint_access: policy.endpoint_access,
+                    endpoint_access: policy.endpoint_rules.access(),
+                    endpoint_allow_cidrs: policy.endpoint_rules.allow_cidrs().clone(),
                     timeout: timeout_secs,
                     ..Default::default()
                 },

@@ -7,6 +7,9 @@ use std::sync::Mutex;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[path = "allow_cidr_tests.rs"]
+mod allow_cidr_tests;
+
 type ConnectorBoxError = Box<dyn std::error::Error + Send + Sync>;
 
 fn map_preserved_error(error: reqwest::Error) -> ProviderError {
@@ -204,17 +207,16 @@ async fn assert_public_rebind_is_blocked(
         Ok(Ok(_)) => panic!("{mode:?} must reject connection-time rebind to {blocked_ip}"),
         Err(_) => panic!("{mode:?} did not reject connection-time rebind to {blocked_ip}"),
     };
+    let detail = format!("'rebind.test' (resolved to {blocked_ip})");
     assert!(
-        error_chain_contains(
-            &error,
-            "Host resolves to a disallowed address (SSRF protection)"
-        ),
+        error_chain_contains(&error, &detail),
         "{mode:?} must fail in the DNS policy for {blocked_ip}, got {error:?}"
     );
     assert!(reqwest_error_is_endpoint_policy(&error), "{error:?}");
     let mapped = map_preserved_error(error);
     assert!(matches!(mapped, ProviderError::Configuration { .. }));
-    assert!(!mapped.to_string().contains(&blocked_ip.to_string()));
+    // The operator needs the resolved address to diagnose fake-IP DNS (#1503).
+    assert!(mapped.to_string().contains(&detail), "{mapped}");
     assert_eq!(
         resolver.remaining_answers()?,
         0,
@@ -257,7 +259,7 @@ impl ProviderHttpClient {
         answers[3] = vec![blocked_address];
         let resolver = Arc::new(SequenceResolver::new(answers));
         let priming_resolver = PolicyDnsResolver {
-            access: policy.access(),
+            rules: policy.rules().clone(),
             resolver: resolver.clone(),
         };
         drop(
@@ -299,7 +301,7 @@ impl ProviderHttpClient {
         tripwire: SocketAddr,
     ) -> Result<Self, ProviderHttpClientError> {
         let policy_resolver = Arc::new(PolicyDnsResolver {
-            access: policy.access(),
+            rules: policy.rules().clone(),
             resolver,
         });
         let resolver = Arc::new(TripwireAfterPolicyResolver {

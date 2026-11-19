@@ -351,6 +351,7 @@ fn fine_tuning_route_provider(
             api_key: Some(provider.api_key.clone()),
             api_base: Some(fine_tuning_api_base(provider)?),
             endpoint_access: provider.endpoint_access,
+            endpoint_allow_cidrs: provider.endpoint_allow_cidrs.clone(),
             organization_id: provider.organization.clone(),
             supported_models: provider.models.clone(),
             timeout_seconds: provider.timeout,

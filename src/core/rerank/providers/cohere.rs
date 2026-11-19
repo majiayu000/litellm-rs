@@ -1,7 +1,7 @@
 //! Cohere rerank provider implementation
 
 use super::rerank_upstream_error;
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::{EndpointAddressRules, ProviderEndpointAccess};
 use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::rerank::service::RerankProvider;
 use crate::core::rerank::types::{RerankRequest, RerankResponse, RerankResult, RerankUsage};
@@ -17,7 +17,7 @@ pub struct CohereRerankProvider {
     base_url: String,
     /// Policy-aware HTTP client.
     client: BaseHttpClient,
-    endpoint_access: ProviderEndpointAccess,
+    endpoint_rules: EndpointAddressRules,
     timeout_seconds: u64,
 }
 
@@ -34,27 +34,24 @@ impl CohereRerankProvider {
 
     /// Set custom base URL
     pub fn with_base_url(self, url: impl Into<String>) -> Result<Self> {
-        Self::new_with_endpoint(
-            self.api_key,
-            url,
-            self.endpoint_access,
-            self.timeout_seconds,
-        )
+        Self::new_with_endpoint(self.api_key, url, self.endpoint_rules, self.timeout_seconds)
     }
 
     /// Create a provider bound to an exact endpoint policy and authority.
     pub fn new_with_endpoint(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        endpoint_access: ProviderEndpointAccess,
+        endpoint_rules: impl Into<EndpointAddressRules>,
         timeout_seconds: u64,
     ) -> Result<Self> {
+        let endpoint_rules = endpoint_rules.into();
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let client = BaseHttpClient::new_for_provider(
             "cohere_rerank",
             BaseConfig {
                 api_base: Some(base_url.clone()),
-                endpoint_access,
+                endpoint_access: endpoint_rules.access(),
+                endpoint_allow_cidrs: endpoint_rules.allow_cidrs().clone(),
                 timeout: timeout_seconds,
                 ..BaseConfig::default()
             },
@@ -63,7 +60,7 @@ impl CohereRerankProvider {
             api_key: api_key.into(),
             base_url,
             client,
-            endpoint_access,
+            endpoint_rules,
             timeout_seconds,
         })
     }
@@ -231,5 +228,32 @@ mod tests {
             panic!("cross-authority Cohere request should fail");
         };
         assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn rerank_endpoint_honours_the_provider_allow_list() {
+        let fake_ip = "https://198.18.0.7/v1";
+        assert!(
+            CohereRerankProvider::new_with_endpoint(
+                "test-key",
+                fake_ip,
+                ProviderEndpointAccess::PublicOnly,
+                30
+            )
+            .is_err()
+        );
+        let rules = EndpointAddressRules::new(
+            ProviderEndpointAccess::PublicOnly,
+            crate::core::net::EndpointAllowCidrs::parse(["198.18.0.0/15"]).unwrap(),
+        );
+        let Ok(opted) = CohereRerankProvider::new_with_endpoint("test-key", fake_ip, rules, 30)
+        else {
+            panic!("allow-listed rerank endpoint should build");
+        };
+        assert!(opted.client.post(format!("{fake_ip}/rerank")).is_ok());
+        let rebuilt = opted
+            .with_base_url("https://198.19.1.1/v1")
+            .expect("with_base_url must keep the allow list");
+        assert!(rebuilt.client.post("https://198.19.1.1/v1/rerank").is_ok());
     }
 }
