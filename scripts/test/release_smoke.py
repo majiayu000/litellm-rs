@@ -247,8 +247,8 @@ if __name__=='__main__':
         if not a.image or not a.platform:
             p.error('--image and --platform are required for container')
         gateway = urlsplit(a.gateway)
-        if gateway.scheme != 'http' or gateway.hostname != '127.0.0.1' or gateway.port in (None, 8000):
-            p.error('container requires an HTTP loopback gateway on a port other than 8000')
+        if gateway.scheme != 'http' or gateway.hostname not in ('127.0.0.1', 'localhost') or gateway.port in (None, 8000):
+            p.error('container requires an HTTP loopback gateway (127.0.0.1 or localhost) on a port other than 8000')
         smoke_container(a.image, a.platform, a.gateway, target)
     elif a.mode=='remote-config': print(config(a.base,a.packaged,target,a.gateway,True))
     elif a.mode=='remote-smoke': print(json.dumps(smoke(a.gateway,True,database=target/'smoke.sqlite'),indent=2))
