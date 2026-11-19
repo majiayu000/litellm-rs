@@ -421,7 +421,7 @@ async fn record_completion_spend_inner(
 /// self-reported figures are not trusted for settlement.
 const PROVIDER_REPORTED_COST_PROVIDERS: &[&str] = &["openrouter"];
 
-fn provider_reported_cost(provider: &str, usage: &Usage) -> Option<f64> {
+pub(super) fn provider_reported_cost(provider: &str, usage: &Usage) -> Option<f64> {
     let provider = crate::core::pricing::normalize_pricing_provider(provider);
     if !PROVIDER_REPORTED_COST_PROVIDERS.contains(&provider.as_str()) {
         return None;

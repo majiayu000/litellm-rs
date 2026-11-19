@@ -24,7 +24,7 @@ async fn stale_removed_schedule_outcome_cannot_clear_recreated_run() {
         endpoint: Some(
             Url::parse("http://127.0.0.1:9/health").expect("schedule test endpoint should parse"),
         ),
-        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        endpoint_rules: ProviderEndpointAccess::PrivateNetwork.into(),
         expected_codes: vec![204],
     };
     let deployment = Deployment::new(
@@ -110,7 +110,7 @@ async fn unsupported_native_probe_is_rejected_at_the_snapshot_boundary() {
         failure_threshold: 1,
         recovery_timeout_secs: 60,
         endpoint: None,
-        endpoint_access: ProviderEndpointAccess::PublicOnly,
+        endpoint_rules: ProviderEndpointAccess::PublicOnly.into(),
         expected_codes: vec![200],
     };
     let deployment = Deployment::new(
@@ -153,7 +153,7 @@ async fn ambiguous_gemini_native_probe_is_rejected_without_network_io() {
         failure_threshold: 1,
         recovery_timeout_secs: 30,
         endpoint: None,
-        endpoint_access: ProviderEndpointAccess::PublicOnly,
+        endpoint_rules: ProviderEndpointAccess::PublicOnly.into(),
         expected_codes: vec![200],
     };
     let router = Router::new(RouterConfig::default());

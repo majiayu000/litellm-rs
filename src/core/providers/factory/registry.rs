@@ -17,10 +17,9 @@ use crate::core::traits::provider::ProviderConfig as _;
 #[cfg(feature = "providers-extended")]
 use super::builder::build_github_copilot_config_from_factory;
 use super::builder::{
-    apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
+    apply_endpoint_rules, apply_tier1_openai_like_overrides, build_anthropic_config_from_factory,
     build_cloudflare_config_from_factory, build_mistral_config_from_factory,
-    build_openai_config_from_factory, build_openai_like_config_from_factory,
-    config_endpoint_access, config_str,
+    build_openai_config_from_factory, build_openai_like_config_from_factory, config_str,
 };
 #[cfg(feature = "providers-extra")]
 use super::builder::{build_azure_ai_config_from_factory, build_azure_config_from_factory};
@@ -186,7 +185,7 @@ impl Provider {
                 #[cfg(not(feature = "providers-extra"))]
                 {
                     let mut oai_config = build_azure_ai_openai_like_config_from_factory(&config)?;
-                    oai_config.base.endpoint_access = config_endpoint_access(&config, "azure_ai")?;
+                    apply_endpoint_rules(&mut oai_config.base, &config, "azure_ai")?;
                     let provider = openai_like::OpenAILikeProvider::new(oai_config)
                         .await
                         .map_err(|e| ProviderError::initialization("azure_ai", e.to_string()))?;
@@ -220,7 +219,7 @@ impl Provider {
                 #[cfg(not(feature = "providers-extra"))]
                 {
                     let mut oai_config = build_azure_openai_like_config_from_factory(&config)?;
-                    oai_config.base.endpoint_access = config_endpoint_access(&config, "azure")?;
+                    apply_endpoint_rules(&mut oai_config.base, &config, "azure")?;
                     let provider = openai_like::OpenAILikeProvider::new(oai_config)
                         .await
                         .map_err(|e| ProviderError::initialization("azure", e.to_string()))?;
@@ -365,7 +364,7 @@ impl Provider {
                     config_str(&config, "base_url").or_else(|| config_str(&config, "api_base"));
                 let mut oai_config =
                     def.to_openai_like_config(api_key.as_deref(), base_url_override);
-                oai_config.base.endpoint_access = config_endpoint_access(&config, name)?;
+                apply_endpoint_rules(&mut oai_config.base, &config, name)?;
                 if let Some(settings) = config.as_object() {
                     let settings = settings
                         .iter()

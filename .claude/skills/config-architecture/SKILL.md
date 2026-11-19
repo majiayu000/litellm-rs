@@ -150,6 +150,7 @@ pub struct ProviderConfig {
     pub api_key: String,                   // required unless registry skips key checks
     pub base_url: Option<String>,
     pub endpoint_access: ProviderEndpointAccess, // default PublicOnly; "private_network" opt-in
+    pub endpoint_allow_cidrs: EndpointAllowCidrs, // default empty; e.g. ["198.18.0.0/15"] for fake-IP DNS
     pub api_version: Option<String>,
     pub organization: Option<String>,
     pub project: Option<String>,

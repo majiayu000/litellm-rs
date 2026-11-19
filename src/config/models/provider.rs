@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
 
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::{EndpointAddressRules, EndpointAllowCidrs, ProviderEndpointAccess};
 
 /// Provider configuration
 #[derive(Clone, Serialize, Deserialize)]
@@ -22,6 +22,10 @@ pub struct ProviderConfig {
     /// Network access requested for this provider endpoint.
     #[serde(default)]
     pub endpoint_access: ProviderEndpointAccess,
+    /// Extra address ranges the endpoint may resolve to, e.g. `198.18.0.0/15`
+    /// under fake-IP DNS. Cloud metadata addresses stay blocked regardless.
+    #[serde(default, skip_serializing_if = "EndpointAllowCidrs::is_empty")]
+    pub endpoint_allow_cidrs: EndpointAllowCidrs,
     /// API version
     pub api_version: Option<String>,
     /// Organization ID
@@ -87,6 +91,7 @@ impl std::fmt::Debug for ProviderConfig {
             .field("api_key", &"[REDACTED]")
             .field("base_url", &self.base_url)
             .field("endpoint_access", &self.endpoint_access)
+            .field("endpoint_allow_cidrs", &self.endpoint_allow_cidrs)
             .field("api_version", &self.api_version)
             .field("organization", &self.organization)
             .field("project", &self.project)
@@ -115,6 +120,7 @@ impl Default for ProviderConfig {
             api_key: String::new(),
             base_url: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: EndpointAllowCidrs::default(),
             api_version: None,
             organization: None,
             project: None,
@@ -143,6 +149,11 @@ impl ProviderConfig {
         } else {
             self.provider_type.trim()
         }
+    }
+
+    /// Address rules (access level plus `endpoint_allow_cidrs`) for this provider's endpoints.
+    pub fn endpoint_rules(&self) -> EndpointAddressRules {
+        EndpointAddressRules::new(self.endpoint_access, self.endpoint_allow_cidrs.clone())
     }
 
     pub(crate) fn configured_endpoint(&self) -> Option<&str> {
@@ -481,6 +492,7 @@ mod tests {
             api_key: "sk-xxx".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: Default::default(),
             api_version: Some("2024-01".to_string()),
             organization: Some("org-123".to_string()),
             project: None,
@@ -541,6 +553,7 @@ mod tests {
             api_key: "key".to_string(),
             base_url: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: Default::default(),
             api_version: None,
             organization: None,
             project: None,
@@ -569,6 +582,7 @@ mod tests {
             api_key: "sk-ant-xxx".to_string(),
             base_url: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: Default::default(),
             api_version: None,
             organization: None,
             project: None,

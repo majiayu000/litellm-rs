@@ -425,3 +425,55 @@ async fn persistent_key_budget_timeout_retains_hold_but_explicit_rejection_refun
         );
     }
 }
+
+#[tokio::test]
+async fn persistent_key_budget_refunds_errors_raised_before_dispatch() {
+    use crate::core::keys::{CreateKeyConfig, DatabaseKeyRepository, KeyManager};
+    let mut config = crate::config::Config::default();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    let storage = Arc::new(
+        crate::storage::StorageLayer::new(&config.gateway.storage)
+            .await
+            .unwrap(),
+    );
+    storage.migrate().await.unwrap();
+    let keys = KeyManager::new(DatabaseKeyRepository::new(storage.clone()));
+    let (key, _) = keys
+        .generate_key(CreateKeyConfig {
+            name: "local-failure-budget".into(),
+            max_budget: Some(2.0),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let id = keys.get_key(key).await.unwrap().unwrap().budget_id.unwrap();
+    let manager = Arc::new(BudgetManager::new().with_api_key_database(storage.database.clone()));
+    // Each of these is returned while the gateway builds the upstream request,
+    // so nothing was sent and the reservation must not stay on the key budget.
+    let mut used_after = Vec::new();
+    for error in [
+        ProviderError::not_implemented("bedrock", "Converse image content parts"),
+        ProviderError::configuration("azure", "Azure endpoint not configured"),
+        ProviderError::feature_disabled("vertex_ai", "context caching"),
+    ] {
+        let label = error.to_string();
+        let call = BudgetedCall::new(Arc::new(UnifiedBudgetLimits::new()), "test", "model")
+            .with_api_key_budget(
+                manager.clone(),
+                Some(id),
+                SettlementMode::KeyReservationThenPostSuccessRecord,
+            )
+            .with_precomputed_api_key_budget_cost(Some(0.4));
+        let result = call
+            .reserve_call(async |_| Ok(None), || async { Err::<(), _>(error) })
+            .await;
+        assert!(result.is_err());
+        let budget = storage.database.api_key_budget(id).await.unwrap().unwrap();
+        used_after.push((label, budget.used_amount));
+    }
+    assert!(
+        used_after.iter().all(|(_, used)| *used == 0),
+        "reservations kept on the key budget: {used_after:?}"
+    );
+}

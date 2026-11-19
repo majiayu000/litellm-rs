@@ -65,6 +65,9 @@ jobs:
             --source-catalog config/model_prices_extended.json \
             --check
 
+      - name: Verify release version references
+        run: python3 -m unittest discover -s scripts/test -p 'test_sync_version_references.py'
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

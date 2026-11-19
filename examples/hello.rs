@@ -4,7 +4,7 @@ use litellm_rs::{
     config::models::provider::ProviderConfig,
     core::{
         net::ProviderEndpointAccess,
-        router::{RuntimeBinding, UnifiedRouter, install_default_runtime},
+        router::{RouterConfig, RuntimeBinding, UnifiedRouter, install_default_runtime},
     },
     user_message,
 };
@@ -25,7 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         models: vec![model.clone()],
         ..ProviderConfig::default()
     };
-    let router = UnifiedRouter::from_gateway_config(&[provider], None).await?;
+    // Passing `None` uses `RouterConfig::default()`: 3 retries per call (4 attempts),
+    // and streams retry until the provider returns a stream. Set 0 when your
+    // application already owns retries, deadlines and upstream switching.
+    let router_config = RouterConfig {
+        num_retries: 0,
+        ..RouterConfig::default()
+    };
+    let router = UnifiedRouter::from_gateway_config(&[provider], Some(router_config)).await?;
     install_default_runtime(RuntimeBinding::new(Arc::new(router)))?;
 
     let response = completion(&model, vec![user_message("Hello!")], None).await?;

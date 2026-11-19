@@ -20,7 +20,7 @@
 //! - Cache-friendly: Hot path fields grouped together
 
 use super::runtime_state::GatewayRuntimeIdentity;
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::EndpointAddressRules;
 use crate::core::providers::Provider;
 use crate::utils::auth::crypto::hmac::CredentialDigest;
 use parking_lot::{Mutex, RwLock};
@@ -104,8 +104,8 @@ pub struct HealthCheckPolicy {
     pub recovery_timeout_secs: u64,
     /// Normalized custom unauthenticated GET endpoint, or native provider probe when absent.
     pub endpoint: Option<Url>,
-    /// Runtime network policy applied to a configured custom endpoint.
-    pub endpoint_access: ProviderEndpointAccess,
+    /// Runtime address rules (access level plus `endpoint_allow_cidrs`) for a custom endpoint.
+    pub endpoint_rules: EndpointAddressRules,
     /// HTTP statuses accepted by a custom endpoint probe.
     pub expected_codes: Vec<u16>,
 }

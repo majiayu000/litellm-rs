@@ -5,10 +5,18 @@ use litellm_rs::{
     core::{
         completion::{CompletionOptions, DefaultRouter, Router as CompletionRouter},
         net::ProviderEndpointAccess,
-        providers::anthropic::{AnthropicConfig, AnthropicProvider},
+        providers::{
+            anthropic::{AnthropicConfig, AnthropicProvider},
+            create_provider,
+        },
         router::{RouterConfig, RuntimeBinding, UnifiedRouter, UnifiedRoutingStrategy},
         traits::provider::llm_provider::trait_definition::LLMProvider,
-        types::{chat::ChatRequest, context::RequestContext},
+        types::{
+            chat::{ChatRequest, StreamOptions},
+            context::RequestContext,
+            model::ProviderCapability,
+            responses::ChatChunk,
+        },
     },
     user_message,
 };
@@ -193,4 +201,93 @@ async fn yaml_alias_and_priority_dispatch_to_local_vllm_primary() {
     assert!(
         matches!(fallback.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
     );
+}
+
+/// Single-attempt embedder path: `create_provider` + `Provider::chat_completion_stream`
+/// against an OpenAI-compatible SSE endpoint. The provider layer forwards the
+/// caller's `stream_options` verbatim and adds none of its own (gh#1504).
+async fn provider_level_stream(
+    stream_options: Option<StreamOptions>,
+) -> (Vec<ChatChunk>, String, Value) {
+    let frames = [
+        json!({"id":"c1","object":"chat.completion.chunk","created":1,"model":"local-model","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}),
+        json!({"id":"c1","object":"chat.completion.chunk","created":1,"model":"local-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        json!({"id":"c1","object":"chat.completion.chunk","created":1,"model":"local-model","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}),
+    ];
+    let body = frames
+        .iter()
+        .map(|frame| format!("data: {frame}\n\n"))
+        .chain(std::iter::once("data: [DONE]\n\n".to_string()))
+        .collect();
+    let (url, server) = serve_once(body, "text/event-stream").await;
+    let provider = create_provider(ProviderConfig {
+        name: "compat".into(),
+        provider_type: "openai_compatible".into(),
+        api_key: "local-test-key".into(),
+        base_url: Some(format!("{url}/v1")),
+        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        models: vec!["local-model".into()],
+        ..ProviderConfig::default()
+    })
+    .await
+    .unwrap();
+    assert!(
+        provider
+            .capabilities()
+            .contains(&ProviderCapability::ChatCompletionStream)
+    );
+    let mut request = ChatRequest::new("local-model")
+        .add_user_message("hello")
+        .with_streaming();
+    request.stream_options = stream_options;
+    let chunks = provider
+        .chat_completion_stream(request, RequestContext::default())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let (headers, request) = server.await.unwrap();
+    (chunks, headers, request)
+}
+
+#[tokio::test]
+async fn provider_level_stream_forwards_include_usage_and_surfaces_final_usage_chunk() {
+    let (chunks, headers, request) = provider_level_stream(Some(StreamOptions {
+        include_usage: Some(true),
+    }))
+    .await;
+    assert!(
+        headers.starts_with("POST /v1/chat/completions "),
+        "{headers}"
+    );
+    assert_eq!(request["stream"], true);
+    assert_eq!(request["stream_options"], json!({"include_usage": true}));
+    let usage = chunks
+        .last()
+        .and_then(|chunk| chunk.usage.as_ref())
+        .expect("final chunk carries usage");
+    assert_eq!(
+        (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens
+        ),
+        (7, 2, 9)
+    );
+    assert!(chunks.iter().any(|chunk| {
+        chunk
+            .choices
+            .iter()
+            .any(|choice| choice.delta.content.as_deref() == Some("hi"))
+    }));
+}
+
+#[tokio::test]
+async fn provider_level_stream_sends_no_stream_options_unless_caller_sets_them() {
+    let (_, _, request) = provider_level_stream(None).await;
+    assert_eq!(request["stream"], true);
+    assert!(request.get("stream_options").is_none(), "{request}");
 }

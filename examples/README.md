@@ -18,6 +18,20 @@ The second command runs the same source as a separate crate against a local HTTP
 fixture, with no credentials. The provider snippets below require an already
 configured runtime; setting environment variables alone does not install one.
 
+### Single-attempt provider streaming
+
+[`provider_stream_usage.rs`](provider_stream_usage.rs) skips the router (no
+retries or fallbacks): it builds one `openai_compatible` provider with
+`create_provider`, sets `stream_options.include_usage`, streams with
+`Provider::chat_completion_stream` and prints the final usage chunk.
+
+```bash
+OPENAI_COMPAT_API_KEY=... cargo run --example provider_stream_usage -- \
+  https://<resource>.openai.azure.com/openai/v1 <deployment>
+ENDPOINT_ACCESS=private_network cargo run --example provider_stream_usage -- \
+  http://localhost:8000/v1 your-served-model
+```
+
 ### OpenRouter
 - `openrouter_completion.rs` - Basic completion with OpenRouter API
 

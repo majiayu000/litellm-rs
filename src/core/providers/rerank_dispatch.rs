@@ -44,7 +44,7 @@ impl Provider {
                     return CohereRerankProvider::new_with_endpoint(
                         api_key,
                         config.get_api_base(),
-                        config.base.endpoint_access,
+                        config.base.endpoint_rules(),
                         config.base.timeout,
                     )
                     .map(|adapter| Arc::new(adapter) as Arc<dyn RerankProvider>)
@@ -54,7 +54,7 @@ impl Provider {
                     return JinaRerankProvider::new_with_endpoint(
                         api_key,
                         config.get_api_base(),
-                        config.base.endpoint_access,
+                        config.base.endpoint_rules(),
                         config.base.timeout,
                     )
                     .map(|adapter| Arc::new(adapter) as Arc<dyn RerankProvider>)

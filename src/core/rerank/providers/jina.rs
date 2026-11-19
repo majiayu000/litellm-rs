@@ -1,7 +1,7 @@
 //! Jina AI rerank provider implementation
 
 use super::rerank_upstream_error;
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::{EndpointAddressRules, ProviderEndpointAccess};
 use crate::core::providers::base::{BaseConfig, BaseHttpClient};
 use crate::core::rerank::service::RerankProvider;
 use crate::core::rerank::types::{RerankRequest, RerankResponse, RerankResult, RerankUsage};
@@ -17,7 +17,7 @@ pub struct JinaRerankProvider {
     base_url: String,
     /// Policy-aware HTTP client.
     client: BaseHttpClient,
-    endpoint_access: ProviderEndpointAccess,
+    endpoint_rules: EndpointAddressRules,
     timeout_seconds: u64,
 }
 
@@ -34,27 +34,24 @@ impl JinaRerankProvider {
 
     /// Set custom base URL
     pub fn with_base_url(self, url: impl Into<String>) -> Result<Self> {
-        Self::new_with_endpoint(
-            self.api_key,
-            url,
-            self.endpoint_access,
-            self.timeout_seconds,
-        )
+        Self::new_with_endpoint(self.api_key, url, self.endpoint_rules, self.timeout_seconds)
     }
 
     /// Create a provider bound to an exact endpoint policy and authority.
     pub fn new_with_endpoint(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        endpoint_access: ProviderEndpointAccess,
+        endpoint_rules: impl Into<EndpointAddressRules>,
         timeout_seconds: u64,
     ) -> Result<Self> {
+        let endpoint_rules = endpoint_rules.into();
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let client = BaseHttpClient::new_for_provider(
             "jina_rerank",
             BaseConfig {
                 api_base: Some(base_url.clone()),
-                endpoint_access,
+                endpoint_access: endpoint_rules.access(),
+                endpoint_allow_cidrs: endpoint_rules.allow_cidrs().clone(),
                 timeout: timeout_seconds,
                 ..BaseConfig::default()
             },
@@ -63,7 +60,7 @@ impl JinaRerankProvider {
             api_key: api_key.into(),
             base_url,
             client,
-            endpoint_access,
+            endpoint_rules,
             timeout_seconds,
         })
     }

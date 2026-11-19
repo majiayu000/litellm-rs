@@ -77,6 +77,7 @@ Note: `Config::default()` intentionally fails validation (no providers), so an a
 - Weight in (0, 100]; timeout in (0, 300] seconds; rpm > 0; tpm > 0.
 - `endpoint_access` may only appear as a top-level field, never inside `settings`; `private_network` access generally requires an explicit base URL and a policy-wired provider type.
 - Base URL, when configured, must parse as http/https and pass endpoint-policy and SSRF checks.
+- `endpoint_allow_cidrs` is also top-level only. Each entry must be a valid CIDR with no host bits, no `/0` and not lying entirely in a link-local range, otherwise config load fails. It re-allows those ranges (e.g. fake-IP DNS `198.18.0.0/15`, CGNAT `100.64.0.0/10`) for that provider's endpoint at validation, request time and connect-time DNS. Cloud metadata addresses (including Alibaba `100.100.100.200`, AWS ECS/EKS credential endpoints, OCI IMDS v6) and all link-local addresses stay blocked. Only `openai`, `openai_compatible` and catalog OpenAI-compatible selectors accept it; other types fail validation.
 
 ### AuthConfig
 
