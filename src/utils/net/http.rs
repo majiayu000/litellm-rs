@@ -28,106 +28,24 @@ use reqwest::{
     Body, Client, ClientBuilder, IntoUrl, Method, RequestBuilder, Version, multipart, redirect,
 };
 use serde::Serialize;
-use std::error::Error as _;
+#[cfg(test)]
 use std::io;
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::core::net::{
-    ProviderEndpointAccess, ProviderEndpointPolicy, SsrfError, is_provider_endpoint_ip_allowed,
+    ProviderEndpointAccess, ProviderEndpointPolicy, SsrfError,
     validate_outbound_url_without_resolution,
 };
 
-/// DNS resolver that rejects private/reserved IP addresses at resolution time.
-///
-/// This mitigates DNS-rebinding attacks: even if a hostname resolves to a public IP
-/// at config-validation time, every actual request re-validates the resolved address,
-/// so a later rebind to an internal IP will be caught and rejected.
-trait HostResolver: Send + Sync {
-    fn resolve(&self, host: &str) -> io::Result<Vec<SocketAddr>>;
-}
-
-struct SystemHostResolver;
-
-impl HostResolver for SystemHostResolver {
-    fn resolve(&self, host: &str) -> io::Result<Vec<SocketAddr>> {
-        (host, 0u16)
-            .to_socket_addrs()
-            .map(|addresses| addresses.collect())
-    }
-}
-
-struct PolicyDnsResolver {
-    access: ProviderEndpointAccess,
-    resolver: Arc<dyn HostResolver>,
-}
-
-#[derive(Debug, thiserror::Error)]
-enum ProviderEndpointPolicyRequestError {
-    #[error("Host resolution returned no addresses (SSRF protection)")]
-    EmptyDnsAnswer,
-    #[error("Host resolves to a disallowed address (SSRF protection)")]
-    DisallowedDnsAddress,
-    #[error("Redirect target failed SSRF validation")]
-    RedirectTarget,
-}
-
-fn reqwest_error_is_endpoint_policy(error: &reqwest::Error) -> bool {
-    let mut source = error.source();
-    while let Some(current) = source {
-        if current
-            .downcast_ref::<ProviderEndpointPolicyRequestError>()
-            .is_some()
-            || current
-                .downcast_ref::<io::Error>()
-                .and_then(io::Error::get_ref)
-                .and_then(|inner| inner.downcast_ref::<ProviderEndpointPolicyRequestError>())
-                .is_some()
-        {
-            return true;
-        }
-        source = current.source();
-    }
-    false
-}
-
-impl reqwest::dns::Resolve for PolicyDnsResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_owned();
-        let resolver = Arc::clone(&self.resolver);
-        let access = self.access;
-        Box::pin(async move {
-            let addrs = tokio::task::spawn_blocking(move || resolver.resolve(&host))
-                .await
-                .map_err(io::Error::other)??;
-            let safe = validate_provider_addresses(access, addrs)?;
-
-            Ok(Box::new(safe.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
-fn validate_provider_addresses(
-    access: ProviderEndpointAccess,
-    addrs: Vec<SocketAddr>,
-) -> io::Result<Vec<SocketAddr>> {
-    if addrs.is_empty() {
-        return Err(io::Error::other(
-            ProviderEndpointPolicyRequestError::EmptyDnsAnswer,
-        ));
-    }
-    if addrs
-        .iter()
-        .any(|addr| !is_provider_endpoint_ip_allowed(access, &addr.ip()))
-    {
-        return Err(io::Error::other(
-            ProviderEndpointPolicyRequestError::DisallowedDnsAddress,
-        ));
-    }
-    Ok(addrs)
-}
+mod policy_dns;
+#[cfg(test)]
+use policy_dns::validate_provider_addresses;
+use policy_dns::{
+    HostResolver, PolicyDnsResolver, ProviderEndpointPolicyRequestError, SystemHostResolver,
+    reqwest_error_dns_policy_detail, reqwest_error_is_endpoint_policy,
+};
 
 fn ssrf_safe_redirect_policy() -> redirect::Policy {
     redirect::Policy::custom(|attempt| {
@@ -166,8 +84,12 @@ pub enum ProviderHttpClientError {
 }
 
 impl ProviderHttpClientError {
-    pub(crate) fn is_endpoint_policy(&self) -> bool {
-        matches!(self, Self::Endpoint(_))
+    /// The SSRF rejection behind an endpoint-policy error, if this is one.
+    pub(crate) fn endpoint_policy_detail(&self) -> Option<&SsrfError> {
+        match self {
+            Self::Endpoint(detail) => Some(detail),
+            Self::Request(_) => None,
+        }
     }
 }
 
@@ -280,6 +202,11 @@ impl ProviderHttpClient {
         reqwest_error_is_endpoint_policy(error)
     }
 
+    /// Hostname, rejected address, and allowing setting for a DNS-policy rejection.
+    pub(crate) fn request_error_dns_policy_detail(error: &reqwest::Error) -> Option<&SsrfError> {
+        reqwest_error_dns_policy_detail(error)
+    }
+
     pub fn new(
         policy: ProviderEndpointPolicy,
         timeout: Duration,
@@ -351,7 +278,7 @@ impl ProviderHttpClient {
         resolver: Arc<dyn HostResolver>,
     ) -> Result<Client, ProviderHttpClientError> {
         let resolver = Arc::new(PolicyDnsResolver {
-            access: policy.access(),
+            rules: policy.rules().clone(),
             resolver,
         });
         Self::build_client_with_dns_resolver(policy, timeout, mode, resolver)
@@ -605,7 +532,7 @@ fn create_ssrf_safe_client(
     create_client_builder_with_config(timeout, &HttpClientPoolConfig::default())
         .no_proxy()
         .dns_resolver(Arc::new(PolicyDnsResolver {
-            access: ProviderEndpointAccess::PublicOnly,
+            rules: ProviderEndpointAccess::PublicOnly.into(),
             resolver: Arc::new(SystemHostResolver),
         }))
         .redirect(redirect_policy)

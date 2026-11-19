@@ -58,7 +58,10 @@ pub struct RouterConfig {
     /// Routing strategy to use for deployment selection
     pub routing_strategy: RoutingStrategy,
 
-    /// Number of retry attempts on failure (default: 3)
+    /// Number of retry attempts on failure (default: 3, so up to 4 attempts).
+    ///
+    /// Streaming calls retry only until a provider returns a stream. Set 0 for
+    /// one attempt per call when the embedding application owns retries.
     pub num_retries: u32,
 
     /// Minimum seconds to wait between retries (default: 0)

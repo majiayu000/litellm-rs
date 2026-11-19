@@ -379,6 +379,8 @@ impl BudgetReservations {
 
     pub(super) async fn on_error(&mut self, error: &ProviderError) {
         // Transport, parse and 5xx errors cannot prove that upstream did no work.
+        // NotImplemented, FeatureDisabled and Configuration are raised while the
+        // request is built, before anything is sent, so they refund like a rejection.
         let rejected = matches!(
             error,
             ProviderError::Authentication { .. }
@@ -387,6 +389,9 @@ impl BudgetReservations {
                 | ProviderError::ModelNotFound { .. }
                 | ProviderError::InvalidRequest { .. }
                 | ProviderError::NotSupported { .. }
+                | ProviderError::NotImplemented { .. }
+                | ProviderError::FeatureDisabled { .. }
+                | ProviderError::Configuration { .. }
                 | ProviderError::ContextLengthExceeded { .. }
                 | ProviderError::TokenLimitExceeded { .. }
         ) || matches!(error, ProviderError::ApiError { status, .. } if (400..500).contains(status) && *status != 408);

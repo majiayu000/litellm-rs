@@ -56,7 +56,7 @@ actix-web = { version = "=4.18.2", default-features = false, features = [
     "ws",
 ], optional = true }
 actix-cors = { version = "0.7", optional = true }
-actix-http = { version = "=3.20.3", default-features = false, features = ["rustls-0_23"], optional = true }
+actix-http = { version = "=3.21.3", default-features = false, features = ["rustls-0_23"], optional = true }
 actix-server = { version = "=2.10.0", default-features = false, optional = true }
 actix-service = { version = "=2.0.3", default-features = false, optional = true }
 actix-tls = { version = "=3.5.0", default-features = false, features = ["accept", "rustls-0_23"], optional = true }

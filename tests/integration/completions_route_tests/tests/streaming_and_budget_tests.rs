@@ -669,3 +669,121 @@ async fn test_completions_budget_rejection_emits_no_callback_lifecycle() {
 
     mock_server.shutdown().await;
 }
+
+#[tokio::test]
+async fn openrouter_reported_cost_reaches_callbacks_as_settled() {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("OpenRouter mock listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("OpenRouter mock should have local address");
+    let upstream = HttpServer::new(|| {
+        App::new().default_service(web::post().to(|payload: web::Json<Value>| async move {
+            // 1000 in / 500 out is 0.00045 at catalog prices; OpenRouter reports 0.0123.
+            let usage = json!({"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500,
+                "cost":0.0123});
+            if payload["stream"] != json!(true) {
+                return HttpResponse::Ok().json(json!({
+                    "id":"gen-1","object":"chat.completion","created":1,
+                    "model":"openai/gpt-4o-mini",
+                    "choices":[{"index":0,"finish_reason":"stop",
+                        "message":{"role":"assistant","content":"ok"}}],
+                    "usage":usage
+                }));
+            }
+            let chunk = |choices: Value, usage: Value| {
+                let data = json!({"id":"gen-1","object":"chat.completion.chunk","created":1,
+                    "model":"openai/gpt-4o-mini","choices":choices,"usage":usage});
+                Ok::<Bytes, actix_web::Error>(Bytes::from(format!("data: {data}\n\n")))
+            };
+            let delta = json!([{"index":0,"delta":{"role":"assistant","content":"ok"},
+                "finish_reason":"stop"}]);
+            HttpResponse::Ok()
+                .insert_header(("content-type", "text/event-stream"))
+                .streaming(stream::iter([
+                    chunk(delta, Value::Null),
+                    chunk(json!([]), usage),
+                    Ok(Bytes::from_static(b"data: [DONE]\n\n")),
+                ]))
+        }))
+    })
+    .listen(listener)
+    .expect("OpenRouter mock should listen")
+    .run();
+    let upstream_handle = upstream.handle();
+    let upstream_task = tokio::spawn(upstream);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let mut config = Config::default();
+    config.gateway.storage.database.enabled = false;
+    config.gateway.storage.redis.enabled = false;
+    config.gateway.providers = vec![mock_provider_config(
+        "openrouter",
+        "openrouter",
+        "sk-or-test-12345678901234567890",
+        &format!("http://{address}/v1"),
+        vec!["openai/gpt-4o-mini".to_string()],
+    )];
+    let gateway = GatewayHttpServer::new(&config)
+        .await
+        .expect("gateway should initialize with OpenRouter");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let runtime = build_callback_runtime(Arc::clone(&events)).await;
+    let state = gateway.state().clone().with_callbacks(runtime.dispatcher());
+    state.budget_limits.providers.set_provider_limit(
+        "openrouter",
+        ProviderLimitConfig::new(100.0, ResetPeriod::Monthly),
+    );
+    let budget_limits = state.budget_limits.clone();
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(litellm_rs::server::routes::ai::configure_routes),
+    )
+    .await;
+
+    for stream in [false, true] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/v1/chat/completions")
+                .set_json(json!({
+                    "model": "openai/gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "max_tokens": 600,
+                    "stream": stream,
+                    "stream_options": if stream { json!({"include_usage": true}) } else { Value::Null }
+                }))
+                .to_request(),
+        )
+        .await;
+        let status = response.status();
+        let body = String::from_utf8_lossy(&test::read_body(response).await).into_owned();
+        assert_eq!(status, StatusCode::OK, "stream={stream}: {body}");
+    }
+
+    runtime
+        .shutdown()
+        .await
+        .expect("callback runtime should drain");
+    let callback_costs: Vec<Option<f64>> = events
+        .lock()
+        .expect("callback events should not be poisoned")
+        .iter()
+        .filter_map(|event| match event {
+            RecordedCallback::End(end) => Some(end.cost_usd),
+            _ => None,
+        })
+        .collect();
+    // Unary first, then streaming: both report what the budget was charged.
+    assert_eq!(callback_costs, [Some(0.0123), Some(0.0123)]);
+    let settled = budget_limits
+        .providers
+        .get_provider_usage("openrouter")
+        .expect("provider spend should be recorded")
+        .current_spend;
+    assert!((settled - 0.0246).abs() < 1e-9, "settled {settled}");
+
+    upstream_handle.stop(true).await;
+    let _ = upstream_task.await;
+}

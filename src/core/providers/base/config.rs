@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::{EndpointAllowCidrs, ProviderEndpointAccess};
 
 /// Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,10 @@ pub struct BaseConfig {
     /// Network scope allowed for the configured endpoint.
     #[serde(default)]
     pub endpoint_access: ProviderEndpointAccess,
+
+    /// Extra address ranges this endpoint may resolve to (e.g. fake-IP DNS `198.18.0.0/15`).
+    #[serde(default, skip_serializing_if = "EndpointAllowCidrs::is_empty")]
+    pub endpoint_allow_cidrs: EndpointAllowCidrs,
 
     /// Request
     #[serde(default = "default_timeout")]
@@ -56,6 +60,7 @@ impl Default for BaseConfig {
             api_key: None,
             api_base: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: EndpointAllowCidrs::default(),
             timeout: default_timeout(),
             max_retries: default_max_retries(),
             headers: HashMap::new(),
@@ -119,6 +124,7 @@ impl BaseConfig {
             api_key: Self::env_value(provider, "API_KEY"),
             api_base: Self::env_value(provider, "API_BASE"),
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: EndpointAllowCidrs::default(),
             timeout: Self::env_value(provider, "TIMEOUT")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(default_timeout()),
@@ -168,22 +174,18 @@ impl BaseConfig {
 
     /// Configuration
     pub fn validate(&self, provider: &str) -> Result<(), String> {
-        // Validation
         if self.api_key.is_none() {
             return Err(format!("{} API key is required", provider));
         }
 
-        // Validation
         if self.timeout == 0 {
             return Err("Timeout must be greater than 0".to_string());
         }
 
-        // Validation
         if self.max_retries > 10 {
             return Err("Max retries should not exceed 10".to_string());
         }
 
-        // Validation
         if let Some(api_key) = &self.api_key {
             match provider {
                 "openai" if !api_key.starts_with("sk-") && !api_key.starts_with("proj-") => {

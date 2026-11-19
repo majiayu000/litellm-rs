@@ -19,7 +19,8 @@ fallback budget charges are estimates, never substituted for actual cost.
   `reserved_estimate`, or `fallback_pricing`. `provider_reported` means `cost`
   is the amount the upstream provider reported on the response (currently only
   OpenRouter's `usage.cost` on chat completions); invalid or missing reports fall
-  back to `gateway_pricing`. Charge amounts record acknowledged budget accounting,
+  back to `gateway_pricing`. Callbacks and the Prometheus cost counter report the
+  same amount. Charge amounts record acknowledged budget accounting,
   independently from `cost`.
 - `unknown_reason` distinguishes missing usage, a cancelled stream before usage,
   and unavailable pricing. `reserved_at` records the hold timestamp;

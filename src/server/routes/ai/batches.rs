@@ -330,7 +330,7 @@ fn batch_proxy_provider_from_config(
     let client = RouteHttpClient::new(
         "batch_proxy",
         base_url.clone(),
-        provider.endpoint_access,
+        provider.endpoint_rules(),
         provider.timeout,
     )?;
     Ok(BatchProxyProvider {

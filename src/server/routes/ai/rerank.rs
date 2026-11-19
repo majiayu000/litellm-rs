@@ -299,7 +299,7 @@ fn selected_rerank_runtime(
                     .base_url
                     .as_deref()
                     .unwrap_or("https://api.cohere.ai/v1"),
-                selected.endpoint_access,
+                selected.endpoint_rules.clone(),
                 selected.timeout_seconds,
             )
             .map(|provider| Arc::new(provider) as Arc<dyn RerankProvider>)
@@ -312,7 +312,7 @@ fn selected_rerank_runtime(
                     .base_url
                     .as_deref()
                     .unwrap_or("https://api.jina.ai/v1"),
-                selected.endpoint_access,
+                selected.endpoint_rules.clone(),
                 selected.timeout_seconds,
             )
             .map(|provider| Arc::new(provider) as Arc<dyn RerankProvider>)
@@ -381,7 +381,7 @@ fn selected_rerank_provider_from_config(
         api_key: provider.api_key.clone(),
         base_url: provider.configured_endpoint().map(str::to_string),
         timeout_seconds: provider.timeout,
-        endpoint_access: provider.endpoint_access,
+        endpoint_rules: provider.endpoint_rules(),
     })
 }
 
@@ -657,7 +657,7 @@ struct SelectedRerankProvider {
     api_key: String,
     base_url: Option<String>,
     timeout_seconds: u64,
-    endpoint_access: crate::core::net::ProviderEndpointAccess,
+    endpoint_rules: crate::core::net::EndpointAddressRules,
 }
 
 #[cfg(test)]

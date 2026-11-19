@@ -114,7 +114,7 @@ pub(crate) mod tests {
             failure_threshold: 2,
             recovery_timeout_secs: 60,
             endpoint,
-            endpoint_access,
+            endpoint_rules: endpoint_access.into(),
             expected_codes: vec![204],
         }
     }
@@ -419,7 +419,7 @@ pub(crate) mod tests {
             .expect("public probe endpoint should parse");
         let provider = test_provider(None).await;
         let mut policy = test_policy(Some(endpoint));
-        policy.endpoint_access = ProviderEndpointAccess::PublicOnly;
+        policy.endpoint_rules = ProviderEndpointAccess::PublicOnly.into();
         let router = Router::new(RouterConfig::default());
         router.add_deployment(test_deployment("public-probe", provider, policy).await);
 

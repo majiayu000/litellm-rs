@@ -47,6 +47,7 @@ impl OpenAIFineTuningProvider {
             BaseConfig {
                 api_base: Some(api_base.clone()),
                 endpoint_access: config.endpoint_access,
+                endpoint_allow_cidrs: config.endpoint_allow_cidrs.clone(),
                 timeout: config.timeout_seconds,
                 ..BaseConfig::default()
             },

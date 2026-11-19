@@ -141,7 +141,7 @@ fn policy_with_schedule(
         failure_threshold: 1,
         recovery_timeout_secs,
         endpoint: Some(endpoint),
-        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        endpoint_rules: ProviderEndpointAccess::PrivateNetwork.into(),
         expected_codes: vec![204],
     }
 }
@@ -190,7 +190,7 @@ async fn running_probe_publishes_to_replacement_deployment() {
         failure_threshold: 1,
         recovery_timeout_secs: 1,
         endpoint: Some(endpoint.clone()),
-        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        endpoint_rules: ProviderEndpointAccess::PrivateNetwork.into(),
         expected_codes: vec![204],
     };
     let deployment = Deployment::new(
@@ -257,7 +257,7 @@ async fn stale_success_is_not_published_to_changed_same_id_replacement() {
         failure_threshold: 1,
         recovery_timeout_secs: 1,
         endpoint: Some(old_endpoint),
-        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        endpoint_rules: ProviderEndpointAccess::PrivateNetwork.into(),
         expected_codes: vec![204],
     };
     let router = Router::new(RouterConfig::default());
@@ -293,7 +293,7 @@ async fn stale_success_is_not_published_to_changed_same_id_replacement() {
         failure_threshold: 1,
         recovery_timeout_secs: 1,
         endpoint: Some(new_endpoint),
-        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        endpoint_rules: ProviderEndpointAccess::PrivateNetwork.into(),
         expected_codes: vec![204],
     };
     router.add_deployment(
@@ -363,7 +363,7 @@ async fn reused_provider_identity_cannot_group_distinct_native_deployments() {
         failure_threshold: 1,
         recovery_timeout_secs: 30,
         endpoint: None,
-        endpoint_access: ProviderEndpointAccess::PublicOnly,
+        endpoint_rules: ProviderEndpointAccess::PublicOnly.into(),
         expected_codes: vec![204],
     };
     let router = Router::new(RouterConfig::default());
@@ -492,7 +492,7 @@ async fn replacement_resets_probe_failure_streak() {
         failure_threshold: 3,
         recovery_timeout_secs: 1,
         endpoint: Some(endpoint),
-        endpoint_access: ProviderEndpointAccess::PrivateNetwork,
+        endpoint_rules: ProviderEndpointAccess::PrivateNetwork.into(),
         expected_codes: vec![204],
     };
     let router = Router::new(RouterConfig::default());

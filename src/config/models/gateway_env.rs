@@ -78,6 +78,7 @@ const PROVIDER_ENV_FIELDS: &[&str] = &[
     "API_KEY",
     "BASE_URL",
     "ENDPOINT_ACCESS",
+    "ENDPOINT_ALLOW_CIDRS",
     "API_VERSION",
     "ORGANIZATION",
     "PROJECT",
@@ -306,6 +307,9 @@ fn merge_existing_provider_env(
     if presence.contains_provider_field(name, "ENDPOINT_ACCESS") {
         base.endpoint_access = other.endpoint_access;
     }
+    if presence.contains_provider_field(name, "ENDPOINT_ALLOW_CIDRS") {
+        base.endpoint_allow_cidrs = other.endpoint_allow_cidrs;
+    }
     if presence.contains_provider_field(name, "API_VERSION") {
         base.api_version = other.api_version;
     }
@@ -440,6 +444,19 @@ fn load_providers_from_env(
                     format!("Invalid value for {endpoint_access_key}: {error}"),
                 ));
             }
+        }
+        let allow_cidrs_key = provider_env_name(&name, "ENDPOINT_ALLOW_CIDRS");
+        if let Some(raw) = env_var(&allow_cidrs_key)? {
+            provider.endpoint_allow_cidrs = crate::core::net::EndpointAllowCidrs::parse(
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            )
+            .map_err(|error| {
+                crate::utils::error::gateway_error::GatewayError::Config(format!(
+                    "Invalid value for {allow_cidrs_key}: {error}"
+                ))
+            })?;
         }
         if let Some(value) = env_var(&provider_env_name(&name, "API_VERSION"))? {
             provider.api_version = (!value.is_empty()).then_some(value);

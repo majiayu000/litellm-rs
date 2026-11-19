@@ -1,5 +1,6 @@
-use super::{builder, catalog_definition_for_supported_selector, provider_diagnostic_name};
-use crate::core::net::ProviderEndpointAccess;
+use super::{catalog_definition_for_supported_selector, provider_diagnostic_name};
+use crate::core::net::{EndpointAllowCidrs, ProviderEndpointAccess};
+use crate::core::providers::base::BaseConfig;
 use crate::core::providers::openai::config::validate_private_official_openai_endpoint;
 use crate::core::providers::{ProviderError, ProviderType, registry as provider_registry};
 
@@ -51,6 +52,95 @@ pub(crate) fn selector_supports_endpoint_access(selector: &str) -> bool {
         || selector
             .parse::<ProviderType>()
             .is_ok_and(|provider_type| provider_type_supports(&provider_type))
+}
+
+/// Selectors whose runtime client is built from the full [`BaseConfig`], so
+/// `endpoint_allow_cidrs` reaches every address check (validation, connect-time
+/// DNS, redirects). Other runtimes reject the setting instead of ignoring it.
+pub(crate) fn selector_supports_endpoint_allow_cidrs(selector: &str) -> bool {
+    catalog_definition_for_supported_selector(selector).is_some()
+        || selector.parse::<ProviderType>().is_ok_and(|provider_type| {
+            matches!(
+                provider_type,
+                ProviderType::OpenAI | ProviderType::OpenAICompatible
+            )
+        })
+}
+
+/// Reject endpoint policy fields nested in `settings` and allow lists the
+/// selected runtime cannot honour.
+pub(super) fn check_endpoint_fields(
+    selector: &str,
+    settings: &std::collections::HashMap<String, serde_json::Value>,
+    allow_cidrs: &EndpointAllowCidrs,
+) -> Result<(), ProviderError> {
+    for key in ["endpoint_access", "endpoint_allow_cidrs"] {
+        if settings.contains_key(key) {
+            return Err(ProviderError::configuration(
+                "provider",
+                format!("{key} must be configured as a top-level provider field"),
+            ));
+        }
+    }
+    if !allow_cidrs.is_empty() && !selector_supports_endpoint_allow_cidrs(selector) {
+        return Err(ProviderError::configuration(
+            "provider",
+            format!("endpoint_allow_cidrs is not supported for provider type '{selector}'"),
+        ));
+    }
+    Ok(())
+}
+
+/// Carry the endpoint policy into a factory config map; the allow list only when set.
+pub(super) fn insert_endpoint_rules(
+    factory: &mut serde_json::Map<String, serde_json::Value>,
+    access: ProviderEndpointAccess,
+    allow_cidrs: &EndpointAllowCidrs,
+) {
+    factory.insert("endpoint_access".to_string(), access.to_string().into());
+    if !allow_cidrs.is_empty() {
+        let cidrs = allow_cidrs.as_slice().iter().map(ToString::to_string);
+        factory.insert("endpoint_allow_cidrs".to_string(), cidrs.collect());
+    }
+}
+
+pub(crate) fn config_endpoint_access(
+    config: &serde_json::Value,
+    provider: &'static str,
+) -> Result<ProviderEndpointAccess, ProviderError> {
+    config
+        .get("endpoint_access")
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| {
+                ProviderError::configuration(provider, format!("invalid endpoint_access: {error}"))
+            })
+        })
+        .transpose()
+        .map(|access| access.unwrap_or_default())
+}
+
+/// Parse `endpoint_allow_cidrs` from a factory config; an invalid CIDR is a config error.
+pub(crate) fn config_endpoint_allow_cidrs(
+    config: &serde_json::Value,
+    provider: &'static str,
+) -> Result<EndpointAllowCidrs, ProviderError> {
+    match config.get("endpoint_allow_cidrs") {
+        None | Some(serde_json::Value::Null) => Ok(EndpointAllowCidrs::default()),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+            ProviderError::configuration(provider, format!("invalid endpoint_allow_cidrs: {error}"))
+        }),
+    }
+}
+
+/// Set both endpoint policy fields of a [`BaseConfig`] from a factory config.
+pub(crate) fn apply_endpoint_rules(
+    base: &mut BaseConfig,
+    config: &serde_json::Value,
+    provider: &'static str,
+) -> Result<(), ProviderError> {
+    base.endpoint_access = config_endpoint_access(config, provider)?;
+    base.endpoint_allow_cidrs = config_endpoint_allow_cidrs(config, provider)?;
+    Ok(())
 }
 
 pub(crate) fn selector_allows_implicit_private(selector: &str) -> bool {
@@ -137,9 +227,16 @@ pub(super) fn validate_direct_endpoint_policy(
             .filter(|value| !value.trim().is_empty())
     });
     let has_endpoint = configured_endpoint.is_some();
-    let access = builder::config_endpoint_access(config, provider)?;
+    let access = config_endpoint_access(config, provider)?;
     validate_private_official_openai_endpoint(access, configured_endpoint).map_err(fail)?;
     let selector = provider_type.to_string();
+    if !config_endpoint_allow_cidrs(config, provider)?.is_empty()
+        && !selector_supports_endpoint_allow_cidrs(&selector)
+    {
+        return Err(fail(
+            "endpoint_allow_cidrs is not supported for this provider type",
+        ));
+    }
     if access == ProviderEndpointAccess::PrivateNetwork
         && !has_endpoint
         && !selector_allows_implicit_private(&selector)

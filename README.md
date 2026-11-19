@@ -45,10 +45,23 @@ regression policy: [gateway-overhead benchmark methodology](./docs/benchmarks/ga
 Run the released container with the bundled development config:
 
 ```bash
-docker run --rm -p 8000:8000 ghcr.io/majiayu000/litellm-rs:0.10.1 \
-  gateway --config config/gateway.dev.yaml.example --host 0.0.0.0 --port 8000
-curl http://localhost:8000/health
+docker run --rm --no-healthcheck -p 127.0.0.1:8080:8080 \
+  ghcr.io/majiayu000/litellm-rs:0.10.1 \
+  gateway --config config/gateway.dev.yaml.example --host 0.0.0.0
 ```
+
+Then, from another terminal:
+
+```bash
+curl http://localhost:8080/health
+```
+
+The container keeps the config's port 8080 and is published on loopback only.
+This config accepts anonymous requests, and port 8000 is where its `vllm`
+provider looks for a model server: a gateway listening there forwards chat
+requests to itself. `--no-healthcheck` turns off the image's built-in probe,
+which targets the default port 8000. The image has no model server, so chat
+requests need a provider the container can reach.
 
 Prebuilt `gateway` binaries for Linux x86_64 (glibc and musl), macOS
 aarch64/x86_64 and Windows x86_64 are attached to the
@@ -151,6 +164,67 @@ independent crate consumer, run `python3 scripts/test/library_consumer_smoke.py`
 The smoke uses this checkout as a path dependency; it does not verify a published
 registry artifact or a real provider account.
 
+#### Router retries
+
+`UnifiedRouter::from_gateway_config(&providers, None)` uses `RouterConfig::default()`,
+which sets `num_retries: 3`: a call that fails with a retryable error is tried up
+to 4 times. Streaming calls retry the same way until a provider returns a stream;
+an error after the stream is returned is passed to the caller and not retried.
+The gateway binary also runs with 3 router retries; the gateway `router` YAML
+section has no setting for it.
+If your application already handles retries, deadlines or switching upstreams,
+turn router retries off. The `hello` example does this:
+
+```rust
+use litellm_rs::core::router::{RouterConfig, UnifiedRouter};
+
+let router_config = RouterConfig {
+    num_retries: 0, // one attempt per call
+    ..RouterConfig::default()
+};
+let router = UnifiedRouter::from_gateway_config(&[provider], Some(router_config)).await?;
+```
+
+Fallbacks across model groups run only if you configure them with
+`with_fallback_config` or `set_fallback_config`.
+
+#### Single-attempt provider path
+
+To skip the router completely (no deployment selection, retries, fallbacks or
+cooldowns), build one provider with `core::providers::create_provider` and call
+`Provider::chat_completion_stream`. This path lives under `core::providers`, which
+is an advanced module (see [Installation](#installation)): it is public, but it is
+not covered by the runtime-backed support policy in
+[Supported Product Surfaces](#supported-product-surfaces), and its signatures may
+change in any 0.x minor release.
+Check `provider.capabilities()` before calling an optional method.
+An `openai_compatible` provider sends one HTTP request per call. A few provider
+transports (for example Replicate and fal.ai) retry on their own up to
+`ProviderConfig::max_retries`; set it to 0 for those as well.
+
+The provider layer sends the request exactly as you build it. `completion_stream`
+adds `stream_options: { include_usage: true }` for you; the provider path does not.
+Without it, some OpenAI-compatible endpoints (for example Azure OpenAI v1) send
+no usage chunk. Set it yourself:
+
+```rust
+use litellm_rs::core::types::chat::{ChatRequest, StreamOptions};
+use litellm_rs::core::types::context::RequestContext;
+
+let mut request = ChatRequest::new(model).add_user_message("Hi").with_streaming();
+request.stream_options = Some(StreamOptions { include_usage: Some(true) });
+let mut stream = provider.chat_completion_stream(request, RequestContext::default()).await?;
+// The final chunk has empty `choices` and `usage: Some(..)`.
+```
+
+The complete [`provider_stream_usage` example](examples/provider_stream_usage.rs)
+streams from an OpenAI-compatible endpoint and prints the final usage:
+
+```bash
+OPENAI_COMPAT_API_KEY=... cargo run --example provider_stream_usage -- \
+  https://<resource>.openai.azure.com/openai/v1 <deployment>
+```
+
 ## Gateway Configuration
 
 The gateway router config maps these fields into the runtime router:
@@ -168,6 +242,41 @@ model (currently Anthropic and GitHub Copilot); they send a one-token request an
 charges. OpenAI, Bedrock, OpenAI-compatible, Vertex AI, FalAI, and other multi-capability providers
 require a custom `health_check.endpoint`. Without an active probe policy, readiness remains
 fail-closed (`Unknown`).
+
+Provider endpoints pass an SSRF guard at config load, on every request, and
+again when each connection resolves DNS. `endpoint_access: public_only` (the
+default) allows only globally routable addresses; `private_network` also allows
+loopback, RFC 1918 and ULA addresses for that one configured authority. Hosts
+whose DNS answers from a reserved range, such as fake-IP proxies (Clash, mihomo,
+sing-box, Surge) answering from `198.18.0.0/15` or CGNAT egress in
+`100.64.0.0/10`, can re-allow exactly that range per provider:
+
+```yaml
+providers:
+  - name: dashscope
+    provider_type: openai_compatible
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: "${DASHSCOPE_API_KEY}"
+    endpoint_allow_cidrs: ["198.18.0.0/15"]
+```
+
+The environment form is `LITELLM_PROVIDER_<NAME>_ENDPOINT_ALLOW_CIDRS=198.18.0.0/15,100.64.0.0/10`.
+An invalid CIDR, a `/0` range, host bits set, or an entry that lies entirely in a
+link-local range is a config error. Cloud metadata and credential addresses
+(`169.254.169.254`, `168.63.129.16`, Alibaba Cloud `100.100.100.200`, AWS ECS
+`169.254.170.2`, EKS Pod Identity `169.254.170.23` / `fd00:ec2::23`,
+`fd00:ec2::254`, OCI `fd00:c1::a9fe:a9fe`) and all link-local addresses
+(`169.254.0.0/16`, `fe80::/10`) stay blocked even when a listed range covers them,
+including their IPv4-mapped (`::ffff:0:0/96`) and well-known NAT64
+(`64:ff9b::/96`) forms, so the CGNAT opt-in never reaches Alibaba Cloud metadata.
+The setting is honoured by `openai`, `openai_compatible` and catalog
+OpenAI-compatible providers (including their health-check, batch, image,
+moderation and fine-tuning routes); other provider types reject it at startup
+rather than ignore it; the gateway and provider factory enforce that, while
+direct library construction of other provider types ignores the field. In
+library mode set `BaseConfig::endpoint_allow_cidrs` or
+`ProviderConfig::endpoint_allow_cidrs` and build an OpenAI-compatible provider. A rejection names the resolved address
+and the setting that would allow it.
 
 `router.load_balancer.sticky_sessions` and `router.load_balancer.session_timeout` are reserved for future session affinity. Non-default values fail config validation until runtime affinity is implemented.
 

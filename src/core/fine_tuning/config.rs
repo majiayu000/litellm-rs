@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::core::net::ProviderEndpointAccess;
+use crate::core::net::{EndpointAllowCidrs, ProviderEndpointAccess};
 
 /// Fine-tuning configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +102,10 @@ pub struct ProviderFineTuningConfig {
     #[serde(default)]
     pub endpoint_access: ProviderEndpointAccess,
 
+    /// Extra address ranges the API base may resolve to (see provider `endpoint_allow_cidrs`).
+    #[serde(default, skip_serializing_if = "EndpointAllowCidrs::is_empty")]
+    pub endpoint_allow_cidrs: EndpointAllowCidrs,
+
     /// Organization ID (for OpenAI)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
@@ -130,6 +134,7 @@ impl Default for ProviderFineTuningConfig {
             api_key: None,
             api_base: None,
             endpoint_access: ProviderEndpointAccess::PublicOnly,
+            endpoint_allow_cidrs: EndpointAllowCidrs::default(),
             organization_id: None,
             supported_models: vec![],
             timeout_seconds: default_timeout(),
@@ -155,6 +160,11 @@ impl ProviderFineTuningConfig {
 
     pub fn endpoint_access(mut self, access: ProviderEndpointAccess) -> Self {
         self.endpoint_access = access;
+        self
+    }
+
+    pub fn endpoint_allow_cidrs(mut self, cidrs: EndpointAllowCidrs) -> Self {
+        self.endpoint_allow_cidrs = cidrs;
         self
     }
 
