@@ -270,11 +270,8 @@ pub(crate) fn build_tool_declarations(
                 return Err(invalid(provider, "duplicate tool declaration name"));
             }
             let parameters = validate_parameters(provider, tool.function.parameters.as_ref())?;
-            declarations.push(json!({
-                "name": name,
-                "description": tool.function.description.clone().unwrap_or_default(),
-                "parameters": parameters
-            }));
+            let description = tool.function.description.as_deref().unwrap_or_default();
+            declarations.push(function_declaration(&name, description, parameters));
         }
         return Ok((
             Some(json!([{
@@ -306,14 +303,11 @@ pub(crate) fn build_tool_declarations(
                 ));
             }
             let parameters = validate_parameters(provider, object.get("parameters"))?;
-            declarations.push(json!({
-                "name": name,
-                "description": object
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                "parameters": parameters
-            }));
+            let description = object
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            declarations.push(function_declaration(&name, description, parameters));
         }
         return Ok((
             Some(json!([{
@@ -565,17 +559,28 @@ fn validate_name(
     Ok(name.to_string())
 }
 
+/// Google's `parameters` field is a typed OpenAPI subset, so caller JSON
+/// Schema goes through `parametersJsonSchema` (the two are mutually
+/// exclusive). A function without parameters leaves both unset.
+fn function_declaration(name: &str, description: &str, parameters: Option<Value>) -> Value {
+    let mut declaration = json!({ "name": name, "description": description });
+    if let Some(parameters) = parameters {
+        declaration["parametersJsonSchema"] = parameters;
+    }
+    declaration
+}
+
 fn validate_parameters(
     provider: &'static str,
     parameters: Option<&Value>,
-) -> Result<Value, ProviderError> {
+) -> Result<Option<Value>, ProviderError> {
     match parameters {
-        Some(parameters) if parameters.is_object() => Ok(parameters.clone()),
+        Some(parameters) if parameters.is_object() => Ok(Some(parameters.clone())),
         Some(_) => Err(invalid(
             provider,
             "tool declaration parameters must be a JSON object",
         )),
-        None => Ok(json!({})),
+        None => Ok(None),
     }
 }
 
