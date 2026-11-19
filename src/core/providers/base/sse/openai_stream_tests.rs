@@ -566,3 +566,25 @@ async fn stream_usage_keeps_provider_reported_cost() {
     let usage = output.next().await.unwrap().unwrap().usage.unwrap();
     assert_eq!(usage.cost, Some(0.00042));
 }
+
+#[tokio::test]
+async fn stream_usage_survives_non_numeric_provider_cost() {
+    // Perplexity-style cost object, and a number sent as a string.
+    for cost in [json!({"total_cost": 0.005}), json!("0.005")] {
+        let body = format!(
+            "{}{}data: [DONE]\n\n",
+            event(json!([choice(0, Some("stop"))]), Value::Null),
+            event(
+                json!([]),
+                json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"cost":cost})
+            )
+        );
+        let source = stream::iter([Ok::<_, reqwest::Error>(Bytes::from(body))]);
+        let mut output = UnifiedSSEStream::new(source, OpenAICompatibleTransformer::new("test"));
+        assert!(output.next().await.unwrap().unwrap().usage.is_none());
+        let usage = output.next().await.unwrap().unwrap().usage;
+        let usage = usage.expect("token usage must survive a non-numeric cost");
+        assert_eq!(usage.total_tokens, 5);
+        assert_eq!(usage.cost, None);
+    }
+}

@@ -349,7 +349,11 @@ pub struct OpenAIUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_details: Option<OpenAITokenDetails>,
     /// Provider-reported charge in USD (OpenRouter `usage.cost`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::core::types::responses::deserialize_reported_cost"
+    )]
     pub cost: Option<f64>,
 }
 

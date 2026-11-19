@@ -45,10 +45,23 @@ regression policy: [gateway-overhead benchmark methodology](./docs/benchmarks/ga
 Run the released container with the bundled development config:
 
 ```bash
-docker run --rm -p 8000:8000 ghcr.io/majiayu000/litellm-rs:0.10.1 \
-  gateway --config config/gateway.dev.yaml.example --host 0.0.0.0 --port 8000
-curl http://localhost:8000/health
+docker run --rm --no-healthcheck -p 127.0.0.1:8080:8080 \
+  ghcr.io/majiayu000/litellm-rs:0.10.1 \
+  gateway --config config/gateway.dev.yaml.example --host 0.0.0.0
 ```
+
+Then, from another terminal:
+
+```bash
+curl http://localhost:8080/health
+```
+
+The container keeps the config's port 8080 and is published on loopback only.
+This config accepts anonymous requests, and port 8000 is where its `vllm`
+provider looks for a model server: a gateway listening there forwards chat
+requests to itself. `--no-healthcheck` turns off the image's built-in probe,
+which targets the default port 8000. The image has no model server, so chat
+requests need a provider the container can reach.
 
 Prebuilt `gateway` binaries for Linux x86_64 (glibc and musl), macOS
 aarch64/x86_64 and Windows x86_64 are attached to the

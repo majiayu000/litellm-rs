@@ -313,3 +313,61 @@ fn provider_registry_readme_provider_support_matrix_matches_registry_and_catalog
         }
     }
 }
+
+/// The bundled development config accepts anonymous requests and routes its only
+/// model to a local catalog provider. A container quick start that listens on that
+/// provider's default port forwards chat requests to itself.
+#[test]
+fn readme_container_quick_start_stays_on_loopback_and_off_the_local_provider_port() {
+    let quick_start = section_between(
+        include_str!("../../../../README.md"),
+        "## Quick Start: Self-Hosted Gateway",
+        "Or run from source:",
+    );
+    let command: Vec<&str> = quick_start
+        .lines()
+        .skip_while(|line| !line.starts_with("docker run "))
+        .take_while(|line| !line.starts_with("```"))
+        .flat_map(str::split_whitespace)
+        .collect();
+    let value_of = |flag: &str| {
+        let index = command.iter().position(|argument| *argument == flag)?;
+        command.get(index + 1).copied()
+    };
+    assert_eq!(
+        value_of("--config"),
+        Some("config/gateway.dev.yaml.example"),
+        "README container quick start must use the development config: {command:?}"
+    );
+
+    let dev_config: serde_yml::Value =
+        serde_yml::from_str(include_str!("../../../../config/gateway.dev.yaml.example"))
+            .expect("development config must be valid YAML");
+    let gateway_port = match value_of("--port") {
+        Some(port) => port.parse().expect("README --port must be a port number"),
+        None => dev_config["server"]["port"]
+            .as_u64()
+            .expect("development config must set server.port"),
+    };
+    let providers = dev_config["providers"]
+        .as_sequence()
+        .expect("development config must list providers");
+    for provider in providers {
+        let selector = provider["provider_type"]
+            .as_str()
+            .expect("development provider must name its provider_type");
+        let default_endpoint = url::Url::parse(PROVIDER_CATALOG[selector].base_url)
+            .expect("catalog base URL must parse");
+        assert_ne!(
+            default_endpoint.port_or_known_default().map(u64::from),
+            Some(gateway_port),
+            "README starts the gateway on the port where `{selector}` expects its model server \
+             ({default_endpoint}); in the container that address is the gateway itself"
+        );
+    }
+    assert_eq!(
+        value_of("-p"),
+        Some(format!("127.0.0.1:{gateway_port}:{gateway_port}").as_str()),
+        "README must publish the anonymous development gateway on loopback only"
+    );
+}

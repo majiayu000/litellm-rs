@@ -1,6 +1,6 @@
 //! Usage statistics types
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::super::thinking::ThinkingUsage;
 
@@ -35,8 +35,23 @@ pub struct Usage {
     /// Provider-reported charge for this response in USD, such as OpenRouter's
     /// `usage.cost`. Read from upstream responses for settlement only; it is
     /// never serialized back to gateway clients.
-    #[serde(default, skip_serializing)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "deserialize_reported_cost"
+    )]
     pub cost: Option<f64>,
+}
+
+/// Read a provider-reported `cost` without letting its shape reject the usage
+/// it arrives in. Only a JSON number is kept; any other value (a cost breakdown
+/// object, a string, null) reads as `None` so the token counts still parse.
+pub(crate) fn deserialize_reported_cost<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let cost = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(cost.as_ref().and_then(serde_json::Value::as_f64))
 }
 
 impl Usage {
@@ -307,6 +322,19 @@ mod tests {
             serde_json::from_str(r#"{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}"#)
                 .unwrap();
         assert_eq!(without.cost, None);
+    }
+
+    #[test]
+    fn test_usage_survives_non_numeric_provider_cost() {
+        // Perplexity-style cost object, a number sent as a string, and other shapes.
+        for cost in [r#"{"total_cost":0.005}"#, r#""0.005""#, "[0.005]", "true"] {
+            let usage: Usage = serde_json::from_str(&format!(
+                r#"{{"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500,"cost":{cost}}}"#
+            ))
+            .unwrap_or_else(|error| panic!("cost {cost} must not reject usage: {error}"));
+            assert_eq!(usage.total_tokens, 1500);
+            assert_eq!(usage.cost, None);
+        }
     }
 
     #[test]

@@ -94,3 +94,48 @@ async fn reported_cost_from_other_providers_is_ignored() {
     assert!(cost < 1.0, "self-reported cost must not be trusted: {cost}");
     assert_eq!(settled.charge_basis.as_deref(), Some("gateway_pricing"));
 }
+
+/// Cost a completed LLM callback reports to Prometheus for one OpenRouter response.
+fn callback_cost(model: &str, reported_cost: Option<f64>) -> Option<f64> {
+    use crate::core::integrations::{CallbackRuntime, PrometheusIntegration};
+    use crate::server::routes::ai::callbacks::CallbackLifecycle;
+    use std::sync::Arc;
+
+    let runtime = CallbackRuntime::disabled()
+        .with_callback_metrics(Some(Arc::new(PrometheusIntegration::with_defaults())));
+    let dispatcher = runtime.dispatcher();
+    let pricing = PricingService::with_embedded_default().expect("embedded prices should load");
+    let lifecycle = CallbackLifecycle::new(
+        &dispatcher,
+        Arc::new(pricing),
+        model,
+        &crate::core::types::context::RequestContext::default(),
+    );
+    lifecycle.begin_provider_execution("openrouter", model, "openrouter", model);
+    let mut usage = Usage::new(1000, 500);
+    usage.cost = reported_cost;
+    lifecycle.complete_usage(Some(&usage), "success");
+
+    dispatcher
+        .render_prometheus_metrics()
+        .expect("configured metrics should render")
+        .lines()
+        .find(|line| line.starts_with("litellm_cost_usd_total{") && line.contains("openrouter"))
+        .and_then(|line| line.split_whitespace().last())
+        .and_then(|value| value.parse::<f64>().ok())
+}
+
+#[tokio::test]
+async fn callback_cost_matches_the_settled_cost() {
+    let model = "openrouter/openai/gpt-4o";
+    // Provider-reported, then the catalog fallback for a missing report.
+    for reported_cost in [Some(0.0123), None] {
+        let settled = settle("openrouter", model, reported_cost).await;
+        assert!(settled.cost.is_some());
+        assert_eq!(
+            callback_cost(model, reported_cost),
+            settled.cost,
+            "reported cost {reported_cost:?}"
+        );
+    }
+}
